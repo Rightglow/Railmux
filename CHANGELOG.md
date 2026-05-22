@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Active-pane focus highlight: bold-cyan border on the focused urwid pane and on the active tmux pane (window-scoped, so it does not leak into other tmux windows).
+- Sessions row redesign to mirror `claude --resume`: title on top, dim `<time ago> · <branch> · <size>` below (branch sourced from the JSONL's `gitBranch`, size from the file's stat).
+- Running-pane → sidebar sync: picking a running session now also switches the Projects and Sessions panes to that session's project.
+
+### Changed
+
+- Default ccmgr/claude split is now 30/70 (was 50/50).
+- `__new__-N` placeholders in the Running pane resolve to the real session id and title on the next refresh tick instead of staying labeled `[project]/(new)`.
+- Sessions row drops the ambiguous `38m` message-count chip and the unused token figure.
+
 ## [0.1.3] - 2026-05-18
 
 ### Added

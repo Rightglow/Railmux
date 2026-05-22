@@ -62,11 +62,18 @@ def list_panes() -> list[str]:
         return []
 
 
-def split_window_h(cmd: str = "", target: str | None = None) -> str | None:
-    """Create a horizontal split (new pane to the right). Returns the new pane id."""
+def split_window_h(cmd: str = "", target: str | None = None, size_percent: int | None = None) -> str | None:
+    """Create a horizontal split (new pane to the right). Returns the new pane id.
+
+    `size_percent` sets the new (right) pane's width as a percentage of the
+    parent pane. E.g. size_percent=70 → ccmgr on the left at 30%, claude
+    pane on the right at 70%.
+    """
     if not in_tmux():
         return None
     args = ["tmux", "split-window", "-h", "-P", "-F", "#{pane_id}"]
+    if size_percent is not None:
+        args.extend(["-l", f"{size_percent}%"])
     if target:
         args.extend(["-t", target])
     if cmd:
@@ -111,6 +118,26 @@ def kill_pane(pane_id: str) -> bool:
     try:
         subprocess.check_call(
             ["tmux", "kill-pane", "-t", pane_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def set_window_option(name: str, value: str) -> bool:
+    """`tmux set-window-option -w <name> <value>` scoped to the current window.
+
+    Used by ccmgr to enable a visible border highlight on the active tmux
+    pane (so the claude pane lights up the same way ccmgr's urwid panes do
+    when focused) without leaking the setting into the user's other windows.
+    """
+    if not in_tmux():
+        return False
+    try:
+        subprocess.check_call(
+            ["tmux", "set-window-option", name, value],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

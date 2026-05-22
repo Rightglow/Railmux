@@ -32,6 +32,7 @@ def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
     title: str | None = None
     message_count = 0
     token_total = 0
+    git_branch: str | None = None
 
     try:
         with jsonl_path.open("r") as f:
@@ -52,6 +53,10 @@ def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
                     message_count += 1
                     usage = rec.get("message", {}).get("usage", {}) or {}
                     token_total += int(usage.get("input_tokens", 0)) + int(usage.get("output_tokens", 0))
+                if git_branch is None:
+                    gb = rec.get("gitBranch")
+                    if isinstance(gb, str) and gb:
+                        git_branch = gb
     except OSError:
         return None
 
@@ -68,6 +73,7 @@ def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
         message_count=message_count,
         token_total=token_total,
         last_mtime=mtime,
+        git_branch=git_branch,
     )
 
 

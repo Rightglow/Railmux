@@ -27,6 +27,10 @@ class SessionMeta:
     message_count: int
     token_total: int
     last_mtime: float
+    # Git branch name recorded in the JSONL (claude writes `gitBranch` on each
+    # record). None if the session has no git context. Mirrors the branch
+    # column in `claude --resume`.
+    git_branch: str | None = None
 
     @property
     def display_title(self) -> str:

@@ -23,7 +23,7 @@ If you're not already inside a tmux session, ccmgr will launch one automatically
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Move selection within the focused pane |
-| `Tab` / `Shift-Tab` | Switch focus between Projects and Sessions panes |
+| `Tab` / `Shift-Tab` | Cycle focus through the Projects, Sessions, and Running panes (focused pane gets a bright cyan border) |
 | `Enter` | Resume or start the selected session — claude opens (or re-attaches) in the right pane |
 | `Ctrl-B` then `←` | Move focus back to ccmgr from the right pane |
 | `Ctrl-B` then `→` | Move focus to the claude pane |

@@ -36,6 +36,10 @@ PALETTE = [
     ("dim", "dark gray", ""),
     ("live", "light green,bold", ""),
     ("live_tag", "yellow,bold", ""),
+    # Pane border. Dim by default; bright cyan + bold when the pane is focused
+    # so it's obvious which pane Tab/Shift-Tab landed on.
+    ("pane", "dark gray", ""),
+    ("pane_focus", "light cyan,bold", ""),
 ]
 
 
@@ -51,7 +55,15 @@ class App:
         self._claude_tmux_sessions: dict[str, str] = {}
         # detached tmux session name -> human-readable label for the Running pane
         self._running_labels: dict[str, str] = {}
+        # detached tmux session name -> the Project that session belongs to.
+        # Used by _on_running_select to re-sync the Projects/Sessions panes
+        # when the user jumps between running sessions of different projects.
+        self._running_projects: dict[str, Project] = {}
         self._new_session_counter: int = 0
+        # placeholder_key -> (project_real_path, created_at_epoch). Used by
+        # _refresh to promote `__new__-N` placeholders to the real session_id
+        # (and its display title) once claude creates the jsonl on disk.
+        self._placeholders: dict[str, tuple[Path, float]] = {}
         # The right pane in ccmgr's window; runs `tmux attach -t <claude_session>`.
         self._right_pane_id: str | None = None
         self._loop: urwid.MainLoop | None = None
@@ -65,10 +77,14 @@ class App:
         )
         self._running_pane = RunningSessionsPane(on_select=self._on_running_select)
 
+        # Wrap each pane in AttrMap so its LineBox border highlights when
+        # focused. The `pane`/`pane_focus` palette entries color only cells
+        # with no explicit attribute (the border chars) — inner rows have
+        # their own AttrMaps and are unaffected.
         self._sidebar = urwid.Pile([
-            ("weight", 2, self._projects_pane),
-            ("weight", 3, self._sessions_pane),
-            ("weight", 1, self._running_pane),
+            ("weight", 2, urwid.AttrMap(self._projects_pane, "pane", focus_map="pane_focus")),
+            ("weight", 3, urwid.AttrMap(self._sessions_pane, "pane", focus_map="pane_focus")),
+            ("weight", 1, urwid.AttrMap(self._running_pane, "pane", focus_map="pane_focus")),
         ])
         self._help_bar = HelpBar()
         footer = urwid.Pile([
@@ -102,12 +118,27 @@ class App:
         self._launch_resume(session)
 
     def _on_running_select(self, entry: RunningEntry) -> None:
-        # Just re-attach the right pane to this already-running claude session.
+        # Re-attach the right pane to this already-running claude session AND
+        # sync the Projects/Sessions panes to that session's project, so the
+        # sidebar reflects what's actually showing on the right.
         ok = self._attach_in_right_pane(entry.tmux_name)
-        if ok:
-            self._status.set_message(f"→ {entry.label}")
-        else:
+        if not ok:
             self._status.set_message("failed to re-attach")
+            return
+        project = self._running_projects.get(entry.tmux_name)
+        if project is not None and (
+            self._selected_project is None
+            or self._selected_project.encoded_name != project.encoded_name
+        ):
+            self._selected_project = project
+            self._projects_pane.set_selected(project.encoded_name)
+            sessions = self._session_cache.list_sessions(project)
+            self._sessions_pane.set_sessions(
+                project,
+                sessions,
+                running_ids=set(self._claude_tmux_sessions.keys()),
+            )
+        self._status.set_message(f"→ {entry.label}")
 
     # --- tmux integration (detached session per claude + attach in right pane) ---
 
@@ -141,10 +172,17 @@ class App:
         if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
             ok = tmux_ctl.respawn_pane(self._right_pane_id, attach_cmd)
         else:
-            new_id = tmux_ctl.split_window_h(attach_cmd)
+            # ccmgr (left) at 30%, claude (right, the new pane) at 70%.
+            new_id = tmux_ctl.split_window_h(attach_cmd, size_percent=70)
             if not new_id:
                 return False
             self._right_pane_id = new_id
+            # tmux only draws pane borders once there are 2+ panes. We just
+            # created the second one, so now is the moment to apply the
+            # active/inactive border palette — matches the bright-cyan focus
+            # highlight ccmgr uses on its own urwid panes.
+            tmux_ctl.set_window_option("pane-border-style", "fg=colour240")
+            tmux_ctl.set_window_option("pane-active-border-style", "fg=cyan,bold")
             ok = True
         if ok and self._right_pane_id:
             tmux_ctl.select_pane(self._right_pane_id)
@@ -164,6 +202,7 @@ class App:
             return
         self._claude_tmux_sessions[sid] = claude_tmux_name
         self._running_labels[claude_tmux_name] = f"{session_meta.project.display_name}/{session_meta.display_title}"
+        self._running_projects[claude_tmux_name] = session_meta.project
         if not self._attach_in_right_pane(claude_tmux_name):
             self._status.set_message("failed to attach to claude session")
             return
@@ -186,6 +225,9 @@ class App:
             return
         self._claude_tmux_sessions[placeholder] = claude_tmux_name
         self._running_labels[claude_tmux_name] = f"{self._selected_project.display_name}/(new)"
+        self._running_projects[claude_tmux_name] = self._selected_project
+        import time
+        self._placeholders[placeholder] = (self._selected_project.real_path, time.time())
         if not self._attach_in_right_pane(claude_tmux_name):
             self._status.set_message("failed to attach")
             return
@@ -208,6 +250,8 @@ class App:
             return
         self._claude_tmux_sessions[placeholder] = claude_tmux_name
         self._running_labels[claude_tmux_name] = f"{path.name}/(new)"
+        import time
+        self._placeholders[placeholder] = (path, time.time())
         if not self._attach_in_right_pane(claude_tmux_name):
             self._status.set_message("failed to attach")
             return
@@ -353,6 +397,11 @@ class App:
             return
 
     def _rotate_focus(self, reverse: bool = False) -> None:
+        """Tab / Shift-Tab cycle through the three ccmgr sidebar panes.
+
+        Jumping in/out of the claude pane uses tmux's native nav (Ctrl-B ←/→)
+        so Tab keeps its normal meaning inside claude (autocomplete).
+        """
         n = len(self._sidebar.contents)
         if n <= 1:
             return
@@ -425,6 +474,12 @@ class App:
             if not tmux_ctl.session_exists(self._claude_tmux_sessions[sid]):
                 tmux_name = self._claude_tmux_sessions.pop(sid)
                 self._running_labels.pop(tmux_name, None)
+                self._running_projects.pop(tmux_name, None)
+                self._placeholders.pop(sid, None)
+
+        # Promote any `__new__-N` placeholders to their real session_id +
+        # display title once claude has written the jsonl on disk.
+        self._resolve_placeholders(projects)
         running_ids = set(self._claude_tmux_sessions.keys())
         if self._selected_project is not None:
             matched = next((p for p in projects if p.encoded_name == self._selected_project.encoded_name), None)
@@ -446,6 +501,50 @@ class App:
         if self._claude_tmux_sessions:
             n = len(self._claude_tmux_sessions)
             self._status.set_message(f"● = running ({n}) · Enter on a row re-attaches it · Ctrl-B ← = ccmgr")
+
+    def _resolve_placeholders(self, projects: list[Project]) -> None:
+        """Replace any `__new__-N` placeholder key with the real session_id.
+
+        For each live placeholder, look at its project's sessions and pick the
+        newest one created after the placeholder timestamp whose session_id is
+        not already claimed by another running tmux session. Update both the
+        running-pane label and the _claude_tmux_sessions key.
+        """
+        if not self._placeholders:
+            return
+        # Index projects by real_path for cheap lookup. New-project flow may
+        # create a project dir that didn't exist when ccmgr started, so we
+        # rely on `projects` being a fresh list_projects() result.
+        by_path = {p.real_path: p for p in projects}
+        claimed = set(self._claude_tmux_sessions.keys())
+        for placeholder, (real_path, created_at) in list(self._placeholders.items()):
+            if placeholder not in self._claude_tmux_sessions:
+                self._placeholders.pop(placeholder, None)
+                continue
+            project = by_path.get(real_path)
+            if project is None:
+                continue
+            sessions = self._session_cache.list_sessions(project)
+            # Newest session created since this placeholder was launched, not
+            # already in use by another tmux session.
+            candidate: SessionMeta | None = None
+            for s in sessions:
+                if s.session_id in claimed:
+                    continue
+                if s.last_mtime + 1.0 < created_at:
+                    continue
+                if candidate is None or s.last_mtime > candidate.last_mtime:
+                    candidate = s
+            if candidate is None:
+                continue
+            tmux_name = self._claude_tmux_sessions.pop(placeholder)
+            self._claude_tmux_sessions[candidate.session_id] = tmux_name
+            self._running_labels[tmux_name] = (
+                f"{candidate.project.display_name}/{candidate.display_title}"
+            )
+            self._running_projects[tmux_name] = candidate.project
+            self._placeholders.pop(placeholder, None)
+            claimed.add(candidate.session_id)
 
     def _currently_focused_session_meta(self) -> SessionMeta | None:
         if not self._sessions_pane._walker:
