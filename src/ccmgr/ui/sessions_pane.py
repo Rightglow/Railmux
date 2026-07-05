@@ -236,16 +236,4 @@ class SessionsPane(urwid.WidgetWrap):
                 if isinstance(focus_w, _SessionRow):
                     self._on_select(focus_w.session)
                     return None
-        # Boundary consume.
-        if key == "up" and self._pile.focus_position == 0:
-            return None
-        if key == "down":
-            if self._pile.focus_position == listbox_pos and self._walker:
-                cur = self._walker.focus
-                last_selectable_idx = None
-                for i, w in enumerate(self._walker):
-                    if isinstance(w, _SessionRow):
-                        last_selectable_idx = i
-                if last_selectable_idx is not None and cur == last_selectable_idx:
-                    return None
         return super().keypress(size, key)

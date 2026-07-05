@@ -167,18 +167,4 @@ class ProjectsPane(urwid.WidgetWrap):
             if proj is not None:
                 self._on_select(proj)
                 return None
-        # Consume up/down at the boundary so focus doesn't escape into the
-        # sibling Sessions pane.
-        if key == "up" and self._pile.focus_position == 0:
-            return None
-        if key == "down":
-            # If focus is in the ListBox and we're at the last selectable row, consume.
-            if self._pile.focus_position == 2 and self._walker:
-                cur = self._walker.focus
-                last_selectable_idx = None
-                for i, w in enumerate(self._walker):
-                    if isinstance(w, _ProjectRow):
-                        last_selectable_idx = i
-                if last_selectable_idx is not None and cur == last_selectable_idx:
-                    return None
         return super().keypress(size, key)

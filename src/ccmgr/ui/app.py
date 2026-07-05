@@ -22,6 +22,7 @@ from ccmgr.ui.modals import (
     DeleteConfirmModal,
     HelpModal,
     NewProjectModal,
+    PathBrowserModal,
     ProjectInfoModal,
     QuitConfirmModal,
     RenameModal,
@@ -281,8 +282,12 @@ class App:
     # --- modals ---
 
     def _open_new_project_modal(self) -> None:
-        modal = NewProjectModal(on_submit=self._on_new_project_submit, on_cancel=self._close_modal)
-        self._show_overlay(modal, width=50, height=30)
+        modal = PathBrowserModal(
+            start_path=Path.home(),
+            on_submit=self._on_new_project_submit,
+            on_cancel=self._close_modal,
+        )
+        self._show_overlay(modal, width=54, height=60)
 
     def _open_info_modal(self) -> None:
         """Show info for whichever pane has focus: Project, Sessions, or Running."""
@@ -429,6 +434,14 @@ class App:
     # --- key handling ---
 
     def _on_input(self, key: str) -> None:
+        # Up/down that bubble through unhandled → pane boundary reached.
+        # Move focus to the adjacent pane.
+        if key == "up" and self._sidebar.focus_position > 0:
+            self._sidebar.focus_position = self._sidebar.focus_position - 1
+            return
+        if key == "down" and self._sidebar.focus_position < 2:
+            self._sidebar.focus_position = self._sidebar.focus_position + 1
+            return
         if key == "esc":
             # Esc navigates "up" the pane hierarchy:
             #   Running → Sessions → Projects

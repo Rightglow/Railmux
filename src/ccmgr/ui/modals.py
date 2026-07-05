@@ -326,3 +326,135 @@ class RenameModal(urwid.WidgetWrap):
             self._on_cancel()
             return None
         return super().keypress(size, key)
+
+
+class _BrowserRow(urwid.WidgetWrap):
+    """A selectable row for the directory browser."""
+    def __init__(self, markup, attr):
+        self._body = urwid.AttrMap(urwid.Text(markup, wrap="clip"),
+                                   attr, focus_map="focus")
+        super().__init__(self._body)
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        return key
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        return super().mouse_event(size, event, button, col, row, focus)
+
+
+class PathBrowser(urwid.WidgetWrap):
+    """Directory browser: navigate with arrows, Enter to descend/confirm.
+
+    First row is always ``. (use this path)`` — selecting it confirms
+    the current directory.  Subdirectories are listed below with a
+    ``/`` suffix.
+    """
+
+    def __init__(self, start_path: Path,
+                 on_select: Callable[[Path], None]) -> None:
+        self._path = start_path.expanduser().resolve()
+        self._on_select = on_select
+        self._items: list[Path] = []            # item 0 = current dir
+        self._walker = urwid.SimpleFocusListWalker([])
+        self._listbox = urwid.ListBox(self._walker)
+        self._path_text = urwid.Text("", wrap="clip")
+
+        header = urwid.Pile([
+            ("pack", self._path_text),
+            ("pack", urwid.Divider("─")),
+            ("weight", 1, self._listbox),
+            ("pack", urwid.Divider("─")),
+            ("pack", urwid.Text(
+                ("dim", "↑↓ navigate  ↵ enter dir / confirm  "
+                 "← backspace = parent  Esc = back"),
+                align="left",
+            )),
+        ])
+        header.focus_position = 2  # the ListBox
+        super().__init__(urwid.LineBox(header, title="Choose directory"))
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self._path_text.set_text(str(self._path))
+        self._items = [self._path]
+        try:
+            entries = sorted(self._path.iterdir(),
+                             key=lambda p: (not p.is_dir(), p.name.lower()))
+        except OSError:
+            entries = []
+        self._items.extend(entries)
+
+        rows: list = [
+            _BrowserRow(".  (use this path)", "live_tag"),
+        ]
+        for p in entries:
+            label = p.name + ("/" if p.is_dir() else "")
+            rows.append(_BrowserRow(
+                "  " + label,
+                "live" if p.is_dir() else "dim",
+            ))
+        self._walker[:] = rows
+        self._walker.set_focus(0)
+
+    def _cur_path(self) -> Path | None:
+        if not self._walker:
+            return None
+        idx = self._walker.focus
+        if 0 <= idx < len(self._items):
+            return self._items[idx]
+        return None
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        if key in ("up", "down", "j", "k"):
+            return self._listbox.keypress(size, key)
+        if key == "enter":
+            p = self._cur_path()
+            if p is not None:
+                if p == self._path:
+                    self._on_select(self._path)
+                    return None
+                if p.is_dir():
+                    self._path = p
+                    self._refresh()
+            return None
+        if key == "backspace":
+            parent = self._path.parent
+            if parent != self._path:
+                self._path = parent
+                self._refresh()
+            return None
+        return super().keypress(size, key)
+
+
+class PathBrowserModal(urwid.WidgetWrap):
+    """Overlay wrapper: Esc calls PathBrowser to go up one level, or
+    cancels if already at the root."""
+
+    def __init__(self, start_path: Path,
+                 on_submit: Callable[[Path], None],
+                 on_cancel: Callable[[], None]) -> None:
+        self._on_cancel = on_cancel
+        self._browser = PathBrowser(start_path, on_submit)
+        self._close_on_next_esc = False
+        super().__init__(self._browser)
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        if key == "esc":
+            parent = self._browser._path.parent
+            if parent == self._browser._path:
+                # Already at root — cancel.
+                self._on_cancel()
+            else:
+                self._browser._path = parent
+                self._browser._refresh()
+            return None
+        return super().keypress(size, key)
