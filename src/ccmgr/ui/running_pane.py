@@ -14,8 +14,10 @@ class RunningEntry:
 
 
 class _RunningRow(urwid.WidgetWrap):
-    def __init__(self, entry: RunningEntry) -> None:
+    def __init__(self, entry: RunningEntry,
+                 on_click: "Callable[[], None] | None" = None) -> None:
         self.entry = entry
+        self._on_click = on_click
         markup = ["● ", entry.label]
         self._text = urwid.Text(markup, wrap="clip")
         focus_remap = {None: "focus", "live": "focus"}
@@ -26,6 +28,12 @@ class _RunningRow(urwid.WidgetWrap):
 
     def keypress(self, size, key):
         return key
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        if event == "mouse press" and button == 1 and self._on_click:
+            self._on_click()
+            return True
+        return super().mouse_event(size, event, button, col, row, focus)
 
 
 class RunningSessionsPane(urwid.WidgetWrap):
@@ -49,7 +57,7 @@ class RunningSessionsPane(urwid.WidgetWrap):
             self._walker[:] = [urwid.Text(("dim", "  (no running sessions)"), align="left")]
             self._linebox.set_title("Running")
             return
-        self._walker[:] = [_RunningRow(e) for e in entries]
+        self._walker[:] = [_RunningRow(e, on_click=lambda e=e: self._on_select(e)) for e in entries]
         self._linebox.set_title(f"Running ({len(entries)})")
         self._restore_focus(prior)
 

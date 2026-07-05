@@ -57,7 +57,8 @@ def list_panes() -> list[str]:
             ["tmux", "list-panes", "-F", "#{pane_id}"],
             stderr=subprocess.DEVNULL,
         )
-        return out.decode().strip().splitlines()
+        text = out.decode().strip()
+        return text.splitlines() if text else []
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
 
@@ -158,6 +159,19 @@ def select_pane(pane_id: str) -> bool:
         return False
 
 
+def resize_pane(pane_id: str, direction: str, amount: int) -> bool:
+    """Resize a pane. direction is -L/-R/-U/-D (tmux flags)."""
+    try:
+        subprocess.check_call(
+            ["tmux", "resize-pane", "-t", pane_id, direction, str(amount)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def pane_alive(pane_id: str) -> bool:
     """True if the pane id still exists in any window."""
     if not in_tmux():
@@ -167,7 +181,8 @@ def pane_alive(pane_id: str) -> bool:
             ["tmux", "list-panes", "-a", "-F", "#{pane_id}"],
             stderr=subprocess.DEVNULL,
         )
-        ids = out.decode().strip().splitlines()
+        text = out.decode().strip()
+        ids = text.splitlines() if text else []
         return pane_id in ids
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
@@ -180,6 +195,19 @@ def new_detached_session(name: str, cmd: str) -> bool:
             ["tmux", "new-session", "-d", "-s", name, cmd],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+        )
+        # Enable mouse + clipboard sync in the inner session.
+        # - mouse on: scroll → tmux copy-mode, click → focus
+        # - set-clipboard on: text selection → system clipboard
+        # Right-click is intercepted by tmux copy-mode (extend selection);
+        # use keyboard shortcuts for context-menu actions in Claude Code.
+        subprocess.check_call(
+            ["tmux", "set-option", "-t", name, "mouse", "on"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            ["tmux", "set-option", "-t", name, "set-clipboard", "on"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -261,3 +289,33 @@ def kill_window(window_id: str) -> bool:
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
+
+
+def _kill_dead_panes() -> None:
+    """Kill panes marked 'dead' in the current window (e.g. terminal exited).
+
+    Dead panes show 'Pane is dead' as their title.  Removing them keeps the
+    tmux layout clean and prevents border-color artifacts.
+    """
+    if not in_tmux():
+        return
+    try:
+        out = subprocess.check_output(
+            ["tmux", "list-panes", "-F", "#{pane_id} #{pane_dead}"],
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return
+    for line in out.decode().strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[1] == "1":
+            try:
+                subprocess.check_call(
+                    ["tmux", "kill-pane", "-t", parts[0]],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
