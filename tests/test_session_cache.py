@@ -60,7 +60,8 @@ def test_cache_reparses_when_mtime_changes(claude_home, write_session_fixture, t
     ])
     cache = SessionCache()
     first = cache.list_sessions(project)
-    assert first[0].message_count == 1
+    # 1 user record + 1 auto-injected assistant record (see conftest.py).
+    assert first[0].message_count == 2
 
     jsonl = first[0].jsonl_path
     with jsonl.open("a") as f:
@@ -69,7 +70,7 @@ def test_cache_reparses_when_mtime_changes(claude_home, write_session_fixture, t
     os.utime(jsonl, (new_mtime, new_mtime))
 
     second = cache.list_sessions(project)
-    assert second[0].message_count == 2
+    assert second[0].message_count == 3
 
 
 def test_cache_drops_entries_for_deleted_sessions(claude_home, write_session_fixture, tmp_path):

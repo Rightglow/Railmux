@@ -75,8 +75,9 @@ def test_session_with_no_title_uses_fallback(claude_home, write_session_fixture,
         ]),
     ])
     sessions = list_sessions(project)
-    assert sessions[0].title is None
-    assert sessions[0].display_title == "session cccccccc"
+    # No ai-title → falls back to first user message.
+    assert sessions[0].title == "hi"
+    assert sessions[0].display_title == "hi"
 
 
 def test_malformed_lines_are_skipped(claude_home, write_session_fixture, tmp_path):
@@ -88,11 +89,12 @@ def test_malformed_lines_are_skipped(claude_home, write_session_fixture, tmp_pat
     with (jpath / "dddddddd-dddd-dddd-dddd-dddddddddddd.jsonl").open("w") as f:
         f.write("not json at all\n")
         f.write('{"type": "user", "message": {"role": "user", "content": "hi"}}\n')
+        f.write('{"type": "assistant", "message": {"role": "assistant", "content": "ok", "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}}}\n')
         f.write("{partial json\n")
     project = list_projects(claude_home)[0]
     sessions = list_sessions(project)
     assert len(sessions) == 1
-    assert sessions[0].message_count == 1
+    assert sessions[0].message_count == 2  # 1 user + 1 assistant
 
 
 def test_is_live_within_threshold(claude_home, write_session_fixture, tmp_path):

@@ -9,9 +9,11 @@ from ccmgr.models import Project
 
 
 class _ProjectRow(urwid.WidgetWrap):
-    def __init__(self, project: Project, selected: bool = False) -> None:
+    def __init__(self, project: Project, selected: bool = False,
+                 on_click: "Callable[[], None] | None" = None) -> None:
         label = f"{project.display_name} [{project.session_count}]"
         self.project = project
+        self._on_click = on_click
         self._text = urwid.Text(label)
         attr = "selected" if selected else None
         super().__init__(urwid.AttrMap(self._text, attr, focus_map="focus"))
@@ -22,9 +24,16 @@ class _ProjectRow(urwid.WidgetWrap):
     def keypress(self, size, key):
         return key
 
+    def mouse_event(self, size, event, button, col, row, focus):
+        if event == "mouse press" and button == 1 and self._on_click:
+            self._on_click()
+            return True
+        return super().mouse_event(size, event, button, col, row, focus)
+
 
 class _NewProjectRow(urwid.WidgetWrap):
-    def __init__(self) -> None:
+    def __init__(self, on_click: "Callable[[], None] | None" = None) -> None:
+        self._on_click = on_click
         self._text = urwid.Text("+ New project", align="left")
         super().__init__(urwid.AttrMap(self._text, "dim", focus_map="focus"))
 
@@ -33,6 +42,12 @@ class _NewProjectRow(urwid.WidgetWrap):
 
     def keypress(self, size, key):
         return key
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        if event == "mouse press" and button == 1 and self._on_click:
+            self._on_click()
+            return True
+        return super().mouse_event(size, event, button, col, row, focus)
 
 
 class ProjectsPane(urwid.WidgetWrap):
@@ -57,7 +72,7 @@ class ProjectsPane(urwid.WidgetWrap):
         self._filter = ""
         self._selected_encoded_name: str | None = None
 
-        self._new_row = _NewProjectRow()
+        self._new_row = _NewProjectRow(on_click=lambda: self._on_select(None))
         self._walker = urwid.SimpleFocusListWalker(self._build_rows(projects))
         self._listbox = urwid.ListBox(self._walker)
         self._pile = urwid.Pile([
@@ -74,7 +89,8 @@ class ProjectsPane(urwid.WidgetWrap):
         needle = self._filter.lower()
         sel = self._selected_encoded_name
         rows = [
-            _ProjectRow(p, selected=(p.encoded_name == sel))
+            _ProjectRow(p, selected=(p.encoded_name == sel),
+                        on_click=lambda p=p: self._on_select(p))
             for p in projects
             if needle in str(p.real_path).lower()
         ]

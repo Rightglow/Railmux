@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ccmgr.models import Project
 from ccmgr.path_codec import decode
+from ccmgr.session_index import _looks_like_uuid
 
 
 # Module-level cache: (claude_home, projects_dir_mtime) -> list[Project]
@@ -74,7 +75,7 @@ def list_projects(claude_home: Path) -> list[Project]:
 
 
 def _count_and_latest_mtime(claude_dir: Path) -> tuple[int, float]:
-    """Count *.jsonl files and the max mtime in one scandir pass."""
+    """Count UUID-named *.jsonl session files and the max mtime in one scandir pass."""
     count = 0
     latest = 0.0
     try:
@@ -84,6 +85,8 @@ def _count_and_latest_mtime(claude_dir: Path) -> tuple[int, float]:
     with scan:
         for entry in scan:
             if not entry.name.endswith(".jsonl"):
+                continue
+            if not _looks_like_uuid(Path(entry.name).stem):
                 continue
             count += 1
             try:

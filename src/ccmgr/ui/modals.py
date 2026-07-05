@@ -47,11 +47,21 @@ class ProjectInfoModal(urwid.WidgetWrap):
 class QuitConfirmModal(urwid.WidgetWrap):
     """Confirm-quit popup. y/Y/Enter confirms; n/N/Esc cancels."""
 
-    def __init__(self, on_confirm: Callable[[], None], on_cancel: Callable[[], None]) -> None:
+    def __init__(self, on_confirm: Callable[[], None], on_cancel: Callable[[], None],
+                 running_count: int = 0) -> None:
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
+
+        if running_count > 0:
+            session_word = "session" if running_count == 1 else "sessions"
+            summary = f"{running_count} Claude {session_word} still running.  Quit will kill them all."
+        else:
+            summary = "No running sessions."
+
         body = urwid.Pile([
             urwid.Text("Quit ccmgr?", align="center"),
+            urwid.Divider(),
+            urwid.Text(("live", summary), align="center"),
             urwid.Divider(),
             urwid.Text("This will kill the right tmux pane (claude) and the", align="center"),
             urwid.Text("auto-launched tmux session (if any).", align="center"),
@@ -84,23 +94,31 @@ class HelpModal(urwid.WidgetWrap):
         ("Actions", [
             ("Enter", "Open or resume the selected session"),
             ("Enter on '+ New project'", "Prompt for a path, start fresh claude there"),
-            ("Enter on '+ New session'", "Start a fresh claude in the current project"),
+            ("Enter on '+ New session' or n", "Start a fresh claude in the current project"),
             ("/", "Filter the focused pane; Enter or Esc exits filter mode"),
             ("i", "Popup with details of the focused project / session"),
             ("c", "Open the active project in VS Code (`code <path>`)"),
             ("t", "Open a terminal in the active project (new tmux window)"),
+            ("[ / ]", "Resize divider: shrink / expand ccmgr sidebar"),
+            ("r", "Rename the focused session"),
+            ("f", "Toggle favorite (pin to top of session list)"),
+            ("d", "Delete the focused session (prompts for confirmation)"),
             ("?", "This help"),
-            ("q", "Quit ccmgr (kills the right tmux pane + auto-launched session)"),
+            ("q or Ctrl-C", "Quit ccmgr (prompts for confirmation, kills all sessions)"),
         ]),
         ("tmux pane switching (outer prefix)", [
             ("Ctrl-B then →", "Move focus to claude (right pane)"),
             ("Ctrl-B then ←", "Move focus back to ccmgr (left pane)"),
             ("Ctrl-B then o", "Cycle through panes"),
+            ("Ctrl-B d", "Detach from ccmgr (keep sessions alive, return to bash)"),
         ]),
         ("Notes", [
             ("State preservation", "Each session runs in its own detached tmux"),
             ("", "session. Switching keeps every claude alive — no"),
             ("", "responses or tool calls are interrupted."),
+            ("", ""),
+            ("Status dots", "🟢 idle · 🟡 busy · 🔴 blocked (needs input)"),
+            ("", "⭐ = favorited (pinned to top)"),
             ("", ""),
             ("Inner tmux prefix", "Press Ctrl-B twice (Ctrl-B Ctrl-B) to send"),
             ("", "tmux commands to the inner (claude) session."),
@@ -150,6 +168,10 @@ class SessionInfoModal(urwid.WidgetWrap):
                 urwid.Text(f"messages:  {session.message_count}"),
                 urwid.Text(f"tokens:    {session.token_total}"),
             ]
+            if session.last_user_message:
+                body_lines.append(urwid.Divider())
+                body_lines.append(urwid.Text("last user input:"))
+                body_lines.append(urwid.Text(("dim", f"  {session.last_user_message}"), wrap="clip"))
             if running_label:
                 body_lines.append(urwid.Divider())
                 body_lines.append(urwid.Text(("live", f"▶ running in tmux: {running_label}")))
@@ -190,6 +212,115 @@ class NewProjectModal(urwid.WidgetWrap):
                 return None
             expanded = Path(raw).expanduser()
             self._on_submit(expanded)
+            return None
+        if key == "esc":
+            self._on_cancel()
+            return None
+        return super().keypress(size, key)
+
+
+class RunningInfoModal(urwid.WidgetWrap):
+    """Read-only popup with details of a running session entry."""
+
+    def __init__(self, label: str, tmux_name: str, project: "Project | None",
+                 session: "SessionMeta | None", is_placeholder: bool,
+                 on_close: Callable[[], None]) -> None:
+        self._on_close = on_close
+
+        body_lines: list = [
+            urwid.Text(("title", label)),
+            urwid.Divider(),
+            urwid.Text(f"tmux session:  {tmux_name}"),
+        ]
+        if project is not None:
+            body_lines.append(urwid.Text(f"project:       {project.real_path}"))
+        else:
+            body_lines.append(urwid.Text("project:       (unknown)"))
+
+        if is_placeholder:
+            body_lines.append(urwid.Divider())
+            body_lines.append(urwid.Text(("live", "(initializing — waiting for Claude to start)")))
+        elif session is not None:
+            body_lines.append(urwid.Divider())
+            body_lines.append(urwid.Text(f"session id:    {session.session_id}"))
+            body_lines.append(urwid.Text(f"messages:      {session.message_count}"))
+            body_lines.append(urwid.Text(f"tokens:        {session.token_total}"))
+        else:
+            body_lines.append(urwid.Divider())
+            body_lines.append(urwid.Text(("dim", "(session metadata not available)")))
+
+        body_lines.append(urwid.Divider())
+        body_lines.append(urwid.Text(("dim", "Esc or Enter to close"), align="left"))
+        super().__init__(urwid.LineBox(urwid.Filler(urwid.Pile(body_lines), valign="top"), title="Running session"))
+
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        if key in ("enter", "esc"):
+            self._on_close()
+            return None
+        return key
+
+
+class DeleteConfirmModal(urwid.WidgetWrap):
+    """Confirm-delete popup for a session. y/Y/Enter confirms; n/N/Esc cancels."""
+
+    def __init__(self, title: str, detail: str,
+                 on_confirm: Callable[[], None], on_cancel: Callable[[], None]) -> None:
+        self._on_confirm = on_confirm
+        self._on_cancel = on_cancel
+        body = urwid.Pile([
+            urwid.Text(title, align="center"),
+            urwid.Divider(),
+            urwid.Text(detail, align="center"),
+            urwid.Divider(),
+            urwid.Text(("dim", "y / Enter = delete,  n / Esc = cancel"), align="center"),
+        ])
+        super().__init__(urwid.LineBox(urwid.Filler(body, valign="middle"), title="Confirm delete"))
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        if key in ("y", "Y", "enter"):
+            self._on_confirm()
+            return None
+        if key in ("n", "N", "esc"):
+            self._on_cancel()
+            return None
+        return key
+
+
+class RenameModal(urwid.WidgetWrap):
+    """Inline rename popup. Enter submits the new title; Esc cancels."""
+
+    def __init__(self, current_title: str,
+                 on_submit: Callable[[str], None],
+                 on_cancel: Callable[[], None]) -> None:
+        self._on_submit = on_submit
+        self._on_cancel = on_cancel
+        self._edit = urwid.Edit(caption="title: ", edit_text=current_title)
+        body = urwid.Pile([
+            urwid.Text("Rename session:"),
+            urwid.Divider(),
+            self._edit,
+            urwid.Divider(),
+            urwid.Text(("dim", "Enter to save, Esc to cancel"), align="left"),
+        ])
+        super().__init__(urwid.LineBox(urwid.Filler(body, valign="top"), title="Rename"))
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        if key == "enter":
+            raw = self._edit.edit_text.strip()
+            if raw:
+                self._on_submit(raw)
+            else:
+                self._on_cancel()
             return None
         if key == "esc":
             self._on_cancel()
