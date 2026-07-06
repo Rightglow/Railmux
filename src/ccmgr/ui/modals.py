@@ -84,6 +84,18 @@ class QuitConfirmModal(urwid.WidgetWrap):
         return key
 
 
+class _Selectable(urwid.WidgetWrap):
+    """Tiny wrapper that makes any widget selectable for ListBox navigation."""
+    def __init__(self, widget):
+        super().__init__(widget)
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        return key
+
+
 class HelpModal(urwid.WidgetWrap):
     """Read-only popup listing all keybindings. Esc or Enter dismisses."""
 
@@ -98,13 +110,13 @@ class HelpModal(urwid.WidgetWrap):
             ("Enter on '+ New session' or n", "Start a fresh claude in the current project"),
             ("/", "Filter the focused pane; Enter or Esc exits filter mode"),
             ("i", "Popup with details of the focused project / session"),
-            ("c", "Open the active project in VS Code (`code <path>`)"),
-            ("t", "Open a terminal in the active project (new tmux window)"),
             ("[ / ]", "Resize divider: shrink / expand ccmgr sidebar"),
             ("r", "Rename the focused session"),
             ("f", "Toggle favorite (pin to top of session list)"),
             ("k", "Kill the running Claude process (keeps session file)"),
             ("d", "Delete the focused session (prompts for confirmation)"),
+            ("t", "Open a terminal in the active project (new tmux split)"),
+            ("c", "Open the active project in VS Code (`code <path>`)"),
             ("?", "This help"),
             ("q or Ctrl-C", "Quit ccmgr (prompts for confirmation, kills all sessions)"),
         ]),
@@ -121,9 +133,6 @@ class HelpModal(urwid.WidgetWrap):
             ("", ""),
             ("Status dots", "🟢 idle · 🟡 busy · 🔴 blocked (needs input)"),
             ("", "⭐ = favorited (pinned to top)"),
-            ("", ""),
-            ("Inner tmux prefix", "Press Ctrl-B twice (Ctrl-B Ctrl-B) to send"),
-            ("", "tmux commands to the inner (claude) session."),
         ]),
     ]
 
@@ -131,15 +140,16 @@ class HelpModal(urwid.WidgetWrap):
         self._on_close = on_close
         rows: list = []
         for section_title, bindings in self.SECTIONS:
-            rows.append(urwid.Text(("title", section_title)))
+            rows.append(_Selectable(urwid.Text(("title", section_title))))
             for key, desc in bindings:
-                rows.append(urwid.Columns([
+                rows.append(_Selectable(urwid.Columns([
                     ("fixed", 28, urwid.Text(key, align="left")),
                     urwid.Text(desc, align="left"),
-                ], dividechars=1))
-            rows.append(urwid.Divider())
-        rows.append(urwid.Text(("dim", "Esc or Enter to close"), align="left"))
-        super().__init__(urwid.LineBox(urwid.Filler(urwid.Pile(rows), valign="top"), title="Help"))
+                ], dividechars=1)))
+            rows.append(_Selectable(urwid.Divider()))
+        rows.append(_Selectable(urwid.Text(("dim", "Esc or Enter to close"), align="left")))
+        body = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
+        super().__init__(urwid.LineBox(body, title="Help"))
 
     def selectable(self) -> bool:
         return True
@@ -190,35 +200,6 @@ class SessionInfoModal(urwid.WidgetWrap):
             return None
         return key
 
-
-class NewProjectModal(urwid.WidgetWrap):
-    """Prompts for a directory path; calls `on_submit(path)` or `on_cancel()`."""
-
-    def __init__(self, on_submit: Callable[[Path], None], on_cancel: Callable[[], None]) -> None:
-        self._on_submit = on_submit
-        self._on_cancel = on_cancel
-        self._edit = urwid.Edit(caption="path: ", edit_text=str(Path.home()) + "/")
-        body = urwid.Pile([
-            urwid.Text("Create a new project at:"),
-            urwid.Divider(),
-            self._edit,
-            urwid.Divider(),
-            urwid.Text("Enter to submit, Esc to cancel.", align="left"),
-        ])
-        super().__init__(urwid.LineBox(urwid.Filler(body, valign="top"), title="New Project"))
-
-    def keypress(self, size, key):
-        if key == "enter":
-            raw = self._edit.edit_text.strip()
-            if not raw:
-                return None
-            expanded = Path(raw).expanduser()
-            self._on_submit(expanded)
-            return None
-        if key == "esc":
-            self._on_cancel()
-            return None
-        return super().keypress(size, key)
 
 
 class RunningInfoModal(urwid.WidgetWrap):

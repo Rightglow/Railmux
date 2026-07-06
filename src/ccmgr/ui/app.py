@@ -7,6 +7,7 @@ popup.
 """
 from __future__ import annotations
 
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +25,6 @@ from ccmgr.ui import keymap
 from ccmgr.ui.modals import (
     DeleteConfirmModal,
     HelpModal,
-    NewProjectModal,
     PathBrowserModal,
     ProjectInfoModal,
     QuitConfirmModal,
@@ -95,6 +95,8 @@ class App:
         self._right_pane_id: str | None = None
         self._loop: urwid.MainLoop | None = None
         self._last_screen_size: tuple[int, int] | None = None
+        self._help_right_was_open: bool = False
+        self._help_saved_width: str = ""
 
         projects = list_projects(claude_home)
         self._projects_pane = ProjectsPane(projects, on_select=self._on_project_select)
@@ -346,8 +348,40 @@ class App:
         self._show_overlay(modal, width=60, height=40)
 
     def _open_help_modal(self) -> None:
-        modal = HelpModal(on_close=self._close_modal)
-        self._show_overlay(modal, width=70, height=80)
+        # Temporarily shrink the right pane so help gets full terminal width.
+        # Claude keeps running — it's in a detached tmux session.
+        self._help_right_was_open = (
+            self._right_pane_id is not None
+            and tmux_ctl.pane_alive(self._right_pane_id)
+        )
+        if self._help_right_was_open:
+            import subprocess as _sp
+            # Save current width so we can restore it exactly.
+            saved = _sp.check_output(
+                ["tmux", "display-message", "-p", "-t", self._right_pane_id,
+                 "-F", "#{pane_width}"],
+                stderr=_sp.DEVNULL,
+            )
+            self._help_saved_width = saved.decode().strip()
+            _sp.run(
+                ["tmux", "resize-pane", "-t", self._right_pane_id, "-x", "1"],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+
+        modal = HelpModal(on_close=self._close_help_modal)
+        self._show_overlay(modal, width=60, height=80)
+
+    def _close_help_modal(self) -> None:
+        self._close_modal()
+        if self._help_right_was_open and self._right_pane_id:
+            import subprocess as _sp
+            _sp.run(
+                ["tmux", "resize-pane", "-t", self._right_pane_id, "-x",
+                 self._help_saved_width],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+        self._help_right_was_open = False
+        self._help_saved_width = ""
 
     def _open_quit_confirm(self) -> None:
         modal = QuitConfirmModal(
@@ -372,7 +406,6 @@ class App:
         return self._selected_project
 
     def _open_editor_for_active_project(self) -> None:
-        import shutil
         import subprocess
         proj = self._active_project()
         if proj is None:
@@ -589,8 +622,7 @@ class App:
         self._running_pane.set_running(entries)
 
         if self._running:
-            n = len(self._running)
-            self._status.set_message(f"● = running ({n}) · Enter on a row re-attaches it · Ctrl-B ← = ccmgr")
+            self._status.set_message("Ctrl-B ← returns focus to ccmgr")
 
     def _resolve_placeholders(self, projects: list[Project]) -> None:
         """Re-key any `__new__-N` placeholder to its real session_id.
@@ -729,37 +761,107 @@ class App:
             self._status.set_message("Use d on a session row or running-entry row to delete.")
 
     def _do_delete_session(self, session: SessionMeta) -> None:
-        """Actually delete a session: remove JSONL + kill detached tmux."""
+        """Delete a session completely: kill tmux, remove JSONL, clean up
+        session-env, and refresh the UI so pane rows stay aligned."""
         self._close_modal()
-        # Kill the detached tmux session, if running.
-        r = self._running.pop(session.session_id, None)
-        if r is not None and tmux_ctl.session_exists(r.tmux_name):
-            tmux_ctl.kill_session(r.tmux_name)
-        # Delete the JSONL file.
-        try:
-            session.jsonl_path.unlink(missing_ok=True)
-        except OSError as e:
-            self._status.set_message(f"Failed to delete session file: {e}")
-            return
-        self._status.set_message(f"Deleted: {session.display_title}")
+        self._cleanup_session(
+            session_id=session.session_id,
+            jsonl_path=session.jsonl_path,
+            label=session.display_title,
+        )
 
     def _do_kill_running(self, tmux_name: str, session_id: str | None,
                          project: Project | None) -> None:
-        """Kill a running detached tmux session, optionally deleting its JSONL."""
+        """Kill a detached tmux session; delete JSONL + session-env if known."""
         self._close_modal()
-        if tmux_ctl.session_exists(tmux_name):
-            tmux_ctl.kill_session(tmux_name)
-        # Remove every registry entry backed by this tmux session.
-        for key in [k for k, r in self._running.items() if r.tmux_name == tmux_name]:
-            del self._running[key]
-        # Delete the JSONL if we know the session.
-        if session_id is not None and not session_id.startswith("__new__-") and project is not None:
+        jsonl_path: Path | None = None
+        if session_id and not session_id.startswith("__new__-") and project:
             jsonl_path = project.claude_dir / f"{session_id}.jsonl"
+        self._cleanup_session(
+            session_id=session_id, jsonl_path=jsonl_path,
+            tmux_name=tmux_name, label=tmux_name,
+        )
+
+    def _cleanup_session(self, session_id: str | None = None,
+                         jsonl_path: Path | None = None,
+                         tmux_name: str | None = None,
+                         label: str = "") -> None:
+        """Unified session cleanup: kill tmux → remove files → refresh UI."""
+        # 1. Kill the detached tmux session first (avoid race conditions).
+        if tmux_name is None and session_id is not None:
+            r = self._running.get(session_id)
+            tmux_name = r.tmux_name if r else None
+        if tmux_name and tmux_ctl.session_exists(tmux_name):
+            tmux_ctl.kill_session(tmux_name)
+
+        # 2. Remove from our running-session registry.
+        if session_id is not None:
+            self._running.pop(session_id, None)
+        if tmux_name is not None:
+            for key in [k for k, r in self._running.items() if r.tmux_name == tmux_name]:
+                del self._running[key]
+
+        # 3. Delete the JSONL file (conversation history).
+        if jsonl_path is not None:
             try:
                 jsonl_path.unlink(missing_ok=True)
             except OSError:
                 pass
-        self._status.set_message(f"Killed: {tmux_name}")
+
+        # 4. Remove Claude's session-env directory (session metadata).
+        if session_id is not None and not session_id.startswith("__new__-"):
+            env_dir = Path.home() / ".claude" / "session-env" / session_id
+            if env_dir.is_dir():
+                shutil.rmtree(env_dir, ignore_errors=True)
+
+        # 5. Remove from Claude's history index so it doesn't recreate a
+        #    metadata stub (Claude rebuilds missing JSONLs from this index).
+        if session_id is not None and not session_id.startswith("__new__-"):
+            self._remove_from_history(session_id)
+
+        # 6. Invalidate caches and refresh so the UI reflects the deletion
+        #    immediately — no stale rows that point to deleted sessions.
+        self._session_cache.invalidate()
+        self._refresh()
+
+        self._status.set_message(f"Deleted: {label}")
+
+    @staticmethod
+    def _remove_from_history(session_id: str) -> None:
+        """Strip every line referencing *session_id* from ~/.claude/history.jsonl.
+
+        Claude Code uses this file as a session index — when a JSONL is deleted
+        but the history entry remains, Claude rebuilds an empty metadata stub on
+        the next launch.  Removing the entry prevents that.
+        """
+        history_path = Path.home() / ".claude" / "history.jsonl"
+        if not history_path.is_file():
+            return
+        try:
+            lines = history_path.read_text().splitlines()
+        except OSError:
+            return
+        kept = []
+        changed = False
+        import json as _json
+        for line in lines:
+            line_s = line.strip()
+            if not line_s:
+                continue
+            try:
+                rec = _json.loads(line_s)
+            except (ValueError, _json.JSONDecodeError):
+                kept.append(line)
+                continue
+            if rec.get("sessionId") == session_id:
+                changed = True
+                continue
+            kept.append(line)
+        if changed:
+            try:
+                history_path.write_text("\n".join(kept) + ("\n" if kept else ""))
+            except OSError:
+                pass
 
     # --- rename session ---
 

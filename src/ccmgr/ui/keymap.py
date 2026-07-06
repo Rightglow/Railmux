@@ -23,20 +23,24 @@ class Binding:
 
 
 BINDINGS: list[Binding] = [
+    # Core navigation / session actions first (left-to-right reading order).
     Binding(("up", "down"), "↑↓", "move"),
     Binding(("tab", "shift tab"), "Tab", "pane"),
     Binding(("enter",), "↵", "open"),
     Binding(("n", "N"), "n", "new", "_launch_new_session"),
-    Binding(("t", "T"), "t", "term", "_open_terminal_for_active_project"),
-    Binding(("c", "C"), "c", "code", "_open_editor_for_active_project"),
     Binding(("/",), "/", "filter"),
     Binding(("i", "I"), "i", "info", "_open_info_modal"),
     Binding(("r", "R"), "r", "rename", "_on_rename_session"),
     Binding(("f", "F"), "f", "fav", "_on_toggle_favorite"),
-    Binding(("d", "D"), "d", "del", "_on_delete_session"),
     Binding(("k", "K"), "k", "kill", "_on_kill_session"),
+    Binding(("d", "D"), "d", "del", "_on_delete_session"),
+    # Utility keys (lower priority, before help).
+    Binding(("t", "T"), "t", "term", "_open_terminal_for_active_project"),
+    Binding(("c", "C"), "c", "code", "_open_editor_for_active_project"),
+    # Help, quit, detach last (right-to-left scanning for exit).
     Binding(("?",), "?", "help", "_open_help_modal"),
     Binding(("q", "Q"), "q", "quit", "_open_quit_confirm"),
+    Binding((), "C-b d", "detach"),  # tmux-native, display only
 ]
 
 
