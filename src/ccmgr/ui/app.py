@@ -606,7 +606,14 @@ class App:
                 self._sessions_pane.set_sessions(None, [], running_ids=running_ids,
                                                   favorite_ids=self._favorites.get_ids())
 
-        # Populate the bottom "Running" pane.
+        # Populate the bottom "Running" pane. Sync labels first so AI-
+        # generated titles and renames appear without restarting ccmgr.
+        for r in self._running.values():
+            if r.is_placeholder or r.project is None:
+                continue
+            s = self._find_session_meta(r.key, r.project)
+            if s is not None and s.title:
+                r.label = f"{s.project.display_name}/{s.display_title}"
         entries = [
             RunningEntry(tmux_name=r.tmux_name, label=r.label)
             for r in self._running.values()
@@ -907,8 +914,10 @@ class App:
         except OSError as e:
             self._status.set_message(f"Failed to rename: {e}")
             return
-        # Invalidate the cache so subsequent renders pick up the new title.
+        # Invalidate the cache and refresh so both Sessions and Running
+        # panes pick up the new title immediately.
         self._session_cache.invalidate()
+        self._refresh()
         self._status.set_message(f"Renamed to: {new_title}")
 
     # --- toggle favorite ---
