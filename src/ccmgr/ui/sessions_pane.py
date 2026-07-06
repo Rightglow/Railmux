@@ -13,24 +13,19 @@ from ccmgr.ui._widgets import ClickableRow, remember_focus, restore_focus
 
 
 def _format_when(epoch: float) -> str:
-    """Last-used timestamp, written exactly as `claude --resume` does:
-    'just now', '5 minutes ago', '4 hours ago', '2 days ago', and a date for
-    anything older than a week. Singular/plural picked correctly.
-    """
+    """Abbreviated relative time: 'just now', '5m ago', '4h ago', '2d ago',
+    and a date for anything older than a week."""
     if epoch <= 0:
         return "—"
     delta = max(0.0, time.time() - epoch)
     if delta < 60:
         return "just now"
     if delta < 3600:
-        n = int(delta // 60)
-        return f"{n} minute{'s' if n != 1 else ''} ago"
+        return f"{int(delta // 60)}m ago"
     if delta < 86400:
-        n = int(delta // 3600)
-        return f"{n} hour{'s' if n != 1 else ''} ago"
+        return f"{int(delta // 3600)}h ago"
     if delta < 7 * 86400:
-        n = int(delta // 86400)
-        return f"{n} day{'s' if n != 1 else ''} ago"
+        return f"{int(delta // 86400)}d ago"
     return datetime.fromtimestamp(epoch).strftime("%Y-%m-%d")
 
 
