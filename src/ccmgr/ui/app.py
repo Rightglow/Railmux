@@ -680,8 +680,34 @@ class App:
     # --- kill / delete session ---
 
     def _on_kill_session(self) -> None:
-        """Kill the running Claude process for the focused session without
-        deleting its JSONL file — the conversation history is preserved."""
+        """Kill the running Claude process without deleting the JSONL file.
+
+        Works from both Sessions pane (pos 1) and Running pane (pos 2).
+        """
+        pos = self._sidebar.focus_position
+        if pos == 2:
+            # Running pane — kill the focused running entry.
+            from ccmgr.ui.running_pane import _RunningRow
+            if not self._running_pane._walker:
+                self._status.set_message("No running session selected.")
+                return
+            focus_w, _ = self._running_pane._walker.get_focus()
+            if not isinstance(focus_w, _RunningRow):
+                self._status.set_message("No running session selected.")
+                return
+            r = self._by_tmux(focus_w.entry.tmux_name)
+            if r is None:
+                self._status.set_message("Session not found in registry.")
+                return
+            if not tmux_ctl.session_exists(r.tmux_name):
+                self._status.set_message(f"tmux session already gone: {r.tmux_name}")
+                return
+            tmux_ctl.kill_session(r.tmux_name)
+            del self._running[r.key]
+            self._status.set_message(f"Killed: {r.label}  (file kept)")
+            return
+
+        # Sessions pane (pos 1 or default).
         session = self._currently_focused_session_meta()
         if session is None:
             self._status.set_message("No session selected.")
