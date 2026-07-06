@@ -6,13 +6,28 @@ through this module so error handling and command shape stay consistent.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
+from functools import lru_cache
 
 
 def has_tmux() -> bool:
     """True if tmux is installed and on PATH."""
     return shutil.which("tmux") is not None
+
+
+@lru_cache(maxsize=1)
+def tmux_version() -> tuple[int, int]:
+    """Return the installed tmux (major, minor) version, or (0, 0) if unknown."""
+    try:
+        out = subprocess.check_output(
+            ["tmux", "-V"], stderr=subprocess.DEVNULL
+        ).decode()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return (0, 0)
+    m = re.search(r"(\d+)\.(\d+)", out)
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
 
 
 def in_tmux() -> bool:
@@ -74,7 +89,14 @@ def split_window_h(cmd: str = "", target: str | None = None, size_percent: int |
         return None
     args = ["tmux", "split-window", "-h", "-P", "-F", "#{pane_id}"]
     if size_percent is not None:
-        args.extend(["-l", f"{size_percent}%"])
+        # `-l <N>%` is only understood by tmux >= 3.1. Older tmux (e.g. 2.7,
+        # shipped on many stable distros) rejects it with "size invalid" and
+        # the split silently fails, so the claude pane never opens. Fall back
+        # to the pre-3.1 `-p <N>` percentage flag there.
+        if tmux_version() >= (3, 1):
+            args.extend(["-l", f"{size_percent}%"])
+        else:
+            args.extend(["-p", str(size_percent)])
     if target:
         args.extend(["-t", target])
     if cmd:

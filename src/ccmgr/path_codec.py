@@ -117,8 +117,12 @@ def _scan_recover(encoded: str, best_path: Path) -> Path:
         if resolved is not None:
             return resolved
 
-        # Couldn't resolve past this prefix; fall through to best_path.
-        break
+        # This prefix matched textually but its subtree doesn't contain the
+        # real path — a false match (e.g. a coincidental "/home/scratch" dir
+        # when the true path is "/home/scratch.jasxu_inf/..."). Keep trying
+        # shallower prefixes rather than giving up: a shorter verified prefix
+        # (down to "/home") often lets _resolve_tail recover the real path.
+        continue
 
     return best_path
 
