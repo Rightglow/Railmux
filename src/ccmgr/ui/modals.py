@@ -125,8 +125,8 @@ class HelpModal(urwid.WidgetWrap):
             ("Right-click", "Context menu for the session"),
         ]),
         ("Copy text from Claude", [
-            ("Shift-drag",
-             "OSC 52 terminals: copies to local clipboard directly"),
+            ("Drag-select",
+             "OSC 52 terminals copy to local clipboard automatically"),
             ("F3",
              "Fullscreen Claude → Shift-drag select → Cmd/Ctrl+C → F3"),
         ]),
