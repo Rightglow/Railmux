@@ -125,10 +125,10 @@ class HelpModal(urwid.WidgetWrap):
             ("Right-click", "Context menu for the session"),
         ]),
         ("Copy text from Claude", [
-            ("Drag-select",
+            ("Shift-drag",
              "OSC 52 terminals: copies to local clipboard directly"),
             ("F3",
-             "Fullscreen Claude (toggle) → drag + Cmd/C to copy → F3"),
+             "Fullscreen Claude → Shift-drag select → Cmd/Ctrl+C → F3"),
         ]),
         ("tmux", [
             ("Ctrl-B → / ←", "Move focus between ccmgr and Claude panes"),
