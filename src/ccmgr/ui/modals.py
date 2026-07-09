@@ -276,20 +276,26 @@ class RunningInfoModal(urwid.WidgetWrap):
 
 
 class DeleteConfirmModal(urwid.WidgetWrap):
-    """Confirm-delete popup for a session. y/Y/Enter confirms; n/N/Esc cancels."""
+    """Confirm-delete popup for a session. y/Y/Enter confirms; n/N/Esc cancels.
+
+    Uses a scrollable ListBox so content is never clipped, even when the
+    overlay height is smaller than the body (e.g. long session titles, or
+    the right pane shrinking the ccmgr sidebar).
+    """
 
     def __init__(self, title: str, detail: str,
                  on_confirm: Callable[[], None], on_cancel: Callable[[], None]) -> None:
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
-        body = urwid.Pile([
-            urwid.Text(title, align="center"),
-            urwid.Divider(),
-            urwid.Text(detail, align="center"),
-            urwid.Divider(),
-            urwid.Text(("dim", "y / Enter = delete,  n / Esc = cancel"), align="center"),
-        ])
-        super().__init__(urwid.LineBox(urwid.Filler(body, valign="middle"), title="Confirm delete"))
+        rows = [
+            _Selectable(urwid.Text(title, align="center")),
+            _Selectable(urwid.Divider()),
+            _Selectable(urwid.Text(detail, align="center")),
+            _Selectable(urwid.Divider()),
+            _Selectable(urwid.Text(("dim", "y / Enter = delete,  n / Esc = cancel"), align="center")),
+        ]
+        self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
+        super().__init__(urwid.LineBox(self._listbox, title="Confirm delete"))
 
     def selectable(self) -> bool:
         return True
@@ -301,6 +307,8 @@ class DeleteConfirmModal(urwid.WidgetWrap):
         if key in ("n", "N", "esc"):
             self._on_cancel()
             return None
+        if key in ("up", "down"):
+            return self._listbox.keypress(size, key)
         return key
 
 

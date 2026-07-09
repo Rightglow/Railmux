@@ -551,6 +551,13 @@ class App:
 
     # --- modals ---
 
+    def _overlay_dims(self, base_width: int, base_height: int) -> tuple[int, int]:
+        """Return (width, height) for ``_show_overlay``, bumped when the right
+        pane is open and the ccmgr sidebar is only ~30% of the terminal."""
+        if self._right_pane_id is not None and tmux_ctl.pane_alive(self._right_pane_id):
+            return (int(base_width * 1.6), int(base_height * 1.35))
+        return (base_width, base_height)
+
     def _open_new_project_modal(self) -> None:
         modal = PathBrowserModal(
             start_path=Path.home(),
@@ -1164,7 +1171,8 @@ class App:
                 on_confirm=lambda: self._do_delete_session(session),
                 on_cancel=self._close_modal,
             )
-            self._show_overlay(modal, width=54, height=30)
+            w, h = self._overlay_dims(54, 30)
+            self._show_overlay(modal, width=w, height=h)
 
         elif pos == 2:
             # Running pane — kill the detached tmux session.
@@ -1196,7 +1204,8 @@ class App:
                 on_confirm=lambda: self._do_kill_running(entry.tmux_name, session_id, project),
                 on_cancel=self._close_modal,
             )
-            self._show_overlay(modal, width=54, height=30)
+            w, h = self._overlay_dims(54, 30)
+            self._show_overlay(modal, width=w, height=h)
 
         else:
             self._status.set_message("Use d on a session row or running-entry row to delete.")
@@ -1496,7 +1505,8 @@ class App:
             on_confirm=lambda s=session: self._do_delete_session(s),
             on_cancel=self._close_modal,
         )
-        self._show_overlay(modal, width=54, height=30)
+        w, h = self._overlay_dims(54, 30)
+        self._show_overlay(modal, width=w, height=h)
 
     # --- resize divider ---
 

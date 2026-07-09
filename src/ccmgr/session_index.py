@@ -1,6 +1,12 @@
 """Scan a project directory for sessions, extracting cheap metadata."""
 from __future__ import annotations
 
+# Duration (seconds) after which a running tool_use is presumed to be
+# waiting for user approval rather than still executing.  Must be long
+# enough to cover auto-approved tool runs (bash commands, API calls)
+# but short enough that genuinely-blocked sessions surface quickly.
+_TOOL_BLOCK_AGE_S = 10
+
 import json
 import time
 from pathlib import Path
@@ -83,6 +89,12 @@ def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
                 rtype = rec.get("type")
                 if rtype == "ai-title":
                     title = rec.get("aiTitle") or title
+                elif rtype == "last-prompt":
+                    # Claude Code writes this just before sending a prompt to
+                    # the model.  The assistant hasn't replied yet, so the
+                    # session is actively waiting — equivalent to a user turn.
+                    last_rtype = "user"
+                    last_stop_reason = ""
                 elif rtype == "user":
                     message_count += 1
                     user_count += 1
@@ -131,12 +143,11 @@ def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
     elif last_rtype == "assistant":
         if last_stop_reason == "tool_use":
             # tool_use is ambiguous: it means "I used a tool" but doesn't
-            # say whether it needs approval.  If the JSONL was last touched
-            # >3 s ago, Claude has stopped writing → genuinely waiting.
-            # Otherwise Claude is still processing (auto-approved tool or
-            # rapidly chaining calls) → treat as busy.
+            # say whether it needs approval.  Auto-approved tools (bash
+            # commands, web fetches) may take many seconds; only flag as
+            # blocked once writing has genuinely ceased.
             age = time.time() - mtime
-            status = "blocked" if age > 3 else "busy"
+            status = "blocked" if age > _TOOL_BLOCK_AGE_S else "busy"
         else:
             status = "idle"
     else:

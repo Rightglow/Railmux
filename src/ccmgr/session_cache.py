@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from ccmgr.models import Project, SessionMeta
-from ccmgr.session_index import _scan_session
+from ccmgr.session_index import _scan_session, _TOOL_BLOCK_AGE_S
 
 
 _DEFAULT_TOP_N = 30
@@ -54,10 +54,10 @@ class SessionCache:
             if cached is not None and cached[0] == mtime:
                 meta = cached[1]
                 # "busy" status is time-dependent: a tool_use with no
-                # follow-up writes should become "blocked" after 3 s.
-                # The mtime hasn't changed, but the age has — the
-                # cached value is stale.  Re-scan.
-                if meta.status != "busy" or now - mtime <= 3:
+                # follow-up writes should become "blocked" after the
+                # block-age window closes.  The mtime hasn't changed,
+                # but the age has — the cached value is stale.  Re-scan.
+                if meta.status != "busy" or now - mtime <= _TOOL_BLOCK_AGE_S:
                     results.append(meta)
                     continue
             meta = _scan_session(project, path)
