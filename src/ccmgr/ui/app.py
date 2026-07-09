@@ -37,11 +37,16 @@ from ccmgr.ui.modals import (
 from ccmgr.ui.projects_pane import ProjectsPane
 from ccmgr.ui.running_pane import RunningEntry, RunningSessionsPane
 from ccmgr.ui.sessions_pane import SessionsPane
-from ccmgr.ui.statusbar import HelpBar, StatusBar
+from ccmgr.ui.statusbar import HelpBar, StatusBar, TIPS
 
 
 PALETTE = [
-    ("statusbar", "yellow,bold", "default"),
+    # Status-bar message levels. Idle tips are dim; info neutral green;
+    # warn/error escalate so failures stand out from routine feedback.
+    ("status_info", "light green", "default"),
+    ("status_warn", "yellow,bold", "default"),
+    ("status_error", "light red,bold", "default"),
+    ("status_tip", "dark gray", "default"),
     # Row focus: bold black on brown. Pane focus also remaps otherwise-unstyled
     # titles to cyan, making the active pane easier to scan.
     ("focus", "black,bold", "brown"),
@@ -150,6 +155,15 @@ class App:
         self._config = config
         self._auto_launched = auto_launched
         self._status = StatusBar()
+        # Status-bar state machine. An explicit message (info/warn/error) holds
+        # the bar for a level-dependent TTL, then it falls back to cycling idle
+        # tips. This is what stops one-shot messages ("→ opened X") from being
+        # clobbered by the poll tick before the user can read them.
+        self._status_text: str | None = None
+        self._status_level: str = "info"
+        self._status_since: float = 0.0
+        self._tip_index: int = 0
+        self._tip_since: float = 0.0
         self._selected_project: Project | None = None
         self._session_cache = SessionCache()
         self._favorites = Favorites()
@@ -197,10 +211,10 @@ class App:
         # Warn early if dependencies are missing so the user doesn't
         # discover it by getting a cryptic error in the right pane.
         if not tmux_ctl.has_tmux():
-            self._status.set_message(
+            self._set_status(
                 "ERROR: tmux not found on PATH — ccmgr cannot run without tmux")
         elif not shutil.which(self._config.claude_binary):
-            self._status.set_message(
+            self._set_status(
                 f"WARNING: '{self._config.claude_binary}' not on PATH — sessions cannot launch")
 
         # The outer AttrMaps highlight both LineBox borders and otherwise-
@@ -338,7 +352,7 @@ class App:
         sessions = self._session_cache.list_sessions(project)
         self._sessions_pane.set_sessions(project, sessions, running_ids=set(self._running),
                 favorite_ids=self._favorites.get_ids())
-        self._status.set_message(f"Project: {project.real_path}  ({len(sessions)} sessions)")
+        self._set_status(f"Project: {project.real_path}  ({len(sessions)} sessions)")
 
     def _on_project_double_click(self, project: Project | None) -> None:
         """Double-click / Enter on a project: show sessions AND move focus to them."""
@@ -369,7 +383,7 @@ class App:
         self._restore_state = None
         ok = self._attach_in_right_pane(entry.tmux_name, steal_focus=steal_focus)
         if not ok:
-            self._status.set_message("failed to re-attach")
+            self._set_status("failed to re-attach")
             return
         r = self._by_tmux(entry.tmux_name)
         project = r.project if r else None
@@ -386,7 +400,7 @@ class App:
                 running_ids=set(self._running),
                 favorite_ids=self._favorites.get_ids(),
             )
-        self._status.set_message(f"→ {entry.label}")
+        self._set_status(f"→ {entry.label}")
 
     # --- history preview (right pane shows transcript via less, not a Claude session) ---
 
@@ -397,7 +411,7 @@ class App:
         passed, so this only fires on a genuine single-click.
         """
         if not self._has_less:
-            self._status.set_message("'less' not installed — cannot preview history")
+            self._set_status("'less' not installed — cannot preview history")
             return
         if not self._in_history_mode:
             self._save_restore_state()
@@ -446,12 +460,12 @@ class App:
                f"less -R +G {mouse}")
         if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
             if not tmux_ctl.respawn_pane(self._right_pane_id, cmd):
-                self._status.set_message("failed to respawn right pane for transcript")
+                self._set_status("failed to respawn right pane for transcript")
                 return False
         else:
             new_id = tmux_ctl.split_window_h(cmd, size_percent=70, detached=True)
             if not new_id:
-                self._status.set_message("failed to create right pane for transcript")
+                self._set_status("failed to create right pane for transcript")
                 return False
             self._right_pane_id = new_id
             self._set_ccmgr_focus(self._ccmgr_has_focus, force_border=True)
@@ -598,7 +612,7 @@ class App:
         existing = self._running.get(key)
         tmux_name = existing.tmux_name if existing else self._claude_session_name(key)
         if not self._ensure_detached_claude(tmux_name, self._shellify(cmd, cwd=cwd)):
-            self._status.set_message("failed to create detached claude session")
+            self._set_status("failed to create detached claude session")
             return False
         self._running[key] = _Running(
             key=key, tmux_name=tmux_name, label=label, project=project,
@@ -606,7 +620,7 @@ class App:
             created_at=time.time() if placeholder_path is not None else 0.0,
         )
         if not self._attach_in_right_pane(tmux_name, steal_focus=steal_focus):
-            self._status.set_message("failed to attach to claude session")
+            self._set_status("failed to attach to claude session")
             return False
         return True
 
@@ -620,12 +634,12 @@ class App:
         label = f"{session_meta.project.display_name}/{session_meta.display_title}"
         if self._launch(session_meta.session_id, cmd, session_meta.project.real_path,
                         label, session_meta.project, steal_focus=steal_focus):
-            self._status.set_message(
+            self._set_status(
                 f"→ {session_meta.display_title}  ({len(self._running)} session(s) running)")
 
     def _launch_new_session(self) -> None:
         if self._selected_project is None:
-            self._status.set_message("Pick a project first.")
+            self._set_status("Pick a project first.")
             return
         proj = self._selected_project
         self._new_session_counter += 1
@@ -633,21 +647,21 @@ class App:
         cmd = build_new_session_command(claude_binary=self._config.claude_binary, cwd=proj.real_path)
         if self._launch(placeholder, cmd, proj.real_path, f"{proj.display_name}/(new)",
                         proj, placeholder_path=proj.real_path):
-            self._status.set_message(f"→ new session in {proj.display_name}")
+            self._set_status(f"→ new session in {proj.display_name}")
 
     def _on_new_project_submit(self, path: Path) -> None:
         self._close_modal()
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            self._status.set_message(str(e))
+            self._set_status(str(e))
             return
         self._new_session_counter += 1
         placeholder = f"__new__-{self._new_session_counter}"
         cmd = [self._config.claude_binary]
         if self._launch(placeholder, cmd, path, f"{path.name}/(new)",
                         None, placeholder_path=path):
-            self._status.set_message(f"→ new project: {path}")
+            self._set_status(f"→ new project: {path}")
 
     @staticmethod
     def _shellify(argv: list[str], cwd: Path) -> str:
@@ -781,7 +795,7 @@ class App:
         import subprocess as _sp
         proj = self._active_project()
         if proj is None:
-            self._status.set_message("no project focused/selected")
+            self._set_status("no project focused/selected")
             return
         shell = os.environ.get("SHELL", "/bin/bash")
         cmd = f"cd {shlex.quote(str(proj.real_path))} && exec {shlex.quote(shell)}"
@@ -790,7 +804,7 @@ class App:
         target = self._right_pane_id if (self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id)) else None
         new_pane = tmux_ctl.split_window_v(cmd, target=target)
         if not new_pane:
-            self._status.set_message("failed to split for terminal")
+            self._set_status("failed to split for terminal")
             return
         # Auto-close the pane when the shell exits (default, but be explicit).
         _sp.run(
@@ -799,7 +813,7 @@ class App:
         )
         tmux_ctl.select_pane(new_pane)
         self._set_ccmgr_focus(False)
-        self._status.set_message(f"terminal: {proj.display_name}  (Ctrl-B then arrow = move panes)")
+        self._set_status(f"terminal: {proj.display_name}  (Ctrl-B then arrow = move panes)")
 
     def _on_detach(self) -> None:
         """Detach from the ccmgr tmux session (keep all Claude sessions alive)."""
@@ -927,7 +941,7 @@ class App:
             )
             found += 1
         if found:
-            self._status.set_message(
+            self._set_status(
                 f"Found {found} running session(s)")
 
     @staticmethod
@@ -1002,7 +1016,7 @@ class App:
         if key == "/":
             # Running pane doesn't support filtering — skip.
             if self._sidebar.focus_position == 2:
-                self._status.set_message("No filter on Running pane.")
+                self._set_status("No filter on Running pane.")
                 return
             self._enter_filter_mode()
             return
@@ -1155,8 +1169,9 @@ class App:
                                                   favorite_ids=self._favorites.get_ids())
 
         self._update_running_pane()
-        if self._running:
-            self._status.set_message("Ctrl-B ← returns focus to ccmgr")
+        # Advance the status-bar state machine (TTL expiry + idle tip rotation)
+        # instead of unconditionally overwriting the message every tick.
+        self._update_status()
 
     def _effective_status(self, meta: SessionMeta) -> str:
         """Displayed status, refined by the live process when we own the session.
@@ -1275,39 +1290,39 @@ class App:
             # Running pane — kill the focused running entry.
             from ccmgr.ui.running_pane import _RunningRow
             if not self._running_pane._walker:
-                self._status.set_message("No running session selected.")
+                self._set_status("No running session selected.")
                 return
             focus_w, _ = self._running_pane._walker.get_focus()
             if not isinstance(focus_w, _RunningRow):
-                self._status.set_message("No running session selected.")
+                self._set_status("No running session selected.")
                 return
             r = self._by_tmux(focus_w.entry.tmux_name)
             if r is None:
-                self._status.set_message("Session not found in registry.")
+                self._set_status("Session not found in registry.")
                 return
             if not tmux_ctl.session_exists(r.tmux_name):
-                self._status.set_message(f"tmux session already gone: {r.tmux_name}")
+                self._set_status(f"tmux session already gone: {r.tmux_name}")
                 return
             tmux_ctl.kill_session(r.tmux_name)
             del self._running[r.key]
-            self._status.set_message(f"Killed: {r.label}  (file kept)")
+            self._set_status(f"Killed: {r.label}  (file kept)")
             return
 
         # Sessions pane (pos 1 or default).
         session = self._currently_focused_session_meta()
         if session is None:
-            self._status.set_message("No session selected.")
+            self._set_status("No session selected.")
             return
         r = self._running.get(session.session_id)
         if r is None:
-            self._status.set_message(f"'{session.display_title}' is not running.")
+            self._set_status(f"'{session.display_title}' is not running.")
             return
         if not tmux_ctl.session_exists(r.tmux_name):
-            self._status.set_message(f"tmux session already gone: {r.tmux_name}")
+            self._set_status(f"tmux session already gone: {r.tmux_name}")
             return
         tmux_ctl.kill_session(r.tmux_name)
         del self._running[session.session_id]
-        self._status.set_message(f"Killed: {session.display_title}  (file kept)")
+        self._set_status(f"Killed: {session.display_title}  (file kept)")
 
     def _on_delete_session(self) -> None:
         """Delete the focused session from the current pane (with confirmation)."""
@@ -1317,7 +1332,7 @@ class App:
             # Sessions pane — delete the focused session (JSONL + tmux).
             session = self._currently_focused_session_meta()
             if session is None:
-                self._status.set_message("No session selected to delete.")
+                self._set_status("No session selected to delete.")
                 return
             title = session.display_title
             detail = f"Permanently delete '{title}'?\n\nThis removes the session file from disk\nand kills its background tmux session."
@@ -1334,11 +1349,11 @@ class App:
             from ccmgr.ui.running_pane import _RunningRow
             running_walker = self._running_pane._walker
             if not running_walker:
-                self._status.set_message("No running session selected.")
+                self._set_status("No running session selected.")
                 return
             focus_w, _ = running_walker.get_focus()
             if not isinstance(focus_w, _RunningRow):
-                self._status.set_message("No running session selected.")
+                self._set_status("No running session selected.")
                 return
             entry = focus_w.entry
             r = self._by_tmux(entry.tmux_name)
@@ -1362,7 +1377,7 @@ class App:
             self._show_overlay(modal, width=54, height=30)
 
         else:
-            self._status.set_message("Use d on a session row or running-entry row to delete.")
+            self._set_status("Use d on a session row or running-entry row to delete.")
 
     def _do_delete_session(self, session: SessionMeta) -> None:
         """Delete a session completely: kill tmux, remove JSONL, clean up
@@ -1428,7 +1443,7 @@ class App:
         self._session_cache.invalidate()
         self._refresh()
 
-        self._status.set_message(f"Deleted: {label}")
+        self._set_status(f"Deleted: {label}")
 
     @staticmethod
     def _remove_from_history(session_id: str) -> None:
@@ -1473,7 +1488,7 @@ class App:
         """Open the rename modal for the focused session."""
         session = self._currently_focused_session_meta()
         if session is None:
-            self._status.set_message("No session selected to rename.")
+            self._set_status("No session selected to rename.")
             return
         modal = RenameModal(
             current_title=session.display_title,
@@ -1491,13 +1506,13 @@ class App:
             with session.jsonl_path.open("a") as f:
                 f.write(record + "\n")
         except OSError as e:
-            self._status.set_message(f"Failed to rename: {e}")
+            self._set_status(f"Failed to rename: {e}")
             return
         # Invalidate the cache and refresh so both Sessions and Running
         # panes pick up the new title immediately.
         self._session_cache.invalidate()
         self._refresh()
-        self._status.set_message(f"Renamed to: {new_title}")
+        self._set_status(f"Renamed to: {new_title}")
 
     # --- toggle favorite ---
 
@@ -1505,11 +1520,11 @@ class App:
         """Toggle star status for the focused session."""
         session = self._currently_focused_session_meta()
         if session is None:
-            self._status.set_message("No session selected.")
+            self._set_status("No session selected.")
             return
         now_star = self._favorites.toggle(session.session_id)
         label = "★" if now_star else "unstarred"
-        self._status.set_message(f"{label} {session.display_title}")
+        self._set_status(f"{label} {session.display_title}")
 
     # --- context menu (right-click) ---
 
@@ -1599,14 +1614,14 @@ class App:
         self._session_cache.invalidate()
         self._refresh()
         label = "★" if now_star else "unstarred"
-        self._status.set_message(f"{label} {session.display_title}")
+        self._set_status(f"{label} {session.display_title}")
 
     def _do_context_kill(self, session: SessionMeta) -> None:
         r = self._running.get(session.session_id)
         if r and tmux_ctl.session_exists(r.tmux_name):
             tmux_ctl.kill_session(r.tmux_name)
         self._running.pop(session.session_id, None)
-        self._status.set_message(f"Killed: {session.display_title}  (file kept)")
+        self._set_status(f"Killed: {session.display_title}  (file kept)")
 
     def _kill_tmux_session(self, tmux_name: str, label: str) -> None:
         """Kill a running tmux session by name (no SessionMeta needed)."""
@@ -1615,7 +1630,7 @@ class App:
         # Remove any _running entry keyed by this tmux name.
         for key in [k for k, r in self._running.items() if r.tmux_name == tmux_name]:
             del self._running[key]
-        self._status.set_message(f"Killed: {label}  (file kept)")
+        self._set_status(f"Killed: {label}  (file kept)")
 
     def _open_terminal_for_project(self, project: Project) -> None:
         """Open a terminal in the given project directory."""
@@ -1627,13 +1642,13 @@ class App:
         target = self._right_pane_id if (self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id)) else None
         new_pane = tmux_ctl.split_window_v(cmd, target=target)
         if not new_pane:
-            self._status.set_message("failed to split for terminal")
+            self._set_status("failed to split for terminal")
             return
         _sp.run(["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
         tmux_ctl.select_pane(new_pane)
         self._set_ccmgr_focus(False)
-        self._status.set_message(f"terminal: {project.display_name}")
+        self._set_status(f"terminal: {project.display_name}")
 
     def _do_context_term(self, session: SessionMeta) -> None:
         import os
@@ -1644,13 +1659,13 @@ class App:
         target = self._right_pane_id if (self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id)) else None
         new_pane = tmux_ctl.split_window_v(cmd, target=target)
         if not new_pane:
-            self._status.set_message("failed to split for terminal")
+            self._set_status("failed to split for terminal")
             return
         _sp.run(["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
         tmux_ctl.select_pane(new_pane)
         self._set_ccmgr_focus(False)
-        self._status.set_message(f"terminal: {session.project.display_name}")
+        self._set_status(f"terminal: {session.project.display_name}")
 
     def _do_context_delete(self, session: SessionMeta) -> None:
         title = session.display_title
@@ -1668,10 +1683,62 @@ class App:
     def _resize_divider(self, expand_ccmgr: bool) -> None:
         """Move the vertical divider: [ shrinks ccmgr, ] expands it."""
         if not self._right_pane_id or not tmux_ctl.pane_alive(self._right_pane_id):
-            self._status.set_message("No claude pane to resize against.")
+            self._set_status("No claude pane to resize against.")
             return
         direction = "-R" if expand_ccmgr else "-L"
         tmux_ctl.resize_pane(self._right_pane_id, direction, 5)
+
+    # --- status bar ---
+
+    # How long an explicit message holds the bar before it falls back to idle
+    # tips. Errors are sticky (cleared only by the next message or action);
+    # warnings linger; routine info is brief. Tips rotate on their own cadence.
+    _STATUS_TTL = {"error": None, "warn": 12.0, "info": 6.0}
+    _TIP_INTERVAL = 9.0
+
+    def _set_status(self, msg: str, level: str | None = None) -> None:
+        """Show an explicit status message.
+
+        ``level`` is auto-classified from the message prefix when omitted, so
+        the ~40 existing call sites keep working unchanged: ``ERROR…`` → error,
+        ``WARNING…``/``Failed…``/``failed…`` → warn, everything else → info.
+        """
+        if level is None:
+            if msg.startswith("ERROR"):
+                level = "error"
+            elif msg.startswith(("WARNING", "Failed", "failed")):
+                level = "warn"
+            else:
+                level = "info"
+        self._status_text = msg
+        self._status_level = level
+        self._status_since = time.monotonic()
+        self._status.set_message(msg, level)
+
+    def _update_status(self) -> None:
+        """Advance the status-bar state machine once per tick.
+
+        Holds an explicit message for its TTL, then falls back to cycling idle
+        tips. Called from ``_refresh`` instead of the old unconditional
+        ``set_message`` that clobbered one-shot messages every poll.
+        """
+        now = time.monotonic()
+        if self._status_text is not None:
+            ttl = self._STATUS_TTL.get(self._status_level, 6.0)
+            if ttl is None or now - self._status_since < ttl:
+                return
+            # Expired → drop to idle and start the tip clock from now.
+            self._status_text = None
+            self._tip_since = now
+            self._status.set_message(TIPS[self._tip_index], "tip")
+            return
+        # Idle: rotate tips on their own cadence.
+        if not TIPS:
+            return
+        if self._tip_since == 0.0 or now - self._tip_since >= self._TIP_INTERVAL:
+            self._status.set_message(TIPS[self._tip_index], "tip")
+            self._tip_index = (self._tip_index + 1) % len(TIPS)
+            self._tip_since = now
 
     # --- periodic refresh ---
 

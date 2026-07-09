@@ -1,6 +1,7 @@
 """Bottom-of-screen status + help-hint widgets."""
 from __future__ import annotations
 
+import textwrap
 from collections.abc import Callable
 
 import urwid
@@ -11,6 +12,27 @@ from ccmgr.ui import keymap
 # Generated from the single keymap source of truth so the hint bar can't drift
 # from the actual dispatch.
 HELP_HINT = keymap.hint_text()
+
+
+# Idle tips cycled through the status bar when there's no active message. Kept
+# short so they fit one line at typical sidebar widths; the "return focus" hint
+# lives here now instead of being re-written every poll tick (which used to
+# clobber genuine one-shot messages before the user could read them).
+TIPS: tuple[str, ...] = (
+    "Ctrl-B ← / → moves focus between ccmgr and Claude",
+    "n new · r rename · s star · k kill · d delete",
+    "/ filter the focused pane · i info · ? help",
+    "Ctrl-B d backgrounds ccmgr (sessions keep running) · q quit",
+)
+
+# Message severity → palette attribute. Idle tips render dim; info is neutral
+# green; warn/error escalate so failures actually stand out.
+_LEVEL_ATTR = {
+    "error": "status_error",
+    "warn": "status_warn",
+    "info": "status_info",
+    "tip": "status_tip",
+}
 
 
 class _HelpButton(urwid.WidgetWrap):
@@ -69,17 +91,52 @@ class HelpBar(urwid.WidgetWrap):
 class StatusBar(urwid.WidgetWrap):
     """Two-line status bar — height is fixed so the sidebar never jitters.
 
-    A ``Pile`` of two ``Text`` widgets, each ``wrap="clip"``.  The
-    first line shows the message (truncated if too wide); the second
-    is always empty, guaranteeing a fixed 2-line height.
+    A ``Pile`` of two ``Text`` widgets. The message is soft-wrapped to the
+    render width across both lines: it stays on line 1 when it fits, spills
+    into line 2 when longer, and is truncated with an ellipsis only when it
+    exceeds two lines. The second line is otherwise empty, guaranteeing a
+    fixed 2-line height. The colour tracks the message level (info / warn /
+    error / idle tip).
     """
 
     def __init__(self) -> None:
         self._line1 = urwid.Text("", align="left", wrap="clip")
         self._line2 = urwid.Text("", align="left", wrap="clip")
+        self._text = ""
+        self._level = "tip"
         body = urwid.Pile([self._line1, self._line2])
-        super().__init__(urwid.AttrMap(body, "statusbar"))
+        self._attr = urwid.AttrMap(body, _LEVEL_ATTR["tip"])
+        super().__init__(self._attr)
 
-    def set_message(self, msg: str) -> None:
-        self._line1.set_text(msg)
-        self._line2.set_text("")
+    def set_message(self, msg: str, level: str = "info") -> None:
+        """Set the message text and severity; re-wrapped on next render."""
+        self._text = msg or ""
+        self._level = level if level in _LEVEL_ATTR else "info"
+        self._attr.set_attr_map({None: _LEVEL_ATTR[self._level]})
+        # Re-flow immediately for a best-effort width; render() re-wraps to the
+        # real column count so this is only a fallback for width-less callers.
+        self._reflow(80)
+
+    def _reflow(self, maxcol: int) -> None:
+        maxcol = max(1, maxcol)
+        lines = textwrap.wrap(self._text, maxcol) if self._text else [""]
+        if not lines:
+            lines = [""]
+        self._line1.set_text(lines[0])
+        if len(lines) <= 1:
+            self._line2.set_text("")
+        elif len(lines) == 2:
+            self._line2.set_text(lines[1])
+        else:
+            # More than two lines: keep line 2's start, mark the overflow with
+            # an ellipsis so it's clear the message was truncated.
+            second = lines[1]
+            if len(second) >= maxcol:
+                second = second[: maxcol - 1]
+            self._line2.set_text(second + "…")
+
+    def render(self, size, focus: bool = False):
+        # Wrap to the actual available width so resizing stays correct.
+        if size:
+            self._reflow(size[0])
+        return super().render(size, focus)

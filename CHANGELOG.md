@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Status bar now cycles short idle tips when there's no active message, and
+  soft-wraps long messages across both lines (ellipsis only past two lines)
+  instead of clipping at line one. _(2026-07-10 02:12 +0800)_
+
 ### Changed
 
+- Status-bar messages are levelled (info / warn / error) with distinct colours,
+  and one-shot messages ("→ opened X", "Renamed to: …", "Killed: …") now persist
+  for a level-dependent time (errors are sticky) instead of being overwritten by
+  the next poll tick — fixing messages that previously flashed by unreadably.
+  _(2026-07-10 02:12 +0800)_
 - Pane focus now follows the actual tmux input target: the sidebar drops focus
   styling while another pane is active, while the selected conversation and
   status colours remain visible. Shared tmux dividers now switch as one solid
