@@ -38,6 +38,8 @@ def _minimal_app(*, selected_project=None):
     app._favorites = MagicMock()
     app._favorites.get_ids.return_value = set()
     app._currently_focused_session_meta = MagicMock(return_value=None)
+    app._in_history_mode = False
+    app._right_pane_claude = None
     return app
 
 
@@ -113,14 +115,42 @@ def test_save_and_load_state_round_trip(tmp_path, monkeypatch):
     assert (tmp_path / "state.json").is_file()
 
     data = app._load_state()
-    assert data == {"project": "-tmp-myproj"}
+    assert data["project"] == "-tmp-myproj"
+    assert data["right_kind"] == "empty"
 
 
-def test_save_state_without_project_writes_nothing(tmp_path, monkeypatch):
+def test_save_state_always_writes_right_kind(tmp_path, monkeypatch):
+    """Even without a selected project, _save_state records the right-pane state."""
     monkeypatch.setattr(App, "_state_path", staticmethod(lambda: tmp_path / "state.json"))
     app = _minimal_app(selected_project=None)
     app._save_state()
-    assert not (tmp_path / "state.json").is_file()
+    assert (tmp_path / "state.json").is_file()
+    data = app._load_state()
+    assert data == {"right_kind": "empty"}
+
+
+def test_save_state_with_claude_in_right_pane(tmp_path, monkeypatch):
+    """When a Claude session is open, save its tmux name."""
+    monkeypatch.setattr(App, "_state_path", staticmethod(lambda: tmp_path / "state.json"))
+    app = _minimal_app(selected_project=_project("myproj"))
+    app._right_pane_claude = "cc-abc123"
+    app._save_state()
+    data = app._load_state()
+    assert data["right_kind"] == "claude"
+    assert data["right_tmux"] == "cc-abc123"
+
+
+def test_save_state_with_preview_in_right_pane(tmp_path, monkeypatch):
+    """When a transcript preview is showing, save the session id."""
+    monkeypatch.setattr(App, "_state_path", staticmethod(lambda: tmp_path / "state.json"))
+    app = _minimal_app(selected_project=_project("myproj"))
+    app._in_history_mode = True
+    app._currently_focused_session_meta = MagicMock(
+        return_value=type("s", (), {"session_id": "abc123"})())
+    app._save_state()
+    data = app._load_state()
+    assert data["right_kind"] == "preview"
+    assert data["right_session"] == "abc123"
 
 
 def test_load_state_missing_file_returns_none():

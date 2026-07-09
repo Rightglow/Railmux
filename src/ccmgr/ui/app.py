@@ -225,6 +225,9 @@ class App:
         # _refresh tick, otherwise the pane shows "(no running sessions)"
         # for up to 1 s even when _discover_orphans found sessions.
         self._update_running_pane()
+        # Re-open whatever was in the right pane at soft-quit time.
+        if state:
+            self._restore_right_pane(state)
 
     # --- project / session selection callbacks ---
 
@@ -720,16 +723,23 @@ class App:
 
     def _save_state(self) -> None:
         """Persist enough state to restore the current view after a restart."""
-        data = {}
+        data: dict = {}
         if self._selected_project is not None:
             data["project"] = self._selected_project.encoded_name
-        # Also save the focused session so the user lands right back where
-        # they were (helpful when updating mid-task).
+        # Focused session in the sidebar.
         session = self._currently_focused_session_meta()
         if session is not None:
             data["session"] = session.session_id
-        if not data:
-            return
+        # What's in the right pane — so we can re-open the same thing.
+        if self._in_history_mode:
+            data["right_kind"] = "preview"
+            if session is not None:
+                data["right_session"] = session.session_id
+        elif self._right_pane_claude is not None:
+            data["right_kind"] = "claude"
+            data["right_tmux"] = self._right_pane_claude
+        else:
+            data["right_kind"] = "empty"
         import json
         path = self._state_path()
         try:
@@ -745,6 +755,21 @@ class App:
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+
+    def _restore_right_pane(self, state: dict) -> None:
+        """Re-open the right pane to its state at soft-quit time."""
+        kind = state.get("right_kind")
+        if kind == "claude":
+            tmux_name = state.get("right_tmux")
+            if tmux_name and tmux_ctl.session_exists(tmux_name):
+                self._attach_in_right_pane(tmux_name, steal_focus=False)
+        elif kind == "preview":
+            sess_id = state.get("right_session")
+            if sess_id and self._selected_project is not None:
+                meta = self._session_cache.get(self._selected_project, sess_id)
+                if meta is not None:
+                    self._in_history_mode = True
+                    self._show_transcript(meta.jsonl_path)
 
     def _discover_orphans(self) -> None:
         """Find detached ``cc-*`` tmux sessions and rebuild ``_running``.
