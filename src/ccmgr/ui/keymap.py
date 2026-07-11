@@ -1,7 +1,7 @@
 """Single source of truth for ccmgr's action keybindings.
 
 Drives both the key dispatch in ``App._on_input`` and the always-visible hint
-bar (``HelpBar`` / ``hint_text_for``) so the two cannot drift — previously a key's
+bar (``HintBar`` / ``hint_text_for``) so the two cannot drift — previously a key's
 behaviour and the bar describing it were maintained separately.
 
 Navigation / pane keys and keys that need a pane guard or an argument

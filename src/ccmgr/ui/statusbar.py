@@ -9,7 +9,7 @@ from ccmgr.ui import keymap
 
 
 # Idle tips cycled through the status bar when there's no active message. These
-# intentionally avoid the keys already listed in the always-visible HelpBar
+# intentionally avoid the keys already listed in the always-visible HintBar
 # (n/r/s/d, /, i, ?, q, Ctrl-B ←/→) — they surface behaviour that isn't obvious
 # from the hint bar, like soft-quit and history preview.
 TIPS: tuple[str, ...] = (

@@ -162,6 +162,16 @@ class App:
     _DOUBLE_CLICK_FOCUS_DELAY = 0.35
     _double_focus_alarm: object | None = None
     _double_focus_visual_pending: bool = False
+    # Set while dropping a bracketed-paste burst; see _filter_input.  Class-level
+    # default so partially-built instances (App.__new__ in tests) are safe.
+    _in_paste: bool = False
+    # Whether the in-progress paste is being delivered to a text field (rename /
+    # filter / path browser) rather than dropped.  Decided once at "begin paste".
+    _paste_passthrough: bool = False
+    # Fallback for terminals WITHOUT bracketed paste: this many single-character
+    # keys arriving in one input read is treated as a paste in command mode.
+    # Bracketed paste is the precise primary guard; this is a coarse net.
+    _PASTE_BURST_MIN = 2
     # Global project counts/order are less latency-sensitive than the selected
     # session list and are expensive on NFS homes.
     _PROJECT_SCAN_INTERVAL = 3.0
@@ -208,6 +218,14 @@ class App:
         self._scroll_alarm_pending: bool = False
         self._double_focus_alarm: object | None = None
         self._double_focus_visual_pending: bool = False
+        # True while consuming a bracketed-paste burst (between the terminal's
+        # "begin paste"/"end paste" markers).  The sidebar panes are command
+        # mode — a single stray key like `k`/`d` triggers a destructive action —
+        # so pasted text is dropped wholesale rather than replayed as keystrokes.
+        # Spans may straddle multiple _filter_input reads, so this is instance
+        # state, not a per-call local.
+        self._in_paste: bool = False
+        self._paste_passthrough: bool = False
         self._last_screen_size: tuple[int, int] | None = None
         # History-preview mode: when the right pane shows a session transcript
         # (less) instead of a Claude session.  We remember what was there before
@@ -375,17 +393,113 @@ class App:
         if self._loop is not None:
             self._loop.draw_screen()
 
+    def _paste_target_is_text_input(self) -> bool:
+        """True when the focused widget is a text field that should receive
+        pasted text (rename, path browser, or the filter Edit).
+
+        Everything else — the sidebar panes and the confirm/menu modals — is
+        command mode, where pasted characters are dispatched as destructive
+        keybindings and must be dropped.  Note this deliberately excludes the
+        delete/quit confirmations: pasting ``y`` into them is the exact hazard.
+        """
+        loop = self._loop
+        if loop is not None and loop.widget is not self._frame:
+            # A modal overlay is up; only the text-entry modals accept paste.
+            top = getattr(loop.widget, "top_w", None)
+            return isinstance(top, (RenameModal, PathBrowserModal))
+        # No modal — the filter Edit lives in the footer and only gets focus
+        # while filtering.
+        try:
+            return self._frame.focus_position == "footer"
+        except Exception:
+            return False
+
+    def _looks_like_paste_burst(self, keys: list) -> bool:
+        """Heuristic paste detector for terminals lacking bracketed paste.
+
+        A human presses one command key per read; a paste dumps many character
+        bytes at once.  Count only single-character keys so multi-key names
+        (``up``, ``enter``, ``tab``) and mouse tuples from a single action don't
+        trip it.
+        """
+        singles = sum(1 for k in keys if isinstance(k, str) and len(k) == 1)
+        return singles >= self._PASTE_BURST_MIN
+
     def _filter_input(self, keys: list, _raw: list[int]) -> list:
-        """Consume terminal focus reports before normal key dispatch."""
+        """Consume terminal focus reports and drop pasted input before normal
+        key dispatch.
+
+        Pasting into the sidebar is dangerous: each pasted character is dispatched
+        as a command key, so a clipboard containing ``k`` (kill), ``d``+``y``
+        (delete-confirm) or ``q``+Enter (quit-all) can destroy sessions.  Two
+        layers guard against it:
+
+        * **Bracketed paste** (primary, precise): with the mode enabled the
+          terminal frames the paste in ``begin paste``/``end paste`` markers, so
+          we can drop the whole span exactly.  The span can straddle multiple
+          reads, hence ``self._in_paste`` persists across calls.
+        * **Burst heuristic** (fallback): terminals without bracketed paste send
+          the paste as raw characters; a dense burst in one read is dropped too.
+
+        Text fields (rename / filter / path browser) are exempt — there a paste
+        is wanted, so the markers are stripped and the content passed through.
+        """
+        # Fallback layer: no bracketed markers, not mid-span, but a burst arrived
+        # in a command-mode context.  Drop it (focus reports don't ride along
+        # with pasted text, so returning [] loses nothing).
+        if (not self._in_paste
+                and "begin paste" not in keys
+                and self._looks_like_paste_burst(keys)
+                and not self._paste_target_is_text_input()):
+            self._set_status(
+                "Paste ignored in sidebar — switch to the agent pane "
+                "(Ctrl-B →) to paste."
+            )
+            return []
+
         filtered = []
         for key in keys:
-            if key == "focus in":
+            if self._in_paste:
+                # Safety reset: if a modal overlay appeared while we were
+                # mid-paste (e.g. focus-out closed the paste span), don't
+                # stay stuck swallowing keys forever.
+                if self._loop is not None and self._loop.widget is not self._frame:
+                    self._in_paste = False
+                # Inside a bracketed-paste span.  The closing marker ends the
+                # span and is never forwarded.
+                if key == "end paste":
+                    self._in_paste = False
+                elif self._paste_passthrough:
+                    # Only forward printable single characters.  Control keys
+                    # (enter, esc, tab, …) must be dropped — a newline in the
+                    # pasted text would otherwise exit the text field and
+                    # dispatch the remaining characters as sidebar commands
+                    # (potentially destructive ones like d, k, q).
+                    if isinstance(key, str) and len(key) == 1 and key.isprintable():
+                        filtered.append(key)
+                continue
+            if key == "begin paste":
+                self._in_paste = True
+                self._paste_passthrough = self._paste_target_is_text_input()
+                if not self._paste_passthrough:
+                    self._set_status(
+                        "Paste ignored in sidebar — switch to the agent pane "
+                        "(Ctrl-B →) to paste."
+                    )
+            elif key == "end paste":
+                # Stray close with no matching open — nothing to do.
+                pass
+            elif key == "focus in":
                 # Ignore the late left-pane report while a double-click transfer
                 # is pending; cancellation restores it for newer sidebar input.
                 if not self._double_focus_visual_pending:
                     self._set_ccmgr_focus(True)
             elif key == "focus out":
                 self._set_ccmgr_focus(False)
+                # Belt-and-suspenders: if the paste-end marker was lost the
+                # sidebar would swallow every key forever.  Focus leaving the
+                # pane is a natural reset point — the paste is over.
+                self._in_paste = False
             else:
                 filtered.append(key)
         return filtered
@@ -1175,6 +1289,13 @@ class App:
     # --- key handling ---
 
     def _on_input(self, key: str) -> None:
+        # When a modal overlay is showing, don't dispatch sidebar action keys.
+        # Modals handle their own keys (Esc, Enter, y/n) in their keypress
+        # methods.  Unhandled keys like q would otherwise open a second modal
+        # (quit confirm) without cleaning up the first — leaving help's tmux
+        # zoom stuck, for example.
+        if self._loop is not None and self._loop.widget is not self._frame:
+            return
         if key == "`":
             self._on_backtick()
             return
@@ -2301,7 +2422,12 @@ class App:
 
         self._ccmgr_pane_id = tmux_ctl.current_pane_id()
         self._set_ccmgr_focus(True, force_border=True)
-        screen = urwid.raw_display.Screen(focus_reporting=True)
+        # bracketed_paste_mode: the terminal frames pastes in begin/end markers
+        # so _filter_input can drop them — sidebar keys are destructive commands,
+        # not text input.
+        screen = urwid.raw_display.Screen(
+            focus_reporting=True, bracketed_paste_mode=True
+        )
         self._loop = urwid.MainLoop(
             self._frame,
             palette=PALETTE,

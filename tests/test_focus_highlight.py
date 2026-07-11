@@ -6,6 +6,7 @@ import urwid
 
 from ccmgr.models import Project, SessionMeta
 from ccmgr.ui.app import App, _FocusAwareFrame
+from ccmgr.ui.modals import DeleteConfirmModal, RenameModal
 from ccmgr.ui.sessions_pane import _SessionRow
 
 
@@ -83,6 +84,124 @@ def test_focus_reports_are_consumed_and_update_divider(monkeypatch):
     assert app._filter_input(["focus in"], []) == []
     assert app._frame._window_active is True
     assert set_border.call_args.args == ("fg=colour240",)
+
+
+def _paste_app():
+    """App stub in a command-mode context (sidebar focused, no modal)."""
+    app = App.__new__(App)
+    app._in_paste = False
+    app._paste_passthrough = False
+    app._double_focus_visual_pending = False
+    app._set_status = MagicMock()
+    app._loop = None
+    app._frame = _FocusAwareFrame(urwid.SolidFill(" "))  # body-focused
+    return app
+
+
+def _with_modal(app, modal):
+    """Put *modal* on screen as the active overlay."""
+    loop = MagicMock()
+    loop.widget = urwid.Overlay(
+        modal, app._frame, "center", 10, "middle", 5)
+    app._loop = loop
+    return app
+
+
+def _filter_mode(app):
+    """Focus the footer filter Edit (text-input context)."""
+    app._frame = _FocusAwareFrame(
+        urwid.SolidFill(" "), footer=urwid.Edit(), focus_part="footer")
+    return app
+
+
+def test_bracketed_paste_burst_is_dropped_whole():
+    # A clipboard whose bytes include destructive command keys (k=kill,
+    # d+y=delete-confirm, q+enter=quit-all) must not reach dispatch.
+    app = _paste_app()
+    out = app._filter_input(
+        ["begin paste", "k", "d", "y", "q", "enter", "end paste"], [])
+    assert out == []
+    assert app._in_paste is False
+    app._set_status.assert_called_once()
+
+
+def test_paste_span_across_reads_is_dropped_and_trailing_key_survives():
+    # urwid may deliver a large paste over several input reads; the flag has to
+    # persist until "end paste" arrives.  Real keystrokes after the paste closes
+    # (same read) are preserved.
+    app = _paste_app()
+    assert app._filter_input(["begin paste", "h", "e"], []) == []
+    assert app._in_paste is True
+    assert app._filter_input(["l", "l", "o", "d", "y"], []) == []
+    assert app._in_paste is True
+    assert app._filter_input(["t", "end paste", "n"], []) == ["n"]
+    assert app._in_paste is False
+    # Status shown once, on the opening marker only.
+    app._set_status.assert_called_once()
+
+
+def test_real_keystrokes_and_stray_end_marker_pass_through():
+    # Single command keys typed by hand (one per read) are NOT pastes and must
+    # dispatch normally; a lone "end paste" with no open span is a no-op.
+    app = _paste_app()
+    assert app._filter_input(["k"], []) == ["k"]
+    assert app._filter_input(["d"], []) == ["d"]
+    assert app._filter_input(["end paste", "z"], []) == ["z"]
+    assert app._in_paste is False
+    app._set_status.assert_not_called()
+
+
+def test_paste_into_filter_edit_passes_through():
+    # Filter mode is a text field — pasted content is delivered, markers stripped,
+    # and no "ignored" status is shown.
+    app = _filter_mode(_paste_app())
+    out = app._filter_input(["begin paste", "h", "i", "end paste"], [])
+    assert out == ["h", "i"]
+    assert app._paste_passthrough is True
+    assert app._in_paste is False
+    app._set_status.assert_not_called()
+
+
+def test_paste_into_rename_modal_passes_through():
+    app = _with_modal(_paste_app(), RenameModal("old", lambda *_: None, lambda: None))
+    out = app._filter_input(["begin paste", "x", "y", "end paste"], [])
+    assert out == ["x", "y"]
+    app._set_status.assert_not_called()
+
+
+def test_paste_into_delete_confirm_is_still_blocked():
+    # The hazard case: a pasted 'y' must NOT confirm a pending delete.
+    app = _with_modal(
+        _paste_app(), DeleteConfirmModal("t", "d", lambda: None, lambda: None))
+    out = app._filter_input(["begin paste", "y", "end paste"], [])
+    assert out == []
+    app._set_status.assert_called_once()
+
+
+def test_burst_without_markers_dropped_in_command_mode():
+    # Terminals lacking bracketed paste: a dense character burst in one read is
+    # still recognised as a paste and dropped in the sidebar.
+    app = _paste_app()
+    out = app._filter_input(list("hellodyk"), [])
+    assert out == []
+    app._set_status.assert_called_once()
+
+
+def test_two_key_burst_is_treated_as_paste():
+    # _PASTE_BURST_MIN is 2 by design — d+y is two single keys that arrive
+    # in one read, which a paste would also do.  Two fast keystrokes hitting
+    # the guard is an annoyance; missing a d+y paste is data loss.
+    app = _paste_app()
+    assert app._filter_input(["d", "y"], []) == []
+    app._set_status.assert_called_once()
+
+
+def test_burst_without_markers_allowed_in_text_field():
+    app = _filter_mode(_paste_app())
+    out = app._filter_input(list("hello"), [])
+    assert out == list("hello")
+    app._set_status.assert_not_called()
+
 
 
 def test_double_click_prepaints_focus_before_tmux_settles(monkeypatch):
