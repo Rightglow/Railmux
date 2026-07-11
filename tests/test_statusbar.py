@@ -4,7 +4,7 @@ import pytest
 
 from ccmgr.config import Config
 from ccmgr.ui import app as app_mod
-from ccmgr.ui.statusbar import TIPS, StatusBar, _LEVEL_ATTR
+from ccmgr.ui.statusbar import TIPS, ButtonBar, HintBar, StatusBar, _LEVEL_ATTR
 
 
 @pytest.fixture
@@ -262,3 +262,65 @@ def test_unknown_level_falls_back_to_info():
     bar = StatusBar()
     bar.set_message("x", "bogus")
     assert bar._level == "info"
+
+
+# ── HintBar: context-sensitive, two-line wrap, overflow ellipsis ─────────
+
+from ccmgr.ui import keymap  # noqa: E402
+
+
+def _hint_rows(bar: HintBar, width: int) -> list[str]:
+    canvas = bar.render((width,), False)
+    return [t.decode() for t in canvas.text]
+
+
+def test_hintbar_wide_shows_all_keys_no_ellipsis():
+    bar = HintBar()
+    bar.set_context(keymap.CTX_SESSIONS)
+    rows = _hint_rows(bar, 120)  # wider than the full sessions hint
+    joined = "".join(rows)
+    assert "…" not in joined
+    assert "F9 fullscreen" in joined  # last key is present
+
+
+def test_hintbar_narrow_uses_two_lines_and_ellipsis():
+    bar = HintBar()
+    bar.set_context(keymap.CTX_SESSIONS)  # widest context
+    rows = _hint_rows(bar, 30)
+    assert len(rows) == 2                 # fixed two-line height
+    assert all(_cols(r) <= 30 for r in rows)
+    assert rows[1].rstrip().endswith("…")  # signals more keys are hidden
+
+
+def test_hintbar_context_switch_changes_keys():
+    bar = HintBar()
+    bar.set_context(keymap.CTX_RUNNING)
+    running = "".join(_hint_rows(bar, 120))
+    bar.set_context(keymap.CTX_SESSIONS)
+    sessions = "".join(_hint_rows(bar, 120))
+    # Running hides rename/star/filter; Sessions shows them.
+    assert "rename" not in running
+    assert "rename" in sessions
+
+
+def test_hintbar_always_two_lines_even_when_short():
+    bar = HintBar()
+    bar.set_context(keymap.CTX_PROJECTS)
+    rows = _hint_rows(bar, 200)  # everything fits on line 1
+    assert len(rows) == 2        # height stays fixed
+    assert rows[1].strip() == ""
+
+
+# ── ButtonBar: constant utility row ──────────────────────────────────────
+
+def test_buttonbar_lists_help_quit_detach():
+    calls = []
+    bar = ButtonBar(
+        on_help=lambda: calls.append("help"),
+        on_quit=lambda: calls.append("quit"),
+        on_detach=lambda: calls.append("detach"),
+    )
+    canvas = bar.render((60,), False)
+    text = "".join(t.decode() for t in canvas.text)
+    assert "help" in text and "quit" in text and "detach" in text
+

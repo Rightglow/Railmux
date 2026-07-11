@@ -44,7 +44,7 @@ from ccmgr.ui.modals import (
 from ccmgr.ui.projects_pane import ProjectsPane
 from ccmgr.ui.running_pane import RunningEntry, RunningSessionsPane
 from ccmgr.ui.sessions_pane import SessionsPane
-from ccmgr.ui.statusbar import HelpBar, StatusBar, TIPS
+from ccmgr.ui.statusbar import ButtonBar, HintBar, StatusBar, TIPS
 
 
 PALETTE = [
@@ -267,16 +267,20 @@ class App:
             ("weight", 1, urwid.AttrMap(self._running_pane, "pane", focus_map="pane_focus")),
         ])
         self._sidebar_body = urwid.Padding(self._sidebar, right=1)
-        self._help_bar = HelpBar(
+        self._hint_bar = HintBar()
+        # Start on the focused pane's key set (sidebar defaults to Projects) so
+        # the bar is correct before the first refresh tick.
+        self._hint_bar.set_context(self._help_context())
+        self._button_bar = ButtonBar(
             on_help=self._open_help_modal,
             on_quit=self._open_quit_confirm,
             on_detach=self._on_detach,
         )
-        # Start on the focused pane's key set (sidebar defaults to Projects) so
-        # the bar is correct before the first refresh tick.
-        self._help_bar.set_context(self._help_context())
+        # Footer: context key hints, then the constant button row, then the
+        # status/tips line. The status line is index 2 — filter mode swaps it.
         footer = urwid.Pile([
-            ("pack", self._help_bar),
+            ("pack", self._hint_bar),
+            ("pack", self._button_bar),
             ("pack", self._status),
         ])
         self._frame = _FocusAwareFrame(body=self._sidebar_body, footer=footer)
@@ -330,8 +334,8 @@ class App:
         self._ccmgr_has_focus = active
         self._frame.set_window_active(active)
         self._set_divider_active(not active, force=force_border)
-        if hasattr(self, "_help_bar"):
-            self._help_bar.set_context(self._help_context())
+        if hasattr(self, "_hint_bar"):
+            self._hint_bar.set_context(self._help_context())
 
     def _schedule_right_pane_focus_after_double(self) -> None:
         """Show the right-focus state now, then move tmux focus once settled."""
@@ -1181,11 +1185,11 @@ class App:
             #   Running → Sessions → Projects
             if self._sidebar.focus_position == 2:
                 self._sidebar.focus_position = 1
-                self._help_bar.set_context(self._help_context())
+                self._hint_bar.set_context(self._help_context())
                 return
             if self._sidebar.focus_position == 1:
                 self._sidebar.focus_position = 0
-                self._help_bar.set_context(self._help_context())
+                self._hint_bar.set_context(self._help_context())
                 return
             return
         if key == "ctrl c":
@@ -1393,7 +1397,7 @@ class App:
             return
         cur = self._sidebar.focus_position
         self._sidebar.focus_position = (cur - 1) % n if reverse else (cur + 1) % n
-        self._help_bar.set_context(self._help_context())
+        self._hint_bar.set_context(self._help_context())
 
     def _teardown_tmux(self) -> None:
         """Clean up on quit.
@@ -1433,13 +1437,13 @@ class App:
                     pass
 
     def _enter_filter_mode(self) -> None:
-        # Swap the status row for a filter Edit, keeping the 2-line
-        # height so the sidebar doesn't jump.
+        # Swap the status row (footer index 2) for a filter Edit, keeping the
+        # 2-line height so the sidebar doesn't jump.
         edit = urwid.Edit(caption="filter: ")
         filter_body = urwid.Pile([edit, urwid.Text("")])
         footer_pile = self._frame.contents["footer"][0]
-        footer_pile.contents[1] = (filter_body, footer_pile.options("pack"))
-        footer_pile.focus_position = 1
+        footer_pile.contents[2] = (filter_body, footer_pile.options("pack"))
+        footer_pile.focus_position = 2
         self._frame.focus_position = "footer"
 
         def on_change(widget, new_text):
@@ -1454,7 +1458,7 @@ class App:
 
         def restore(key):
             if key in ("enter", "esc"):
-                footer_pile.contents[1] = (self._status, footer_pile.options("pack"))
+                footer_pile.contents[2] = (self._status, footer_pile.options("pack"))
                 self._frame.focus_position = "body"
                 return None
             return key
@@ -1561,7 +1565,7 @@ class App:
         # Advance the status-bar state machine (TTL expiry + idle tip rotation)
         self._update_status()
         # Keep the hint bar showing only the keys valid for the focused pane.
-        self._help_bar.set_context(self._help_context())
+        self._hint_bar.set_context(self._help_context())
 
     _HELP_CONTEXTS = (keymap.CTX_PROJECTS, keymap.CTX_SESSIONS, keymap.CTX_RUNNING)
 

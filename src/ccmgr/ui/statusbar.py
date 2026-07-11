@@ -30,6 +30,54 @@ _LEVEL_ATTR = {
 }
 
 
+def split_at_width(text: str, maxcol: int) -> tuple[str, str]:
+    """Split *text* into (head, tail) where head fits in *maxcol* display
+    columns. Uses urwid's column arithmetic so wide (CJK) glyphs — which
+    occupy two columns — wrap correctly; ``textwrap`` counts characters and
+    would let a wide line overflow and get clipped instead of wrapping.
+    Prefers to break on the last space within the width. Spaces at the wrap
+    boundary are dropped so the continuation line has no leading gap; spaces
+    elsewhere in the text are preserved verbatim."""
+    if not text:
+        return "", ""
+    maxcol = max(1, maxcol)
+    pos, _ = urwid.calc_text_pos(text, 0, len(text), maxcol)
+    if pos >= len(text):
+        return text, ""
+    # Prefer a word boundary, but only if it doesn't waste most of the
+    # line — otherwise (e.g. CJK text whose only early space trails a lone
+    # glyph) hard-break at the column limit.
+    brk = text.rfind(" ", 0, pos)
+    if brk > pos // 2:
+        head, tail = text[:brk], text[brk + 1:]
+    else:
+        head, tail = text[:pos], text[pos:]
+    return head, tail.lstrip(" ")
+
+
+def reflow_two_lines(text: str, maxcol: int) -> tuple[str, str]:
+    """Soft-wrap *text* across (line1, line2) to *maxcol* display columns.
+
+    Fits on line 1 when it can, spills into line 2 when longer, and truncates
+    line 2 with an ellipsis when the text needs more than two lines. Shared by
+    the status bar and the hint bar so both wrap identically."""
+    maxcol = max(1, maxcol)
+    line1, rest = split_at_width(text, maxcol)
+    if not rest:
+        return line1, ""
+    line2, overflow = split_at_width(rest, maxcol)
+    if overflow:
+        # More than two lines' worth: truncate line 2 with an ellipsis so it's
+        # clear the text was cut off. Reserve one column for "…"; when the
+        # viewport is a single column there's no room for content.
+        if maxcol <= 1:
+            line2 = "…"
+        else:
+            line2, _ = split_at_width(rest, maxcol - 1)
+            line2 = line2.rstrip() + "…"
+    return line1, line2
+
+
 class _HelpButton(urwid.WidgetWrap):
     """A compact clickable label for the trailing help-hint bar."""
 
@@ -53,22 +101,18 @@ class _HelpButton(urwid.WidgetWrap):
         return super().mouse_event(size, event, button, col, row, focus)
 
 
-class HelpBar(urwid.WidgetWrap):
-    """Persistent key reference — two lines: actions, then utility/exit.
+class ButtonBar(urwid.WidgetWrap):
+    """The constant utility/exit row: help / quit / detach as clickable buttons.
 
-    The first line is context-sensitive: it lists only the action keys valid
-    for the focused sidebar pane (Projects / Sessions / Running), pulled from
-    ``keymap.hint_text_for`` so it can't drift from dispatch. The second line
-    (help / quit / detach) is constant and its items are clickable buttons.
+    Split out from the old two-line HelpBar so the context-sensitive key hints
+    (HintBar) and these always-present global actions are independent widgets.
+    Content is fixed — the trailing keymap entries never change.
     """
 
     def __init__(self, on_help: Callable[[], None],
                  on_quit: Callable[[], None],
                  on_detach: Callable[[], None]) -> None:
-        self._context: str | None = None
-        main, trail = keymap.hint_text_for(self._context).split("\n", 1)
-        self._main = urwid.Text(main, align="left", wrap="clip")
-        # Build clickable buttons from the trailing items (these never change).
+        trail = keymap.hint_text_for(None).split("\n", 1)[1]
         buttons: list = []
         for item in trail.split(" · "):
             label = " " + item + " "
@@ -81,20 +125,47 @@ class HelpBar(urwid.WidgetWrap):
             else:
                 btn = urwid.Text(label)
             buttons.append(("pack", btn))
-        body = urwid.Pile([
-            self._main,
-            urwid.Columns(buttons, dividechars=1),
-        ])
+        super().__init__(urwid.AttrMap(urwid.Columns(buttons, dividechars=1), "dim"))
+
+
+class HintBar(urwid.WidgetWrap):
+    """Context-sensitive key reference — the action keys valid for the focused
+    sidebar pane (Projects / Sessions / Running), from ``keymap.hint_text_for``
+    so it can't drift from dispatch.
+
+    Two fixed lines (height never changes, so the sidebar doesn't jitter). The
+    hint soft-wraps across both lines by display width; when it needs more than
+    two lines the second is truncated with an ellipsis so it's clear some keys
+    aren't shown (the full list is in the ``?`` help modal).
+    """
+
+    def __init__(self) -> None:
+        self._context: str | None = None
+        self._text = keymap.hint_text_for(self._context).split("\n", 1)[0]
+        self._line1 = urwid.Text("", align="left", wrap="clip")
+        self._line2 = urwid.Text("", align="left", wrap="clip")
+        body = urwid.Pile([self._line1, self._line2])
         super().__init__(urwid.AttrMap(body, "dim"))
+        self._reflow(80)
 
     def set_context(self, context: str | None) -> None:
-        """Update the first line to the key set for *context* (a ``keymap.CTX_*``
-        value, or None for all keys). No-op when unchanged."""
+        """Switch to the key set for *context* (a ``keymap.CTX_*`` value, or
+        None for all keys). No-op when unchanged."""
         if context == self._context:
             return
         self._context = context
-        main = keymap.hint_text_for(context).split("\n", 1)[0]
-        self._main.set_text(main)
+        self._text = keymap.hint_text_for(context).split("\n", 1)[0]
+        self._reflow(80)
+
+    def _reflow(self, maxcol: int) -> None:
+        line1, line2 = reflow_two_lines(self._text, maxcol)
+        self._line1.set_text(line1)
+        self._line2.set_text(line2)
+
+    def render(self, size, focus: bool = False):
+        if size:
+            self._reflow(size[0])
+        return super().render(size, focus)
 
 
 class StatusBar(urwid.WidgetWrap):
@@ -127,48 +198,9 @@ class StatusBar(urwid.WidgetWrap):
         self._reflow(80)
 
     def _reflow(self, maxcol: int) -> None:
-        maxcol = max(1, maxcol)
-        line1, rest = self._split_at_width(self._text, maxcol)
+        line1, line2 = reflow_two_lines(self._text, maxcol)
         self._line1.set_text(line1)
-        if not rest:
-            self._line2.set_text("")
-            return
-        line2, overflow = self._split_at_width(rest, maxcol)
-        if overflow:
-            # More than two lines' worth: truncate line 2 with an ellipsis so
-            # it's clear the message was cut off. Reserve one column for "…";
-            # when the viewport is a single column there's no room for content,
-            # so line 2 is just the ellipsis.
-            if maxcol <= 1:
-                line2 = "…"
-            else:
-                line2, _ = self._split_at_width(rest, maxcol - 1)
-                line2 = line2.rstrip() + "…"
         self._line2.set_text(line2)
-
-    @staticmethod
-    def _split_at_width(text: str, maxcol: int) -> tuple[str, str]:
-        """Split *text* into (head, tail) where head fits in *maxcol* display
-        columns. Uses urwid's column arithmetic so wide (CJK) glyphs — which
-        occupy two columns — wrap correctly; ``textwrap`` counts characters and
-        would let a wide line overflow and get clipped instead of wrapping.
-        Prefers to break on the last space within the width. Spaces at the wrap
-        boundary are dropped so the continuation line has no leading gap; spaces
-        elsewhere in the text are preserved verbatim."""
-        if not text:
-            return "", ""
-        pos, _ = urwid.calc_text_pos(text, 0, len(text), maxcol)
-        if pos >= len(text):
-            return text, ""
-        # Prefer a word boundary, but only if it doesn't waste most of the
-        # line — otherwise (e.g. CJK text whose only early space trails a lone
-        # glyph) hard-break at the column limit.
-        brk = text.rfind(" ", 0, pos)
-        if brk > pos // 2:
-            head, tail = text[:brk], text[brk + 1:]
-        else:
-            head, tail = text[:pos], text[pos:]
-        return head, tail.lstrip(" ")
 
     def render(self, size, focus: bool = False):
         # Wrap to the actual available width so resizing stays correct.
