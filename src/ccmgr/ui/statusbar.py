@@ -98,54 +98,48 @@ def reflow_pages(text: str, maxcol: int, lines: int = 2) -> list[tuple[str, ...]
     return pages
 
 
-class _HelpButton(urwid.WidgetWrap):
-    """A compact clickable label for the trailing help-hint bar."""
-
-    def __init__(self, label: str, on_click: Callable[[], None]) -> None:
-        self._on_click = on_click
-        super().__init__(urwid.AttrMap(urwid.Text(label), "help_btn"))
-
-    def selectable(self) -> bool:
-        return True
-
-    def keypress(self, size, key):
-        if key == "enter":
-            self._on_click()
-            return None
-        return key
-
-    def mouse_event(self, size, event, button, col, row, focus):
-        if event == "mouse press" and button == 1:
-            self._on_click()
-            return True
-        return super().mouse_event(size, event, button, col, row, focus)
-
-
 class ButtonBar(urwid.WidgetWrap):
-    """The constant utility/exit row: help / quit / detach as clickable buttons.
+    """The constant utility/exit row: ``[? help]  [q quit]  [C-b d detach]``.
 
-    Split out from the old two-line HelpBar so the context-sensitive key hints
-    (HintBar) and these always-present global actions are independent widgets.
-    Content is fixed — the trailing keymap entries never change.
+    Rendered as a single line of plain text so there are no per-button
+    background-colour blocks.  Mouse clicks are resolved by column position —
+    click anywhere inside the brackets of a button to fire it.
     """
 
     def __init__(self, on_help: Callable[[], None],
                  on_quit: Callable[[], None],
                  on_detach: Callable[[], None]) -> None:
         trail = keymap.hint_text_for(None).split("\n", 1)[1]
-        buttons: list = []
+        self._hit_areas: list[tuple[int, int, Callable[[], None]]] = []
+        parts: list[str] = []
+        col: int = 0
         for item in trail.split(" · "):
-            label = " " + item + " "
-            if "help" in item:
-                btn = _HelpButton(label, on_help)
-            elif "quit" in item:
-                btn = _HelpButton(label, on_quit)
-            elif "detach" in item:
-                btn = _HelpButton(label, on_detach)
-            else:
-                btn = urwid.Text(label)
-            buttons.append(("pack", btn))
-        super().__init__(urwid.AttrMap(urwid.Columns(buttons, dividechars=1), "dim"))
+            label = f"[{item}]"
+            if col > 0:
+                parts.append("  ")
+                col += 2
+            self._hit_areas.append((col, col + len(label),
+                                     on_help if "help" in item else
+                                     on_quit if "quit" in item else
+                                     on_detach if "detach" in item else
+                                     (lambda: None)))
+            parts.append(label)
+            col += len(label)
+        super().__init__(urwid.AttrMap(
+            urwid.Text("".join(parts), align="left", wrap="clip"), "dim"))
+
+    def selectable(self) -> bool:
+        # Not selectable — focus stays on the sidebar.  Mouse clicks are
+        # still delivered and resolved via hit areas below.
+        return False
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        if event == "mouse press" and button == 1 and row == 0:
+            for start, end, cb in self._hit_areas:
+                if start <= col < end:
+                    cb()
+                    return True
+        return super().mouse_event(size, event, button, col, row, focus)
 
 
 class HintBar(urwid.WidgetWrap):

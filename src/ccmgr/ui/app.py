@@ -83,8 +83,6 @@ PALETTE = [
     # so it's obvious which pane Tab/Shift-Tab landed on.
     ("pane", "dark gray", ""),
     ("pane_focus", "light cyan,bold", ""),
-    # Help-hint buttons in the trailing bar.
-    ("help_btn", "light gray", "dark gray"),
 ]
 
 

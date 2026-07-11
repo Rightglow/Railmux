@@ -350,3 +350,47 @@ def test_buttonbar_lists_help_quit_detach():
     text = "".join(t.decode() for t in canvas.text)
     assert "help" in text and "quit" in text and "detach" in text
 
+
+def test_buttonbar_bracket_format():
+    """Buttons are rendered as [key desc] with bracket delimiters."""
+    bar = ButtonBar(on_help=lambda: None, on_quit=lambda: None, on_detach=lambda: None)
+    canvas = bar.render((60,), False)
+    text = "".join(t.decode() for t in canvas.text)
+    assert "[? help]" in text
+    assert "[q quit]" in text
+    assert "[C-b d detach]" in text
+
+
+def test_buttonbar_mouse_click_hits_button():
+    """Mouse click on a button's column range fires the right callback."""
+    calls = []
+    bar = ButtonBar(
+        on_help=lambda: calls.append("help"),
+        on_quit=lambda: calls.append("quit"),
+        on_detach=lambda: calls.append("detach"),
+    )
+    # The first hit area (lowest start column) is [? help].
+    help_start, help_end = sorted(bar._hit_areas)[0][:2]
+    mid = (help_start + help_end) // 2
+    bar.mouse_event((60,), "mouse press", 1, mid, 0, False)
+    assert calls == ["help"]
+
+
+def test_buttonbar_mouse_click_miss_does_nothing():
+    """Clicking between buttons does not fire any callback."""
+    calls = []
+    bar = ButtonBar(
+        on_help=lambda: calls.append("help"),
+        on_quit=lambda: calls.append("quit"),
+        on_detach=lambda: calls.append("detach"),
+    )
+    # Click in the gap between [? help] and [q quit].
+    bar.mouse_event((60,), "mouse press", 1, 8, 0, False)
+    assert calls == []
+
+
+def test_buttonbar_not_selectable():
+    """ButtonBar must not steal keyboard focus from the sidebar."""
+    bar = ButtonBar(on_help=lambda: None, on_quit=lambda: None, on_detach=lambda: None)
+    assert bar.selectable() is False
+
