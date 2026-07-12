@@ -88,6 +88,74 @@ PALETTE = [
 ]
 
 
+# Preview themes for the outer tmux status bar, cycled live with the ` key so the
+# colour scheme can be judged in a real terminal. Each theme sets the whole bar's
+# background (status-style), the ` ccmgr ` brand (status-left), and the per-level
+# inline styles for the status text. Design notes per level:
+#   - tip/info sit directly on the bar bg (calm, uniform band);
+#   - error ALWAYS gets its own red pill (bg=colour52/88) — red text on a green or
+#     blue bar is low-contrast and red/green is the common colour-blind pair;
+#   - warn on the green theme also keeps a dark pill (amber-on-green is muddy).
+# Index 0 ("dark") is the shipped default and matches the values the tests pin.
+_TMUX_THEMES: tuple[dict, ...] = (
+    {
+        "name": "dark",
+        "bar": "bg=colour236,fg=colour250",
+        "brand": "#[fg=colour250,bold] ccmgr #[default]",
+        "levels": {
+            "info": "#[bg=colour236,fg=colour114]",
+            "warn": "#[bg=colour236,fg=colour214,bold]",
+            "error": "#[bg=colour52,fg=colour231,bold]",
+            "tip": "#[bg=colour236,fg=colour245]",
+        },
+    },
+    {
+        "name": "green",
+        "bar": "bg=colour2,fg=colour0",
+        "brand": "#[fg=colour0,bold] ccmgr #[default]",
+        "levels": {
+            "info": "#[bg=colour2,fg=colour231]",
+            "warn": "#[bg=colour236,fg=colour214,bold]",
+            "error": "#[bg=colour52,fg=colour231,bold]",
+            "tip": "#[bg=colour2,fg=colour0]",
+        },
+    },
+    {
+        "name": "gray band",
+        "bar": "bg=colour240,fg=colour252",
+        "brand": "#[fg=colour252,bold] ccmgr #[default]",
+        "levels": {
+            "info": "#[bg=colour240,fg=colour159]",
+            "warn": "#[bg=colour240,fg=colour220,bold]",
+            "error": "#[bg=colour52,fg=colour231,bold]",
+            "tip": "#[bg=colour240,fg=colour250]",
+        },
+    },
+    {
+        "name": "system blue",
+        "bar": "bg=colour24,fg=colour231",
+        "brand": "#[fg=colour231,bold] ccmgr #[default]",
+        "levels": {
+            "info": "#[bg=colour24,fg=colour159]",
+            "warn": "#[bg=colour24,fg=colour222,bold]",
+            "error": "#[bg=colour88,fg=colour231,bold]",
+            "tip": "#[bg=colour24,fg=colour253]",
+        },
+    },
+    {
+        "name": "slate",
+        "bar": "bg=colour60,fg=colour253",
+        "brand": "#[fg=colour253,bold] ccmgr #[default]",
+        "levels": {
+            "info": "#[bg=colour60,fg=colour151]",
+            "warn": "#[bg=colour60,fg=colour222,bold]",
+            "error": "#[bg=colour52,fg=colour231,bold]",
+            "tip": "#[bg=colour60,fg=colour251]",
+        },
+    },
+)
+
+
 @dataclass
 class _Running:
     """One claude session opened by this ccmgr instance.
@@ -189,37 +257,37 @@ class App:
     _tmux_status_enabled: bool = False
     _tmux_status_session: str | None = None
     _TMUX_STATUS_RIGHT_LENGTH = 200
-    # Per-level tmux inline styles for the status text. The outer tmux status bar
-    # has its own background (commonly bg=green), so each level sets its OWN dark
-    # background "pill" — decoupling readability from whatever the bar's bg is —
-    # then a level-coloured fg (info green / warn amber / error red / tip gray).
-    # Appended AFTER content escaping so their '#[' survives; closed with
-    # #[default] to restore the bar's own style for the rest of the line.
-    _TMUX_LEVEL_STYLE = {
-        "info": "#[bg=colour236,fg=colour114]",
-        "warn": "#[bg=colour236,fg=colour214,bold]",
-        "error": "#[bg=colour52,fg=colour231,bold]",
-        "tip": "#[bg=colour236,fg=colour245]",
-    }
-    # Static appearance ccmgr paints onto the OUTER tmux status bar while it owns
-    # the session. Applied in run(), reverted with `set-option -u` on teardown, so
-    # the user's global tmux config is untouched. Rationale:
-    #   - status-style: one dark background for the WHOLE bar so the info/warn/tip
-    #     pills (bg=colour236 in _TMUX_LEVEL_STYLE) sit seamlessly and only the red
-    #     error pill stands out — no green/dark clash with the user's theme.
-    #   - status-left: a minimal ` ccmgr ` brand replacing the default `[session]`.
+    # Which entry of the module-level _TMUX_THEMES is active. Driven by the `
+    # preview walk (see _cycle_tmux_preview); index 0 is the shipped default.
+    _tmux_theme_index: int = 0
+    # Theme-independent options ccmgr sets on the OUTER tmux status bar. The bar
+    # background (status-style) and brand (status-left) are owned by the active
+    # theme and applied separately (see _apply_tmux_theme / _TMUX_THEME_OPTIONS).
+    # All are session-scoped and reverted with `set-option -u` on teardown, so the
+    # user's global tmux config is untouched. Rationale:
     #   - window-status-*: blanked. ccmgr's outer session has a single fixed window,
     #     so its `0:tmux*` list entry is pure noise.
     #   - status: forced on (the bar is now the only status surface).
     #   - status-right-length: raised from the ~40 default so messages aren't cut.
     _TMUX_BAR_OPTIONS = (
         ("status", "on"),
-        ("status-style", "bg=colour236,fg=colour250"),
-        ("status-left", "#[fg=colour250,bold] ccmgr #[default]"),
         ("window-status-format", ""),
         ("window-status-current-format", ""),
         ("status-right-length", str(_TMUX_STATUS_RIGHT_LENGTH)),
     )
+    # Bar options owned by the active theme (set per theme, reverted on teardown).
+    _TMUX_THEME_OPTIONS = ("status-style", "status-left")
+    # TEMPORARY colour previewer (the ` key). Each press shows one status level
+    # with sample text; a full lap of the four rolls on to the next theme, so one
+    # key walks every theme × level. Throwaway diagnostic — collapse to the chosen
+    # scheme once picked. See _cycle_tmux_preview.
+    _TMUX_PREVIEW_SAMPLES = (
+        ("tip", "tip — Click a stopped session to preview its history"),
+        ("info", "info — → Previewing my-session (history)"),
+        ("warn", "warn — Paste ignored, switch to the agent pane"),
+        ("error", "error — ERROR: tmux not found on PATH"),
+    )
+    _tmux_preview_index: int = -1  # first ` press → 0 (tip on theme 0)
 
     def __init__(self, claude_home: Path, config: Config,
                  auto_launched: bool = False,
@@ -241,6 +309,8 @@ class App:
         # Outer tmux status-bar rendering; run() enables it once tmux is up.
         self._tmux_status_enabled: bool = False
         self._tmux_status_session: str | None = None
+        self._tmux_theme_index: int = 0  # index into _TMUX_THEMES
+        self._tmux_preview_index: int = -1  # ` colour-preview walk position
         self._selected_project: Project | None = None
         self._session_cache = SessionCache()
         self._favorites = Favorites()
@@ -1366,6 +1436,10 @@ class App:
         if key in ("[", "]"):
             self._resize_divider(key == "]")
             return
+        if key == "`":
+            # Temporary live preview: cycle status-bar colours (level × theme).
+            self._cycle_tmux_preview()
+            return
         # Simple action keys are dispatched from the shared keymap (single
         # source of truth shared with the hint bar) so the two can't drift.
         action = keymap.action_for(key, self._help_context())
@@ -1564,7 +1638,8 @@ class App:
             try:
                 import subprocess as _sp
                 revert = [opt for opt, _ in self._TMUX_BAR_OPTIONS]
-                revert.append("status-right")  # set dynamically, not in the tuple
+                revert += list(self._TMUX_THEME_OPTIONS)  # status-style, status-left
+                revert.append("status-right")  # set dynamically, not in a tuple
                 for opt in revert:
                     _sp.run(
                         ["tmux", "set-option", "-u", "-t",
@@ -2379,7 +2454,7 @@ class App:
         if not self._tmux_status_enabled or not self._tmux_status_session:
             return
         safe = text.replace("#", "##").replace("%", "%%")
-        style = self._TMUX_LEVEL_STYLE.get(level, "")
+        style = _TMUX_THEMES[self._tmux_theme_index]["levels"].get(level, "")
         payload = f"{style}{safe}#[default]" if style else safe
         try:
             import subprocess as _sp
@@ -2394,6 +2469,51 @@ class App:
             )
         except Exception:
             pass
+
+    def _apply_tmux_theme(self) -> None:
+        """Push the active theme's bar background + brand to the outer tmux bar.
+
+        The per-level status *text* colour is applied per message inside
+        ``_render_status_to_tmux`` (which reads the same theme); this only sets
+        the two whole-bar options. Best-effort — a tmux hiccup must not raise."""
+        if not self._tmux_status_enabled or not self._tmux_status_session:
+            return
+        theme = _TMUX_THEMES[self._tmux_theme_index]
+        try:
+            import subprocess as _sp
+            for opt, val in (("status-style", theme["bar"]),
+                             ("status-left", theme["brand"])):
+                _sp.run(
+                    ["tmux", "set-option", "-t", self._tmux_status_session,
+                     opt, val],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                )
+        except Exception:
+            pass
+
+    def _cycle_tmux_preview(self) -> None:
+        """TEMPORARY colour previewer (the ` key).
+
+        Steps one status level per press (tip → info → warn → error) with sample
+        text so every level colour is directly visible; a full lap of the four
+        rolls on to the next theme, so the single key walks all 5 themes × 4
+        levels. Throwaway diagnostic — collapse to the chosen scheme once picked.
+
+        Feeds the state-machine fields directly (rather than _set_status) so the
+        severity min-hold can't swallow a press, and so the poll tick re-renders
+        the same sample instead of clobbering it."""
+        self._tmux_preview_index += 1
+        samples = self._TMUX_PREVIEW_SAMPLES
+        level, sample = samples[self._tmux_preview_index % len(samples)]
+        theme_idx = (self._tmux_preview_index // len(samples)) % len(_TMUX_THEMES)
+        if theme_idx != self._tmux_theme_index:
+            self._tmux_theme_index = theme_idx
+            self._apply_tmux_theme()  # repaint bar bg + brand for the new theme
+        text = f"{_TMUX_THEMES[theme_idx]['name']} · {sample}  (` next)"
+        self._status_text = text
+        self._status_level = level
+        self._status_since = time.monotonic()
+        self._render_status_to_tmux(text, level)
 
     def _set_status(self, msg: str, level: str | None = None) -> None:
         """Show an explicit status message.
@@ -2507,11 +2627,11 @@ class App:
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
             )
             # The outer tmux status bar is now ccmgr's only status surface (the
-            # in-pane StatusBar was removed), so paint ccmgr's own appearance onto
-            # the whole bar (see _TMUX_BAR_OPTIONS): one dark background, a ` ccmgr `
-            # brand instead of the meaningless `0:tmux*` window list, the bar forced
-            # visible, and a raised length cap. Session-scoped + reverted on
-            # teardown, so the user's global tmux config is untouched.
+            # in-pane StatusBar was removed). Apply the theme-independent options
+            # (window list blanked, bar forced on, length cap) here; the bar
+            # background + brand come from the active theme via _apply_tmux_theme.
+            # All session-scoped + reverted on teardown, so the user's global tmux
+            # config is untouched.
             for opt, val in self._TMUX_BAR_OPTIONS:
                 _sp.run(
                     ["tmux", "set-option", "-t", sess, opt, val],
@@ -2519,6 +2639,7 @@ class App:
                 )
             self._tmux_status_session = sess
             self._tmux_status_enabled = True
+            self._apply_tmux_theme()
 
         self._ccmgr_pane_id = tmux_ctl.current_pane_id()
         self._set_ccmgr_focus(True, force_border=True)
