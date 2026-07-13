@@ -12,9 +12,11 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from ccmgr.models import Project, SessionMeta
+from ccmgr.renames import Renames
 
 # Same threshold as session_index.py — a pending function_call that hasn't
 # written in this many seconds is presumed blocked on user approval.
@@ -27,11 +29,20 @@ FileSignature = tuple[int, int]  # (mtime_ns, size)
 class CodexIndex:
     """mtime-keyed cache of all Codex sessions under ``codex_home/sessions/``."""
 
-    def __init__(self, codex_home: Path) -> None:
+    def __init__(self, codex_home: Path, renames: Renames | None = None) -> None:
         self._codex_home = codex_home
         self._sessions_dir = codex_home / "sessions"
         # path -> (file signature captured before parsing, metadata)
         self._entries: dict[Path, tuple[FileSignature, SessionMeta]] = {}
+        # User-assigned titles, overlaid at read time (see ccmgr.renames).
+        self._renames = renames
+
+    def _with_override(self, meta: SessionMeta) -> SessionMeta:
+        """Overlay a user rename onto *meta*'s title, if one exists."""
+        if self._renames is None:
+            return meta
+        override = self._renames.get(meta.session_id)
+        return replace(meta, title=override) if override else meta
 
     # -- public API -------------------------------------------------------
 
@@ -75,7 +86,7 @@ class CodexIndex:
                 mc = meta.project.real_path
             if mc == target:
                 seen.add(sid)
-                results.append(meta)
+                results.append(self._with_override(meta))
         results.sort(key=lambda s: s.last_mtime, reverse=True)
         return results
 
@@ -85,7 +96,7 @@ class CodexIndex:
             self._refresh()
         for _, meta in self._entries.values():
             if meta.session_id == session_id:
-                return meta
+                return self._with_override(meta)
         return None
 
     def invalidate(self) -> None:

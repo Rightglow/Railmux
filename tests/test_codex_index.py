@@ -351,3 +351,38 @@ def test_codex_index_no_sessions_dir(tmp_path: Path):
     assert idx.all_cwds() == set()
     assert idx.sessions_for_cwd(Path("/x")) == []
     assert idx.get("x") is None
+
+
+class _StubRenames:
+    def __init__(self, mapping):
+        self._m = mapping
+
+    def get(self, session_id):
+        return self._m.get(session_id)
+
+
+def test_rename_override_overlays_codex_title(tmp_path: Path):
+    sid = "019f4509-2908-7a70-a36b-9e1044cb7a88"
+    _write_codex_session(
+        tmp_path / "sessions" / "2026" / "07" / "09" / "rollout-x.jsonl",
+        sid, "/proj",
+        messages=[{"role": "user", "text": "orig"},
+                  {"role": "assistant", "text": "ok"}],
+    )
+    idx = CodexIndex(tmp_path, _StubRenames({sid: "Renamed"}))
+
+    sessions = idx.sessions_for_cwd(Path("/proj"))
+    assert sessions and sessions[0].title == "Renamed"
+    assert idx.get(sid).title == "Renamed"
+
+
+def test_no_override_keeps_codex_auto_title(tmp_path: Path):
+    sid = "019f4509-2908-7a70-a36b-9e1044cb7a89"
+    _write_codex_session(
+        tmp_path / "sessions" / "2026" / "07" / "09" / "rollout-y.jsonl",
+        sid, "/proj",
+        messages=[{"role": "user", "text": "orig"},
+                  {"role": "assistant", "text": "ok"}],
+    )
+    idx = CodexIndex(tmp_path, _StubRenames({}))
+    assert idx.sessions_for_cwd(Path("/proj"))[0].title == "orig"

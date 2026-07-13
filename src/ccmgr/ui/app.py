@@ -27,6 +27,7 @@ from ccmgr.launcher import (
     build_resume_command,
 )
 from ccmgr.models import Project, SessionMeta
+from ccmgr.renames import Renames
 from ccmgr.session_cache import SessionCache
 from ccmgr.scroll_manager import ScrollManager
 from ccmgr.ui import keymap
@@ -106,6 +107,10 @@ _TMUX_LEVEL_STYLE = {
     "tip": "#[fg=colour0]",
 }
 
+# How often the Running pane is re-ordered by recency.  Re-sorting on every poll
+# would make rows jump under the cursor mid-click, so it's throttled to this.
+_RUNNING_SORT_INTERVAL = 60.0
+
 
 @dataclass
 class _Running:
@@ -123,6 +128,7 @@ class _Running:
     placeholder_path: Path | None = None  # cwd to resolve against, while a placeholder
     created_at: float = 0.0                # launch time, for placeholder resolution
     status: str = "idle"                   # "idle" | "busy" | "blocked"
+    last_mtime: float = 0.0                # session JSONL mtime, for recency sort
 
     @property
     def is_placeholder(self) -> bool:
@@ -251,11 +257,15 @@ class App:
         self._tmux_status_session: str | None = None
         self._tmux_error_bar: bool = False  # whole-bar red while an error shows
         self._selected_project: Project | None = None
-        self._session_cache = SessionCache()
+        self._renames = Renames()
+        self._session_cache = SessionCache(self._renames)
         self._favorites = Favorites()
         # Every claude session this ccmgr instance has opened, keyed by
         # session_id (or a "__new__-N" placeholder until the JSONL appears).
         self._running: dict[str, _Running] = {}
+        # Wall-clock of the last Running-pane re-sort; throttles reordering to
+        # once per _RUNNING_SORT_INTERVAL so rows don't jump under the cursor.
+        self._running_sort_ts: float = 0.0
         self._new_session_counter: int = 0
         # The right pane in ccmgr's window; runs `tmux attach -t <claude_session>`.
         self._right_pane_id: str | None = None
@@ -292,7 +302,7 @@ class App:
         # Codex mode (developer toggle via the x key / ButtonBar).
         self._codex_mode: bool = False
         self._codex_index = CodexIndex(
-            Path(config.codex_home).expanduser())
+            Path(config.codex_home).expanduser(), self._renames)
         self._codex_project_filter: set[Path] = set()  # cwds with Codex sessions
 
         projects = list_projects(claude_home)
@@ -1834,7 +1844,29 @@ class App:
                 if meta.title:
                     r.label = f"{meta.project.display_name}/{meta.display_title}"
                 r.status = self._effective_status(meta, child_probes, server)
+                r.last_mtime = meta.last_mtime
+        self._maybe_resort_running()
         self._render_running_pane()
+
+    def _maybe_resort_running(self) -> None:
+        """Re-order the Running registry by recency, at most once per minute.
+
+        The pane renders ``self._running`` in dict order, so reordering the
+        dict reorders the pane.  Sorting on every poll would make rows jump
+        under the cursor while the user clicks; throttling to
+        ``_RUNNING_SORT_INTERVAL`` bubbles recently-active sessions to the top
+        without churn.  Placeholders (no JSONL yet) sort by their launch time.
+        Focus is restored by tmux name in ``set_running``, so the highlighted
+        row follows its session across the reorder."""
+        now = time.time()
+        if now - self._running_sort_ts < _RUNNING_SORT_INTERVAL:
+            return
+        self._running_sort_ts = now
+        self._running = dict(sorted(
+            self._running.items(),
+            key=lambda kv: kv[1].last_mtime or kv[1].created_at,
+            reverse=True,
+        ))
 
     def _render_running_pane(self) -> None:
         """Render registry values without doing metadata or process I/O.
@@ -2159,22 +2191,43 @@ class App:
         self._show_overlay(modal, width=50, height=22)
 
     def _do_rename(self, session: SessionMeta, new_title: str) -> None:
-        """Write a new ai-title record to the session JSONL."""
+        """Persist a rename for the session.
+
+        The title is stored in ccmgr's own sidecar (``self._renames``) — the
+        source of truth, immune to Claude Code rewriting its ai-title record
+        every turn.  We *also* append an ai-title record to the JSONL so
+        ``claude --resume``'s own picker reflects the rename until Claude
+        re-titles.  An empty title clears the rename (reverts to the auto
+        title)."""
         self._close_modal()
+        new_title = new_title.strip()
+        if not new_title:
+            self._renames.clear(session.session_id)
+            self._session_cache.invalidate()
+            self._codex_index.invalidate()
+            self._invalidate_project_snapshot()
+            self._refresh()
+            self._set_status("Rename cleared.")
+            return
+        self._renames.set(session.session_id, new_title)
         import json
         record = json.dumps({"type": "ai-title", "aiTitle": new_title})
+        synced = True
         try:
             with session.jsonl_path.open("a") as f:
                 f.write(record + "\n")
-        except OSError as e:
-            self._set_status(f"Failed to rename: {e}")
-            return
-        # Invalidate the cache and refresh so both Sessions and Running
+        except OSError:
+            # The sidecar rename already succeeded; the JSONL echo (so
+            # `claude --resume` shows it too) is best-effort.
+            synced = False
+        # Invalidate the caches and refresh so both Sessions and Running
         # panes pick up the new title immediately.
         self._session_cache.invalidate()
+        self._codex_index.invalidate()
         self._invalidate_project_snapshot()
         self._refresh()
-        self._set_status(f"Renamed to: {new_title}")
+        self._set_status(f"Renamed to: {new_title}" if synced
+                         else f"Renamed to: {new_title} (transcript sync failed)")
 
     # --- toggle favorite ---
 

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from ccmgr.models import Project, SessionMeta
+from ccmgr.renames import Renames
 from ccmgr.session_index import _scan_session, _TOOL_BLOCK_AGE_S
 
 
@@ -16,8 +18,11 @@ FileSignature = tuple[int, int]  # (mtime_ns, size)
 
 
 class SessionCache:
-    def __init__(self) -> None:
+    def __init__(self, renames: Renames | None = None) -> None:
         self._entries: dict[Path, tuple[FileSignature, SessionMeta]] = {}
+        # User-assigned titles, overlaid at read time so they survive Claude
+        # Code rewriting its own ai-title record every turn.
+        self._renames = renames
 
     def list_sessions(self, project: Project, top_n: int = _DEFAULT_TOP_N) -> list[SessionMeta]:
         """Return up to `top_n` most-recent sessions for `project`.
@@ -94,11 +99,22 @@ class SessionCache:
             meta = cached[1]
             if (meta.status != "busy"
                     or now - meta.last_mtime <= _TOOL_BLOCK_AGE_S):
-                return meta
+                return self._with_override(meta)
         meta = _scan_session(project, path)
         if meta is not None:
             self._entries[path] = (signature, meta)
-        return meta
+        return self._with_override(meta)
+
+    def _with_override(self, meta: SessionMeta | None) -> SessionMeta | None:
+        """Overlay a user rename onto *meta*'s title, if one exists.
+
+        The cache stores the raw parse; the override is applied on the way out
+        so a rename takes effect on the next poll without invalidating the
+        cache, and Claude's own ai-title rewrites can never clobber it."""
+        if meta is None or self._renames is None:
+            return meta
+        override = self._renames.get(meta.session_id)
+        return replace(meta, title=override) if override else meta
 
     def invalidate(self) -> None:
         self._entries.clear()

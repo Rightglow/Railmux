@@ -151,3 +151,45 @@ def test_append_during_scan_forces_next_poll_rescan(
     assert cache.list_sessions(project)[0].title != "Late title"
     assert cache.list_sessions(project)[0].title == "Late title"
     assert len(calls) == 2
+
+
+class _StubRenames:
+    """Minimal stand-in for ccmgr.renames.Renames (get() only)."""
+
+    def __init__(self, mapping):
+        self._m = mapping
+
+    def get(self, session_id):
+        return self._m.get(session_id)
+
+
+def test_rename_override_overlays_title(claude_home, write_session_fixture, tmp_path):
+    # A user rename must win over the JSONL's own ai-title, in both the list
+    # and the single-session lookup, and it must not need cache invalidation.
+    sid = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    project = _make_project(claude_home, tmp_path, write_session_fixture, [
+        (sid, [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "ai-title", "aiTitle": "Auto Title"},
+        ]),
+    ])
+    cache = SessionCache(_StubRenames({sid: "My Name"}))
+
+    listed = cache.list_sessions(project)
+    assert listed[0].title == "My Name"
+    assert listed[0].display_title == "My Name"
+
+    got = cache.get(project, sid)
+    assert got is not None and got.title == "My Name"
+
+
+def test_no_override_keeps_auto_title(claude_home, write_session_fixture, tmp_path):
+    sid = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
+    project = _make_project(claude_home, tmp_path, write_session_fixture, [
+        (sid, [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            {"type": "ai-title", "aiTitle": "Auto Title"},
+        ]),
+    ])
+    cache = SessionCache(_StubRenames({}))
+    assert cache.list_sessions(project)[0].title == "Auto Title"
