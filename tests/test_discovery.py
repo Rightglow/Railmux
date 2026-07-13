@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from ccmgr.discovery import list_projects
+from railmux.discovery import list_projects
 
 
 def test_list_projects_empty_when_no_claude_dir(tmp_path):
@@ -60,7 +60,7 @@ def test_list_projects_skips_missing_dir(claude_home, write_session_fixture, tmp
 
 def test_path_cache_persists_and_is_reused(claude_home, write_session_fixture, tmp_path, monkeypatch):
     """Second scan resolves via the persistent cache without calling decode()."""
-    import ccmgr.discovery as discovery
+    import railmux.discovery as discovery
 
     real = tmp_path / "cached_project"
     real.mkdir()
@@ -85,7 +85,7 @@ def test_path_cache_persists_and_is_reused(claude_home, write_session_fixture, t
 def test_path_cache_prunes_vanished_projects(claude_home, write_session_fixture, tmp_path):
     """Cache entries for projects whose dir disappeared are pruned on rescan."""
     import shutil
-    import ccmgr.discovery as discovery
+    import railmux.discovery as discovery
 
     real = tmp_path / "temp_project"
     real.mkdir()

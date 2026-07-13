@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from ccmgr.scroll_agent import ScrollAccumulator, ScrollInput, apply_scroll
+from railmux.scroll_agent import ScrollAccumulator, ScrollInput, apply_scroll
 
 
 def test_accumulator_coalesces_and_preserves_distance():
@@ -23,7 +23,7 @@ def test_accumulator_preserves_tmux_wheel_distance():
 
 
 def test_apply_scroll_submits_one_aggregated_tmux_command():
-    with patch("ccmgr.scroll_agent.subprocess.run") as run:
+    with patch("railmux.scroll_agent.subprocess.run") as run:
         run.return_value.returncode = 0
         assert apply_scroll("%12", 18)
     run.assert_called_once()
@@ -33,7 +33,7 @@ def test_apply_scroll_submits_one_aggregated_tmux_command():
 
 
 def test_apply_scroll_down_uses_absolute_count():
-    with patch("ccmgr.scroll_agent.subprocess.run") as run:
+    with patch("railmux.scroll_agent.subprocess.run") as run:
         run.return_value.returncode = 0
         assert apply_scroll("%4", -6)
     assert run.call_args.args[0][-2:] == ["%4", "scroll-down"]
@@ -41,7 +41,7 @@ def test_apply_scroll_down_uses_absolute_count():
 
 
 def test_apply_scroll_zero_does_not_spawn_tmux():
-    with patch("ccmgr.scroll_agent.subprocess.run") as run:
+    with patch("railmux.scroll_agent.subprocess.run") as run:
         assert apply_scroll("%1", 0)
     run.assert_not_called()
 

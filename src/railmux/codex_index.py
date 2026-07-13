@@ -15,8 +15,8 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from ccmgr.models import Project, SessionMeta
-from ccmgr.renames import Renames
+from railmux.models import Project, SessionMeta
+from railmux.renames import Renames
 
 # Same threshold as session_index.py — a pending function_call that hasn't
 # written in this many seconds is presumed blocked on user approval.
@@ -34,7 +34,7 @@ class CodexIndex:
         self._sessions_dir = codex_home / "sessions"
         # path -> (file signature captured before parsing, metadata)
         self._entries: dict[Path, tuple[FileSignature, SessionMeta]] = {}
-        # User-assigned titles, overlaid at read time (see ccmgr.renames).
+        # User-assigned titles, overlaid at read time (see railmux.renames).
         self._renames = renames
 
     def _with_override(self, meta: SessionMeta) -> SessionMeta:

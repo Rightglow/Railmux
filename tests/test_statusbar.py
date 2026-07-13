@@ -3,9 +3,9 @@ the HintBar/ButtonBar footer widgets. The status text itself is rendered into
 the outer tmux bar (see test_tmux_status.py), not an in-pane widget."""
 import pytest
 
-from ccmgr.config import Config
-from ccmgr.ui import app as app_mod
-from ccmgr.ui.statusbar import TIPS, ButtonBar, HintBar
+from railmux.config import Config
+from railmux.ui import app as app_mod
+from railmux.ui.statusbar import TIPS, ButtonBar, HintBar
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def app(tmp_path):
 
 @pytest.fixture
 def clock(monkeypatch):
-    """A controllable monotonic clock for ccmgr.ui.app."""
+    """A controllable monotonic clock for railmux.ui.app."""
     now = {"t": 1000.0}
     monkeypatch.setattr(app_mod.time, "monotonic", lambda: now["t"])
     return now
@@ -25,7 +25,7 @@ def clock(monkeypatch):
 
 @pytest.fixture
 def shown(app, monkeypatch):
-    """Record the text handed to the tmux status renderer — ccmgr's only status
+    """Record the text handed to the tmux status renderer — railmux's only status
     surface now that the in-pane StatusBar widget is gone. ``shown[-1]`` is what
     the bar currently displays."""
     seen: list[str] = []
@@ -172,7 +172,7 @@ def test_explicit_message_interrupts_tips(app, clock, shown):
 
 # ── HintBar: context-sensitive, two-line wrap, overflow paging ──────────
 
-from ccmgr.ui import keymap  # noqa: E402
+from railmux.ui import keymap  # noqa: E402
 
 
 def _hint_rows(bar: HintBar, width: int) -> list[str]:
@@ -187,18 +187,18 @@ def test_idle_tip_skips_tmux_repaint_while_agent_pane_focused(app, clock, shown)
     the shared tmux status bar — ``refresh-client -S`` inside the repaint
     path makes the CJK preedit box jump (regression of 18f8c18, re-introduced
     when the status line moved into the outer tmux bar)."""
-    app._ccmgr_has_focus = False
+    app._railmux_has_focus = False
     app._tip_since = 0.0  # tip is due immediately
     shown.clear()
     app._update_status()
     assert shown == [], "must not repaint tmux bar while agent pane focused"
 
 
-def test_idle_tip_repaints_when_ccmgr_focused(app, clock, shown):
-    """When ccmgr has focus the idle tip rotation repaints the tmux status
+def test_idle_tip_repaints_when_railmux_focused(app, clock, shown):
+    """When railmux has focus the idle tip rotation repaints the tmux status
     bar normally — the focus guard only suppresses repaints while the user
     is typing in the agent pane."""
-    app._ccmgr_has_focus = True
+    app._railmux_has_focus = True
     app._tip_since = 0.0  # tip is due immediately
     shown.clear()
     app._update_status()

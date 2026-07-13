@@ -1,4 +1,4 @@
-"""Load ccmgr configuration from TOML with sensible defaults."""
+"""Load railmux configuration from TOML with sensible defaults."""
 from __future__ import annotations
 
 import tomllib
@@ -15,7 +15,7 @@ class Config:
 
 
 def default_config_path() -> Path:
-    return Path.home() / ".config" / "ccmgr" / "config.toml"
+    return Path.home() / ".config" / "railmux" / "config.toml"
 
 
 def load_config(config_path: Path | None = None) -> Config:

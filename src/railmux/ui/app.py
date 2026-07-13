@@ -1,7 +1,7 @@
 """Top-level urwid app: sidebar + status bar.
 
-ccmgr runs in the left pane of a tmux window. The right pane hosts the
-currently-selected claude session. Switching sessions in ccmgr respawns
+railmux runs in the left pane of a tmux window. The right pane hosts the
+currently-selected claude session. Switching sessions in railmux respawns
 the right pane with a new claude --resume. Press `i` for a session-info
 popup.
 """
@@ -14,24 +14,24 @@ from pathlib import Path
 
 import urwid
 
-from ccmgr import tmux_ctl
-from ccmgr.atomic_file import atomic_write_text
-from ccmgr.codex_index import CodexIndex
-from ccmgr.config import Config
-from ccmgr.discovery import list_projects
-from ccmgr.favorites import Favorites
-from ccmgr.launcher import (
+from railmux import tmux_ctl
+from railmux.atomic_file import atomic_write_text
+from railmux.codex_index import CodexIndex
+from railmux.config import Config
+from railmux.discovery import list_projects
+from railmux.favorites import Favorites
+from railmux.launcher import (
     build_codex_new_command,
     build_codex_resume_command,
     build_new_session_command,
     build_resume_command,
 )
-from ccmgr.models import Project, SessionMeta
-from ccmgr.renames import Renames
-from ccmgr.session_cache import SessionCache
-from ccmgr.scroll_manager import ScrollManager
-from ccmgr.ui import keymap
-from ccmgr.ui.modals import (
+from railmux.models import Project, SessionMeta
+from railmux.renames import Renames
+from railmux.session_cache import SessionCache
+from railmux.scroll_manager import ScrollManager
+from railmux.ui import keymap
+from railmux.ui.modals import (
     ContextMenu,
     DeleteConfirmModal,
     HelpModal,
@@ -42,10 +42,10 @@ from ccmgr.ui.modals import (
     RunningInfoModal,
     SessionInfoModal,
 )
-from ccmgr.ui.projects_pane import ProjectsPane
-from ccmgr.ui.running_pane import RunningEntry, RunningSessionsPane
-from ccmgr.ui.sessions_pane import SessionsPane
-from ccmgr.ui.statusbar import ButtonBar, HintBar, TIPS
+from railmux.ui.projects_pane import ProjectsPane
+from railmux.ui.running_pane import RunningEntry, RunningSessionsPane
+from railmux.ui.sessions_pane import SessionsPane
+from railmux.ui.statusbar import ButtonBar, HintBar, TIPS
 
 
 PALETTE = [
@@ -89,18 +89,18 @@ PALETTE = [
 ]
 
 
-# Colours for the outer tmux status bar (ccmgr's only status surface). The bar is
+# Colours for the outer tmux status bar (railmux's only status surface). The bar is
 # green in normal use; on an error the WHOLE bar flips to dark red so the alert is
 # unmissable and the line reads as one block (not just a red pill on green). The
 # brand (status-left) follows the bar so its fg stays legible in both modes.
 _TMUX_BAR_STYLE_NORMAL = "bg=colour2,fg=colour0"    # green bar, black default fg
 _TMUX_BAR_STYLE_ERROR = "bg=colour52,fg=colour231"  # dark-red bar, white fg
-_TMUX_BRAND_NORMAL = "#[fg=colour0] ccmgr #[default]"
-_TMUX_BRAND_ERROR = "#[fg=colour231] ccmgr #[default]"
+_TMUX_BRAND_NORMAL = "#[fg=colour0] railmux #[default]"
+_TMUX_BRAND_ERROR = "#[fg=colour231] railmux #[default]"
 
 
 def _tmux_status_left(error: bool, codex_mode: bool) -> str:
-    """The tmux status-left segment: the ``ccmgr`` brand plus a current-mode
+    """The tmux status-left segment: the ``railmux`` brand plus a current-mode
     indicator (``· Claude Code`` / ``· Codex``), rendered in the tips colour
     (colour0 = black on green, or white on red)."""
     brand = _TMUX_BRAND_ERROR if error else _TMUX_BRAND_NORMAL
@@ -125,7 +125,7 @@ _RUNNING_SORT_INTERVAL = 60.0
 
 @dataclass
 class _Running:
-    """One claude session opened by this ccmgr instance.
+    """One claude session opened by this railmux instance.
 
     Replaces the four parallel dicts that previously tracked running sessions
     (tmux name, label, project, placeholder) and had to be kept in sync by hand.
@@ -273,7 +273,7 @@ class App:
     _status_since: float = 0.0
     _tip_index: int = 0
     _tip_since: float = 0.0
-    # ccmgr's status line is rendered into the OUTER tmux status bar (full
+    # railmux's status line is rendered into the OUTER tmux status bar (full
     # terminal width) — there is no in-pane status widget. Off until run() wires
     # it up; session-scoped so it never touches the user's global tmux config.
     _tmux_status_enabled: bool = False
@@ -282,16 +282,16 @@ class App:
     # Whether the bar is currently in error mode (whole bar dark red). Tracked so
     # the style swap only fires on the normal↔error transition, not every render.
     _tmux_error_bar: bool = False
-    # Static options ccmgr sets on the OUTER tmux status bar. The bar
+    # Static options railmux sets on the OUTER tmux status bar. The bar
     # background (status-style) and brand (status-left) are set dynamically per
     # error state (see _apply_tmux_bar / _TMUX_BAR_STYLE_OPTIONS). All are
     # session-scoped and reverted with `set-option -u` on teardown, so the user's
     # global tmux config is untouched. Rationale:
-    #   - window-status-*: blanked. ccmgr's outer session has a single fixed window,
+    #   - window-status-*: blanked. railmux's outer session has a single fixed window,
     #     so its `0:tmux*` list entry is pure noise.
     #   - status: forced on (the bar is now the only status surface).
     #   - status-right-length: raised from the ~40 default so messages aren't cut.
-    #   - status-left-length: raised from the 10 default so "ccmgr · Claude Code"
+    #   - status-left-length: raised from the 10 default so "railmux · Claude Code"
     #     (the brand + mode indicator) isn't truncated.
     _TMUX_BAR_OPTIONS = (
         ("status", "on"),
@@ -328,14 +328,14 @@ class App:
         self._renames = Renames()
         self._session_cache = SessionCache(self._renames)
         self._favorites = Favorites()
-        # Every claude session this ccmgr instance has opened, keyed by
+        # Every claude session this railmux instance has opened, keyed by
         # session_id (or a "__new__-N" placeholder until the JSONL appears).
         self._running: dict[str, _Running] = {}
         # Wall-clock of the last Running-pane re-sort; throttles reordering to
         # once per _RUNNING_SORT_INTERVAL so rows don't jump under the cursor.
         self._running_sort_ts: float = 0.0
         self._new_session_counter: int = 0
-        # The right pane in ccmgr's window; runs `tmux attach -t <claude_session>`.
+        # The right pane in railmux's window; runs `tmux attach -t <claude_session>`.
         self._right_pane_id: str | None = None
         self._loop: urwid.MainLoop | None = None
         self._pending_restore_state: dict | None = None
@@ -360,8 +360,8 @@ class App:
         self._restore_state: _RightPaneState | None = None
         self._right_pane_claude: str | None = None  # tmux_name of claude session in right pane
         self._active_session_id: str | None = None
-        self._ccmgr_pane_id: str | None = None  # set in run()
-        self._ccmgr_has_focus: bool = True
+        self._railmux_pane_id: str | None = None  # set in run()
+        self._railmux_has_focus: bool = True
         self._divider_active: bool | None = None
         self._has_less: bool = shutil.which("less") is not None
         self._less_mouse_flag: str = self._detect_less_mouse()
@@ -393,7 +393,7 @@ class App:
         # discover it by getting a cryptic error in the right pane.
         if not tmux_ctl.has_tmux():
             self._set_status(
-                "ERROR: tmux not found on PATH — ccmgr cannot run without tmux")
+                "ERROR: tmux not found on PATH — railmux cannot run without tmux")
         elif not shutil.which(self._config.claude_binary):
             self._set_status(
                 f"WARNING: '{self._config.claude_binary}' not on PATH — sessions cannot launch")
@@ -463,16 +463,16 @@ class App:
         self._set_active_target(session_id, tmux_name)
 
     def _set_divider_active(self, active: bool, *, force: bool = False) -> None:
-        """Highlight tmux's divider only while a non-ccmgr pane has focus."""
+        """Highlight tmux's divider only while a non-railmux pane has focus."""
         if not force and self._divider_active == active:
             return
         self._divider_active = active
         style = "fg=cyan" if active else "fg=colour240"
         tmux_ctl.set_window_border_style(style)
 
-    def _set_ccmgr_focus(self, active: bool, *, force_border: bool = False) -> None:
+    def _set_railmux_focus(self, active: bool, *, force_border: bool = False) -> None:
         """Synchronize urwid focus maps and the tmux center divider."""
-        self._ccmgr_has_focus = active
+        self._railmux_has_focus = active
         self._frame.set_window_active(active)
         self._set_divider_active(not active, force=force_border)
         if hasattr(self, "_hint_bar"):
@@ -482,7 +482,7 @@ class App:
         """Show the right-focus state now, then move tmux focus once settled."""
         self._cancel_pending_double_focus(restore_visual=False)
         self._double_focus_visual_pending = True
-        self._set_ccmgr_focus(False)
+        self._set_railmux_focus(False)
         self._redraw_focus_state_now()
         if self._loop is None:
             self._apply_right_pane_focus_after_double(None, None)
@@ -497,11 +497,11 @@ class App:
         pane_id = self._right_pane_id
         if pane_id is None or not tmux_ctl.select_pane(pane_id):
             self._double_focus_visual_pending = False
-            self._set_ccmgr_focus(True)
+            self._set_railmux_focus(True)
             self._redraw_focus_state_now()
             return
         self._double_focus_visual_pending = False
-        self._set_ccmgr_focus(False)
+        self._set_railmux_focus(False)
         self._redraw_focus_state_now()
 
     def _cancel_pending_double_focus(self, *, restore_visual: bool = True) -> None:
@@ -512,7 +512,7 @@ class App:
         visual_pending = self._double_focus_visual_pending
         self._double_focus_visual_pending = False
         if visual_pending and restore_visual:
-            self._set_ccmgr_focus(True)
+            self._set_railmux_focus(True)
             self._redraw_focus_state_now()
 
     def _redraw_focus_state_now(self) -> None:
@@ -622,9 +622,9 @@ class App:
                 # Ignore the late left-pane report while a double-click transfer
                 # is pending; cancellation restores it for newer sidebar input.
                 if not self._double_focus_visual_pending:
-                    self._set_ccmgr_focus(True)
+                    self._set_railmux_focus(True)
             elif key == "focus out":
-                self._set_ccmgr_focus(False)
+                self._set_railmux_focus(False)
                 # Belt-and-suspenders: if the paste-end marker was lost the
                 # sidebar would swallow every key forever.  Focus leaving the
                 # pane is a natural reset point — the paste is over.
@@ -807,7 +807,7 @@ class App:
         # Tail the last 2000 lines so large sessions appear instantly.
         path = shlex.quote(str(jsonl_path))
         cmd = (f"tail -n 2000 {path} | "
-               f"{_sys.executable} -m ccmgr.transcript - | "
+               f"{_sys.executable} -m railmux.transcript - | "
                f"less -R +G {mouse}")
         if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
             if not tmux_ctl.respawn_pane(self._right_pane_id, cmd):
@@ -819,7 +819,7 @@ class App:
                 self._set_status("failed to create right pane for transcript")
                 return False
             self._right_pane_id = new_id
-            self._set_ccmgr_focus(self._ccmgr_has_focus, force_border=True)
+            self._set_railmux_focus(self._railmux_has_focus, force_border=True)
         # Right pane is now showing a transcript, not a Claude session.
         self._right_pane_claude = None
         self._install_fullscreen_binding()
@@ -892,7 +892,7 @@ class App:
         claude tmux session stays alive, detached.
 
         When *steal_focus* is False the right pane content is updated but tmux
-        focus stays on the ccmgr pane so the user can keep browsing the sidebar.
+        focus stays on the railmux pane so the user can keep browsing the sidebar.
 
         TMUX= prefix clears the env var so the nested ``tmux attach`` works; tmux
         otherwise refuses to attach from within another tmux session.
@@ -907,7 +907,7 @@ class App:
                 and tmux_ctl.pane_alive(self._right_pane_id)):
             if steal_focus:
                 tmux_ctl.select_pane(self._right_pane_id)
-                self._set_ccmgr_focus(False)
+                self._set_railmux_focus(False)
             self._set_active_tmux_target(claude_tmux_name)
             # Re-assert the F9 fullscreen binding: it's server-global and may
             # have been overwritten by another pane's attach since we last set
@@ -919,7 +919,7 @@ class App:
         if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
             ok = tmux_ctl.respawn_pane(self._right_pane_id, attach_cmd)
         else:
-            # ccmgr (left) at 30%, claude (right, the new pane) at 70%.
+            # railmux (left) at 30%, claude (right, the new pane) at 70%.
             new_id = tmux_ctl.split_window_h(
                 attach_cmd, size_percent=70, detached=not steal_focus)
             if not new_id:
@@ -931,7 +931,7 @@ class App:
         if ok:
             self._right_pane_claude = claude_tmux_name
             self._set_active_tmux_target(claude_tmux_name)
-            self._set_ccmgr_focus(
+            self._set_railmux_focus(
                 not steal_focus and not self._double_focus_visual_pending,
                 force_border=True,
             )
@@ -943,7 +943,7 @@ class App:
         """(Re)bind F9 to fullscreen-toggle the *agent* (right) pane.
 
         Unlike tmux's built-in ``Ctrl-B z`` — which zooms whichever pane is
-        active and can therefore fullscreen the ccmgr sidebar by mistake — this
+        active and can therefore fullscreen the railmux sidebar by mistake — this
         targets the right pane's current id explicitly, so F9 always zooms the
         agent pane regardless of focus. Rebound whenever the right pane is
         (re)created because its id changes. Copy workflow: F9 → Shift-drag to
@@ -1076,7 +1076,7 @@ class App:
     # --- modals ---
 
     def _right_pane_open(self) -> bool:
-        """True when the tmux right pane exists (ccmgr sidebar is ~30% width)."""
+        """True when the tmux right pane exists (railmux sidebar is ~30% width)."""
         return self._right_pane_id is not None and tmux_ctl.pane_alive(self._right_pane_id)
 
     def _open_new_project_modal(self) -> None:
@@ -1096,7 +1096,7 @@ class App:
             return
         if self._sidebar.focus_position == 2:
             # Running pane — show info from the focused running entry.
-            from ccmgr.ui.running_pane import _RunningRow
+            from railmux.ui.running_pane import _RunningRow
             running_walker = self._running_pane._walker
             if running_walker:
                 focus_w, _ = running_walker.get_focus()
@@ -1132,15 +1132,15 @@ class App:
                            click_outside_to_close=True)
 
     def _open_help_modal(self) -> None:
-        # Zoom the left (ccmgr) pane fullscreen so the help modal has the
+        # Zoom the left (railmux) pane fullscreen so the help modal has the
         # entire terminal.  Tmux resize-pane -Z toggles — the second call in
         # _close_help_modal restores the original split layout.  This is
         # much cleaner than shrinking the right pane: it doesn't force a
         # reflow in the agent pane, so no history corruption.
-        if self._ccmgr_pane_id:
+        if self._railmux_pane_id:
             import subprocess as _sp
             _sp.run(
-                ["tmux", "resize-pane", "-Z", "-t", self._ccmgr_pane_id],
+                ["tmux", "resize-pane", "-Z", "-t", self._railmux_pane_id],
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
             )
 
@@ -1152,21 +1152,21 @@ class App:
 
     def _close_help_modal(self) -> None:
         self._close_modal()
-        # Un-zoom — restore the previous tmux layout, but only if the ccmgr
+        # Un-zoom — restore the previous tmux layout, but only if the railmux
         # pane is still zoomed.  F9 shares the same resize-pane -Z toggle
         # (targeting the right pane), so if the user pressed F9 while help
         # was open the left pane was already unzoomed and calling -Z again
         # would RE-zoom it, trapping the user in fullscreen.
-        if self._ccmgr_pane_id:
+        if self._railmux_pane_id:
             import subprocess as _sp
             result = _sp.run(
-                ["tmux", "display-message", "-p", "-t", self._ccmgr_pane_id,
+                ["tmux", "display-message", "-p", "-t", self._railmux_pane_id,
                  "-F", "#{window_zoomed_flag}"],
                 stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True,
             )
             if result.stdout.strip() == "1":
                 _sp.run(
-                    ["tmux", "resize-pane", "-Z", "-t", self._ccmgr_pane_id],
+                    ["tmux", "resize-pane", "-Z", "-t", self._railmux_pane_id],
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
                 )
 
@@ -1217,11 +1217,11 @@ class App:
             stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
         )
         tmux_ctl.select_pane(new_pane)
-        self._set_ccmgr_focus(False)
+        self._set_railmux_focus(False)
         self._set_status(f"terminal: {proj.display_name}  (Ctrl-B then arrow = move panes)")
 
     def _on_detach(self) -> None:
-        """Detach from the ccmgr tmux session (keep all Claude sessions alive)."""
+        """Detach from the railmux tmux session (keep all Claude sessions alive)."""
         import subprocess as _sp
         _sp.run(["tmux", "detach-client"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
@@ -1241,8 +1241,8 @@ class App:
     @staticmethod
     def _state_path() -> Path:
         import os as _os
-        run_dir = _os.environ.get("XDG_RUNTIME_DIR", f"/tmp/ccmgr-{_os.getuid()}")
-        return Path(run_dir) / "ccmgr-state.json"
+        run_dir = _os.environ.get("XDG_RUNTIME_DIR", f"/tmp/railmux-{_os.getuid()}")
+        return Path(run_dir) / "railmux-state.json"
 
     def _save_state(self) -> None:
         """Persist enough state to restore the current view after a restart."""
@@ -1388,7 +1388,7 @@ class App:
                        on_click_outside: Callable[[], None] | None = None) -> None:
         if self._loop is None:
             return
-        # When the right pane is open the ccmgr sidebar is only ~30% of the
+        # When the right pane is open the railmux sidebar is only ~30% of the
         # terminal.  Bump relative dimensions so overlays stay readable.
         # Fixed-pixel overlays (context menus) are left alone.
         if not fixed_width and self._right_pane_open():
@@ -1498,7 +1498,7 @@ class App:
 
         Codex uses ``env_key`` from its config to name the API key variable
         (e.g. ``DEEPSEEK_API_KEY``).  First check the current process
-        environment; when that misses (e.g. ccmgr was launched without a
+        environment; when that misses (e.g. railmux was launched without a
         login shell), probe the user's shell profile via ``bash -lic``.
         """
         import os as _os
@@ -1611,7 +1611,7 @@ class App:
     @staticmethod
     def _synthesise_codex_project(cwd: Path) -> Project:
         """Create a synthetic Project for a Codex-only directory."""
-        from ccmgr.codex_index import _safe_encoded_name
+        from railmux.codex_index import _safe_encoded_name
         try:
             resolved = cwd.resolve()
         except OSError:
@@ -1625,7 +1625,7 @@ class App:
         )
 
     def _rotate_focus(self, reverse: bool = False) -> None:
-        """Tab / Shift-Tab cycle through the three ccmgr sidebar panes.
+        """Tab / Shift-Tab cycle through the three railmux sidebar panes.
 
         Jumping in/out of the claude pane uses tmux's native nav (Ctrl-B ←/→)
         so Tab keeps its normal meaning inside claude (autocomplete).
@@ -1687,9 +1687,9 @@ class App:
         self._running.clear()
         if self._auto_launched:
             session_name = tmux_ctl.current_session_name()
-            if session_name == "ccmgr":
+            if session_name == "railmux":
                 try:
-                    tmux_ctl.kill_session("ccmgr")
+                    tmux_ctl.kill_session("railmux")
                 except Exception:
                     pass
 
@@ -1847,7 +1847,7 @@ class App:
         When the right-hand agent pane has focus (via Ctrl-B →), return the
         agent context so the help bar shows only the two keys that matter:
         Ctrl-B ← (back to sidebar) and F9 (fullscreen)."""
-        if not self._ccmgr_has_focus:
+        if not self._railmux_has_focus:
             return keymap.CTX_AGENT
         pos = self._sidebar.focus_position
         if 0 <= pos < len(self._HELP_CONTEXTS):
@@ -1862,7 +1862,7 @@ class App:
     ) -> str:
         """Displayed status, refined by the live process when we own the session.
 
-        For a session ccmgr has opened, a pending ``tool_use`` with a live
+        For a session railmux has opened, a pending ``tool_use`` with a live
         child process means a tool is actively running (busy); no child means
         Claude is waiting for approval (blocked). Probe failures fall back to
         ``meta.status`` (the JSONL time heuristic). Used by both panes so the
@@ -1968,7 +1968,7 @@ class App:
         if not placeholders:
             return
         # Index projects by real_path for cheap lookup. New-project flow may
-        # create a project dir that didn't exist when ccmgr started, so we
+        # create a project dir that didn't exist when railmux started, so we
         # rely on `projects` being a fresh list_projects() result.
         by_path = {p.real_path: p for p in projects}
         claimed = set(self._running)
@@ -2012,7 +2012,7 @@ class App:
         if not self._sessions_pane._walker:
             return None
         focus_w, _ = self._sessions_pane._walker.get_focus()
-        from ccmgr.ui.sessions_pane import _SessionRow
+        from railmux.ui.sessions_pane import _SessionRow
         if isinstance(focus_w, _SessionRow):
             return focus_w.session
         return None
@@ -2021,7 +2021,7 @@ class App:
         """Look up session metadata by ID, optionally scoped to a project."""
         if project is None:
             return None
-        from ccmgr.session_index import _scan_session
+        from railmux.session_index import _scan_session
         jsonl_path = project.claude_dir / f"{session_id}.jsonl"
         if not jsonl_path.exists():
             return None
@@ -2037,7 +2037,7 @@ class App:
         pos = self._sidebar.focus_position
         if pos == 2:
             # Running pane — kill the focused running entry.
-            from ccmgr.ui.running_pane import _RunningRow
+            from railmux.ui.running_pane import _RunningRow
             if not self._running_pane._walker:
                 self._set_status("No running session selected.")
                 return
@@ -2095,7 +2095,7 @@ class App:
 
         elif pos == 2:
             # Running pane — kill the detached tmux session.
-            from ccmgr.ui.running_pane import _RunningRow
+            from railmux.ui.running_pane import _RunningRow
             running_walker = self._running_pane._walker
             if not running_walker:
                 self._set_status("No running session selected.")
@@ -2263,7 +2263,7 @@ class App:
     def _do_rename(self, session: SessionMeta, new_title: str) -> None:
         """Persist a rename for the session.
 
-        The title is stored in ccmgr's own sidecar (``self._renames``) — the
+        The title is stored in railmux's own sidecar (``self._renames``) — the
         source of truth, immune to Claude Code rewriting its ai-title record
         every turn.  We *also* append an ai-title record to the JSONL so
         ``claude --resume``'s own picker reflects the rename until Claude
@@ -2323,8 +2323,8 @@ class App:
         self._running_pane.set_selected(entry.tmux_name)
         # Ensure tmux focus is on our pane so the 200 ms poll doesn't
         # auto-close the menu (can happen if focus was on the right pane).
-        if self._ccmgr_pane_id:
-            tmux_ctl.select_pane(self._ccmgr_pane_id)
+        if self._railmux_pane_id:
+            tmux_ctl.select_pane(self._railmux_pane_id)
         if r.is_placeholder:
             # Placeholder: no SessionMeta yet, but we can still kill the
             # running tmux session or switch to it.
@@ -2352,8 +2352,8 @@ class App:
     def _open_session_context_menu(self, session: SessionMeta) -> None:
         # Ensure tmux focus is on our pane so the 200 ms poll doesn't
         # auto-close the menu (can happen if focus was on the right pane).
-        if self._ccmgr_pane_id:
-            tmux_ctl.select_pane(self._ccmgr_pane_id)
+        if self._railmux_pane_id:
+            tmux_ctl.select_pane(self._railmux_pane_id)
         self._sessions_pane.set_selected_session(session.session_id)
         r = self._running.get(session.session_id)
         is_alive = r is not None and not r.is_placeholder
@@ -2435,7 +2435,7 @@ class App:
         _sp.run(["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
         tmux_ctl.select_pane(new_pane)
-        self._set_ccmgr_focus(False)
+        self._set_railmux_focus(False)
         self._set_status(f"terminal: {project.display_name}")
 
     def _do_context_term(self, session: SessionMeta) -> None:
@@ -2452,7 +2452,7 @@ class App:
         _sp.run(["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
         tmux_ctl.select_pane(new_pane)
-        self._set_ccmgr_focus(False)
+        self._set_railmux_focus(False)
         self._set_status(f"terminal: {session.project.display_name}")
 
     def _do_context_delete(self, session: SessionMeta) -> None:
@@ -2468,12 +2468,12 @@ class App:
 
     # --- resize divider ---
 
-    def _resize_divider(self, expand_ccmgr: bool) -> None:
-        """Move the vertical divider: [ shrinks ccmgr, ] expands it."""
+    def _resize_divider(self, expand_railmux: bool) -> None:
+        """Move the vertical divider: [ shrinks railmux, ] expands it."""
         if not self._right_pane_id or not tmux_ctl.pane_alive(self._right_pane_id):
             self._set_status("No agent pane to resize against.")
             return
-        direction = "-R" if expand_ccmgr else "-L"
+        direction = "-R" if expand_railmux else "-L"
         tmux_ctl.resize_pane(self._right_pane_id, direction, 5)
 
     # --- status bar ---
@@ -2494,7 +2494,7 @@ class App:
     def _render_status_to_tmux(self, text: str, level: str = "info") -> None:
         """Render the current status line into the outer tmux status bar.
 
-        This is ccmgr's only status surface — there is no in-pane status widget.
+        This is railmux's only status surface — there is no in-pane status widget.
         The tmux bar is full terminal width, so far more fits on one line than
         the old ~30%-wide sidebar bar could show. Best-effort — a tmux hiccup
         must never raise into the UI.
@@ -2611,12 +2611,12 @@ class App:
         if not TIPS:
             return
         if self._tip_since == 0.0 or now - self._tip_since >= self._TIP_INTERVAL:
-            # Only repaint the shared tmux status bar when ccmgr has focus.
+            # Only repaint the shared tmux status bar when railmux has focus.
             # When the user is typing in the right agent pane, refresh-client -S
             # inside _render_status_to_tmux makes the CJK preedit box jump.
             # The counter still advances so tips don't stall during long typing
             # sessions — the next tip appears as soon as focus returns.
-            if self._ccmgr_has_focus:
+            if self._railmux_has_focus:
                 self._render_status_to_tmux(TIPS[self._tip_index], "tip")
             self._tip_index = (self._tip_index + 1) % len(TIPS)
             self._tip_since = now
@@ -2630,15 +2630,15 @@ class App:
         # quick response when pressing q in less or clicking the right pane.
         fast_poll = (
             self._in_history_mode
-            or (self._ccmgr_pane_id is not None
+            or (self._railmux_pane_id is not None
                 and self._loop is not None
                 and isinstance(self._loop.widget, _CloseOnClickOverlay))
         )
         if fast_poll:
-            if (self._ccmgr_pane_id is not None
+            if (self._railmux_pane_id is not None
                     and self._loop is not None
                     and isinstance(self._loop.widget, _CloseOnClickOverlay)):
-                if tmux_ctl.current_pane_id() != self._ccmgr_pane_id:
+                if tmux_ctl.current_pane_id() != self._railmux_pane_id:
                     self._close_modal()
             interval_s = 0.2
         else:
@@ -2656,10 +2656,10 @@ class App:
         # Wrap the whole setup (not just loop.run) so `finally` reverts our tmux
         # status-bar overrides even if Screen()/MainLoop() construction raises
         # after we've mutated the outer session — otherwise the user's bar would
-        # keep ccmgr's `status on`, style, brand and blanked window-list.
+        # keep railmux's `status on`, style, brand and blanked window-list.
         try:
             if tmux_ctl.in_tmux():
-                sess = tmux_ctl.current_session_name() or "ccmgr"
+                sess = tmux_ctl.current_session_name() or "railmux"
                 _sp.run(
                     ["tmux", "set-option", "-t", sess, "set-clipboard", "on"],
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
@@ -2684,7 +2684,7 @@ class App:
                     ["tmux", "unbind-key", "-T", "root", "MouseDown3Pane"],
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
                 )
-                # The outer tmux status bar is now ccmgr's only status surface (the
+                # The outer tmux status bar is now railmux's only status surface (the
                 # in-pane StatusBar was removed). Apply the static options (window
                 # list blanked, bar forced on, length cap) here; the bar background
                 # + brand are set by _apply_tmux_bar (green now, dark red on error).
@@ -2699,8 +2699,8 @@ class App:
                 self._tmux_status_enabled = True
                 self._apply_tmux_bar(error=False)  # initial green bar
 
-            self._ccmgr_pane_id = tmux_ctl.current_pane_id()
-            self._set_ccmgr_focus(True, force_border=True)
+            self._railmux_pane_id = tmux_ctl.current_pane_id()
+            self._set_railmux_focus(True, force_border=True)
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
             # not text input.
@@ -2714,7 +2714,7 @@ class App:
                 input_filter=self._filter_input,
                 unhandled_input=self._on_input,
             )
-            from ccmgr.ui._widgets import ClickableRow
+            from railmux.ui._widgets import ClickableRow
             ClickableRow._main_loop = self._loop
             self._hint_bar.set_loop(self._loop)
             try:
@@ -2729,7 +2729,7 @@ class App:
             except Exception:
                 pass
             # Right pane is created lazily on first session launch — startup is
-            # ccmgr-only, no empty pane.
+            # railmux-only, no empty pane.
             self._loop.set_alarm_in(self._config.poll_interval_ms / 1000.0, self._on_tick)
             if self._pending_project is not None:
                 self._loop.set_alarm_in(

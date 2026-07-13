@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ccmgr"
+name = "railmux"
 dynamic = ["version"]
 description = "Terminal UI to navigate, resume, and start Claude Code sessions across all your projects"
 readme = "README.md"
@@ -39,18 +39,18 @@ dev = [
 ]
 
 [project.scripts]
-ccmgr = "ccmgr.cli:main"
+railmux = "railmux.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/regmi-saugat/ccmgr"
-Repository = "https://github.com/regmi-saugat/ccmgr"
-Issues = "https://github.com/regmi-saugat/ccmgr/issues"
+Homepage = "https://github.com/regmi-saugat/railmux"
+Repository = "https://github.com/regmi-saugat/railmux"
+Issues = "https://github.com/regmi-saugat/railmux/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.dynamic]
-version = {attr = "ccmgr.__version__"}
+version = {attr = "railmux.__version__"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

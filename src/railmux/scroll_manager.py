@@ -1,7 +1,7 @@
 """Lifecycle and recovery for SSH scroll coalescing.
 
 tmux key tables are server-global. This manager therefore serializes ownership
-per tmux server, persists enough state to recover after an ungraceful ccmgr
+per tmux server, persists enough state to recover after an ungraceful railmux
 exit, and refuses to enable when the user has customized wheel bindings.
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from ccmgr import tmux_ctl
+from railmux import tmux_ctl
 
 
 class ScrollManager:
@@ -39,7 +39,7 @@ class ScrollManager:
         if self._lock_fd is not None:
             return True
         key = self._server_key()
-        prefix = f"ccmgr-scroll-{os.getuid()}-{key}"
+        prefix = f"railmux-scroll-{os.getuid()}-{key}"
         lock_path = Path(tempfile.gettempdir()) / f"{prefix}.lock"
         state_path = Path(tempfile.gettempdir()) / f"{prefix}.json"
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -115,13 +115,13 @@ class ScrollManager:
     def _start_agent(self, target_pane: str) -> bool:
         if self._agent_session:
             tmux_ctl.kill_session(self._agent_session)
-        self._agent_session = f"ccmgr-scroll-{os.getpid()}"
+        self._agent_session = f"railmux-scroll-{os.getpid()}"
         if tmux_ctl.session_exists(self._agent_session):
             tmux_ctl.kill_session(self._agent_session)
         lines_per_event = tmux_ctl.scroll_lines_per_event(
             self._bindings_backup or {})
         cmd = (
-            f"{shlex.quote(sys.executable)} -m ccmgr.scroll_agent "
+            f"{shlex.quote(sys.executable)} -m railmux.scroll_agent "
             f"--target {shlex.quote(target_pane)} "
             f"--lines-per-event {lines_per_event} "
             f"--ready-session {shlex.quote(self._agent_session)}"
@@ -130,7 +130,7 @@ class ScrollManager:
         if self._agent_pane is None:
             return False
         return tmux_ctl.wait_window_user_option(
-            self._agent_session, "@ccmgr_scroll_ready", "1")
+            self._agent_session, "@railmux_scroll_ready", "1")
 
     def configure(self, claude_tmux_name: str) -> bool:
         """Enable or retarget coalescing for a detached Claude session."""
@@ -169,7 +169,7 @@ class ScrollManager:
             assert self._agent_pane is not None
             if prepared_now:
                 # Persist recovery data before touching the server-global key
-                # tables. A replacement ccmgr can now recover at every point.
+                # tables. A replacement railmux can now recover at every point.
                 if not self._save_state():
                     tmux_ctl.kill_session(self._agent_session or "")
                     self._agent_session = self._agent_pane = None
@@ -198,7 +198,7 @@ class ScrollManager:
             self._active_session = None
             return False
         if not tmux_ctl.set_window_user_option(
-                claude_tmux_name, "@ccmgr_scroll_agent", "1"):
+                claude_tmux_name, "@railmux_scroll_agent", "1"):
             self._target_windows.discard(claude_tmux_name)
             self._active_session = None
             self._save_state()
@@ -217,7 +217,7 @@ class ScrollManager:
             return
         for target_window in self._target_windows:
             tmux_ctl.set_window_user_option(
-                target_window, "@ccmgr_scroll_agent", None)
+                target_window, "@railmux_scroll_agent", None)
         if (self._bindings_backup is not None and self._agent_pane
                 and tmux_ctl.scroll_bindings_owned_by(self._agent_pane)):
             tmux_ctl.restore_scroll_bindings(self._bindings_backup)

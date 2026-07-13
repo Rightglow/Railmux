@@ -1,4 +1,4 @@
-"""Sidebar pane: chat sessions currently opened in this ccmgr instance."""
+"""Sidebar pane: chat sessions currently opened in this railmux instance."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -6,11 +6,11 @@ from dataclasses import dataclass
 
 import urwid
 
-from ccmgr.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
 # Reuse the status-dot glyphs and the focus/selected attribute maps so the
 # coloured ● blends into highlighted rows the same way it does in the Sessions
 # pane (extra keys like "dim" are harmless here).
-from ccmgr.ui.sessions_pane import _STATUS_DOTS, _FOCUS_REMAP, _SELECTED_MAP
+from railmux.ui.sessions_pane import _STATUS_DOTS, _FOCUS_REMAP, _SELECTED_MAP
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class _RunningRow(ClickableRow):
 
 
 class RunningSessionsPane(urwid.WidgetWrap):
-    """Lists every chat session this ccmgr instance has opened.
+    """Lists every chat session this railmux instance has opened.
 
     Enter on a row re-attaches the right pane to that detached claude session.
     """

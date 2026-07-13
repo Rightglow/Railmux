@@ -3,12 +3,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ccmgr.fuzzy import fuzzy_match
+from railmux.fuzzy import fuzzy_match
 
 import urwid
 
-from ccmgr.models import Project
-from ccmgr.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.models import Project
+from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
 
 
 class _ProjectRow(ClickableRow):

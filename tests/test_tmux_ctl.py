@@ -1,9 +1,9 @@
-"""Tests for ccmgr.tmux_ctl — CLI wrappers (mocked, no real tmux needed)."""
+"""Tests for railmux.tmux_ctl — CLI wrappers (mocked, no real tmux needed)."""
 
 import subprocess
 from unittest.mock import patch, MagicMock
 
-from ccmgr.tmux_ctl import (
+from railmux.tmux_ctl import (
     _bindings_are_tmux_defaults,
     _read_key_binding,
     _set_scroll_bindings,
@@ -68,7 +68,7 @@ def test_clipboard_handles_check_output_error():
 
 def test_server_snapshot_collects_sessions_and_panes():
     output = "cc-one\t%1\t101\ncc-one\t%2\t102\ncc-two\t%3\t201\n"
-    with patch("ccmgr.tmux_ctl.in_tmux", return_value=True), \
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output(output) as call:
         snapshot = server_snapshot()
 
@@ -85,13 +85,13 @@ def test_server_snapshot_collects_sessions_and_panes():
 
 
 def test_server_snapshot_rejects_malformed_output():
-    with patch("ccmgr.tmux_ctl.in_tmux", return_value=True), \
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output("cc-one %1\n"):
         assert server_snapshot() is None
 
 
 def test_server_snapshot_returns_none_when_tmux_probe_fails():
-    with patch("ccmgr.tmux_ctl.in_tmux", return_value=True), \
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          patch(
              "subprocess.check_output",
              side_effect=subprocess.CalledProcessError(1, "tmux"),
@@ -100,7 +100,7 @@ def test_server_snapshot_returns_none_when_tmux_probe_fails():
 
 
 def test_server_snapshot_skips_probe_outside_tmux():
-    with patch("ccmgr.tmux_ctl.in_tmux", return_value=False), \
+    with patch("railmux.tmux_ctl.in_tmux", return_value=False), \
          patch("subprocess.check_output") as output:
         assert server_snapshot() is None
 
@@ -143,7 +143,7 @@ def test_scroll_bindings_target_agent_and_keep_default_fallback():
     for invocation in call.call_args_list:
         args = invocation.args[0]
         assert args[:4] == ["tmux", "bind-key", "-T", args[3]]
-        assert "#{@ccmgr_scroll_agent}" in args
+        assert "#{@railmux_scroll_agent}" in args
         assert any("send-keys -t %99" in arg for arg in args)
         assert any("send-keys -X -N 5" in arg for arg in args)
 
@@ -168,25 +168,25 @@ def test_custom_wheel_binding_disables_install_without_overwriting_it():
         ("copy-mode-vi", "WheelDownPane"): "bind-key -T copy-mode-vi WheelDownPane page-down",
     }
     assert not _bindings_are_tmux_defaults(custom)
-    with patch("ccmgr.tmux_ctl.read_scroll_bindings", return_value=custom), \
-         patch("ccmgr.tmux_ctl._set_scroll_bindings") as install:
+    with patch("railmux.tmux_ctl.read_scroll_bindings", return_value=custom), \
+         patch("railmux.tmux_ctl._set_scroll_bindings") as install:
         assert install_scroll_bindings("%99") is None
     install.assert_not_called()
 
 
 def test_tmux_older_than_27_disables_scroll_coalescing():
-    with patch("ccmgr.tmux_ctl.tmux_version", return_value=(2, 6)), \
-         patch("ccmgr.tmux_ctl.read_scroll_bindings") as read:
+    with patch("railmux.tmux_ctl.tmux_version", return_value=(2, 6)), \
+         patch("railmux.tmux_ctl.read_scroll_bindings") as read:
         assert prepare_scroll_bindings() is None
     read.assert_not_called()
 
 
 def test_window_user_option_uses_tmux_27_compatible_command():
     with _mock_check_call() as call:
-        assert set_window_user_option("cc-session", "@ccmgr_scroll_agent", "1")
+        assert set_window_user_option("cc-session", "@railmux_scroll_agent", "1")
     assert call.call_args.args[0] == [
         "tmux", "set-window-option", "-t", "cc-session",
-        "@ccmgr_scroll_agent", "1",
+        "@railmux_scroll_agent", "1",
     ]
 
 
@@ -209,9 +209,9 @@ def test_inconsistent_scroll_distances_are_rejected():
 def test_scroll_binding_ownership_checks_agent_target():
     wrapped = (
         'bind-key -T copy-mode WheelUpPane if-shell -F -t = '
-        '"#{@ccmgr_scroll_agent}" "send-keys -t %9 U" "scroll-up"'
+        '"#{@railmux_scroll_agent}" "send-keys -t %9 U" "scroll-up"'
     )
-    with patch("ccmgr.tmux_ctl.read_scroll_bindings", return_value={
+    with patch("railmux.tmux_ctl.read_scroll_bindings", return_value={
         ("copy-mode", "WheelUpPane"): wrapped,
         ("copy-mode-vi", "WheelUpPane"): wrapped,
         ("copy-mode", "WheelDownPane"): wrapped.replace(" U", " D"),
@@ -224,10 +224,10 @@ def test_scroll_binding_ownership_checks_agent_target():
 def test_wait_window_user_option_observes_ready_value():
     with _mock_check_output("1") as call:
         assert wait_window_user_option(
-            "ccmgr-scroll-1", "@ccmgr_scroll_ready", "1", timeout=0.1)
+            "railmux-scroll-1", "@railmux_scroll_ready", "1", timeout=0.1)
     assert call.call_args.args[0] == [
-        "tmux", "show-window-options", "-v", "-t", "ccmgr-scroll-1",
-        "@ccmgr_scroll_ready",
+        "tmux", "show-window-options", "-v", "-t", "railmux-scroll-1",
+        "@railmux_scroll_ready",
     ]
 
 
@@ -274,7 +274,7 @@ def test_session_has_child_returns_unknown_without_pane_pid():
 
 
 def test_window_border_style_updates_both_segments_in_one_tmux_call():
-    with patch("ccmgr.tmux_ctl.in_tmux", return_value=True), \
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_call() as call:
         assert set_window_border_style("fg=cyan")
 
@@ -285,8 +285,8 @@ def test_window_border_style_updates_both_segments_in_one_tmux_call():
 
 
 def test_split_window_h_can_leave_focus_on_current_pane():
-    with patch("ccmgr.tmux_ctl.in_tmux", return_value=True), \
-         patch("ccmgr.tmux_ctl.tmux_version", return_value=(3, 4)), \
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         patch("railmux.tmux_ctl.tmux_version", return_value=(3, 4)), \
          _mock_check_output("%9") as output:
         assert split_window_h("cmd", size_percent=70, detached=True) == "%9"
 
@@ -302,9 +302,9 @@ def test_split_window_h_can_leave_focus_on_current_pane():
 
 def test_new_detached_session_hides_inner_status_bar():
     """The inner (agent) session's own status bar is turned off so it doesn't
-    stack a redundant second bar above the outer ccmgr status bar; mouse and
-    clipboard sync are enabled. All session-scoped on the ccmgr-owned session."""
-    from ccmgr.tmux_ctl import new_detached_session
+    stack a redundant second bar above the outer railmux status bar; mouse and
+    clipboard sync are enabled. All session-scoped on the railmux-owned session."""
+    from railmux.tmux_ctl import new_detached_session
     with patch("subprocess.check_call") as call:
         assert new_detached_session("cc-abc", "claude --resume") is True
 
@@ -316,6 +316,6 @@ def test_new_detached_session_hides_inner_status_bar():
 
 
 def test_new_detached_session_survives_tmux_missing():
-    from ccmgr.tmux_ctl import new_detached_session
+    from railmux.tmux_ctl import new_detached_session
     with patch("subprocess.check_call", side_effect=FileNotFoundError):
         assert new_detached_session("cc-abc", "claude") is False

@@ -7,8 +7,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolate_path_cache(tmp_path, monkeypatch):
     """Redirect discovery's persistent path cache into the test's tmp dir so
-    tests never read or write the real ~/.config/ccmgr/path-cache.json."""
-    import ccmgr.discovery as discovery
+    tests never read or write the real ~/.config/railmux/path-cache.json."""
+    import railmux.discovery as discovery
     cache_file = tmp_path / "path-cache.json"
     monkeypatch.setattr(discovery, "_path_cache_file", lambda: cache_file)
 
@@ -26,7 +26,7 @@ def write_session(claude_home: Path, encoded_project: str, session_id: str, reco
 
     If *records* has no assistant entry, a minimal assistant record is appended
     automatically.  Real sessions always have at least one assistant reply;
-    sessions without one are orphans that ccmgr filters out.
+    sessions without one are orphans that railmux filters out.
     """
     proj_dir = claude_home / "projects" / encoded_project
     proj_dir.mkdir(parents=True, exist_ok=True)

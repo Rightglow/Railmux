@@ -1,13 +1,13 @@
-# ccmgr — Claude Code session manager
+# railmux — Claude Code session manager
 
-A terminal UI to navigate, resume, and start [Claude Code](https://claude.com/claude-code) sessions across all your projects from one place. ccmgr lives in the left pane of a tmux window; the right pane shows the currently-active claude. Each claude session runs as its own detached tmux session in the background, so switching between sessions preserves all in-progress work — no responses or tool calls are interrupted.
+A terminal UI to navigate, resume, and start [Claude Code](https://claude.com/claude-code) sessions across all your projects from one place. railmux lives in the left pane of a tmux window; the right pane shows the currently-active claude. Each claude session runs as its own detached tmux session in the background, so switching between sessions preserves all in-progress work — no responses or tool calls are interrupted.
 
-> **This is a fork** of [regmi-saugat/ccmgr](https://github.com/regmi-saugat/ccmgr) (v0.1.5), developed with agent-assisted programming using [Claude Code](https://claude.ai/claude-code).
+> **This is a fork** of [regmi-saugat/railmux](https://github.com/regmi-saugat/railmux) (v0.1.5), developed with agent-assisted programming using [Claude Code](https://claude.ai/claude-code).
 
 ## Install
 
 ```bash
-pip install ccmgr
+pip install railmux
 ```
 
 Requires Python 3.12+, `tmux`, and `less` on `PATH`.
@@ -15,10 +15,10 @@ Requires Python 3.12+, `tmux`, and `less` on `PATH`.
 ## Run
 
 ```bash
-ccmgr
+railmux
 ```
 
-If you're not already inside a tmux session, ccmgr will launch one automatically. The most recent project is auto-selected on startup.
+If you're not already inside a tmux session, railmux will launch one automatically. The most recent project is auto-selected on startup.
 
 ## Keys
 
@@ -72,11 +72,11 @@ Each session shows a coloured ● reflecting its current state:
 
 ## How it works
 
-`ccmgr` reads `~/.claude/projects/*` (Claude's per-project session history) and lists everything. Pressing `Enter` on a session does two things: (1) if a detached tmux session running `claude --resume <id>` doesn't already exist, ccmgr creates one with `tmux new-session -d`; (2) ccmgr's right pane runs `tmux attach -t cc-<id>` so you see and interact with that claude. Switching sessions just respawns the right pane to attach to a different background tmux session — the detached claudes keep running with all their state intact.
+`railmux` reads `~/.claude/projects/*` (Claude's per-project session history) and lists everything. Pressing `Enter` on a session does two things: (1) if a detached tmux session running `claude --resume <id>` doesn't already exist, railmux creates one with `tmux new-session -d`; (2) railmux's right pane runs `tmux attach -t cc-<id>` so you see and interact with that claude. Switching sessions just respawns the right pane to attach to a different background tmux session — the detached claudes keep running with all their state intact.
 
 ## SSH / remote use
 
-ccmgr works over SSH and benefits from a few tweaks for responsiveness and scrollback:
+railmux works over SSH and benefits from a few tweaks for responsiveness and scrollback:
 
 **Server** (`~/.tmux.conf` on the remote machine):
 
@@ -108,7 +108,7 @@ has focus, so it may fullscreen the sidebar instead.
 
 ## Configuration
 
-Optional config at `~/.config/ccmgr/config.toml`:
+Optional config at `~/.config/railmux/config.toml`:
 
 ```toml
 [claude]

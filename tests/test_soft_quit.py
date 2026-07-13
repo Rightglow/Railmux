@@ -9,9 +9,9 @@ from unittest.mock import patch, MagicMock
 import pytest
 import urwid
 
-from ccmgr.models import Project, SessionMeta
-from ccmgr.ui.app import App, _Running
-from ccmgr.ui.modals import QuitConfirmModal
+from railmux.models import Project, SessionMeta
+from railmux.ui.app import App, _Running
+from railmux.ui.modals import QuitConfirmModal
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -98,14 +98,14 @@ def test_safe_name_strips_leading_dashes():
 def test_state_path_uses_xdg_runtime_dir(monkeypatch):
     monkeypatch.setitem(os.environ, "XDG_RUNTIME_DIR", "/run/user/1000")
     path = App._state_path()
-    assert path == Path("/run/user/1000/ccmgr-state.json")
+    assert path == Path("/run/user/1000/railmux-state.json")
 
 
 def test_state_path_falls_back_to_tmp(monkeypatch):
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     monkeypatch.setattr(os, "getuid", lambda: 1000)
     path = App._state_path()
-    assert path == Path("/tmp/ccmgr-1000/ccmgr-state.json")
+    assert path == Path("/tmp/railmux-1000/railmux-state.json")
 
 
 def test_save_and_load_state_round_trip(tmp_path, monkeypatch):
@@ -156,7 +156,7 @@ def test_save_state_with_preview_in_right_pane(tmp_path, monkeypatch):
 
 def test_load_state_missing_file_returns_none():
     app = _minimal_app()
-    with patch.object(App, "_state_path", return_value=Path("/tmp/ccmgr-nonexistent.json")):
+    with patch.object(App, "_state_path", return_value=Path("/tmp/railmux-nonexistent.json")):
         assert app._load_state() is None
 
 
@@ -177,8 +177,8 @@ def test_discover_orphans_finds_cc_sessions():
     truncated = App._safe_name(full_id, 16)
 
     with patch("subprocess.check_output",
-               return_value=f"cc-{truncated}\t/tmp/myproj\nccmgr\t/home/user\n"), \
-         patch("ccmgr.ui.app.list_projects", return_value=[proj]), \
+               return_value=f"cc-{truncated}\t/tmp/myproj\nrailmux\t/home/user\n"), \
+         patch("railmux.ui.app.list_projects", return_value=[proj]), \
          patch.object(App, "_resolve_truncated_id",
                       return_value=full_id):
         app = _minimal_app()
@@ -194,7 +194,7 @@ def test_discover_orphans_skips_placeholder():
     proj = _project()
     with patch("subprocess.check_output",
                return_value="cc-__new__-1\t/tmp/test-proj\n"), \
-         patch("ccmgr.ui.app.list_projects", return_value=[proj]):
+         patch("railmux.ui.app.list_projects", return_value=[proj]):
         app = _minimal_app()
         app._discover_orphans()
     assert len(app._running) == 0
@@ -208,7 +208,7 @@ def test_discover_orphans_skips_already_running():
 
     with patch("subprocess.check_output",
                return_value=f"cc-{truncated}\t/tmp/myproj\n"), \
-         patch("ccmgr.ui.app.list_projects", return_value=[proj]), \
+         patch("railmux.ui.app.list_projects", return_value=[proj]), \
          patch.object(App, "_resolve_truncated_id", return_value=full_id):
         app = _minimal_app()
         app._running[full_id] = _Running(key=full_id, tmux_name=f"cc-{truncated}",
@@ -217,9 +217,9 @@ def test_discover_orphans_skips_already_running():
     assert app._running[full_id].label == "existing"  # not overwritten
 
 
-def test_discover_orphans_skips_ccmgr():
-    """The ccmgr outer tmux session is not treated as an orphan."""
-    with patch("subprocess.check_output", return_value="ccmgr\t/home/user\n"):
+def test_discover_orphans_skips_railmux():
+    """The railmux outer tmux session is not treated as an orphan."""
+    with patch("subprocess.check_output", return_value="railmux\t/home/user\n"):
         app = _minimal_app()
         app._discover_orphans()
     assert len(app._running) == 0
@@ -246,7 +246,7 @@ def test_teardown_soft_quit_skips_session_kill():
         "abc123": _Running(key="abc123", tmux_name="cc-abc123", label="test", project=None),
     }
 
-    with patch("ccmgr.ui.app.tmux_ctl") as tmux:
+    with patch("railmux.ui.app.tmux_ctl") as tmux:
         app._teardown_tmux()
 
     # Right-pane cleanup still happens.
@@ -266,14 +266,14 @@ def test_teardown_hard_quit_kills_sessions():
         "abc123": _Running(key="abc123", tmux_name="cc-abc123", label="test", project=None),
     }
 
-    with patch("ccmgr.ui.app.tmux_ctl") as tmux:
+    with patch("railmux.ui.app.tmux_ctl") as tmux:
         app._teardown_tmux()
 
     tmux.kill_session.assert_any_call("cc-abc123")
 
 
 def test_teardown_reverts_every_bar_option(monkeypatch):
-    """Every appearance option ccmgr paints onto the outer bar — plus the
+    """Every appearance option railmux paints onto the outer bar — plus the
     dynamically set status-right — is reverted with ``set-option -u`` on
     teardown, so the user's tmux config is left clean. The revert runs BEFORE
     the soft-quit early return (the outer session survives soft quit, so a
@@ -284,11 +284,11 @@ def test_teardown_reverts_every_bar_option(monkeypatch):
     app._auto_launched = False
     app._scroll_manager = MagicMock()
     app._tmux_status_enabled = True
-    app._tmux_status_session = "ccmgr"
+    app._tmux_status_session = "railmux"
 
     run = MagicMock()
     monkeypatch.setattr("subprocess.run", run)
-    with patch("ccmgr.ui.app.tmux_ctl"):
+    with patch("railmux.ui.app.tmux_ctl"):
         app._teardown_tmux()
 
     reverted = {
@@ -308,8 +308,8 @@ def test_teardown_reverts_every_bar_option(monkeypatch):
 def test_run_teardown_reverts_bar_if_setup_raises(monkeypatch):
     """Regression: run() applies the tmux status-bar overrides BEFORE building the
     urwid Screen/MainLoop. If that construction raises, `finally` must still call
-    _teardown_tmux, or the user's outer bar keeps ccmgr's status/style/brand."""
-    import ccmgr.ui.app as app_mod
+    _teardown_tmux, or the user's outer bar keeps railmux's status/style/brand."""
+    import railmux.ui.app as app_mod
 
     app = _minimal_app()
     app._pending_project = None
@@ -317,12 +317,12 @@ def test_run_teardown_reverts_bar_if_setup_raises(monkeypatch):
     app._config = MagicMock(poll_interval_ms=500)
     app._frame = MagicMock()
     app._hint_bar = MagicMock()
-    app._set_ccmgr_focus = MagicMock()
+    app._set_railmux_focus = MagicMock()
     teardown = MagicMock()
     app._teardown_tmux = teardown
 
     monkeypatch.setattr(app_mod.tmux_ctl, "in_tmux", lambda: True)
-    monkeypatch.setattr(app_mod.tmux_ctl, "current_session_name", lambda: "ccmgr")
+    monkeypatch.setattr(app_mod.tmux_ctl, "current_session_name", lambda: "railmux")
     monkeypatch.setattr(app_mod.tmux_ctl, "enable_clipboard_passthrough", lambda: None)
     monkeypatch.setattr(app_mod.tmux_ctl, "current_pane_id", lambda: "%0")
     monkeypatch.setattr("subprocess.run", MagicMock())

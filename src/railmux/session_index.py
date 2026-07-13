@@ -11,7 +11,7 @@ import json
 import time
 from pathlib import Path
 
-from ccmgr.models import Project, SessionMeta
+from railmux.models import Project, SessionMeta
 
 
 def list_sessions(project: Project) -> list[SessionMeta]:

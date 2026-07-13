@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from ccmgr.discovery import list_projects
-from ccmgr.session_cache import SessionCache
+from railmux.discovery import list_projects
+from railmux.session_cache import SessionCache
 
 
 def _make_project(claude_home, tmp_path, write_session_fixture, sessions,
@@ -115,7 +115,7 @@ def test_cache_keeps_other_projects_warm(
     cache.list_sessions(second_project)
 
     monkeypatch.setattr(
-        "ccmgr.session_cache._scan_session",
+        "railmux.session_cache._scan_session",
         lambda *_args: pytest.fail("other project cache was evicted"),
     )
 
@@ -133,7 +133,7 @@ def test_append_during_scan_forces_next_poll_rescan(
             [{"type": "user", "message": {"role": "user", "content": "initial"}}],
         )],
     )
-    import ccmgr.session_cache as cache_module
+    import railmux.session_cache as cache_module
     real_scan = cache_module._scan_session
     calls = []
 
@@ -154,7 +154,7 @@ def test_append_during_scan_forces_next_poll_rescan(
 
 
 class _StubRenames:
-    """Minimal stand-in for ccmgr.renames.Renames (get() only)."""
+    """Minimal stand-in for railmux.renames.Renames (get() only)."""
 
     def __init__(self, mapping):
         self._m = mapping

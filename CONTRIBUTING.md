@@ -1,14 +1,14 @@
-# Contributing to ccmgr
+# Contributing to railmux
 
-Thanks for your interest in ccmgr. Issues and pull requests are welcome.
+Thanks for your interest in railmux. Issues and pull requests are welcome.
 
 ## Dev setup
 
-ccmgr targets Python 3.12+ and requires `tmux` on `PATH`.
+railmux targets Python 3.12+ and requires `tmux` on `PATH`.
 
 ```bash
-git clone https://github.com/regmi-saugat/ccmgr
-cd ccmgr
+git clone https://github.com/regmi-saugat/railmux
+cd railmux
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -25,10 +25,10 @@ Tests live in `tests/` and run against the package installed in editable mode. P
 ## Running locally
 
 ```bash
-ccmgr
+railmux
 ```
 
-The entry point is `ccmgr.cli:main`. Source lives under `src/ccmgr/`.
+The entry point is `railmux.cli:main`. Source lives under `src/railmux/`.
 
 ## Pull requests
 
@@ -39,8 +39,8 @@ The entry point is `ccmgr.cli:main`. Source lives under `src/ccmgr/`.
 
 ## Reporting bugs
 
-File an issue at https://github.com/regmi-saugat/ccmgr/issues with:
+File an issue at https://github.com/regmi-saugat/railmux/issues with:
 
-- ccmgr version (`ccmgr --version` or check `src/ccmgr/__init__.py`)
+- railmux version (`railmux --version` or check `src/railmux/__init__.py`)
 - Python version, OS, and tmux version (`tmux -V`)
 - Steps to reproduce and what you expected vs. what happened

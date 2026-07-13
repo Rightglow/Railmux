@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ccmgr.config import Config, load_config
+from railmux.config import Config, load_config
 
 
 def test_load_with_no_file_uses_defaults(tmp_path):

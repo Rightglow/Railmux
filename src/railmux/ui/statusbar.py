@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import urwid
 
-from ccmgr.ui import keymap
+from railmux.ui import keymap
 
 
 # Idle tips cycled through the status bar when there's no active message. These

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from ccmgr.launcher import build_resume_command, build_new_session_command, launch
+from railmux.launcher import build_resume_command, build_new_session_command, launch
 
 
 def test_build_resume_command():

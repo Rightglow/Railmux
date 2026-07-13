@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ccmgr.scroll_manager import ScrollManager
+from railmux.scroll_manager import ScrollManager
 
 
 DEFAULT_BACKUP = {
@@ -16,28 +16,28 @@ DEFAULT_BACKUP = {
 
 @contextmanager
 def mocked_tmux():
-    with patch("ccmgr.scroll_manager.tmux_ctl.session_pane_id",
+    with patch("railmux.scroll_manager.tmux_ctl.session_pane_id",
                return_value="%10") as session_pane_id, \
-         patch("ccmgr.scroll_manager.tmux_ctl.pane_alive",
+         patch("railmux.scroll_manager.tmux_ctl.pane_alive",
                return_value=True) as pane_alive, \
-         patch("ccmgr.scroll_manager.tmux_ctl.start_scroll_agent",
+         patch("railmux.scroll_manager.tmux_ctl.start_scroll_agent",
                return_value="%20") as start, \
-         patch("ccmgr.scroll_manager.tmux_ctl.wait_window_user_option",
+         patch("railmux.scroll_manager.tmux_ctl.wait_window_user_option",
                return_value=True) as wait_ready, \
-         patch("ccmgr.scroll_manager.tmux_ctl.prepare_scroll_bindings",
+         patch("railmux.scroll_manager.tmux_ctl.prepare_scroll_bindings",
                return_value=DEFAULT_BACKUP) as prepare, \
-         patch("ccmgr.scroll_manager.tmux_ctl.rebind_scroll_agent",
+         patch("railmux.scroll_manager.tmux_ctl.rebind_scroll_agent",
                return_value=True) as rebind, \
-         patch("ccmgr.scroll_manager.tmux_ctl.set_scroll_agent_target",
+         patch("railmux.scroll_manager.tmux_ctl.set_scroll_agent_target",
                return_value=True) as set_target, \
-         patch("ccmgr.scroll_manager.tmux_ctl.set_window_user_option",
+         patch("railmux.scroll_manager.tmux_ctl.set_window_user_option",
                return_value=True) as set_option, \
-         patch("ccmgr.scroll_manager.tmux_ctl.session_exists",
+         patch("railmux.scroll_manager.tmux_ctl.session_exists",
                return_value=False), \
-         patch("ccmgr.scroll_manager.tmux_ctl.kill_session") as kill, \
-         patch("ccmgr.scroll_manager.tmux_ctl.restore_scroll_bindings") as restore:
+         patch("railmux.scroll_manager.tmux_ctl.kill_session") as kill, \
+         patch("railmux.scroll_manager.tmux_ctl.restore_scroll_bindings") as restore:
         owned = patch(
-            "ccmgr.scroll_manager.tmux_ctl.scroll_bindings_owned_by",
+            "railmux.scroll_manager.tmux_ctl.scroll_bindings_owned_by",
             return_value=True,
         )
         with owned as bindings_owned:
@@ -57,7 +57,7 @@ def mocked_tmux():
 
 
 def test_second_manager_cannot_overwrite_live_owner(tmp_path):
-    with patch("ccmgr.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
+    with patch("railmux.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
          patch.dict(os.environ, {"TMUX": "/tmp/test-socket,1,0"}), \
          mocked_tmux():
         first = ScrollManager(True)
@@ -68,7 +68,7 @@ def test_second_manager_cannot_overwrite_live_owner(tmp_path):
 
 
 def test_new_manager_adopts_state_after_owner_crash(tmp_path):
-    with patch("ccmgr.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
+    with patch("railmux.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
          patch.dict(os.environ, {"TMUX": "/tmp/test-socket,1,0"}), \
          mocked_tmux() as tmux:
         first = ScrollManager(True)
@@ -92,7 +92,7 @@ def test_new_manager_adopts_state_after_owner_crash(tmp_path):
 
 
 def test_failed_target_message_does_not_mark_window(tmp_path):
-    with patch("ccmgr.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
+    with patch("railmux.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
          patch.dict(os.environ, {"TMUX": "/tmp/test-socket,1,0"}), \
          mocked_tmux() as tmux:
         tmux.set_target.return_value = False
@@ -103,7 +103,7 @@ def test_failed_target_message_does_not_mark_window(tmp_path):
 
 
 def test_dead_agent_is_recreated_by_maintenance(tmp_path):
-    with patch("ccmgr.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
+    with patch("railmux.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
          patch.dict(os.environ, {"TMUX": "/tmp/test-socket,1,0"}), \
          mocked_tmux() as tmux:
         manager = ScrollManager(True)
@@ -116,7 +116,7 @@ def test_dead_agent_is_recreated_by_maintenance(tmp_path):
 
 
 def test_state_write_failure_removes_new_window_marker(tmp_path):
-    with patch("ccmgr.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
+    with patch("railmux.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
          patch.dict(os.environ, {"TMUX": "/tmp/test-socket,1,0"}), \
          mocked_tmux() as tmux:
         manager = ScrollManager(True)

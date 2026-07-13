@@ -1,6 +1,6 @@
-# ccmgr 修复路线图
+# railmux 修复路线图
 
-> 基于 [Rightglow/ccmgr](https://github.com/Rightglow/ccmgr) 的代码审查
+> 基于 [Rightglow/railmux](https://github.com/Rightglow/railmux) 的代码审查
 > 2026-07-04
 
 ---
@@ -15,7 +15,7 @@
 
 ### ~~P2 — 退出确认框显示 session 数量~~ ✅ 已完成
 
-**现状**：`QuitConfirmModal` 只问 "Quit ccmgr?"，不提示有多少 session 在跑。
+**现状**：`QuitConfirmModal` 只问 "Quit railmux?"，不提示有多少 session 在跑。
 
 **修复**：显示 "N Claude sessions still running. Quit will kill them all." （`modals.py:50-61`、`app.py:292-296`）
 
@@ -45,7 +45,7 @@
 
 ### P6 — Session 删除功能
 
-**现状**：只能退出 ccmgr 时一起杀掉所有 session，无法关闭单个 session。
+**现状**：只能退出 railmux 时一起杀掉所有 session，无法关闭单个 session。
 
 **修复**：
 - Sessions 面板：按 `d` 删除选中 session（删除 JSONL 文件 + kill detached tmux）

@@ -2,21 +2,21 @@
 
 Claude Code rewrites its own ``ai-title`` record almost every turn, so a rename
 appended to the session JSONL is clobbered on the very next turn (title parsing
-keeps the *last* ai-title).  ccmgr therefore owns renames in a sidecar JSON file
+keeps the *last* ai-title).  railmux therefore owns renames in a sidecar JSON file
 keyed by ``session_id`` — globally-unique UUIDs, so no per-project namespacing —
 and overlays them onto ``SessionMeta.title`` at read time, immune to Claude's
-re-titling.  Same pattern as :mod:`ccmgr.favorites`.
+re-titling.  Same pattern as :mod:`railmux.favorites`.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from ccmgr.atomic_file import atomic_write_text
+from railmux.atomic_file import atomic_write_text
 
 
 def _renames_path() -> Path:
-    return Path.home() / ".config" / "ccmgr" / "renames.json"
+    return Path.home() / ".config" / "railmux" / "renames.json"
 
 
 class Renames:

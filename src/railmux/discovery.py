@@ -5,10 +5,10 @@ import json
 import os
 from pathlib import Path
 
-from ccmgr.atomic_file import atomic_write_text
-from ccmgr.models import Project
-from ccmgr.path_codec import decode
-from ccmgr.session_index import _looks_like_uuid, _scan_session
+from railmux.atomic_file import atomic_write_text
+from railmux.models import Project
+from railmux.path_codec import decode
+from railmux.session_index import _looks_like_uuid, _scan_session
 
 
 # Module-level cache: (claude_home, projects_dir_mtime) -> list[Project]
@@ -21,7 +21,7 @@ def _path_cache_file() -> Path:
     Decoding an encoded project name is expensive on an NFS home (see
     path_codec), and the mapping is stable, so we persist it across launches.
     """
-    return Path.home() / ".config" / "ccmgr" / "path-cache.json"
+    return Path.home() / ".config" / "railmux" / "path-cache.json"
 
 
 def _load_path_cache() -> dict[str, str]:

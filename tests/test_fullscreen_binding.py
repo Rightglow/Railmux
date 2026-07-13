@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ccmgr.ui.app import App
+from railmux.ui.app import App
 
 
 def _bare_app(**attrs):
@@ -19,7 +19,7 @@ def _bare_app(**attrs):
     app._favorites = MagicMock()
     app._sessions_pane = MagicMock()
     app._running_pane = MagicMock()
-    app._ccmgr_has_focus = True
+    app._railmux_has_focus = True
     app._divider_active = None
     app._frame = MagicMock()
     app._accel_alarm = None
@@ -71,7 +71,7 @@ def test_teardown_unbinds_f9(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", capture)
     monkeypatch.setattr(
-        "ccmgr.ui.app.atomic_write_text", lambda *args, **kwargs: None)
+        "railmux.ui.app.atomic_write_text", lambda *args, **kwargs: None)
 
     app._teardown_tmux()
 
@@ -107,9 +107,9 @@ def test_fast_path_still_rebinds(monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", capture)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.pane_alive", lambda _pid: True)
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pid: True)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.select_pane", lambda _pid: True)
+        "railmux.ui.app.tmux_ctl.select_pane", lambda _pid: True)
 
     result = app._attach_in_right_pane("cc-test", steal_focus=False)
     assert result is True
@@ -119,6 +119,6 @@ def test_fast_path_still_rebinds(monkeypatch):
 
 def test_keymap_references_f9():
     """Verify the keymap entry was updated from F3 to F9."""
-    from ccmgr.ui.keymap import BINDINGS
+    from railmux.ui.keymap import BINDINGS
     fullscreen = next(b for b in BINDINGS if b.desc == "fullscreen")
     assert fullscreen.hint == "F9"

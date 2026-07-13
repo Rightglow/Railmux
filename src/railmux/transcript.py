@@ -2,7 +2,7 @@
 
 Usage::
 
-    python3 -m ccmgr.transcript <jsonl_path>
+    python3 -m railmux.transcript <jsonl_path>
 """
 
 from __future__ import annotations
@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv
     if len(argv) < 2:
-        print("Usage: python3 -m ccmgr.transcript <jsonl_path|- for stdin>", file=sys.stderr)
+        print("Usage: python3 -m railmux.transcript <jsonl_path|- for stdin>", file=sys.stderr)
         sys.exit(1)
     source = argv[1]
     if source == "-":

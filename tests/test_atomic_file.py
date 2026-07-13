@@ -1,9 +1,9 @@
-"""Tests for atomic ccmgr state-file writes."""
+"""Tests for atomic railmux state-file writes."""
 import os
 
 import pytest
 
-from ccmgr.atomic_file import atomic_write_text
+from railmux.atomic_file import atomic_write_text
 
 
 def test_atomic_write_creates_parent_and_replaces_content(tmp_path):

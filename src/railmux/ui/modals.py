@@ -6,8 +6,8 @@ from pathlib import Path
 
 import urwid
 
-from ccmgr.models import Project, SessionMeta
-from ccmgr.ui._widgets import ClickableRow
+from railmux.models import Project, SessionMeta
+from railmux.ui._widgets import ClickableRow
 
 
 class ProjectInfoModal(urwid.WidgetWrap):
@@ -64,7 +64,7 @@ class QuitConfirmModal(urwid.WidgetWrap):
 
         soft_line = "s = soft quit (keep sessions alive)"
         body = urwid.Pile([
-            urwid.Text("Quit ccmgr?", align="center"),
+            urwid.Text("Quit railmux?", align="center"),
             urwid.Divider(),
             urwid.Text(("live", summary), align="center"),
             urwid.Divider(),
@@ -117,14 +117,14 @@ class HelpModal(urwid.WidgetWrap):
             ("n", "Start a new agent session in the current project"),
             ("/", "Filter the focused pane"),
             ("i", "Details of the focused project / session"),
-            ("[ / ]", "Resize divider: shrink / expand ccmgr sidebar"),
+            ("[ / ]", "Resize divider: shrink / expand railmux sidebar"),
             ("r", "Rename the focused session"),
             ("s", "Toggle star (pin to top of session list)"),
             ("k", "Kill the running agent process (keeps session file)"),
             ("d", "Delete the focused session (prompts for confirmation)"),
             ("t", "Open a terminal in the active project"),
             ("F9", "Fullscreen the agent pane (toggle) for clean text copy"),
-            ("q or Ctrl-C", "Quit ccmgr (prompts for confirmation)"),
+            ("q or Ctrl-C", "Quit railmux (prompts for confirmation)"),
         ]),
         ("Mouse", [
             ("Left click", "Select / preview (non-running) / attach (running)"),
@@ -138,14 +138,14 @@ class HelpModal(urwid.WidgetWrap):
              "Fullscreen agent → Shift-drag select → Cmd/Ctrl+C → F9"),
         ]),
         ("tmux", [
-            ("Ctrl-B → / ←", "Move focus between ccmgr and agent panes"),
-            ("Ctrl-B d", "Detach from ccmgr (keep sessions alive)"),
+            ("Ctrl-B → / ←", "Move focus between railmux and agent panes"),
+            ("Ctrl-B d", "Detach from railmux (keep sessions alive)"),
         ]),
         ("", [
             ("Each session runs in its own detached tmux session.",
              "Switching keeps every agent alive — no responses"),
             ("or tool calls are interrupted.",
-             "Ctrl-B d detaches from ccmgr, everything keeps running."),
+             "Ctrl-B d detaches from railmux, everything keeps running."),
         ]),
     ]
 
@@ -302,7 +302,7 @@ class DeleteConfirmModal(urwid.WidgetWrap):
 
     Uses a scrollable ListBox so content is never clipped, even when the
     overlay height is smaller than the body (e.g. long session titles, or
-    the right pane shrinking the ccmgr sidebar).
+    the right pane shrinking the railmux sidebar).
     """
 
     def __init__(self, title: str, detail: str,

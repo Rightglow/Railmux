@@ -1,4 +1,4 @@
-"""Tests for ccmgr.ui._widgets — ClickableRow mouse / double-click."""
+"""Tests for railmux.ui._widgets — ClickableRow mouse / double-click."""
 
 import time
 from unittest.mock import MagicMock
@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 import urwid
 
-from ccmgr.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
 
 
 # ── fixtures ───────────────────────────────────────────────────────────────

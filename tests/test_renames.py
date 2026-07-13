@@ -1,18 +1,18 @@
-"""Tests for ccmgr.renames — the user-rename sidecar store."""
+"""Tests for railmux.renames — the user-rename sidecar store."""
 from __future__ import annotations
 
 import json
 
 import pytest
 
-from ccmgr.renames import Renames
+from railmux.renames import Renames
 
 
 @pytest.fixture
 def renames(tmp_path, monkeypatch):
     """A Renames store backed by a throwaway JSON file."""
     path = tmp_path / "renames.json"
-    monkeypatch.setattr("ccmgr.renames._renames_path", lambda: path)
+    monkeypatch.setattr("railmux.renames._renames_path", lambda: path)
     return Renames(), path
 
 
@@ -52,7 +52,7 @@ def test_clear_removes_and_persists(renames):
 def test_load_ignores_malformed_file(tmp_path, monkeypatch):
     path = tmp_path / "renames.json"
     path.write_text("{ this is not json")
-    monkeypatch.setattr("ccmgr.renames._renames_path", lambda: path)
+    monkeypatch.setattr("railmux.renames._renames_path", lambda: path)
     store = Renames()  # must not raise
     assert store.get("anything") is None
 
@@ -60,7 +60,7 @@ def test_load_ignores_malformed_file(tmp_path, monkeypatch):
 def test_load_skips_non_string_values(tmp_path, monkeypatch):
     path = tmp_path / "renames.json"
     path.write_text(json.dumps({"good": "Title", "bad": 42, "empty": ""}))
-    monkeypatch.setattr("ccmgr.renames._renames_path", lambda: path)
+    monkeypatch.setattr("railmux.renames._renames_path", lambda: path)
     store = Renames()
     assert store.get("good") == "Title"
     assert store.get("bad") is None
@@ -73,9 +73,9 @@ def test_codex_rename_does_not_pollute_rollout_file(tmp_path, monkeypatch):
     the Codex CLI."""
     from unittest.mock import MagicMock
 
-    from ccmgr.models import SessionMeta, Project
-    from ccmgr.renames import Renames
-    from ccmgr.ui.app import App
+    from railmux.models import SessionMeta, Project
+    from railmux.renames import Renames
+    from railmux.ui.app import App
 
     # Build a minimal App with the Renames sidecar wired in.
     app = App.__new__(App)
@@ -131,9 +131,9 @@ def test_claude_rename_still_writes_jsonl_echo(tmp_path):
     """Claude session rename still appends the ai-title to the JSONL (regression)."""
     from unittest.mock import MagicMock
 
-    from ccmgr.models import SessionMeta, Project
-    from ccmgr.renames import Renames
-    from ccmgr.ui.app import App
+    from railmux.models import SessionMeta, Project
+    from railmux.renames import Renames
+    from railmux.ui.app import App
 
     app = App.__new__(App)
     app._renames = Renames()

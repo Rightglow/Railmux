@@ -1,7 +1,7 @@
 """Tests for context-aware hint text generation."""
 import pytest
 
-from ccmgr.ui.keymap import (
+from railmux.ui.keymap import (
     CTX_AGENT,
     CTX_PROJECTS,
     CTX_RUNNING,

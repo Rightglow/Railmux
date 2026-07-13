@@ -2,7 +2,7 @@
 import json
 from pathlib import Path
 
-from ccmgr.ui.app import App
+from railmux.ui.app import App
 
 
 def _record(session_id: str, prompt: str) -> str:

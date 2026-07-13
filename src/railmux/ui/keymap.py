@@ -1,4 +1,4 @@
-"""Single source of truth for ccmgr's action keybindings.
+"""Single source of truth for railmux's action keybindings.
 
 Drives both the key dispatch in ``App._on_input`` and the always-visible hint
 bar (``HintBar`` / ``hint_text_for``) so the two cannot drift — previously a key's
@@ -67,7 +67,7 @@ BINDINGS: list[Binding] = [
     # All three — opens a shell in the active project's directory.
     Binding(("t", "T"), "t", "term", "_open_terminal_for_active_project",
             contexts=_ALL_CTX),
-    # Display-only: handled by a tmux root binding, not ccmgr.
+    # Display-only: handled by a tmux root binding, not railmux.
     Binding((), "F9", "fullscreen"),
     # Agent pane — shown only when the right-hand agent has focus.
     Binding((), "C-b ←", "back",

@@ -1,7 +1,7 @@
 """Tests for fuzzy_match character-sequential matching."""
 import pytest
 
-from ccmgr.fuzzy import fuzzy_match
+from railmux.fuzzy import fuzzy_match
 
 
 # ── basic character-sequential matching ─────────────────────────────────
@@ -71,13 +71,13 @@ def test_extra_whitespace():
     assert fuzzy_match("  cat   work  ", "/mnt/c/CatWork") is True
 
 
-# ── real-world ccmgr filter scenarios ────────────────────────────────────
+# ── real-world railmux filter scenarios ────────────────────────────────────
 
 def test_project_path_filter():
     """Simulates filtering projects by path fragments."""
-    assert fuzzy_match("ccmgr", "/home/giovanna/ccmgr") is True
-    assert fuzzy_match("gio cc", "/home/giovanna/ccmgr") is True
-    assert fuzzy_match("cc test", "/home/giovanna/ccmgr") is False
+    assert fuzzy_match("railmux", "/home/giovanna/railmux") is True
+    assert fuzzy_match("gio rail", "/home/giovanna/railmux") is True
+    assert fuzzy_match("xyz test", "/home/giovanna/railmux") is False
 
 
 def test_session_title_filter():

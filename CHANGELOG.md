@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **ccmgr** will be documented in this file.
+All notable changes to **railmux** will be documented in this file.
 
 The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -86,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Default ccmgr/claude split is now 30/70 (was 50/50).
+- Default railmux/claude split is now 30/70 (was 50/50).
 - `__new__-N` placeholders in the Running pane resolve to the real session id and title on the next refresh tick instead of staying labeled `[project]/(new)`.
 - Sessions row drops the ambiguous `38m` message-count chip and the unused token figure.
 
@@ -94,12 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Initial public release of ccmgr — a tmux-backed terminal UI to navigate, resume, and start [Claude Code](https://claude.com/claude-code) sessions across projects.
+- Initial public release of railmux — a tmux-backed terminal UI to navigate, resume, and start [Claude Code](https://claude.com/claude-code) sessions across projects.
 - Projects and Sessions panes that read from `~/.claude/projects/*`.
 - Per-session detached tmux sessions (`cc-<short_id>`) so in-progress claude work survives switching panes.
 - Key bindings for navigation, focus switching, filtering (`/`), session details popup (`i`), help (`?`), and quit (`q` / `Ctrl-C`).
-- `ccmgr --version` flag.
+- `railmux --version` flag.
 
-[Unreleased]: https://github.com/regmi-saugat/ccmgr/compare/v0.1.5...HEAD
-[0.1.5]: https://github.com/regmi-saugat/ccmgr/compare/v0.1.3...v0.1.5
-[0.1.3]: https://github.com/regmi-saugat/ccmgr/releases/tag/v0.1.3
+[Unreleased]: https://github.com/regmi-saugat/railmux/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/regmi-saugat/railmux/compare/v0.1.3...v0.1.5
+[0.1.3]: https://github.com/regmi-saugat/railmux/releases/tag/v0.1.3

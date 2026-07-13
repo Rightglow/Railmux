@@ -1,12 +1,12 @@
-"""Tests for ccmgr.ui.sessions_pane — callback dispatch (preview vs open)."""
+"""Tests for railmux.ui.sessions_pane — callback dispatch (preview vs open)."""
 
 from pathlib import Path
 
 import pytest
 import urwid
 
-from ccmgr.models import Project, SessionMeta
-from ccmgr.ui.sessions_pane import SessionsPane, _SessionRow, _NewSessionRow
+from railmux.models import Project, SessionMeta
+from railmux.ui.sessions_pane import SessionsPane, _SessionRow, _NewSessionRow
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -177,7 +177,7 @@ def test_set_sessions_no_project():
 
 
 def test_set_sessions_unchanged_preserves_rows(monkeypatch):
-    monkeypatch.setattr("ccmgr.ui.sessions_pane.time.time", lambda: 2050.0)
+    monkeypatch.setattr("railmux.ui.sessions_pane.time.time", lambda: 2050.0)
     pane = SessionsPane(on_select=lambda s: None)
     project = _project()
     session = _session(project)
@@ -192,7 +192,7 @@ def test_set_sessions_unchanged_preserves_rows(monkeypatch):
 
 
 def test_set_sessions_refreshes_when_relative_time_changes(monkeypatch):
-    monkeypatch.setattr("ccmgr.ui.sessions_pane.time.time", lambda: 2050.0)
+    monkeypatch.setattr("railmux.ui.sessions_pane.time.time", lambda: 2050.0)
     pane = SessionsPane(on_select=lambda s: None)
     project = _project()
     session = _session(project)
@@ -200,7 +200,7 @@ def test_set_sessions_refreshes_when_relative_time_changes(monkeypatch):
         project, [session], running_ids=set(), favorite_ids=set())
     row = next(w for w in pane._walker if isinstance(w, _SessionRow))
 
-    monkeypatch.setattr("ccmgr.ui.sessions_pane.time.time", lambda: 2061.0)
+    monkeypatch.setattr("railmux.ui.sessions_pane.time.time", lambda: 2061.0)
     pane.set_sessions(
         project, [session], running_ids=set(), favorite_ids=set())
 
@@ -211,7 +211,7 @@ def test_set_filter_filters_by_title():
     pane = SessionsPane(on_select=lambda s: None)
     proj = _project()
     s1 = _session(proj, session_id="a" * 36, title="Shopping research")
-    s2 = _session(proj, session_id="b" * 36, title="Refactor ccmgr")
+    s2 = _session(proj, session_id="b" * 36, title="Refactor railmux")
 
     pane.set_sessions(proj, [s1, s2], running_ids=set(), favorite_ids=set())
     assert len([w for w in pane._walker if isinstance(w, _SessionRow)]) == 2
@@ -306,7 +306,7 @@ def test_enter_on_non_running_session_steals_focus():
 # ── status dots ─────────────────────────────────────────────────────────
 
 def test_status_dot_idle():
-    from ccmgr.ui.sessions_pane import _STATUS_DOTS
+    from railmux.ui.sessions_pane import _STATUS_DOTS
     dot = _STATUS_DOTS["idle"]
     assert isinstance(dot, tuple)
     assert dot[0] == "status_idle"
@@ -314,14 +314,14 @@ def test_status_dot_idle():
 
 
 def test_status_dot_busy():
-    from ccmgr.ui.sessions_pane import _STATUS_DOTS
+    from railmux.ui.sessions_pane import _STATUS_DOTS
     dot = _STATUS_DOTS["busy"]
     assert isinstance(dot, tuple)
     assert dot[0] == "status_busy"
 
 
 def test_status_dot_blocked():
-    from ccmgr.ui.sessions_pane import _STATUS_DOTS
+    from railmux.ui.sessions_pane import _STATUS_DOTS
     dot = _STATUS_DOTS["blocked"]
     assert isinstance(dot, tuple)
     assert dot[0] == "status_blocked"
@@ -345,7 +345,7 @@ def test_session_row_renders_status_dot():
 # ── attribute maps ──────────────────────────────────────────────────────
 
 def test_focus_remap_includes_status_dots():
-    from ccmgr.ui.sessions_pane import _FOCUS_REMAP
+    from railmux.ui.sessions_pane import _FOCUS_REMAP
     for key in ("status_idle", "status_busy", "status_blocked"):
         assert key in _FOCUS_REMAP, f"{key} missing from _FOCUS_REMAP"
         assert "focus" in _FOCUS_REMAP[key], \
@@ -353,7 +353,7 @@ def test_focus_remap_includes_status_dots():
 
 
 def test_selected_map_includes_status_dots():
-    from ccmgr.ui.sessions_pane import _SELECTED_MAP
+    from railmux.ui.sessions_pane import _SELECTED_MAP
     for key in ("status_idle", "status_busy", "status_blocked"):
         assert key in _SELECTED_MAP, f"{key} missing from _SELECTED_MAP"
         assert "sel" in _SELECTED_MAP[key], \

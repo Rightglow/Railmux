@@ -1,4 +1,4 @@
-"""Tests for ccmgr.ui.modals — PathBrowser directory navigation and filter."""
+"""Tests for railmux.ui.modals — PathBrowser directory navigation and filter."""
 
 import tempfile
 from pathlib import Path
@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import urwid
 
-from ccmgr.ui.modals import (
+from railmux.ui.modals import (
     ContextMenu, PathBrowser, PathBrowserModal, _BrowserRow,
 )
 

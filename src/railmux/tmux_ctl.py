@@ -1,6 +1,6 @@
 """Thin wrappers around the tmux CLI.
 
-ccmgr uses tmux to host the claude side-pane. All tmux interaction goes
+railmux uses tmux to host the claude side-pane. All tmux interaction goes
 through this module so error handling and command shape stay consistent.
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ def enable_clipboard_passthrough() -> None:
     """Force-enable OSC 52 clipboard passthrough so selected text reaches the
     user's *local* system clipboard.
 
-    ccmgr runs a nested tmux (the ccmgr session's right pane attaches the
+    railmux runs a nested tmux (the railmux session's right pane attaches the
     claude session), and over SSH the only channel that can reach the real
     terminal's clipboard is the OSC 52 escape sequence. ``set-clipboard on``
     turns that on, but tmux only emits OSC 52 when the terminal's terminfo
@@ -221,7 +221,7 @@ def split_window_h(cmd: str = "", target: str | None = None,
     """Create a horizontal split (new pane to the right). Returns the new pane id.
 
     `size_percent` sets the new (right) pane's width as a percentage of the
-    parent pane. E.g. size_percent=70 → ccmgr on the left at 30%, claude
+    parent pane. E.g. size_percent=70 → railmux on the left at 30%, claude
     pane on the right at 70%.
     """
     if not in_tmux():
@@ -293,8 +293,8 @@ def kill_pane(pane_id: str) -> bool:
 def set_window_option(name: str, value: str) -> bool:
     """`tmux set-window-option -w <name> <value>` scoped to the current window.
 
-    Used by ccmgr to enable a visible border highlight on the active tmux
-    pane (so the claude pane lights up the same way ccmgr's urwid panes do
+    Used by railmux to enable a visible border highlight on the active tmux
+    pane (so the claude pane lights up the same way railmux's urwid panes do
     when focused) without leaking the setting into the user's other windows.
     """
     if not in_tmux():
@@ -421,7 +421,7 @@ def set_scroll_agent_target(agent_pane_id: str, target_pane_id: str) -> bool:
 def set_window_user_option(target_window: str, name: str, value: str | None) -> bool:
     """Set or unset a user option on *target_window*.
 
-    ccmgr's detached Claude sessions contain one pane per window, so a window
+    railmux's detached Claude sessions contain one pane per window, so a window
     marker is equivalent to a pane marker for this feature. Unlike pane-scoped
     options (``set-option -p``), window user options work on tmux 2.7.
     """
@@ -532,7 +532,7 @@ def scroll_bindings_owned_by(agent_pane_id: str) -> bool:
     for (_table, key), binding in current.items():
         direction = "U" if key == "WheelUpPane" else "D"
         if (not binding
-                or "#{@ccmgr_scroll_agent}" not in binding
+                or "#{@railmux_scroll_agent}" not in binding
                 or f"send-keys -t {agent_pane_id} {direction}" not in binding):
             return False
     return True
@@ -560,7 +560,7 @@ def _set_scroll_bindings(agent_pane_id: str,
                 fallback = _binding_command(binding)
                 subprocess.check_call(
                     ["tmux", "bind-key", "-T", table, key,
-                     "if-shell", "-F", "-t", "=", "#{@ccmgr_scroll_agent}",
+                     "if-shell", "-F", "-t", "=", "#{@railmux_scroll_agent}",
                      accelerated, fallback],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -571,13 +571,13 @@ def _set_scroll_bindings(agent_pane_id: str,
 
 
 def install_scroll_bindings(agent_pane_id: str) -> ScrollBindingBackup | None:
-    """Install copy-mode wheel bindings that coalesce ccmgr pane scrolling.
+    """Install copy-mode wheel bindings that coalesce railmux pane scrolling.
 
     Root-table mouse handling is deliberately untouched: the outer tmux keeps
     forwarding mouse events to its nested tmux client, and mouse-aware Claude
     applications keep receiving their events normally. Only once the inner
     Claude pane is in tmux copy-mode do these bindings redirect wheel deltas to
-    the persistent coalescing agent named by ``@ccmgr_scroll_agent``.
+    the persistent coalescing agent named by ``@railmux_scroll_agent``.
 
     The previous bindings are returned so the caller can restore user config.
     """
@@ -605,7 +605,7 @@ def restore_scroll_bindings(backup: ScrollBindingBackup) -> None:
         try:
             # tmux 2.7 source-file does not document stdin ("-") support.
             # A short-lived 0600 config file is portable across supported tmux.
-            fd, path = tempfile.mkstemp(prefix="ccmgr-scroll-", suffix=".conf")
+            fd, path = tempfile.mkstemp(prefix="railmux-scroll-", suffix=".conf")
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(configured) + "\n")
             subprocess.check_call(
@@ -655,10 +655,10 @@ def new_detached_session(name: str, cmd: str) -> bool:
         )
         # Hide this inner session's own status bar. The right pane attaches to it
         # via nested tmux, so its bar would otherwise stack directly above the
-        # outer ccmgr status bar — a redundant second line (the sidebar already
-        # tracks every session, and the outer bar is ccmgr's status surface).
+        # outer railmux status bar — a redundant second line (the sidebar already
+        # tracks every session, and the outer bar is railmux's status surface).
         # Turning it off reclaims a row for the agent's output. Session-scoped on
-        # this ccmgr-owned session, so the user's global tmux config is untouched.
+        # this railmux-owned session, so the user's global tmux config is untouched.
         subprocess.check_call(
             ["tmux", "set-option", "-t", name, "status", "off"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

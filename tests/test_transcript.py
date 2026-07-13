@@ -1,4 +1,4 @@
-"""Tests for ccmgr.transcript — JSONL → ANSI text formatting."""
+"""Tests for railmux.transcript — JSONL → ANSI text formatting."""
 
 import json
 from pathlib import Path
@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ccmgr.transcript import (
+from railmux.transcript import (
     _is_real_user,
     _render_user,
     _render_assistant_blocks,

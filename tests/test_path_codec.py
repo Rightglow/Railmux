@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ccmgr.path_codec import encode, decode
+from railmux.path_codec import encode, decode
 
 
 def test_encode_simple():
@@ -58,7 +58,7 @@ def test_decode_non_ascii_recovery(tmp_path):
     real.mkdir(parents=True)
     # Claude's encoding replaces non-ASCII chars with dashes.
     # Simulate what Claude would write to ~/.claude/projects/.
-    from ccmgr.path_codec import _claude_encode_path
+    from railmux.path_codec import _claude_encode_path
     encoded = _claude_encode_path(str(real))
     # encoded should contain more dashes than the ASCII-only fallback.
     assert decode(encoded) == real
@@ -68,14 +68,14 @@ def test_decode_non_ascii_nested(tmp_path):
     """Recovery works through multiple levels of non-ASCII directories."""
     real = tmp_path / "数据" / "无尽夏" / "CatWork"
     real.mkdir(parents=True)
-    from ccmgr.path_codec import _claude_encode_path
+    from railmux.path_codec import _claude_encode_path
     encoded = _claude_encode_path(str(real))
     assert decode(encoded) == real
 
 
 def test_decode_non_ascii_fallback_when_no_match(tmp_path):
     """When filesystem scan finds nothing, return the best-guess path without crashing."""
-    from ccmgr.path_codec import _claude_encode_path
+    from railmux.path_codec import _claude_encode_path
     encoded = _claude_encode_path("/zzz/你好/世界")
     result = decode(encoded)
     # Falls back to best-guess from backtracking (all dashes as separators).
@@ -85,7 +85,7 @@ def test_decode_non_ascii_fallback_when_no_match(tmp_path):
 
 def test_claude_encode_collapses_dot_and_underscore():
     """Claude Code encodes '.', '_' and '/' all to '-' (lossy for those too)."""
-    from ccmgr.path_codec import _claude_encode_path
+    from railmux.path_codec import _claude_encode_path
     assert (
         _claude_encode_path("/home/scratch.taianz_inf/workspace")
         == "-home-scratch-taianz-inf-workspace"
@@ -94,7 +94,7 @@ def test_claude_encode_collapses_dot_and_underscore():
 
 def test_decode_recovers_dot_and_underscore(tmp_path):
     """A segment with '.' and '_' (both encoded to '-') is recovered via fs scan."""
-    from ccmgr.path_codec import _claude_encode_path
+    from railmux.path_codec import _claude_encode_path
     real = tmp_path / "scratch.user_name" / "workspace"
     real.mkdir(parents=True)
     encoded = _claude_encode_path(str(real))
@@ -109,7 +109,7 @@ def _reference_decode(encoded: str):
     """The original (un-pruned) decode algorithm, kept here as an oracle so we
     can prove the optimized decode() in path_codec returns identical results."""
     from pathlib import Path
-    from ccmgr import path_codec as pc
+    from railmux import path_codec as pc
 
     if not encoded.startswith("-"):
         raise ValueError(encoded)
@@ -166,7 +166,7 @@ def clean_root():
     would make the un-pruned oracle take minutes.)"""
     import os
     import shutil
-    root = Path("/tmp") / f"ccmgrdiff{os.getpid()}"
+    root = Path("/tmp") / f"railmuxdiff{os.getpid()}"
     shutil.rmtree(root, ignore_errors=True)
     root.mkdir(parents=True)
     try:
@@ -194,7 +194,7 @@ def _build_tricky_tree(root: Path):
 
 def test_decode_matches_reference_over_tricky_tree(clean_root):
     """Optimized decode() == original algorithm for every dir in a tricky tree."""
-    from ccmgr.path_codec import decode, _claude_encode_path
+    from railmux.path_codec import decode, _claude_encode_path
     _build_tricky_tree(clean_root)
 
     checked = 0
@@ -211,7 +211,7 @@ def test_decode_matches_reference_over_tricky_tree(clean_root):
 
 def test_decode_matches_reference_for_missing_paths(clean_root):
     """Match the oracle even when the path (or its tail) doesn't exist on disk."""
-    from ccmgr.path_codec import decode, _claude_encode_path
+    from railmux.path_codec import decode, _claude_encode_path
     _build_tricky_tree(clean_root)
     base = _claude_encode_path(str(clean_root / "s.u_v" / "w"))
     cases = [

@@ -6,11 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from ccmgr import tmux_ctl
-from ccmgr.config import Config
-from ccmgr.models import Project, SessionMeta
-from ccmgr.session_cache import SessionCache
-from ccmgr.session_index import _scan_session
+from railmux import tmux_ctl
+from railmux.config import Config
+from railmux.models import Project, SessionMeta
+from railmux.session_cache import SessionCache
+from railmux.session_index import _scan_session
 
 _UID = "11111111-1111-1111-1111-111111111111"
 U = {"type": "user", "message": {"role": "user", "content": "hi"}}
@@ -93,7 +93,7 @@ def test_cache_get_missing_returns_none(tmp_path):
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
-    from ccmgr.ui.app import App, _Running
+    from railmux.ui.app import App, _Running
     ch = tmp_path / ".claude"
     (ch / "projects").mkdir(parents=True)
     a = App(claude_home=ch, config=Config(), auto_launched=False)
@@ -388,9 +388,9 @@ def test_visible_projects_reuses_short_lived_snapshot(app, monkeypatch):
     a._project_snapshot = [cached]
     a._project_snapshot_at = 100.0
     monkeypatch.setattr(
-        "ccmgr.ui.app.time.monotonic", lambda: now[0])
+        "railmux.ui.app.time.monotonic", lambda: now[0])
     monkeypatch.setattr(
-        "ccmgr.ui.app.list_projects",
+        "railmux.ui.app.list_projects",
         lambda _home: calls.append(True) or [refreshed],
     )
 
@@ -407,10 +407,10 @@ def test_visible_projects_force_bypasses_snapshot(app, monkeypatch):
     a._project_snapshot = []
     a._project_snapshot_at = 100.0
     monkeypatch.setattr(
-        "ccmgr.ui.app.time.monotonic", lambda: 101.0)
+        "railmux.ui.app.time.monotonic", lambda: 101.0)
     calls = []
     monkeypatch.setattr(
-        "ccmgr.ui.app.list_projects",
+        "railmux.ui.app.list_projects",
         lambda _home: calls.append(True) or [],
     )
 

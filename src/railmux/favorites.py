@@ -1,7 +1,7 @@
 """Persistent favorite session tracking.
 
 Favorites are stored as a JSON set of session_id strings under
-``~/.config/ccmgr/favorites.json``.  Session IDs are globally unique
+``~/.config/railmux/favorites.json``.  Session IDs are globally unique
 (UUIDs), so we don't need per-project namespacing.
 """
 from __future__ import annotations
@@ -9,11 +9,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ccmgr.atomic_file import atomic_write_text
+from railmux.atomic_file import atomic_write_text
 
 
 def _favorites_path() -> Path:
-    return Path.home() / ".config" / "ccmgr" / "favorites.json"
+    return Path.home() / ".config" / "railmux" / "favorites.json"
 
 
 class Favorites:

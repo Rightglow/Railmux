@@ -1,4 +1,4 @@
-"""Small atomic-file helpers for ccmgr-owned state."""
+"""Small atomic-file helpers for railmux-owned state."""
 from __future__ import annotations
 
 import os

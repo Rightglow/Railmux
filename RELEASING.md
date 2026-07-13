@@ -1,10 +1,10 @@
-# Releasing ccmgr
+# Releasing railmux
 
 Maintainer notes for cutting a new release to PyPI.
 
 ## Versioning
 
-ccmgr follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. The single source of truth is `__version__` in `src/ccmgr/__init__.py`; `pyproject.toml` reads it dynamically via `tool.setuptools.dynamic`.
+railmux follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. The single source of truth is `__version__` in `src/railmux/__init__.py`; `pyproject.toml` reads it dynamically via `tool.setuptools.dynamic`.
 
 - **PATCH** — backwards-compatible bug fixes
 - **MINOR** — backwards-compatible new features
@@ -12,19 +12,19 @@ ccmgr follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. T
 
 ## Prerequisites
 
-- Push access to the [PyPI project](https://pypi.org/project/ccmgr/) with 2FA enabled.
-- A PyPI API token scoped to the `ccmgr` project, stored in `~/.pypirc` or exported as `TWINE_PASSWORD` (with `TWINE_USERNAME=__token__`).
+- Push access to the [PyPI project](https://pypi.org/project/railmux/) with 2FA enabled.
+- A PyPI API token scoped to the `railmux` project, stored in `~/.pypirc` or exported as `TWINE_PASSWORD` (with `TWINE_USERNAME=__token__`).
 - Dev extras installed: `pip install -e ".[dev]"` — this provides `build` and `twine`.
 
 ## Release steps
 
-1. **Bump the version** in `src/ccmgr/__init__.py` (e.g. `0.1.3` → `0.1.4`).
+1. **Bump the version** in `src/railmux/__init__.py` (e.g. `0.1.3` → `0.1.4`).
 2. **Update `CHANGELOG.md`** with the user-visible changes for this version. If the file does not exist yet, create one using [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 3. **Run the test suite**:
    ```bash
    pytest
    ```
-4. **Smoke-test the TUI** locally (`ccmgr`) — at minimum: list projects, resume a session, switch sessions, quit cleanly.
+4. **Smoke-test the TUI** locally (`railmux`) — at minimum: list projects, resume a session, switch sessions, quit cleanly.
 5. **Commit** the version bump and changelog:
    ```bash
    git commit -am "release: vX.Y.Z"
@@ -44,7 +44,7 @@ ccmgr follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. T
    python -m twine upload --repository testpypi dist/*
    pip install --index-url https://test.pypi.org/simple/ \
                --extra-index-url https://pypi.org/simple/ \
-               ccmgr==X.Y.Z
+               railmux==X.Y.Z
    ```
 9. **Upload to PyPI**:
    ```bash
@@ -52,17 +52,17 @@ ccmgr follows [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`. T
    ```
 10. **Verify** the install works from a clean virtualenv:
     ```bash
-    python -m venv /tmp/ccmgr-verify && source /tmp/ccmgr-verify/bin/activate
-    pip install --upgrade ccmgr
-    ccmgr --version   # should print X.Y.Z
-    deactivate && rm -rf /tmp/ccmgr-verify
+    python -m venv /tmp/railmux-verify && source /tmp/railmux-verify/bin/activate
+    pip install --upgrade railmux
+    railmux --version   # should print X.Y.Z
+    deactivate && rm -rf /tmp/railmux-verify
     ```
 11. **Tag and push** — do this *after* the upload succeeds so a failed publish does not leave a dangling tag:
     ```bash
-    git tag -a vX.Y.Z -m "ccmgr vX.Y.Z"
+    git tag -a vX.Y.Z -m "railmux vX.Y.Z"
     git push origin main --follow-tags
     ```
-12. **Create a GitHub Release** from the tag at https://github.com/regmi-saugat/ccmgr/releases/new, pasting the changelog entry into the release notes.
+12. **Create a GitHub Release** from the tag at https://github.com/regmi-saugat/railmux/releases/new, pasting the changelog entry into the release notes.
 
 ## Future: Trusted Publishing
 

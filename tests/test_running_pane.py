@@ -1,8 +1,8 @@
-"""Tests for ccmgr.ui.running_pane — callback dispatch (click vs double-click)."""
+"""Tests for railmux.ui.running_pane — callback dispatch (click vs double-click)."""
 
 import urwid
 
-from ccmgr.ui.running_pane import RunningEntry, RunningSessionsPane, _RunningRow
+from railmux.ui.running_pane import RunningEntry, RunningSessionsPane, _RunningRow
 
 
 def _entry(name: str = "cc-abc123", label: str = "proj/Test") -> RunningEntry:
@@ -114,7 +114,7 @@ def test_running_entry_default_status():
 
 
 def test_running_row_uses_status_dot():
-    from ccmgr.ui.sessions_pane import _STATUS_DOTS
+    from railmux.ui.sessions_pane import _STATUS_DOTS
     e = RunningEntry(tmux_name="cc-x", label="test", status="busy")
     row = _RunningRow(e)
     # Row renders without error with tuple status dot

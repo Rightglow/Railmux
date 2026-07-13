@@ -97,7 +97,7 @@ def run(target_pane: str, frame_seconds: float = FRAME_SECONDS,
         if ready_session:
             subprocess.run(
                 ["tmux", "set-window-option", "-t", ready_session,
-                 "@ccmgr_scroll_ready", "1"],
+                 "@railmux_scroll_ready", "1"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 check=False,
             )

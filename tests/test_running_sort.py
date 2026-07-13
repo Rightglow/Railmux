@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from ccmgr.ui.app import App, _Running, _RUNNING_SORT_INTERVAL
+from railmux.ui.app import App, _Running, _RUNNING_SORT_INTERVAL
 
 
 def _app(running: dict, sort_ts: float) -> App:

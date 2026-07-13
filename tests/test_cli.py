@@ -1,10 +1,10 @@
 from unittest.mock import patch
 
-from ccmgr.cli import is_ssh_session, main
+from railmux.cli import is_ssh_session, main
 
 
 def test_no_scroll_coalescing_flag_reaches_app(tmp_path):
-    with patch("ccmgr.ui.app.App") as app_cls:
+    with patch("railmux.ui.app.App") as app_cls:
         result = main([
             "--inside-tmux",
             "--claude-home", str(tmp_path),
@@ -19,7 +19,7 @@ def test_no_scroll_coalescing_flag_reaches_app(tmp_path):
 
 def test_scroll_coalescing_is_enabled_automatically_over_ssh(tmp_path):
     with patch.dict("os.environ", {"SSH_CONNECTION": "client 1 server 2"}), \
-         patch("ccmgr.ui.app.App") as app_cls:
+         patch("railmux.ui.app.App") as app_cls:
         result = main([
             "--inside-tmux",
             "--claude-home", str(tmp_path),
@@ -35,7 +35,7 @@ def test_scroll_coalescing_is_disabled_automatically_locally(tmp_path):
         "SSH_CLIENT": "",
         "SSH_TTY": "",
     }
-    with patch.dict("os.environ", clean_env), patch("ccmgr.ui.app.App") as app_cls:
+    with patch.dict("os.environ", clean_env), patch("railmux.ui.app.App") as app_cls:
         result = main([
             "--inside-tmux",
             "--claude-home", str(tmp_path),
@@ -51,7 +51,7 @@ def test_force_enable_scroll_coalescing_locally(tmp_path):
         "SSH_CLIENT": "",
         "SSH_TTY": "",
     }
-    with patch.dict("os.environ", clean_env), patch("ccmgr.ui.app.App") as app_cls:
+    with patch.dict("os.environ", clean_env), patch("railmux.ui.app.App") as app_cls:
         result = main([
             "--inside-tmux",
             "--claude-home", str(tmp_path),

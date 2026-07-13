@@ -1,12 +1,12 @@
-"""Tests for ccmgr.ui.projects_pane — project selection, click vs double-click."""
+"""Tests for railmux.ui.projects_pane — project selection, click vs double-click."""
 
 from pathlib import Path
 
 import pytest
 import urwid
 
-from ccmgr.models import Project
-from ccmgr.ui.projects_pane import ProjectsPane, _ProjectRow, _NewProjectRow
+from railmux.models import Project
+from railmux.ui.projects_pane import ProjectsPane, _ProjectRow, _NewProjectRow
 
 
 # ── helpers ──────────────────────────────────────────────────────────────

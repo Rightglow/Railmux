@@ -1,4 +1,4 @@
-"""Tests for ccmgr.transcript — Codex JSONL rendering."""
+"""Tests for railmux.transcript — Codex JSONL rendering."""
 from __future__ import annotations
 
 import json
@@ -6,7 +6,7 @@ import io
 
 import pytest
 
-from ccmgr.transcript import format_transcript
+from railmux.transcript import format_transcript
 
 
 def _make_codex_lines(

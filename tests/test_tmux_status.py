@@ -1,4 +1,4 @@
-"""Rendering the status line into the outer tmux status bar (ccmgr's only status
+"""Rendering the status line into the outer tmux status bar (railmux's only status
 surface). Only the pure escaping/style/guard logic of ``_render_status_to_tmux``
 is exercised here (tmux itself is stubbed) — the option round-trip, the forced
 redraw, and the actual colour rendering are verified manually against a
@@ -6,7 +6,7 @@ throwaway tmux session.
 """
 from unittest.mock import MagicMock
 
-from ccmgr.ui.app import (
+from railmux.ui.app import (
     App,
     _TMUX_BAR_STYLE_NORMAL,
     _TMUX_BAR_STYLE_ERROR,
@@ -17,7 +17,7 @@ from ccmgr.ui.app import (
 )
 
 
-def _status_app(*, enabled=True, session="ccmgr", codex_mode=False):
+def _status_app(*, enabled=True, session="railmux", codex_mode=False):
     app = App.__new__(App)
     app._tmux_status_enabled = enabled
     app._tmux_status_session = session
@@ -58,7 +58,7 @@ def test_escapes_hash_and_percent_inside_style(monkeypatch):
     _status_app()._render_status_to_tmux("50% done #{x} #[bold] /a#b", "info")
 
     argv = _status_right_call(run)
-    assert argv[:5] == ["tmux", "set-option", "-t", "ccmgr", "status-right"]
+    assert argv[:5] == ["tmux", "set-option", "-t", "railmux", "status-right"]
     assert argv[5] == "#[fg=colour231]50%% done ##{x} ##[bold] /a##b#[default]"
 
 

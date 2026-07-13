@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 import pytest
 import urwid
 
-from ccmgr.models import Project, SessionMeta
-from ccmgr.ui.app import App, _FocusAwareFrame
-from ccmgr.ui.modals import DeleteConfirmModal, RenameModal
-from ccmgr.ui.sessions_pane import _SessionRow
+from railmux.models import Project, SessionMeta
+from railmux.ui.app import App, _FocusAwareFrame
+from railmux.ui.modals import DeleteConfirmModal, RenameModal
+from railmux.ui.sessions_pane import _SessionRow
 
 
 def _canvas_attrs(canvas) -> list[str | None]:
@@ -70,12 +70,12 @@ def test_sidebar_gutter_separates_pane_edge_from_tmux_divider():
 def test_focus_reports_are_consumed_and_update_divider(monkeypatch):
     app = App.__new__(App)
     app._frame = _FocusAwareFrame(urwid.SolidFill(" "))
-    app._ccmgr_has_focus = True
+    app._railmux_has_focus = True
     app._divider_active = None
 
     set_border = MagicMock(return_value=True)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.set_window_border_style", set_border)
+        "railmux.ui.app.tmux_ctl.set_window_border_style", set_border)
 
     assert app._filter_input(["focus out", "x"], []) == ["x"]
     assert app._frame._window_active is False
@@ -209,7 +209,7 @@ def test_burst_without_markers_allowed_in_text_field():
 def test_double_click_prepaints_focus_before_tmux_settles(monkeypatch):
     app = App.__new__(App)
     app._frame = _FocusAwareFrame(urwid.SolidFill(" "))
-    app._ccmgr_has_focus = True
+    app._railmux_has_focus = True
     app._divider_active = None
     app._right_pane_id = "%2"
     app._double_focus_alarm = None
@@ -221,8 +221,8 @@ def test_double_click_prepaints_focus_before_tmux_settles(monkeypatch):
     set_border = MagicMock(return_value=True)
     select_pane = MagicMock(return_value=True)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.set_window_border_style", set_border)
-    monkeypatch.setattr("ccmgr.ui.app.tmux_ctl.select_pane", select_pane)
+        "railmux.ui.app.tmux_ctl.set_window_border_style", set_border)
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.select_pane", select_pane)
 
     app._schedule_right_pane_focus_after_double()
 
@@ -230,7 +230,7 @@ def test_double_click_prepaints_focus_before_tmux_settles(monkeypatch):
     assert delay == App._DOUBLE_CLICK_FOCUS_DELAY
     assert app._double_focus_alarm is alarm
     assert app._double_focus_visual_pending is True
-    assert app._ccmgr_has_focus is False
+    assert app._railmux_has_focus is False
     assert app._frame._window_active is False
     set_border.assert_called_once_with("fg=cyan")
     loop.draw_screen.assert_called_once_with()
@@ -241,14 +241,14 @@ def test_double_click_prepaints_focus_before_tmux_settles(monkeypatch):
     select_pane.assert_called_once_with("%2")
     assert app._double_focus_alarm is None
     assert app._double_focus_visual_pending is False
-    assert app._ccmgr_has_focus is False
+    assert app._railmux_has_focus is False
     assert loop.draw_screen.call_count == 2
 
 
 def test_failed_delayed_focus_restores_sidebar(monkeypatch):
     app = App.__new__(App)
     app._frame = _FocusAwareFrame(urwid.SolidFill(" "))
-    app._ccmgr_has_focus = True
+    app._railmux_has_focus = True
     app._divider_active = None
     app._right_pane_id = "%2"
     app._double_focus_alarm = None
@@ -257,16 +257,16 @@ def test_failed_delayed_focus_restores_sidebar(monkeypatch):
     app._loop.set_alarm_in.return_value = object()
     set_border = MagicMock(return_value=True)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.set_window_border_style", set_border)
+        "railmux.ui.app.tmux_ctl.set_window_border_style", set_border)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.select_pane", MagicMock(return_value=False))
+        "railmux.ui.app.tmux_ctl.select_pane", MagicMock(return_value=False))
 
     app._schedule_right_pane_focus_after_double()
     callback = app._loop.set_alarm_in.call_args.args[1]
     callback(app._loop, None)
 
     assert app._double_focus_visual_pending is False
-    assert app._ccmgr_has_focus is True
+    assert app._railmux_has_focus is True
     assert app._frame._window_active is True
     assert set_border.call_args_list[-1].args == ("fg=colour240",)
 
@@ -275,7 +275,7 @@ def test_new_session_intent_cancels_pending_double_focus(monkeypatch):
     app = App.__new__(App)
     app._frame = _FocusAwareFrame(urwid.SolidFill(" "))
     app._frame.set_window_active(False)
-    app._ccmgr_has_focus = False
+    app._railmux_has_focus = False
     app._divider_active = True
     app._loop = MagicMock()
     alarm = object()
@@ -287,14 +287,14 @@ def test_new_session_intent_cancels_pending_double_focus(monkeypatch):
     session = MagicMock()
     set_border = MagicMock(return_value=True)
     monkeypatch.setattr(
-        "ccmgr.ui.app.tmux_ctl.set_window_border_style", set_border)
+        "railmux.ui.app.tmux_ctl.set_window_border_style", set_border)
 
     app._on_session_select(session, steal_focus=False)
 
     app._loop.remove_alarm.assert_called_once_with(alarm)
     assert app._double_focus_alarm is None
     assert app._double_focus_visual_pending is False
-    assert app._ccmgr_has_focus is True
+    assert app._railmux_has_focus is True
     assert app._frame._window_active is True
     set_border.assert_called_once_with("fg=colour240")
     app._loop.draw_screen.assert_called_once_with()
@@ -393,7 +393,7 @@ def test_resume_status_omits_running_count(monkeypatch):
     app._launch = MagicMock(return_value=True)
     app._set_status = MagicMock()
     monkeypatch.setattr(
-        "ccmgr.ui.app.build_resume_command", lambda **kw: ["claude"])
+        "railmux.ui.app.build_resume_command", lambda **kw: ["claude"])
 
     session = MagicMock()
     session.session_type = "claude"

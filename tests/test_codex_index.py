@@ -1,4 +1,4 @@
-"""Tests for ccmgr.codex_index — Codex session scanner."""
+"""Tests for railmux.codex_index — Codex session scanner."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ccmgr.codex_index import CodexIndex, _scan_codex_session
+from railmux.codex_index import CodexIndex, _scan_codex_session
 
 
 def _write_codex_session(path: Path, session_id: str, cwd: str,
@@ -291,7 +291,7 @@ def test_codex_index_cache_mtime(tmp_path: Path):
 def test_codex_append_during_scan_forces_next_refresh(
     tmp_path: Path, monkeypatch,
 ):
-    import ccmgr.codex_index as index_module
+    import railmux.codex_index as index_module
 
     sessions_dir = tmp_path / "sessions" / "2026" / "07" / "09"
     path = sessions_dir / "rollout-a.jsonl"

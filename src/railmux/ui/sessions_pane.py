@@ -7,9 +7,9 @@ from datetime import datetime
 
 import urwid
 
-from ccmgr.fuzzy import fuzzy_match
-from ccmgr.models import Project, SessionMeta
-from ccmgr.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.fuzzy import fuzzy_match
+from railmux.models import Project, SessionMeta
+from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
 
 
 def _format_when(epoch: float) -> str:

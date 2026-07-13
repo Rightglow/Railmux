@@ -1,8 +1,8 @@
 import time
 from pathlib import Path
 
-from ccmgr.discovery import list_projects
-from ccmgr.session_index import list_sessions
+from railmux.discovery import list_projects
+from railmux.session_index import list_sessions
 
 
 def _make_one_project(claude_home, tmp_path, write_session_fixture, sessions: list[tuple[str, list[dict]]]):

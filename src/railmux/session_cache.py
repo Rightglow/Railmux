@@ -1,4 +1,4 @@
-"""mtime-keyed cache wrapping ccmgr.session_index.list_sessions."""
+"""mtime-keyed cache wrapping railmux.session_index.list_sessions."""
 from __future__ import annotations
 
 import os
@@ -6,9 +6,9 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from ccmgr.models import Project, SessionMeta
-from ccmgr.renames import Renames
-from ccmgr.session_index import _scan_session, _TOOL_BLOCK_AGE_S
+from railmux.models import Project, SessionMeta
+from railmux.renames import Renames
+from railmux.session_index import _scan_session, _TOOL_BLOCK_AGE_S
 
 
 _DEFAULT_TOP_N = 30
