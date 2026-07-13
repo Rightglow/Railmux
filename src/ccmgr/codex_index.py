@@ -169,6 +169,13 @@ def _scan_codex_session(path: Path) -> SessionMeta | None:
             f.close()
             return None
         payload = first.get("payload", {}) or {}
+        # Skip non-interactive "codex exec" rollouts — review/automation
+        # threads that would otherwise flood the sidebar.  Blocklist (not
+        # allowlist) so any interactive originator, missing field, or future
+        # value is still shown.
+        if payload.get("originator") == "codex_exec":
+            f.close()
+            return None
         session_id = payload.get("id")
         if not session_id:
             f.close()

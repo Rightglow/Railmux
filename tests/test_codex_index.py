@@ -15,7 +15,8 @@ def _write_codex_session(path: Path, session_id: str, cwd: str,
                           messages: list[dict] | None = None,
                           cli_version: str = "0.98.0",
                           model_provider: str = "deepseek",
-                          extra_lines: list[str] | None = None) -> None:
+                          extra_lines: list[str] | None = None,
+                          originator: str = "codex_cli_rs") -> None:
     """Write a minimal Codex rollout JSONL file for testing."""
     lines = [
         json.dumps({
@@ -25,7 +26,7 @@ def _write_codex_session(path: Path, session_id: str, cwd: str,
                 "id": session_id,
                 "timestamp": "2026-07-09T12:00:00.000Z",
                 "cwd": cwd,
-                "originator": "codex_cli_rs",
+                "originator": originator,
                 "cli_version": cli_version,
                 "source": "cli",
                 "model_provider": model_provider,
@@ -386,3 +387,24 @@ def test_no_override_keeps_codex_auto_title(tmp_path: Path):
     )
     idx = CodexIndex(tmp_path, _StubRenames({}))
     assert idx.sessions_for_cwd(Path("/proj"))[0].title == "orig"
+
+
+def test_scan_codex_session_skips_exec_originator(tmp_path: Path):
+    """Rollout files whose originator is ``codex_exec`` are non-interactive
+    automation / review threads — they must be skipped so they don't flood
+    the sidebar."""
+    p = tmp_path / "rollout-exec.jsonl"
+    _write_codex_session(p, "sid-exec", "/tmp/proj", originator="codex_exec")
+    assert _scan_codex_session(p) is None
+
+
+def test_scan_codex_session_keeps_interactive(tmp_path: Path):
+    """Regression: interactive originators (``codex-tui``, ``codex_cli_rs``,
+    missing field, etc.) must still be shown."""
+    p = tmp_path / "rollout-tui.jsonl"
+    _write_codex_session(p, "sid-tui", "/tmp/proj", originator="codex-tui",
+                         messages=[
+                             {"role": "user", "text": "hello"},
+                             {"role": "assistant", "text": "ok"},
+                         ])
+    assert _scan_codex_session(p) is not None
