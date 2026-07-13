@@ -11,7 +11,7 @@ requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-  {name = "Saugat Regmi", email = "regmisaugat1602@gmail.com"},
+  {name = "Rightglow", email = "zhang.taian@foxmail.com"},
 ]
 keywords = ["claude", "claude-code", "tmux", "tui", "session-manager", "terminal"]
 classifiers = [
@@ -42,9 +42,9 @@ dev = [
 railmux = "railmux.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/regmi-saugat/railmux"
-Repository = "https://github.com/regmi-saugat/railmux"
-Issues = "https://github.com/regmi-saugat/railmux/issues"
+Homepage = "https://github.com/Rightglow/Railmux"
+Repository = "https://github.com/Rightglow/Railmux"
+Issues = "https://github.com/Rightglow/Railmux/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
