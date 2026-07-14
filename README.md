@@ -77,38 +77,6 @@ Each session shows a coloured ● reflecting its current state:
 
 `railmux` reads agent session files from `~/.claude/projects/*` (Claude Code) or `~/.codex/sessions/*` (Codex) and lists everything. Pressing `Enter` on a session does two things: (1) if a detached tmux session for that session doesn't already exist, railmux creates one with `tmux new-session -d`; (2) railmux's right pane attaches to it so you see and interact with the agent. Switching sessions just respawns the right pane — the detached sessions keep running with all their state intact.
 
-## SSH / remote use
-
-railmux works over SSH and benefits from a few tweaks for responsiveness and scrollback:
-
-**Server** (`~/.tmux.conf` on the remote machine):
-
-```tmux
-set -sg escape-time 0         # eliminate delay after Escape key
-set -g  history-limit 10000   # generous scrollback per pane
-```
-
-**Client** (`~/.ssh/config` on your local machine):
-
-```
-Host your-server
-    Compression yes           # smoother tmux pane scrolling over SSH
-```
-
-## Copying text from the agent pane
-
-Selecting text is awkward under tmux: the sidebar and agent share the screen,
-and over SSH your clipboard lives on the *local* machine.
-
-- **OSC 52** (iTerm2, kitty, WezTerm, Alacritty, foot, Windows Terminal):
-  drag-select in the agent pane — copies to local clipboard automatically,
-  even over SSH. No Shift needed. (iTerm2: enable *Settings → General →
-  Selection → "Applications in terminal may access clipboard"*.)
-- **Without OSC 52** (Terminal.app, etc.): **F9** to fullscreen the agent →
-  **Shift-drag** to select → `Cmd/C` to copy → **F9** to return.
-`Ctrl-B z` also toggles fullscreen (built into tmux) but zooms whichever pane
-has focus, so it may fullscreen the sidebar instead.
-
 ## Configuration
 
 Optional config at `~/.config/railmux/config.toml`:
@@ -126,6 +94,92 @@ home = "~/.codex"
 [live]
 # How often to refresh the session list (ms)
 poll_interval_ms = 1000
+```
+
+## FAQ
+
+### How do I copy text from the agent pane?
+
+Under tmux the sidebar and agent share the screen, and over SSH your clipboard
+lives on the *local* machine.
+
+**OSC 52** (iTerm2, kitty, WezTerm, Alacritty, foot, Windows Terminal):
+drag-select in the agent pane copies to the local clipboard automatically,
+even over SSH, no Shift needed. (iTerm2: enable *Settings → General →
+Selection → "Applications in terminal may access clipboard"*.)
+
+**Without OSC 52** (Terminal.app, etc.): press **F9** to fullscreen the agent →
+**Shift‑drag** to select → `Cmd+C` / `Ctrl+C` to copy → **F9** to return.
+
+> `Ctrl-B z` also toggles fullscreen (built into tmux) but zooms whichever
+> pane has focus — it may fullscreen the sidebar instead of the agent.
+
+### Mouse clicks or F9 don't work — what's wrong?
+
+These are usually terminal‑side settings, not tmux or railmux.
+
+**Mouse**: your terminal must forward mouse events to tmux. Check your terminal's
+profile settings for "Report mouse events" or "Mouse reporting" and make sure
+it's enabled. tmux's `set -g mouse on` should already be in place (railmux
+sets it for its own session).
+
+**F9 (fullscreen)**: on macOS, F9 is often captured by Mission Control.
+Fix: *System Settings → Keyboard → "Use F1, F2, etc. keys as standard function
+keys"*. On Windows laptops the Fn‑lock key (`Fn+Esc`) toggles function‑key
+behaviour. If your terminal has a "Pass function keys to terminal" option,
+enable it.
+
+### Using railmux over SSH
+
+railmux works over SSH out of the box — the scroll‑agent integration is
+SSH‑transparent, so mouse scrolling in the agent pane works the same as
+locally. These tweaks improve responsiveness and scrollback:
+
+**Server** (`~/.tmux.conf` on the remote machine):
+
+```tmux
+set -sg escape-time 0         # eliminate delay after Escape key
+set -g  history-limit 10000   # generous scrollback per pane
+```
+
+**Client** (`~/.ssh/config` on your local machine):
+
+```
+Host your-server
+    Compression yes           # smoother tmux pane scrolling over SSH
+```
+
+If the connection is so slow that the sidebar can't refresh one frame per
+second, skip the mouse and use keyboard navigation — `↑↓ / Tab / Enter`
+cover every operation and don't depend on a fast redraw.
+
+### Will automated review sessions pollute my session list?
+
+**Codex**: sessions created by `codex exec` (headless automation, pre‑commit
+hooks, CI) are filtered automatically — railmux only shows interactive
+sessions (`codex-tui`, `codex_cli_rs`).
+
+**Claude Code**: if you use a Codex skill that calls `claude -p` to review
+code, those sessions land in `~/.claude/projects/` alongside your normal
+conversations, and Claude's session format doesn't tag them as automated.
+To keep them separate, set a different data directory for the automation
+calls so they write elsewhere:
+
+```bash
+# Automation reviews use their own directory — won't appear in railmux
+claude -p "review this diff" --user-data-dir ~/.claude-automation
+```
+
+Then your normal `~/.claude` stays clean for interactive sessions only.
+
+### pip install fails with "externally-managed-environment"
+
+Use `pipx` (recommended) or pass `--break-system-packages`:
+
+```bash
+pipx install railmux
+# or
+pip install --break-system-packages railmux
 ```
 
 ## Acknowledgements
