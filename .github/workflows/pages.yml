@@ -34,8 +34,8 @@ jobs:
       - run: npm run build
       - name: Flatten prerendered basename dir
         run: |
-          mv build/client/ccmgr/index.html build/client/index.html
-          rmdir build/client/ccmgr
+          mv build/client/railmux/index.html build/client/index.html
+          rmdir build/client/railmux
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
