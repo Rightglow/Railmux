@@ -927,11 +927,13 @@ def test_launch_snapshots_pre_existing_ids(monkeypatch):
     app = App.__new__(App)
     app._running = {}
     app._set_status = lambda *a, **k: None
+    app._show_error = lambda *a, **k: None
+    app._clear_error = lambda: None
     app._codex_index = MagicMock()
     app._codex_index.sessions_for_cwd.return_value = [
         _codex_session(proj, existing, mtime=5.0)]
     app._shellify = lambda *a, **k: "SHELLCMD"
-    app._ensure_detached_claude = lambda *a, **k: True
+    app._ensure_detached_claude = lambda *a, **k: (True, None)
     app._attach_in_right_pane = lambda *a, **k: True
     app._session_name = lambda key: "cx-abc"
 

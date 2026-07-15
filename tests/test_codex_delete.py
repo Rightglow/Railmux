@@ -419,6 +419,8 @@ def test_launch_never_passes_secret_via_any_channel(monkeypatch):
     app = App.__new__(App)
     app._running = {}
     app._set_status = lambda *a, **k: None
+    app._show_error = lambda *a, **k: None
+    app._clear_error = lambda: None
     captured: dict = {}
 
     def fake_shellify(cmd, cwd, env=None, login_shell=False):
@@ -428,7 +430,7 @@ def test_launch_never_passes_secret_via_any_channel(monkeypatch):
     def fake_ensure(name, shell_cmd, env=None):
         captured["tmux_env"] = env
         captured["shell_cmd"] = shell_cmd
-        return True
+        return True, None
 
     monkeypatch.setattr(app, "_shellify", fake_shellify)
     monkeypatch.setattr(app, "_ensure_detached_claude", fake_ensure)

@@ -445,11 +445,16 @@ class App:
             on_detach=self._on_detach,
             on_mode_toggle=self._toggle_codex_mode,
         )
-        # Footer: context key hints, then the constant button row. Status/tips
-        # are shown in the outer tmux status bar, not here — filter mode borrows
-        # the button row (index 1) for its input.
+        # Footer: context key hints, optional error bar, then the constant
+        # button row. Status/tips are shown in the outer tmux status bar; the
+        # error bar is the in-pane surface for agent-launch failures so the user
+        # sees what went wrong without having to check the tmux bar.
+        self._error_text = urwid.Text("", align="left", wrap="clip")
+        self._error_bar = urwid.AttrMap(self._error_text, "status_error")
+        self._error_timer: object | None = None
         footer = urwid.Pile([
             ("pack", self._hint_bar),
+            ("pack", self._error_bar),
             ("pack", self._button_bar),
         ])
         self._frame = _FocusAwareFrame(body=self._sidebar_body, footer=footer)
@@ -773,7 +778,9 @@ class App:
         self._restore_state = None
         ok = self._attach_in_right_pane(entry.tmux_name, steal_focus=steal_focus)
         if not ok:
-            self._set_status("failed to re-attach")
+            msg = "Re-attach failed: could not connect to agent pane"
+            self._set_status(msg)
+            self._show_error(msg)
             return
         r = self._by_tmux(entry.tmux_name)
         project = r.project if r else None
@@ -802,6 +809,7 @@ class App:
                     running_ids=set(self._running),
                     favorite_ids=self._favorites.get_ids(),
                 )
+        self._clear_error()
         self._set_status(f"→ {entry.label}")
 
     # --- history preview (right pane shows transcript via less, not a Claude session) ---
@@ -944,15 +952,18 @@ class App:
         return f"{prefix}{self._safe_name(key, self._name_width(key))}"
 
     def _ensure_detached_claude(self, name: str, shell_cmd: str,
-                                env: dict[str, str] | None = None) -> bool:
+                                env: dict[str, str] | None = None
+                                ) -> tuple[bool, str | None]:
         """Create the detached tmux session running claude, if it doesn't already exist.
+
+        Returns ``(True, None)`` on success, ``(False, reason)`` on failure.
 
         *env* only ever carries the NON-secret ``CODEX_HOME`` — railmux passes
         no provider API key (it relies on the login shell). It's handed to tmux
         via ``-e`` (which does persist in the session env, so it must stay
         secret-free)."""
         if tmux_ctl.session_exists(name):
-            return True
+            return True, None
         return tmux_ctl.new_detached_session(name, shell_cmd, env=env)
 
     def _configure_scroll_acceleration(self, claude_tmux_name: str) -> None:
@@ -1091,8 +1102,11 @@ class App:
                      if env else None)
         shell_cmd = self._shellify(cmd, cwd=cwd, env=shell_env,
                                    login_shell=login_shell)
-        if not self._ensure_detached_claude(tmux_name, shell_cmd, env=env):
-            self._set_status("failed to create detached agent session")
+        ok, err = self._ensure_detached_claude(tmux_name, shell_cmd, env=env)
+        if not ok:
+            msg = f"Launch failed: {err or 'could not create agent session'}"
+            self._set_status(msg)
+            self._show_error(msg)
             return False
         self._running[key] = _Running(
             key=key, tmux_name=tmux_name, label=label, project=project,
@@ -1102,8 +1116,11 @@ class App:
             pre_launch_ids=pre_launch_ids,
         )
         if not self._attach_in_right_pane(tmux_name, steal_focus=steal_focus):
-            self._set_status("failed to attach to agent session")
+            msg = "Launch failed: could not attach to agent pane"
+            self._set_status(msg)
+            self._show_error(msg)
             return False
+        self._clear_error()
         return True
 
     def _launch_resume(self, session_meta: SessionMeta,
@@ -1174,6 +1191,7 @@ class App:
             path = path.resolve()
         except OSError as e:
             self._set_status(str(e))
+            self._show_error(str(e))
             return
         placeholder = self._new_placeholder_key()
         project: Project | None = None
@@ -1448,7 +1466,10 @@ class App:
         if kind == "claude":
             tmux_name = state.get("right_tmux")
             if tmux_name and tmux_ctl.session_exists(tmux_name):
-                self._attach_in_right_pane(tmux_name, steal_focus=False)
+                ok = self._attach_in_right_pane(tmux_name, steal_focus=False)
+                if not ok:
+                    self._show_error(
+                        "Restore failed: could not re-attach to previous agent session")
         elif kind == "preview":
             sess_id = state.get("right_session")
             if sess_id and self._selected_project is not None:
@@ -1770,13 +1791,16 @@ class App:
             if not self._codex_project_filter:
                 if self._mode_refresh_pending():
                     self._set_status("Codex mode — loading sessions…  (m to exit)")
+                    self._show_error("Codex mode — loading sessions…", level="info")
                 else:
                     self._set_status("Codex mode — no Codex sessions found  (m to exit)")
+                    self._show_error("Codex mode — no Codex sessions found", level="info")
                 self._sessions_pane.set_sessions(None, [],
                     running_ids=set(self._running),
                     favorite_ids=self._favorites.get_ids())
                 return
             self._set_status("Codex mode  (m to exit)")
+            self._show_error("Switched to Codex mode", level="info")
             # Switch to a project that has Codex sessions, if available.
             if self._selected_project is not None and self._selected_project.real_path in self._codex_project_filter:
                 self._on_project_select(self._selected_project)
@@ -1792,6 +1816,7 @@ class App:
             visible = self._visible_projects(allow_stale=True)
             self._projects_pane.set_projects(visible)
             self._set_status("Claude mode  (m for Codex)")
+            self._show_error("Switched to Claude Code mode", level="info")
             # Re-map the selection into the TARGET (Claude) mode by resolved
             # real_path. The current selection may be a synthetic Codex project
             # (empty claude_dir) which must never be handed to the Claude
@@ -3136,6 +3161,45 @@ class App:
         self._status_level = level
         self._status_since = time.monotonic()
         self._render_status_to_tmux(msg, level)
+
+    # ── in-pane notification bar ──────────────────────────────────────────
+
+    _NOTIFY_TTL: float = 8.0    # seconds before auto-clear (error)
+    _NOTIFY_INFO_TTL: float = 3.0  # shorter for info (mode switch etc.)
+
+    def _show_error(self, msg: str, level: str = "error") -> None:
+        """Display a notification in the in-pane bottom bar.  Red for errors
+        (default), green for info.  Auto-clears after a level-dependent TTL or
+        on next successful launch."""
+        if not hasattr(self, "_error_text"):
+            return
+        style = "status_error" if level == "error" else "status_info"
+        self._error_bar.set_attr_map({None: style})
+        self._error_text.set_text(msg)
+        self._cancel_error_timer()
+        ttl = self._NOTIFY_TTL if level == "error" else self._NOTIFY_INFO_TTL
+        if hasattr(self, "_loop") and self._loop is not None:
+            self._error_timer = self._loop.set_alarm_in(
+                ttl, self._on_error_timeout)
+
+    def _clear_error(self) -> None:
+        """Clear the in-pane error bar and cancel its auto-clear timer."""
+        if not hasattr(self, "_error_text"):
+            return
+        self._error_text.set_text("")
+        self._cancel_error_timer()
+
+    def _cancel_error_timer(self) -> None:
+        if self._error_timer is not None and hasattr(self, "_loop") and self._loop is not None:
+            try:
+                self._loop.remove_alarm(self._error_timer)
+            except Exception:
+                pass
+        self._error_timer = None
+
+    def _on_error_timeout(self, _loop, _user_data) -> None:
+        self._error_timer = None
+        self._error_text.set_text("")
 
     def _update_status(self) -> None:
         """Advance the status-bar state machine once per tick.

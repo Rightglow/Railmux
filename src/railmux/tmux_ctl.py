@@ -814,8 +814,11 @@ def restore_scroll_bindings(backup: ScrollBindingBackup) -> None:
 
 
 def new_detached_session(name: str, cmd: str,
-                         env: dict[str, str] | None = None) -> bool:
+                         env: dict[str, str] | None = None) -> tuple[bool, str | None]:
     """Create a detached tmux session running `cmd`. Used for background claudes.
+
+    Returns ``(True, None)`` on success, ``(False, reason)`` on failure where
+    *reason* is a human-readable error string (e.g. "claude: command not found").
 
     *env* entries are passed to tmux via ``-e KEY=VALUE`` so they land in the
     session environment (inherited by the launched process). railmux uses this
@@ -830,8 +833,8 @@ def new_detached_session(name: str, cmd: str,
     version rather than blindly retrying without env on ANY failure — a broad
     retry would silently mask unrelated launch errors. On older tmux the env is
     dropped (callers also carry non-secret values like CODEX_HOME in the command
-    string as a fallback); a genuine failure on a capable tmux now surfaces as a
-    returned ``False`` instead of being swallowed by the fallback path.
+    string as a fallback); a genuine failure on a capable tmux surfaces as a
+    ``(False, reason)`` instead of being swallowed by the fallback path.
     """
     # `new-session -e KEY=VALUE` was added in tmux 3.2 (not 3.0/3.1).
     use_env = bool(env) and tmux_version() >= (3, 2)
@@ -841,17 +844,26 @@ def new_detached_session(name: str, cmd: str,
             args.extend(["-e", f"{k}={v}"])
     args.extend(["-s", name, cmd])
 
+    # Step 1 — create the session, capturing stderr on failure.
     try:
         subprocess.check_call(
             args,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
-        # Enable mouse + clipboard sync in the inner session.
-        # - mouse on: scroll → tmux copy-mode, click → focus
-        # - set-clipboard on: text selection → system clipboard
-        # Right-click is intercepted by tmux copy-mode (extend selection);
-        # use keyboard shortcuts for context-menu actions in Claude Code.
+    except FileNotFoundError:
+        return False, "tmux: command not found"
+    except subprocess.CalledProcessError as e:
+        err = (
+            e.stderr.decode("utf-8", errors="replace").strip()
+            if e.stderr
+            else f"tmux new-session failed (exit {e.returncode})"
+        )
+        return False, err
+
+    # Step 2 — post-creation setup: mouse, clipboard, inner status bar.
+    # Best-effort — don't lose a working session over a setup failure.
+    try:
         subprocess.check_call(
             ["tmux", "set-option", "-t", name, "mouse", "on"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -864,15 +876,46 @@ def new_detached_session(name: str, cmd: str,
         # via nested tmux, so its bar would otherwise stack directly above the
         # outer railmux status bar — a redundant second line (the sidebar already
         # tracks every session, and the outer bar is railmux's status surface).
-        # Turning it off reclaims a row for the agent's output. Session-scoped on
-        # this railmux-owned session, so the user's global tmux config is untouched.
+        # Turning it off reclaims a row for the agent's output.
         subprocess.check_call(
             ["tmux", "set-option", "-t", name, "status", "off"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        return True
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
+        pass  # setup is best-effort
+
+    # Step 3 — health check: did the agent command exit immediately?
+    # This catches "claude: command not found", "claude --resume <bad-id>",
+    # codex CLI crashes, etc. — cases where tmux creates the session
+    # successfully but the command inside dies before the user sees anything.
+    try:
+        dead = subprocess.run(
+            ["tmux", "list-panes", "-t", name, "-F", "#{pane_dead}"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if dead.stdout.strip() == "1":
+            capture = subprocess.run(
+                ["tmux", "capture-pane", "-t", name, "-p", "-S", "-20"],
+                capture_output=True, text=True, timeout=2,
+            )
+            pane_content = capture.stdout.strip()
+            # Clean up the dead session — it can never recover.
+            subprocess.run(
+                ["tmux", "kill-session", "-t", name],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            if pane_content:
+                lines = [ln.strip() for ln in pane_content.splitlines()
+                         if ln.strip()]
+                reason = "agent command failed: " + (
+                    "; ".join(lines[-3:]) if lines else "exited immediately")
+            else:
+                reason = "agent command exited immediately (no output)"
+            return False, reason
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        pass  # health check itself failed; assume the session is ok
+
+    return True, None
 
 
 def session_exists(name: str) -> bool:

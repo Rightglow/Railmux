@@ -434,8 +434,11 @@ def test_new_detached_session_hides_inner_status_bar():
     stack a redundant second bar above the outer railmux status bar; mouse and
     clipboard sync are enabled. All session-scoped on the railmux-owned session."""
     from railmux.tmux_ctl import new_detached_session
-    with patch("subprocess.check_call") as call:
-        assert new_detached_session("cc-abc", "claude --resume") is True
+    with patch("subprocess.check_call") as call, \
+            patch("subprocess.run") as run:
+        # Health check: pane is alive (stdout "0").
+        run.return_value.stdout = "0"
+        assert new_detached_session("cc-abc", "claude --resume") == (True, None)
 
     argvs = [c.args[0] for c in call.call_args_list]
     assert ["tmux", "new-session", "-d", "-s", "cc-abc", "claude --resume"] in argvs
@@ -447,7 +450,9 @@ def test_new_detached_session_hides_inner_status_bar():
 def test_new_detached_session_survives_tmux_missing():
     from railmux.tmux_ctl import new_detached_session
     with patch("subprocess.check_call", side_effect=FileNotFoundError):
-        assert new_detached_session("cc-abc", "claude") is False
+        ok, err = new_detached_session("cc-abc", "claude")
+        assert ok is False
+        assert err is not None
 
 
 def test_new_detached_session_passes_env_via_tmux_e_flag():
@@ -456,11 +461,14 @@ def test_new_detached_session_passes_env_via_tmux_e_flag():
     environment. railmux never passes a provider API key here (#8)."""
     from railmux.tmux_ctl import new_detached_session
     with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 2)), \
-            patch("subprocess.check_call") as call:
+            patch("subprocess.check_call") as call, \
+            patch("subprocess.run") as run:
+        # Health check: pane is alive.
+        run.return_value.stdout = "0"
         assert new_detached_session(
             "cx-abc", "exec codex",
             env={"CODEX_HOME": "/home/u/.codex"},
-        ) is True
+        ) == (True, None)
     argvs = [c.args[0] for c in call.call_args_list]
     new_session = next(a for a in argvs if a[:3] == ["tmux", "new-session", "-d"])
     # -e pair is present, and precedes -s <name> <cmd>.
@@ -480,9 +488,11 @@ def test_new_detached_session_drops_env_on_old_tmux():
         return 0
 
     with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 1)), \
-            patch("subprocess.check_call", side_effect=fake_check_call):
+            patch("subprocess.check_call", side_effect=fake_check_call), \
+            patch("subprocess.run") as run:
+        run.return_value.stdout = "0"
         assert new_detached_session("cx-abc", "exec codex",
-                                    env={"K": "v"}) is True
+                                    env={"K": "v"}) == (True, None)
     new_sessions = [a for a in calls if a[:3] == ["tmux", "new-session", "-d"]]
     assert len(new_sessions) == 1
     assert "-e" not in new_sessions[0]
@@ -502,8 +512,10 @@ def test_new_detached_session_does_not_retry_on_real_failure():
 
     with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 3)), \
             patch("subprocess.check_call", side_effect=fake_check_call):
-        assert new_detached_session("cx-abc", "exec codex",
-                                    env={"K": "v"}) is False
+        ok, err = new_detached_session("cx-abc", "exec codex",
+                                       env={"K": "v"})
+        assert ok is False
+        assert isinstance(err, str)
     new_sessions = [a for a in calls if a[:3] == ["tmux", "new-session", "-d"]]
     # Attempted exactly once (with -e); no second env-less retry.
     assert len(new_sessions) == 1
