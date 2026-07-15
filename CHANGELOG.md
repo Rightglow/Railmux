@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Missing-`tmux` startup checks now offer an explicit, default-no installation
+  prompt for Homebrew on macOS and `apt-get` on Debian/Ubuntu/WSL. Other common
+  Linux package managers receive an actionable manual command, while
+  non-interactive launches never attempt to modify the system.
+
+### Fixed
+
+- Check for the `tmux` executable before every TUI startup path, including an
+  inherited or explicitly forced inside-tmux launch, instead of entering a TUI
+  whose controls cannot work when `TMUX` is set but the binary is absent.
+
 ## [0.1.1] - 2026-07-15
 
 ### Added

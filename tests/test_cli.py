@@ -1,6 +1,14 @@
 from unittest.mock import patch
 
+import pytest
+
 from railmux.cli import is_ssh_session, main
+
+
+@pytest.fixture(autouse=True)
+def tmux_preflight_succeeds(monkeypatch):
+    """CLI behaviour tests must not depend on the host's tmux installation."""
+    monkeypatch.setattr("railmux.cli.ensure_tmux_available", lambda: True)
 
 
 def test_no_scroll_coalescing_flag_reaches_app(tmp_path):
@@ -67,3 +75,15 @@ def test_is_ssh_session_recognizes_common_markers():
     assert is_ssh_session({"SSH_CLIENT": "client 1 2"})
     assert is_ssh_session({"SSH_TTY": "/dev/pts/1"})
     assert not is_ssh_session({})
+
+
+def test_tmux_preflight_also_runs_for_inside_tmux(monkeypatch, tmp_path):
+    monkeypatch.setattr("railmux.cli.ensure_tmux_available", lambda: False)
+    with patch("railmux.ui.app.App") as app_cls:
+        result = main([
+            "--inside-tmux",
+            "--claude-home", str(tmp_path),
+        ])
+
+    assert result == 2
+    app_cls.assert_not_called()

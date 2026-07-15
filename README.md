@@ -31,6 +31,12 @@ pip install railmux
 
 Requires Python 3.9+, `tmux`, and `less` on `PATH`.
 
+If `tmux` is missing, an interactive Railmux launch can offer to install it
+with Homebrew on macOS or `apt-get` on Debian/Ubuntu/WSL. Railmux shows the
+exact command and requires explicit confirmation (default: no); it never
+installs Homebrew itself or modifies the system during non-interactive runs.
+Other common Linux package managers receive a copyable installation command.
+
 ## Run
 
 ```bash

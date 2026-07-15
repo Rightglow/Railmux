@@ -8,6 +8,7 @@ from pathlib import Path
 from railmux import __version__
 from railmux.config import load_config
 from railmux import tmux_ctl
+from railmux.system_deps import ensure_tmux_available
 
 
 def is_ssh_session(environ: dict[str, str] | None = None) -> bool:
@@ -44,11 +45,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # tmux is required even when TMUX is already set: an inherited TMUX value
+    # with no tmux binary on PATH otherwise enters a TUI whose controls cannot
+    # work. Keep this preflight ahead of every TUI startup path.
+    if not ensure_tmux_available():
+        return 2
+
     # If we're not in tmux and not told we're already inside, re-exec ourselves under tmux.
     if not args.inside_tmux and not tmux_ctl.in_tmux():
-        if not tmux_ctl.has_tmux():
-            print("error: tmux is required but not found on PATH. Install tmux to use railmux.", file=sys.stderr)
-            return 2
         # Find this railmux binary to re-exec.
         railmux_path = sys.argv[0]
         cmd = ["tmux", "new-session", "-A", "-s", "railmux",
