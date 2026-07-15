@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Check for the `tmux` executable before every TUI startup path, including an
   inherited or explicitly forced inside-tmux launch, instead of entering a TUI
   whose controls cannot work when `TMUX` is set but the binary is absent.
+- Remember each agent mode's project selection independently. Switching through
+  a mode with no projects no longer leaves a hidden actionable project or loses
+  the previous mode's Sessions view after the next refresh tick; deleted
+  remembered projects fall back only to a currently visible project.
 
 ## [0.1.1] - 2026-07-15
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -251,6 +252,19 @@ class _RightPaneState:
     tmux_name: str | None = None  # for "claude"
 
 
+@dataclass
+class _ModeViewState:
+    """UI state owned by one agent mode.
+
+    The dictionary that stores these objects is keyed by a stable mode name, so
+    adding another provider does not require another pair of fields or teach
+    existing modes about one another. More per-mode view state can be added here
+    as switching behaviour grows.
+    """
+
+    selected_project_path: Path | None = None
+
+
 class App:
     # tmux may apply DoubleClick1Pane after the application's double callback.
     # Wait past that multi-click window before selecting the right pane.
@@ -336,6 +350,12 @@ class App:
         self._tmux_status_session: str | None = None
         self._tmux_error_bar: bool = False  # whole-bar red while an error shows
         self._selected_project: Project | None = None
+        # Project selection belongs to a provider view, not to the whole app.
+        # Keep the live field above aligned with the currently visible mode,
+        # while this extensible table remembers state for every mode. Paths
+        # (rather than Project objects) are re-resolved against the fresh
+        # visible list so deleted projects and stale session counts stay safe.
+        self._mode_view_states: dict[str, _ModeViewState] = {}
         self._renames = Renames()
         self._session_cache = SessionCache(self._renames)
         self._favorites = Favorites()
@@ -488,8 +508,7 @@ class App:
         if initial_project is None and visible:
             initial_project = visible[0]
         if initial_project is not None:
-            self._selected_project = initial_project
-            self._projects_pane.set_selected(initial_project.encoded_name)
+            self._set_current_project(initial_project)
             self._pending_project = initial_project
         # Paint discovered orphans without parsing their JSONLs. Full labels
         # and statuses are refined after MainLoop renders the first frame.
@@ -730,6 +749,75 @@ class App:
 
     # --- project / session selection callbacks ---
 
+    @staticmethod
+    def _selection_path(path: Path) -> Path:
+        """Return a comparison-safe project path without requiring it to exist."""
+        try:
+            return path.resolve()
+        except OSError:
+            return path
+
+    def _remember_project_selection(self, project: Project) -> None:
+        self._current_mode_view_state().selected_project_path = (
+            self._selection_path(project.real_path))
+
+    def _remembered_project_path(self) -> Path | None:
+        return self._current_mode_view_state().selected_project_path
+
+    def _current_mode_key(self) -> str:
+        """Stable key for state owned by the currently visible agent mode."""
+        return "codex" if self._codex_mode else "claude"
+
+    def _current_mode_view_state(self) -> _ModeViewState:
+        # Lazily initialise for App.__new__ unit fixtures and for future modes.
+        states = getattr(self, "_mode_view_states", None)
+        if states is None:
+            states = {}
+            self._mode_view_states = states
+        return states.setdefault(self._current_mode_key(), _ModeViewState())
+
+    def _set_current_project(self, project: Project | None,
+                             *, remember: bool = True) -> None:
+        """Synchronise the live project and its Projects-pane highlight."""
+        self._selected_project = project
+        self._projects_pane.set_selected(
+            project.encoded_name if project is not None else None)
+        if project is not None and remember:
+            self._remember_project_selection(project)
+
+    def _visible_project_for_path(self, projects: list[Project],
+                                  path: Path | None) -> Project | None:
+        if path is None:
+            return None
+        target = self._selection_path(path)
+        return next(
+            (project for project in projects
+             if self._selection_path(project.real_path) == target),
+            None,
+        )
+
+    def _preferred_project(self, projects: list[Project],
+                           fallback: Project | None = None) -> Project | None:
+        """Choose the current mode's remembered project, safely and visibly."""
+        if not projects:
+            return None
+        remembered = self._visible_project_for_path(
+            projects, self._remembered_project_path())
+        if remembered is not None:
+            return remembered
+        if fallback is not None:
+            mapped = self._visible_project_for_path(projects, fallback.real_path)
+            if mapped is not None:
+                return mapped
+        return projects[0]
+
+    def _clear_current_project(self) -> None:
+        """Clear only the visible mode; keep its remembered path for later."""
+        self._set_current_project(None, remember=False)
+        self._sessions_pane.set_sessions(
+            None, [], running_ids=set(self._running),
+            favorite_ids=self._favorites.get_ids())
+
     def _on_project_select(self, project: Project | None) -> None:
         """Single-click / initial auto-select: show sessions, keep focus here."""
         self._cancel_pending_double_focus()
@@ -737,8 +825,7 @@ class App:
         if project is None:
             self._open_new_project_modal()
             return
-        self._selected_project = project
-        self._projects_pane.set_selected(project.encoded_name)
+        self._set_current_project(project)
         sessions = self._pane_sessions(
             project, refresh=not self._mode_refresh_pending())
         self._sessions_pane.set_sessions(project, sessions, running_ids=set(self._running),
@@ -797,8 +884,7 @@ class App:
             project = self._project_in_current_view(project)
             if (self._selected_project is None
                     or self._selected_project.encoded_name != project.encoded_name):
-                self._selected_project = project
-                self._projects_pane.set_selected(project.encoded_name)
+                self._set_current_project(project)
                 # Pull sessions from the correct source for the mode. In Codex
                 # mode the Claude cache is empty, so using it would clear the
                 # Sessions highlight (the running session isn't in that list);
@@ -920,8 +1006,7 @@ class App:
                     proj = self._project_in_current_view(r.project)
                     if (self._selected_project is None
                             or self._selected_project.encoded_name != proj.encoded_name):
-                        self._selected_project = proj
-                        self._projects_pane.set_selected(proj.encoded_name)
+                        self._set_current_project(proj)
                         # #9: a synthetic Codex project (empty claude_dir) must
                         # never reach the Claude cache — ``_pane_sessions`` routes
                         # Codex/Claude and skips the empty case.
@@ -1794,6 +1879,9 @@ class App:
         Paint immediately from stale-safe snapshots, then let a daemon worker
         refresh both NFS-backed indexes for the next UI refresh tick.
         """
+        outgoing_project = self._selected_project
+        if outgoing_project is not None:
+            self._remember_project_selection(outgoing_project)
         self._codex_mode = not self._codex_mode
         # Repaint the tmux brand so its "· Claude Code / · Codex" indicator
         # reflects the new mode (keeps the current error/normal bar colour).
@@ -1804,47 +1892,33 @@ class App:
             self._schedule_mode_data_refresh()
             self._projects_pane.set_projects(self._visible_projects(allow_stale=True))
             if not self._codex_project_filter:
+                # The current mode visibly has no project, so it must not keep
+                # the outgoing Claude project as a hidden target for ``n``.
+                # Its path remains in the Claude-specific memory for return.
+                self._clear_current_project()
                 if self._mode_refresh_pending():
                     self._set_status("Codex mode — loading sessions…  (m to exit)")
                 else:
                     self._set_status("Codex mode — no Codex sessions found  (m to exit)")
-                self._sessions_pane.set_sessions(None, [],
-                    running_ids=set(self._running),
-                    favorite_ids=self._favorites.get_ids())
                 return
             self._set_status("Codex mode  (m to exit)")
-            # Switch to a project that has Codex sessions, if available.
-            if self._selected_project is not None and self._selected_project.real_path in self._codex_project_filter:
-                self._on_project_select(self._selected_project)
+            visible = self._visible_projects(allow_stale=True)
+            selected = self._preferred_project(visible, outgoing_project)
+            if selected is not None:
+                self._on_project_select(selected)
             else:
-                matched = self._first_codex_project()
-                if matched is not None:
-                    self._on_project_select(matched)
-                else:
-                    self._sessions_pane.set_sessions(None, [],
-                        running_ids=set(self._running),
-                        favorite_ids=self._favorites.get_ids())
+                self._clear_current_project()
         else:
             visible = self._visible_projects(allow_stale=True)
             self._projects_pane.set_projects(visible)
             self._set_status("Claude mode  (m for Codex)")
-            # Re-map the selection into the TARGET (Claude) mode by resolved
-            # real_path. The current selection may be a synthetic Codex project
-            # (empty claude_dir) which must never be handed to the Claude
-            # session cache; map it to the matching real Claude project, else
-            # fall back to the first visible project or clear (#9).
-            if self._selected_project is not None:
-                mapped = self._project_in_current_view(self._selected_project)
-                if mapped.claude_dir != Path():
-                    self._on_project_select(mapped)
-                elif visible:
-                    self._on_project_select(visible[0])
-                else:
-                    self._selected_project = None
-                    self._projects_pane.set_selected(None)
-                    self._sessions_pane.set_sessions(
-                        None, [], running_ids=set(self._running),
-                        favorite_ids=self._favorites.get_ids())
+            # Resolve only against Claude-visible projects. A stale/deleted
+            # Project object must never fall through to the Claude cache.
+            selected = self._preferred_project(visible, outgoing_project)
+            if selected is not None:
+                self._on_project_select(selected)
+            else:
+                self._clear_current_project()
 
     def _enter_codex_mode_on_restore(self) -> None:
         """Re-enter Codex mode during startup state restore.
@@ -1878,15 +1952,6 @@ class App:
         launched Codex runs under ``$SHELL -li`` (login+interactive), which
         sources the user's profile and loads their key the normal way."""
         return {"CODEX_HOME": str(self._codex_home_path())}
-
-    def _first_codex_project(self) -> Project | None:
-        """First Claude project whose cwd has Codex sessions.
-
-        Uses the cached project snapshot (no ``force``) so the mode toggle stays
-        off the synchronous NFS-rescan path; a stale count is corrected on the
-        next refresh tick."""
-        projects = self._visible_projects(allow_stale=True)
-        return projects[0] if projects else None
 
     def _visible_projects(self, *, force: bool = False,
                           allow_stale: bool = False) -> list[Project]:
@@ -2134,12 +2199,13 @@ class App:
             force=force_projects and not mode_refresh_pending,
             allow_stale=mode_refresh_pending)
         self._projects_pane.set_projects(projects)
-        if background_refreshed and self._codex_mode and projects:
-            selected_path = getattr(self._selected_project, "real_path", None)
-            refreshed_selection = next(
-                (p for p in projects if p.real_path == selected_path), projects[0])
-            self._selected_project = refreshed_selection
-            self._projects_pane.set_selected(refreshed_selection.encoded_name)
+        if projects:
+            # Re-resolve the live object after every project snapshot update.
+            # If the mode was previously empty, this also restores its remembered
+            # selection (or safely falls back to the first visible project).
+            refreshed_selection = self._preferred_project(
+                projects, self._selected_project)
+            self._set_current_project(refreshed_selection)
         # Prune dead tmux sessions (e.g. claude/codex exited via /quit).
         for key in list(self._running):
             if self._running[key].tmux_name.startswith(prefix):
@@ -2178,7 +2244,7 @@ class App:
         if self._selected_project is not None:
             matched = next((p for p in projects if p.encoded_name == self._selected_project.encoded_name), None)
             if matched is not None:
-                self._selected_project = matched
+                self._set_current_project(matched)
                 # #4: refine Codex sessions too (not just Claude) so the Sessions
                 # pane agrees with the Running pane on each session's status dot.
                 sessions = self._pane_sessions(
@@ -2187,8 +2253,7 @@ class App:
                 self._sessions_pane.set_sessions(matched, sessions, running_ids=running_ids,
                                                   favorite_ids=self._favorites.get_ids())
             else:
-                self._selected_project = None
-                self._projects_pane.set_selected(None)
+                self._set_current_project(None, remember=False)
                 self._sessions_pane.set_sessions(None, [], running_ids=running_ids,
                                                   favorite_ids=self._favorites.get_ids())
 
@@ -2435,9 +2500,7 @@ class App:
             claimed.add(candidate.session_id)
             if self._right_pane_claude == r.tmux_name:
                 self._set_active_target(candidate.session_id, r.tmux_name)
-                self._selected_project = candidate.project
-                self._projects_pane.set_selected(
-                    candidate.project.encoded_name)
+                self._set_current_project(candidate.project)
 
     def _correlate_codex_rollout(self, r: "_Running") -> set[str] | None:
         """Exact child→rollout correlation for a Codex placeholder (#12).
