@@ -34,7 +34,9 @@ credential and publishes only after its build and test job succeeds.
 2. Run the full test suite and smoke-test the TUI on supported platforms:
 
    ```bash
+   python -m ruff check src tests
    python -m pytest -q
+   RAILMUX_RUN_TMUX_INTEGRATION=1 python -m pytest -q tests/test_tmux_integration.py
    ```
 
 3. Build and validate clean artifacts locally:

@@ -40,9 +40,9 @@ class _RunningRow(ClickableRow):
 
 
 class RunningSessionsPane(urwid.WidgetWrap):
-    """Lists every chat session this railmux instance has opened.
+    """Lists every agent session this Railmux instance has opened.
 
-    Enter on a row re-attaches the right pane to that detached claude session.
+    Enter on a row re-attaches the display pane to that detached agent session.
     """
 
     def __init__(self, on_select: Callable[[RunningEntry], None],

@@ -118,11 +118,13 @@ class SessionsPane(urwid.WidgetWrap):
     def __init__(self, on_select: Callable[[SessionMeta | None], None],
                  on_preview: "Callable[[SessionMeta], None] | None" = None,
                  on_context: "Callable[[SessionMeta], None] | None" = None,
-                 on_double_detected: "Callable[[], None] | None" = None) -> None:
+                 on_double_detected: "Callable[[], None] | None" = None,
+                 provider_label: str = "Agent") -> None:
         self._on_select = on_select
         self._on_preview = on_preview
         self._on_context = on_context
         self._on_double_detected = on_double_detected
+        self._provider_label = provider_label
         self._sessions: list[SessionMeta] = []
         self._project: Project | None = None
         self._filter = ""
@@ -134,7 +136,8 @@ class SessionsPane(urwid.WidgetWrap):
 
         self._new_row = _NewSessionRow(on_click=lambda: self._on_select(None))
         self._divider = urwid.Divider("─")
-        self._walker = urwid.SimpleFocusListWalker([urwid.Text("(no project selected)", align="center")])
+        self._walker = urwid.SimpleFocusListWalker([
+            urwid.Text(self._no_project_text(), align="center")])
         self._listbox = urwid.ListBox(self._walker)
         self._pile = urwid.Pile([
             ("weight", 1, self._listbox),
@@ -159,6 +162,7 @@ class SessionsPane(urwid.WidgetWrap):
             frozenset(next_running_ids),
             frozenset(next_favorite_ids),
             tuple(_format_when(session.last_mtime) for session in sessions),
+            self._provider_label,
         )
         if self._rendered_data == rendered_data:
             return
@@ -175,7 +179,8 @@ class SessionsPane(urwid.WidgetWrap):
         self._rendered_data = rendered_data
 
         if project is None:
-            self._walker[:] = [urwid.Text("(no project selected)", align="center")]
+            self._walker[:] = [
+                urwid.Text(self._no_project_text(), align="center")]
             self._linebox.set_title("Sessions")
             self._pile.contents[:] = [
                 (self._listbox, self._pile.options("weight", 1)),
@@ -194,6 +199,24 @@ class SessionsPane(urwid.WidgetWrap):
         self._linebox.set_title(f"Sessions ({project.display_name})")
 
         self._restore_focus(prior_focus)
+
+    def _no_project_text(self) -> str:
+        return (
+            f"Select a {self._provider_label} project above\n"
+            "or choose + New project"
+        )
+
+    def set_provider_label(self, label: str) -> None:
+        """Repaint provider-aware onboarding text without losing pane state."""
+        if self._provider_label == label:
+            return
+        self._provider_label = label
+        self._rendered_data = None
+        if self._project is None:
+            self._walker[:] = [
+                urwid.Text(self._no_project_text(), align="center")]
+        else:
+            self._rerender_preserving_focus()
 
     def set_active_session(self, session_id: str | None) -> None:
         """Persistently highlight the conversation displayed in the right pane."""
@@ -263,7 +286,15 @@ class SessionsPane(urwid.WidgetWrap):
                                if self._on_context else None,
             ))
         if not rows:
-            rows = [urwid.Text("  (no matches)" if self._filter else "  (no sessions yet)", align="left")]
+            text = (
+                "  (no matches)"
+                if self._filter
+                else (
+                    f"No {self._provider_label} sessions yet\n"
+                    "Press n to start one"
+                )
+            )
+            rows = [urwid.Text(text, align="center")]
         self._walker[:] = rows
 
     @staticmethod

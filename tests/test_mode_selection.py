@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from railmux.config import Config
+from railmux.modes import CLAUDE_MODE
 from railmux.models import Project
 from railmux.ui.app import App
 
@@ -24,6 +26,7 @@ def _mode_app(monkeypatch, claude_projects: list[Project],
     """Bare App with real toggle/refresh selection logic and mocked I/O."""
     app = App.__new__(App)
     app._codex_mode = False
+    app._config = Config()
     app._selected_project = None
     app._mode_view_states = {}
     app._project_snapshot = claude_projects
@@ -58,6 +61,7 @@ def _mode_app(monkeypatch, claude_projects: list[Project],
     app._schedule_mode_data_refresh = MagicMock()
     app._mode_refresh_pending = MagicMock(return_value=False)
     app._consume_mode_refresh = MagicMock(return_value=False)
+    monkeypatch.setattr("railmux.ui.app.shutil.which", lambda _binary: "/bin/agent")
 
     monkeypatch.setattr(
         app,
@@ -65,6 +69,23 @@ def _mode_app(monkeypatch, claude_projects: list[Project],
         lambda **_kwargs: codex_projects if app._codex_mode else claude_projects,
     )
     return app
+
+
+def test_missing_provider_binary_warning_never_echoes_configured_path(
+    monkeypatch,
+):
+    app = App.__new__(App)
+    secret_path = "/private/company/user/claude-wrapper"
+    app._config = Config(claude_binary=secret_path)
+    app._set_status = MagicMock()
+    monkeypatch.setattr("railmux.ui.app.shutil.which", lambda _binary: None)
+
+    assert app._warn_missing_mode_binary(CLAUDE_MODE) is True
+
+    message, level = app._set_status.call_args.args
+    assert level == "warn"
+    assert "Claude Code executable not found" in message
+    assert secret_path not in message
 
 
 def test_empty_codex_refresh_then_claude_restores_previous_project(monkeypatch):

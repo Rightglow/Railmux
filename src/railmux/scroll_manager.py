@@ -133,7 +133,7 @@ class ScrollManager:
             self._agent_session, "@railmux_scroll_ready", "1")
 
     def configure(self, claude_tmux_name: str) -> bool:
-        """Enable or retarget coalescing for a detached Claude session."""
+        """Enable or retarget coalescing for a detached agent session."""
         if not self.enabled or not self._acquire():
             return False
         if self._bindings_backup is None:
@@ -206,7 +206,7 @@ class ScrollManager:
         return True
 
     def maintain(self) -> None:
-        """Recreate a failed agent while the same Claude session is visible."""
+        """Recreate a failed helper while the same agent session is visible."""
         if (self.enabled and self._active_session and self._lock_fd is not None
                 and (not self._agent_pane or not tmux_ctl.pane_alive(self._agent_pane))):
             self.configure(self._active_session)

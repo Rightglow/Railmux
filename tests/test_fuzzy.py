@@ -1,5 +1,4 @@
 """Tests for fuzzy_match character-sequential matching."""
-import pytest
 
 from railmux.fuzzy import fuzzy_match
 

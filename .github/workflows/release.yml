@@ -26,6 +26,7 @@ jobs:
 
       - run: |
           python -m pip install -e ".[dev]"
+          python -m ruff check src tests
           python -m pytest -q
 
       - run: |

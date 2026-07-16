@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt for Homebrew on macOS and `apt-get` on Debian/Ubuntu/WSL. Other common
   Linux package managers receive an actionable manual command, while
   non-interactive launches never attempt to modify the system.
+- Add `railmux --doctor`, a privacy-safe diagnostic report for provider,
+  terminal, tmux, configuration, and data-directory health that works even
+  when tmux is unavailable.
+- Add provider-aware project/session onboarding text and non-blocking,
+  path-safe warnings when the active mode's executable is unavailable.
+- Add an isolated real-tmux smoke test on Linux and macOS CI, alongside Ruff
+  lint and package build validation gates.
 
 ### Changed
 
@@ -28,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meaning across cursor and target backgrounds, while stopped sessions use a
   neutral hollow marker. True-colour terminals receive the exact accent and
   other terminals use an automatically downsampled fallback.
+- Use provider-neutral product copy throughout the shared UI and expand the
+  README with status badges, a quick-start path, diagnostics guidance, and a
+  reserved demo-GIF slot.
 
 ### Fixed
 
@@ -47,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a mode with no projects no longer leaves a hidden actionable project or loses
   the previous mode's Sessions view after the next refresh tick; deleted
   remembered projects fall back only to a currently visible project.
+- Report malformed or invalid configuration as a concise actionable error
+  instead of exposing a Python traceback.
 
 ## [0.1.1] - 2026-07-15
 

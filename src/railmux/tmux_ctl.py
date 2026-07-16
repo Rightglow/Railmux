@@ -56,8 +56,8 @@ def enable_clipboard_passthrough() -> None:
     """Force-enable OSC 52 clipboard passthrough so selected text reaches the
     user's *local* system clipboard.
 
-    railmux runs a nested tmux (the railmux session's right pane attaches the
-    claude session), and over SSH the only channel that can reach the real
+    Railmux runs a nested tmux (the display pane attaches an agent session),
+    and over SSH the only channel that can reach the real
     terminal's clipboard is the OSC 52 escape sequence. ``set-clipboard on``
     turns that on, but tmux only emits OSC 52 when the terminal's terminfo
     advertises the ``Ms`` capability — many capable terminals (iTerm2, kitty,
@@ -500,7 +500,7 @@ def split_window_h(cmd: str = "", target: str | None = None,
     """Create a horizontal split (new pane to the right). Returns the new pane id.
 
     `size_percent` sets the new (right) pane's width as a percentage of the
-    parent pane. E.g. size_percent=70 → railmux on the left at 30%, claude
+    parent pane. E.g. size_percent=70 → Railmux on the left at 30%, agent
     pane on the right at 70%.
     """
     if not in_tmux():
@@ -511,7 +511,7 @@ def split_window_h(cmd: str = "", target: str | None = None,
     if size_percent is not None:
         # `-l <N>%` is only understood by tmux >= 3.1. Older tmux (e.g. 2.7,
         # shipped on many stable distros) rejects it with "size invalid" and
-        # the split silently fails, so the claude pane never opens. Fall back
+        # the split silently fails, so the agent pane never opens. Fall back
         # to the pre-3.1 `-p <N>` percentage flag there.
         if tmux_version() >= (3, 1):
             args.extend(["-l", f"{size_percent}%"])
@@ -573,7 +573,7 @@ def set_window_option(name: str, value: str) -> bool:
     """`tmux set-window-option -w <name> <value>` scoped to the current window.
 
     Used by railmux to enable a visible border highlight on the active tmux
-    pane (so the claude pane lights up the same way railmux's urwid panes do
+    pane (so the agent pane lights up the same way Railmux's Urwid panes do
     when focused) without leaking the setting into the user's other windows.
     """
     if not in_tmux():
@@ -656,9 +656,9 @@ def pane_alive(pane_id: str) -> bool:
 def session_pane_id(session_name: str) -> str | None:
     """Return the first pane id in *session_name*.
 
-    Each detached Claude session currently owns one pane. Keeping this lookup
+    Each detached agent session currently owns one pane. Keeping this lookup
     here makes the distinction between the outer display pane and the inner
-    Claude pane explicit for mouse/copy-mode handling.
+    agent pane explicit for mouse/copy-mode handling.
     """
     try:
         out = subprocess.check_output(
@@ -684,7 +684,7 @@ def start_scroll_agent(session_name: str, cmd: str) -> str | None:
 
 
 def set_scroll_agent_target(agent_pane_id: str, target_pane_id: str) -> bool:
-    """Tell a running scroll agent which inner Claude pane is visible."""
+    """Tell a running scroll agent which inner provider pane is visible."""
     try:
         subprocess.check_call(
             ["tmux", "send-keys", "-l", "-t", agent_pane_id,
@@ -700,7 +700,7 @@ def set_scroll_agent_target(agent_pane_id: str, target_pane_id: str) -> bool:
 def set_window_user_option(target_window: str, name: str, value: str | None) -> bool:
     """Set or unset a user option on *target_window*.
 
-    railmux's detached Claude sessions contain one pane per window, so a window
+    Railmux's detached agent sessions contain one pane per window, so a window
     marker is equivalent to a pane marker for this feature. Unlike pane-scoped
     options (``set-option -p``), window user options work on tmux 2.7.
     """
@@ -853,9 +853,9 @@ def install_scroll_bindings(agent_pane_id: str) -> ScrollBindingBackup | None:
     """Install copy-mode wheel bindings that coalesce railmux pane scrolling.
 
     Root-table mouse handling is deliberately untouched: the outer tmux keeps
-    forwarding mouse events to its nested tmux client, and mouse-aware Claude
+    forwarding mouse events to its nested tmux client, and mouse-aware agent
     applications keep receiving their events normally. Only once the inner
-    Claude pane is in tmux copy-mode do these bindings redirect wheel deltas to
+    agent pane is in tmux copy-mode do these bindings redirect wheel deltas to
     the persistent coalescing agent named by ``@railmux_scroll_agent``.
 
     The previous bindings are returned so the caller can restore user config.
@@ -923,7 +923,7 @@ def _single_line_error(text: str, limit: int = 500) -> str:
 
 def new_detached_session(name: str, cmd: str,
                          env: dict[str, str] | None = None) -> tuple[bool, str | None]:
-    """Create a detached tmux session running `cmd`. Used for background claudes.
+    """Create a detached tmux session running `cmd` for a background agent.
 
     Returns ``(True, None)`` on success, ``(False, reason)`` on failure where
     *reason* is a human-readable error string (e.g. "claude: command not found").

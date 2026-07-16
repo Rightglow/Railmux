@@ -46,7 +46,7 @@ def _mock_check_call():
 
 
 def test_clipboard_adds_override_when_missing():
-    with _mock_check_output("") as out, _mock_check_call() as call:
+    with _mock_check_output(""), _mock_check_call() as call:
         enable_clipboard_passthrough()
         # Should have appended the Ms override
         call.assert_called_once()
@@ -58,7 +58,7 @@ def test_clipboard_adds_override_when_missing():
 
 
 def test_clipboard_idempotent_when_already_set():
-    with _mock_check_output("stuff,Ms=something,more") as out, \
+    with _mock_check_output("stuff,Ms=something,more"), \
          _mock_check_call() as call:
         enable_clipboard_passthrough()
         # Should NOT have called check_call again
@@ -66,7 +66,7 @@ def test_clipboard_idempotent_when_already_set():
 
 
 def test_clipboard_handles_tmux_not_found():
-    with _mock_check_output("") as out, \
+    with _mock_check_output(""), \
          patch("subprocess.check_call", side_effect=FileNotFoundError):
         # Should not raise
         enable_clipboard_passthrough()

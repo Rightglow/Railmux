@@ -117,7 +117,6 @@ def test_running_entry_default_status():
 
 
 def test_running_row_uses_status_dot():
-    from railmux.ui.sessions_pane import _STATUS_DOTS
     e = RunningEntry(tmux_name="cc-x", label="test", status="busy")
     row = _RunningRow(e)
     # Row renders without error with tuple status dot

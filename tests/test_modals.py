@@ -1,10 +1,7 @@
 """Tests for railmux.ui.modals — PathBrowser directory navigation and filter."""
 
-import tempfile
 from pathlib import Path
 
-import pytest
-import urwid
 
 from railmux.ui.modals import (
     ContextMenu, PathBrowser, PathBrowserModal, _BrowserRow,
@@ -35,7 +32,7 @@ def test_browser_renders_dot_and_dotdot(tmp_path: Path):
     labels = _row_labels(browser)
     assert labels[0] == ".  (use this path)"
     assert labels[1] == "..  (parent directory)"
-    assert any("sub/" in l for l in labels)
+    assert any("sub/" in label for label in labels)
 
 
 def test_browser_dirs_first_then_files(tmp_path: Path):
@@ -45,13 +42,13 @@ def test_browser_dirs_first_then_files(tmp_path: Path):
     labels = _row_labels(browser)
     # Strip first two rows (. and ..)
     entries = labels[2:]
-    dirs = [l for l in entries if "/" in l]
-    files = [l for l in entries if "/" not in l]
+    dirs = [label for label in entries if "/" in label]
+    files = [label for label in entries if "/" not in label]
     assert len(dirs) == 1 and "aaa_dir" in dirs[0]
     assert len(files) == 1 and "zzz_file" in files[0]
     # Directory comes before file
-    assert labels.index([l for l in labels if "aaa_dir" in l][0]) < \
-           labels.index([l for l in labels if "zzz_file" in l][0])
+    assert labels.index(next(label for label in labels if "aaa_dir" in label)) < \
+           labels.index(next(label for label in labels if "zzz_file" in label))
 
 
 # ── filter ──────────────────────────────────────────────────────────────
@@ -66,9 +63,9 @@ def test_filter_filters_entries(tmp_path: Path):
     browser._filter = "al"
     browser._render_list()
     labels = _row_labels(browser)
-    assert any("alpha" in l for l in labels)
-    assert not any("beta" in l for l in labels)
-    assert not any("gamma" in l for l in labels)
+    assert any("alpha" in label for label in labels)
+    assert not any("beta" in label for label in labels)
+    assert not any("gamma" in label for label in labels)
 
 
 def test_filter_no_matches(tmp_path: Path):
@@ -123,7 +120,7 @@ def test_filter_case_insensitive(tmp_path: Path):
     browser._filter = "myproj"
     browser._render_list()
     labels = _row_labels(browser)
-    assert any("MyProject" in l for l in labels)
+    assert any("MyProject" in label for label in labels)
 
 
 def test_filter_cleared_on_directory_change(tmp_path: Path):

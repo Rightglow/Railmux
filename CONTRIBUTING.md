@@ -17,10 +17,19 @@ pip install -e ".[dev]"
 ## Running tests
 
 ```bash
-pytest
+ruff check src tests
+pytest -q
+python -m build
+twine check dist/*
 ```
 
 Tests live in `tests/` and run against the package installed in editable mode. Please add a test alongside any bugfix or new behavior.
+
+The real-tmux smoke test is opt-in and always uses a private tmux socket:
+
+```bash
+RAILMUX_RUN_TMUX_INTEGRATION=1 pytest -q tests/test_tmux_integration.py
+```
 
 ## Running locally
 
@@ -34,13 +43,13 @@ The entry point is `railmux.cli:main`. Source lives under `src/railmux/`.
 
 - Open an issue first for non-trivial changes so we can agree on the approach before you write code.
 - Keep PRs focused — one logical change per PR.
-- Make sure `pytest` passes and the TUI still launches cleanly before pushing.
+- Make sure Ruff, pytest, package validation, and a local TUI smoke check pass
+  before pushing.
 - Commit messages: short imperative subject (e.g. `discovery: handle empty projects dir`); reference the issue in the body when relevant.
 
 ## Reporting bugs
 
 File an issue at https://github.com/Rightglow/Railmux/issues with:
 
-- railmux version (`railmux --version` or check `src/railmux/__init__.py`)
-- Python version, OS, and tmux version (`tmux -V`)
+- output from `railmux --doctor` (designed to omit private environment data)
 - Steps to reproduce and what you expected vs. what happened

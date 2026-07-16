@@ -1,17 +1,18 @@
 """Scan a project directory for sessions, extracting cheap metadata."""
 from __future__ import annotations
 
-# Duration (seconds) after which a running tool_use is presumed to be
-# waiting for user approval rather than still executing.  Must be long
-# enough to cover auto-approved tool runs (bash commands, API calls)
-# but short enough that genuinely-blocked sessions surface quickly.
-_TOOL_BLOCK_AGE_S = 10
-
 import json
 import time
 from pathlib import Path
 
 from railmux.models import Project, SessionMeta
+
+
+# Duration (seconds) after which a running tool_use is presumed to be
+# waiting for user approval rather than still executing.  Must be long
+# enough to cover auto-approved tool runs (bash commands, API calls)
+# but short enough that genuinely-blocked sessions surface quickly.
+_TOOL_BLOCK_AGE_S = 10
 
 
 def list_sessions(project: Project) -> list[SessionMeta]:

@@ -1,6 +1,7 @@
-from pathlib import Path
 
-from railmux.config import Config, load_config
+import pytest
+
+from railmux.config import Config, ConfigError, load_config
 
 
 def test_load_with_no_file_uses_defaults(tmp_path):
@@ -36,6 +37,33 @@ def test_show_empty_projects_non_boolean_fails_closed(tmp_path):
     p = tmp_path / "config.toml"
     p.write_text('[projects]\nshow_empty_projects = "yes"\n')
     assert load_config(config_path=p).show_empty_projects is False
+
+
+def test_malformed_toml_raises_safe_config_error(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("[claude\nbinary = 'secret'")
+
+    with pytest.raises(ConfigError, match="invalid TOML") as error:
+        load_config(config_path=path)
+
+    assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("value", ['"nope"', "0", "-1", "true"])
+def test_invalid_poll_interval_is_rejected(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[live]\npoll_interval_ms = {value}\n")
+
+    with pytest.raises(ConfigError, match="positive integer"):
+        load_config(config_path=path)
+
+
+def test_provider_binary_must_be_a_non_empty_string(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("[codex]\nbinary = ''\n")
+
+    with pytest.raises(ConfigError, match="codex.binary"):
+        load_config(config_path=path)
 
 
 def test_resolved_codex_home_expands_user(monkeypatch, tmp_path):

@@ -1,6 +1,6 @@
 """Tests for context-aware hint text generation."""
-import pytest
 
+from railmux.ui.app import App
 from railmux.ui.keymap import (
     CTX_AGENT,
     CTX_PROJECTS,
@@ -8,6 +8,7 @@ from railmux.ui.keymap import (
     CTX_SESSIONS,
     Binding,
     _visible_in,
+    action_for,
     hint_text,
     hint_text_for,
 )
@@ -150,3 +151,10 @@ def test_agent_context_produces_different_line():
     agent_line = hint_text_for(CTX_AGENT).split("\n")[0]
     for ctx in (CTX_PROJECTS, CTX_SESSIONS, CTX_RUNNING):
         assert hint_text_for(ctx).split("\n")[0] != agent_line
+
+
+def test_mode_binding_resolves_to_compatibility_action():
+    action = action_for("m", CTX_PROJECTS)
+
+    assert action == "_toggle_codex_mode"
+    assert callable(getattr(App, action))

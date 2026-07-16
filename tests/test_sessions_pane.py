@@ -55,6 +55,20 @@ def test_initial_state_shows_placeholder():
     assert isinstance(pane._walker[0], urwid.Text)
 
 
+def test_empty_state_updates_for_current_provider():
+    pane = SessionsPane(
+        on_select=lambda _session: None, provider_label="Claude Code")
+    assert "Select a Claude Code project" in pane._walker[0].text
+
+    pane.set_provider_label("Codex")
+    assert "Select a Codex project" in pane._walker[0].text
+
+    project = _project()
+    pane.set_sessions(project, [], running_ids=set(), favorite_ids=set())
+    assert "No Codex sessions yet" in pane._walker[0].text
+    assert "Press n to start one" in pane._walker[0].text
+
+
 # ── callback dispatch ────────────────────────────────────────────────────
 
 def test_non_running_sessions_get_preview_and_open():

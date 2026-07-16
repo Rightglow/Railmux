@@ -2,11 +2,10 @@
 
 from pathlib import Path
 
-import pytest
 import urwid
 
 from railmux.models import Project
-from railmux.ui.projects_pane import ProjectsPane, _ProjectRow, _NewProjectRow
+from railmux.ui.projects_pane import ProjectsPane, _ProjectRow
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -34,6 +33,17 @@ def test_project_row_stores_project():
     p = _project()
     row = _ProjectRow(p)
     assert row.project is p
+
+
+def test_empty_state_updates_on_empty_to_empty_provider_switch():
+    pane = ProjectsPane(
+        [], on_select=lambda _project: None, provider_label="Claude Code")
+    assert "No Claude Code projects yet" in pane._walker[0].text
+
+    pane.set_provider_label("Codex")
+
+    assert "No Codex projects yet" in pane._walker[0].text
+    assert "+ New project" in pane._walker[0].text
 
 
 # ── click vs double-click dispatch ──────────────────────────────────────

@@ -29,6 +29,7 @@ class AgentMode:
     tmux_prefix: str
     session_type: str
     project_source: ProjectSource
+    binary_config_attr: str = "claude_binary"
     login_shell: bool = False
     prompt_for_auto_run: bool = False
 
@@ -94,6 +95,7 @@ CODEX_MODE = AgentMode(
     tmux_prefix="cx-",
     session_type="codex",
     project_source=ProjectSource.CODEX,
+    binary_config_attr="codex_binary",
     login_shell=True,
     prompt_for_auto_run=True,
 )

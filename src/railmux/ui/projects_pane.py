@@ -1,4 +1,4 @@
-"""Top sidebar pane: list of Claude projects."""
+"""Top sidebar pane: projects for the currently browsed agent provider."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -50,10 +50,12 @@ class ProjectsPane(urwid.WidgetWrap):
 
     def __init__(self, projects: list[Project],
                  on_select: Callable[[Project | None], None],
-                 on_double_click: Callable[[Project | None], None] | None = None) -> None:
+                 on_double_click: Callable[[Project | None], None] | None = None,
+                 provider_label: str = "Agent") -> None:
         self._all_projects = projects
         self._on_select = on_select
         self._on_double_click = on_double_click
+        self._provider_label = provider_label
         self._filter = ""
         self._selected_encoded_name: str | None = None
 
@@ -85,8 +87,23 @@ class ProjectsPane(urwid.WidgetWrap):
             if fuzzy_match(needle, str(p.real_path))
         ]
         if not rows:
-            rows = [urwid.Text("  (no matches)" if self._filter else "  (no projects)", align="left")]
+            text = (
+                "  (no matches)"
+                if self._filter
+                else (
+                    f"No {self._provider_label} projects yet\n"
+                    "Choose + New project above to start"
+                )
+            )
+            rows = [urwid.Text(text, align="center")]
         return rows
+
+    def set_provider_label(self, label: str) -> None:
+        """Update provider-specific empty text, including empty-to-empty switches."""
+        if self._provider_label == label:
+            return
+        self._provider_label = label
+        self._refresh_rows()
 
     def set_projects(self, projects: list[Project]) -> None:
         if self._all_projects == projects:

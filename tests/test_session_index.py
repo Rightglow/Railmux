@@ -1,5 +1,4 @@
 import time
-from pathlib import Path
 
 from railmux.discovery import list_projects
 from railmux.session_index import list_sessions
@@ -73,9 +72,9 @@ def test_sessions_sorted_by_mtime_desc(claude_home, write_session_fixture, tmp_p
     real = tmp_path / "proj"
     real.mkdir()
     encoded = str(real).replace("/", "-")
-    p1 = write_session_fixture(encoded, "11111111-1111-1111-1111-111111111111", [{"type": "user", "message": {"role": "user", "content": "old"}}])
+    write_session_fixture(encoded, "11111111-1111-1111-1111-111111111111", [{"type": "user", "message": {"role": "user", "content": "old"}}])
     time.sleep(0.05)
-    p2 = write_session_fixture(encoded, "22222222-2222-2222-2222-222222222222", [{"type": "user", "message": {"role": "user", "content": "new"}}])
+    write_session_fixture(encoded, "22222222-2222-2222-2222-222222222222", [{"type": "user", "message": {"role": "user", "content": "new"}}])
 
     project = list_projects(claude_home)[0]
     sessions = list_sessions(project)

@@ -1,10 +1,27 @@
 # Railmux — session manager for Claude Code & Codex
 
-A terminal UI to navigate, resume, and start [Claude Code](https://claude.com/claude-code) and [Codex](https://github.com/openai/codex) sessions across all your projects. railmux lives in the left pane of a tmux window; the right pane shows the active agent. Each session runs as its own detached tmux session in the background — switching preserves all in-progress work, no responses or tool calls are interrupted.
+[![Tests](https://github.com/Rightglow/Railmux/actions/workflows/test.yml/badge.svg)](https://github.com/Rightglow/Railmux/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/railmux.svg)](https://pypi.org/project/railmux/)
+[![Python](https://img.shields.io/pypi/pyversions/railmux.svg)](https://pypi.org/project/railmux/)
+[![License](https://img.shields.io/github/license/Rightglow/Railmux.svg)](LICENSE)
+
+A terminal UI to navigate, resume, and start
+[Claude Code](https://claude.com/claude-code) and
+[Codex](https://github.com/openai/codex) sessions across all your projects.
+Railmux lives in the left pane of a tmux window; the right pane shows the active
+agent. Each session runs in its own detached tmux session, so switching never
+interrupts in-progress responses or tool calls.
 
 - **Claude Code mode** — reads `~/.claude/projects/*`, lists sessions by project, resume with `claude --resume`
 - **Codex mode** — reads `~/.codex/sessions/*`, same sidebar workflow for Codex sessions
-- Press `m` to toggle between modes
+- Press `m` to cycle through the available modes
+
+## Demo
+
+> **Demo GIF coming soon.** This slot is reserved for the interactive Railmux
+> walkthrough and can be replaced without restructuring the README.
+
+<!-- Replace the blockquote above with assets/railmux-demo.gif when available. -->
 
 ## Why Railmux?
 
@@ -22,14 +39,17 @@ Railmux replaces all of that with a single keystroke:
 - **Zero manual bookkeeping** — no more `tmux ls | grep cc-` or hunting through
   `~/.claude/projects/`
 
-## Install
+## Quick start
 
 ```bash
 pip install railmux
 # or: pip3 install railmux
+railmux
 ```
 
-Requires Python 3.9+, `tmux`, and `less` on `PATH`.
+Requires Python 3.9+, `tmux`, `less`, and at least one supported agent CLI on
+`PATH`. Claude Code and Codex are independent: a missing provider does not stop
+you from using the other one.
 
 If `tmux` is missing, an interactive Railmux launch can offer to install it
 with Homebrew on macOS or `apt-get` on Debian/Ubuntu/WSL. Railmux shows the
@@ -37,13 +57,9 @@ exact command and requires explicit confirmation (default: no); it never
 installs Homebrew itself or modifies the system during non-interactive runs.
 Other common Linux package managers receive a copyable installation command.
 
-## Run
-
-```bash
-railmux
-```
-
-If you're not already inside a tmux session, railmux will launch one automatically. The most recent project is auto-selected on startup.
+If you are not already inside tmux, Railmux launches its own tmux session. Run
+`railmux --doctor` for a privacy-safe dependency and environment report when
+setup does not behave as expected.
 
 ## Keys
 
@@ -68,7 +84,7 @@ If you're not already inside a tmux session, railmux will launch one automatical
 | `k` | Kill the running agent process (keeps session file) |
 | `d` | Delete the focused session (prompts for confirmation) |
 | `t` | Open a terminal in the active project directory |
-| `m` | Toggle between Claude Code and Codex modes |
+| `m` | Cycle through available agent modes |
 | `F9` | Fullscreen the agent pane (toggle) for clean text selection |
 | `?` | Full help popup with all keybindings |
 | `q` or `Ctrl-C` | Quit with confirmation |
@@ -78,6 +94,10 @@ existing directory and choose `. (use this path)`, or type a new relative,
 absolute, or `~`-based path. When no existing entry matches, select the
 explicit `+ create …` row (it is focused automatically) and press `Enter`;
 railmux creates the directory before starting the agent.
+
+When a mode has no projects or sessions, its empty state names the active
+provider and points to `+ New project` or `n`, so an unavailable provider never
+looks like data from the previous mode.
 
 ### Mouse
 
@@ -155,6 +175,18 @@ show_empty_projects = false
 # How often to refresh the session list (ms)
 poll_interval_ms = 1000
 ```
+
+## Diagnostics
+
+```bash
+railmux --doctor
+```
+
+The doctor command works even when `tmux` is missing. It reports component
+versions, terminal capability hints, configuration health, and whether provider
+data directories are accessible. Its output is designed for issue reports: it
+does not include hostnames, usernames, session IDs, transcripts, credentials,
+environment values, configured commands, or raw custom paths.
 
 ## FAQ
 

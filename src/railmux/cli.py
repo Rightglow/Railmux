@@ -6,26 +6,23 @@ import sys
 from pathlib import Path
 
 from railmux import __version__
-from railmux.config import load_config
+from railmux.config import ConfigError, default_config_path, load_config
+from railmux.diagnostics import is_ssh_session, run_doctor
 from railmux import tmux_ctl
 from railmux.system_deps import ensure_tmux_available
 
 
-def is_ssh_session(environ: dict[str, str] | None = None) -> bool:
-    """Best-effort detection of a process reached through an SSH transport.
-
-    OpenSSH exports all three variables below. tmux normally refreshes
-    ``SSH_CONNECTION`` when a client attaches, so this also works when railmux is
-    launched from an existing tmux session. Explicit CLI flags remain available
-    for terminals or gateways that strip these variables.
-    """
-    env = os.environ if environ is None else environ
-    return any(env.get(name) for name in ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"))
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="railmux", description="Claude Code session manager TUI")
+    parser = argparse.ArgumentParser(
+        prog="railmux",
+        description="Terminal workspace for Claude Code and Codex sessions",
+    )
     parser.add_argument("--version", action="version", version=f"railmux {__version__}")
+    parser.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Print privacy-safe environment diagnostics and exit",
+    )
     parser.add_argument("--project", help="Launch focused on a single project path")
     parser.add_argument("--claude-home", default=str(Path.home() / ".claude"), help="Override ~/.claude location (testing)")
     parser.add_argument("--inside-tmux", action="store_true", help="Internal: skip the auto-tmux-launch step")
@@ -44,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Force-disable tmux copy-mode wheel event coalescing",
     )
     args = parser.parse_args(argv)
+
+    if args.doctor:
+        return run_doctor(claude_home=Path(args.claude_home))
 
     # tmux is required even when TMUX is already set: an inherited TMUX value
     # with no tmux binary on PATH otherwise enters a TUI whose controls cannot
@@ -64,7 +64,16 @@ def main(argv: list[str] | None = None) -> int:
         # unreachable
 
     # Inside tmux now.
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        path = default_config_path()
+        try:
+            display_path = f"~/{path.relative_to(Path.home()).as_posix()}"
+        except ValueError:
+            display_path = "the Railmux configuration file"
+        print(f"error: {display_path}: {exc}", file=sys.stderr)
+        return 2
     # Lazy import so non-TUI invocations (--version etc) don't pull urwid.
     from railmux.ui.app import App
     app = App(

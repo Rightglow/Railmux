@@ -533,13 +533,19 @@ class App:
         projects = list_projects(claude_home)
         self._project_snapshot = projects
         self._project_snapshot_at = time.monotonic()
-        self._projects_pane = ProjectsPane(projects, on_select=self._on_project_select,
-                                           on_double_click=self._on_project_double_click)
+        initial_mode = self._active_mode()
+        self._projects_pane = ProjectsPane(
+            projects,
+            on_select=self._on_project_select,
+            on_double_click=self._on_project_double_click,
+            provider_label=initial_mode.label,
+        )
         self._sessions_pane = SessionsPane(
             on_select=self._on_session_select,
             on_preview=self._on_session_preview,
             on_context=self._open_session_context_menu,
             on_double_detected=self._schedule_right_pane_focus_after_double,
+            provider_label=initial_mode.label,
         )
         self._running_pane = RunningSessionsPane(
             on_select=self._on_running_select,
@@ -551,9 +557,6 @@ class App:
         if not tmux_ctl.has_tmux():
             self._set_status(
                 "ERROR: tmux not found on PATH — railmux cannot run without tmux")
-        elif not shutil.which(self._config.claude_binary):
-            self._set_status(
-                f"WARNING: '{self._config.claude_binary}' not on PATH — sessions cannot launch")
 
         # The outer AttrMaps highlight both LineBox borders and otherwise-
         # unstyled titles in the focused pane. A one-column gutter keeps those
@@ -601,6 +604,7 @@ class App:
         restored_mode = self._mode_key_from_state(state)
         if restored_mode != self._modes().default_key:
             self._enter_mode_on_restore(restored_mode)
+        self._warn_missing_mode_binary(self._active_mode())
         # Apply the mode-specific project view immediately. In Claude mode this
         # also enforces the configured empty-project policy on the first frame.
         visible = self._visible_projects()
@@ -1034,7 +1038,7 @@ class App:
         self._clear_error()
         self._set_status(f"→ {entry.label}")
 
-    # --- history preview (right pane shows transcript via less, not a Claude session) ---
+    # --- history preview (display pane shows a transcript, not an agent session) ---
 
     def _on_session_preview(self, session: SessionMeta) -> None:
         """Show session history in the right pane without launching Claude.
@@ -1122,7 +1126,7 @@ class App:
                 return False
             slot.pane_id = new_id
             self._set_railmux_focus(self._railmux_has_focus, force_border=True)
-        # Right pane is now showing a transcript, not a Claude session.
+        # The display pane is now showing a transcript, not an agent session.
         slot.agent_tmux_name = None
         slot.mode_key = self._current_mode_key()
         self._install_fullscreen_binding()
@@ -1157,7 +1161,7 @@ class App:
                             favorite_ids=self._favorites.get_ids(),
                         )
 
-    # --- tmux integration (detached session per claude + attach in right pane) ---
+    # --- tmux integration (detached session per agent + display-pane attach) ---
 
     @staticmethod
     def _safe_name(s: str, n: int = 12) -> str:
@@ -1639,7 +1643,7 @@ class App:
             return
         shell = os.environ.get("SHELL", "/bin/bash")
         cmd = f"cd {shlex.quote(str(proj.real_path))} && exec {shlex.quote(shell)}"
-        # Split visibly in the same window: if a right pane (claude) exists,
+        # Split visibly in the same window: if an agent pane exists,
         # put the terminal below it; otherwise split off the current pane.
         pane_id = self._primary_slot.pane_id
         target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
@@ -1657,7 +1661,7 @@ class App:
         self._set_status(f"terminal: {proj.display_name}  (Ctrl-B then arrow = move panes)")
 
     def _on_detach(self) -> None:
-        """Detach from the railmux tmux session (keep all Claude sessions alive)."""
+        """Detach from Railmux while keeping every agent session alive."""
         import subprocess as _sp
         _sp.run(["tmux", "detach-client"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
@@ -2063,6 +2067,30 @@ class App:
         target = self._modes().next_key(self._current_mode_key())
         self._switch_mode(target)
 
+    def _set_mode_pane_context(self, mode: AgentMode) -> None:
+        """Update provider-aware pane copy without coupling panes to mode keys."""
+        projects_pane = getattr(self, "_projects_pane", None)
+        sessions_pane = getattr(self, "_sessions_pane", None)
+        if projects_pane is not None:
+            projects_pane.set_provider_label(mode.label)
+        if sessions_pane is not None:
+            sessions_pane.set_provider_label(mode.label)
+
+    def _configured_mode_binary(self, mode: AgentMode) -> str:
+        config = getattr(self, "_config", Config())
+        return getattr(config, mode.binary_config_attr)
+
+    def _warn_missing_mode_binary(self, mode: AgentMode) -> bool:
+        """Warn without echoing a configured command or user-specific path."""
+        binary = self._configured_mode_binary(mode)
+        if shutil.which(binary) is not None:
+            return False
+        self._set_status(
+            f"{mode.label} executable not found; install it or configure its binary.",
+            "warn",
+        )
+        return True
+
     def _switch_mode(self, mode_key: str) -> None:
         """Switch to *mode_key* without encoding a two-provider toggle.
 
@@ -2076,6 +2104,7 @@ class App:
         if outgoing_project is not None:
             self._remember_project_selection(outgoing_project)
         self._active_mode_key = target.key
+        self._set_mode_pane_context(target)
         # Repaint the tmux brand while retaining the current error/normal colour.
         self._apply_tmux_bar(self._tmux_error_bar)
         next_label = self._modes().get(
@@ -2097,6 +2126,7 @@ class App:
                 else:
                     self._set_status(
                         f"{target.label} mode — no sessions found{suffix}")
+                self._warn_missing_mode_binary(target)
                 return
             self._set_status(f"{target.label} mode{suffix}")
             visible = self._visible_projects(allow_stale=True)
@@ -2116,6 +2146,7 @@ class App:
                 self._on_project_select(selected)
             else:
                 self._clear_current_project()
+        self._warn_missing_mode_binary(target)
 
     def _toggle_codex_mode(self) -> None:
         """Compatibility alias for integrations written before mode cycling."""
@@ -2129,6 +2160,7 @@ class App:
         """
         mode = self._modes().resolve(mode_key)
         self._active_mode_key = mode.key
+        self._set_mode_pane_context(mode)
         if mode.project_source == ProjectSource.CODEX:
             self._codex_project_filter = self._codex_index.all_cwds()
         self._projects_pane.set_projects(self._visible_projects())
@@ -2261,8 +2293,8 @@ class App:
     def _rotate_focus(self, reverse: bool = False) -> None:
         """Tab / Shift-Tab cycle through the three railmux sidebar panes.
 
-        Jumping in/out of the claude pane uses tmux's native nav (Ctrl-B ←/→)
-        so Tab keeps its normal meaning inside claude (autocomplete).
+        Jumping in/out of the agent pane uses tmux's native nav (Ctrl-B ←/→)
+        so Tab keeps its native meaning inside each provider (autocomplete).
         """
         n = len(self._sidebar.contents)
         if n <= 1:
@@ -2276,7 +2308,7 @@ class App:
 
         Called exactly once, from ``run()``'s ``finally`` block, for both
         hard and soft quit.  On soft quit (``_soft_quit_flag`` is set) the
-        detached Claude sessions and outer tmux session are left alive.
+        detached agent sessions and the outer tmux session are left alive.
         """
         self._teardown_scroll_acceleration()
         # Drop our status-bar overrides BEFORE the soft-quit early return below —
@@ -2416,7 +2448,7 @@ class App:
             refreshed_selection = self._preferred_project(
                 projects, self._selected_project)
             self._set_current_project(refreshed_selection)
-        # Prune dead tmux sessions (e.g. claude/codex exited via /quit).
+        # Prune dead tmux sessions (e.g. a provider exited via /quit).
         for key in list(self._running):
             if self._running[key].tmux_name.startswith(prefix):
                 if not session_is_alive(self._running[key].tmux_name):

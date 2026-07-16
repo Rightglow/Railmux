@@ -5,6 +5,19 @@ on:
   pull_request:
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m ruff check src tests
+      - run: python -m build
+      - run: python -m twine check dist/*
+
   pytest:
     runs-on: ubuntu-latest
     strategy:
@@ -20,3 +33,27 @@ jobs:
       - run: python -m pip install -U pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -q
+
+  tmux-smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.9"
+      - name: Install tmux on Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Install tmux on macOS when missing
+        if: runner.os == 'macOS'
+        run: command -v tmux >/dev/null || brew install tmux
+      - run: python -m pip install -U pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run isolated real-tmux smoke test
+        env:
+          RAILMUX_RUN_TMUX_INTEGRATION: "1"
+        run: python -m pytest -q tests/test_tmux_integration.py

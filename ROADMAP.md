@@ -119,10 +119,12 @@ The mode registry now supports a third stable mode and independent view state.
 Extract backend operations behind a provider adapter before adding a provider
 whose discovery/launch/delete model differs from both existing backends.
 
-### Visual polish
+## Completed foundations
 
-Evaluate the grass-green focus system on several terminal themes. Preserve
-distinct meanings for bright pane chrome, the deep-green cursor, the slate
-persistent target, grass-green live-session titles, and agent status dots. Tmux draws
-a half-colour shared edge for exactly two panes, so a dual-agent layout must
-prototype border ownership rather than relying on active-border style alone.
+### Focus and status colour semantics
+
+Railmux now uses distinct meanings for grass-green pane chrome and live-session
+titles, the deep-green cursor, the slate persistent target, and red/yellow/green
+agent status dots. The shared two-pane divider is painted continuously. A
+dual-agent layout must still prototype border ownership rather than assuming
+tmux active-border style can outline one slot.

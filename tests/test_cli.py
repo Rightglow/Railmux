@@ -1,8 +1,9 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from railmux.cli import is_ssh_session, main
+from railmux.config import ConfigError
 
 
 @pytest.fixture(autouse=True)
@@ -86,4 +87,38 @@ def test_tmux_preflight_also_runs_for_inside_tmux(monkeypatch, tmp_path):
         ])
 
     assert result == 2
+    app_cls.assert_not_called()
+
+
+def test_doctor_runs_before_tmux_preflight(monkeypatch, tmp_path):
+    doctor = MagicMock(return_value=0)
+    preflight = MagicMock(return_value=False)
+    monkeypatch.setattr("railmux.cli.run_doctor", doctor)
+    monkeypatch.setattr("railmux.cli.ensure_tmux_available", preflight)
+
+    result = main(["--doctor", "--claude-home", str(tmp_path)])
+
+    assert result == 0
+    doctor.assert_called_once_with(claude_home=tmp_path)
+    preflight.assert_not_called()
+
+
+def test_invalid_config_is_actionable_without_traceback(
+    monkeypatch, tmp_path, capsys,
+):
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr(
+        "railmux.cli.load_config",
+        MagicMock(side_effect=ConfigError("invalid TOML")),
+    )
+    monkeypatch.setattr(
+        "railmux.cli.default_config_path", lambda: config_path)
+
+    with patch("railmux.ui.app.App") as app_cls:
+        result = main(["--inside-tmux"])
+
+    stderr = capsys.readouterr().err
+    assert result == 2
+    assert "invalid TOML" in stderr
+    assert "Traceback" not in stderr
     app_cls.assert_not_called()
