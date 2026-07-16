@@ -1,9 +1,9 @@
-"""Top-level urwid app: sidebar + status bar.
+"""Top-level urwid app: provider sidebar + tmux agent workspace.
 
-railmux runs in the left pane of a tmux window. The right pane hosts the
-currently-selected claude session. Switching sessions in railmux respawns
-the right pane with a new claude --resume. Press `i` for a session-info
-popup.
+Railmux runs in the left pane of a tmux window. The current release exposes one
+agent pane; its state already lives in a bounded two-slot workspace so a second
+pane can be enabled without duplicating provider/display state. Press `i` for a
+session-info popup.
 """
 from __future__ import annotations
 
@@ -29,6 +29,13 @@ from railmux.launcher import (
     build_new_session_command,
     build_resume_command,
 )
+from railmux.modes import (
+    CODEX_MODE,
+    DEFAULT_MODE_REGISTRY,
+    AgentMode,
+    ModeRegistry,
+    ProjectSource,
+)
 from railmux.models import Project, SessionMeta
 from railmux.renames import Renames
 from railmux.session_cache import SessionCache
@@ -49,46 +56,67 @@ from railmux.ui.projects_pane import ProjectsPane
 from railmux.ui.running_pane import RunningEntry, RunningSessionsPane
 from railmux.ui.sessions_pane import SessionsPane
 from railmux.ui.statusbar import ButtonBar, HintBar, TIPS
+from railmux.ui.workspace import AgentSlot, AgentWorkspace, SlotRestoreState
+
+
+_GRASS_GREEN = "#5faf00"
+_DEEP_GRASS_GREEN = "#005200"
+_SLATE = "#3a3a3a"
+_BODY = "#d0d0d0"
+_STATUS_YELLOW = "#ffd700"
+_STATUS_RED = "#ff5f5f"
+_TERMINAL_COLORS = 2**24
 
 
 PALETTE = [
     # Status-bar message levels. Idle tips are dim; info neutral green;
     # warn/error escalate so failures stand out from routine feedback.
-    ("status_info", "light green", "default"),
-    ("status_warn", "yellow,bold", "default"),
-    ("status_error", "light red,bold", "default"),
+    ("status_info", "light green", "default", "", _GRASS_GREEN, "default"),
+    ("status_warn", "yellow,bold", "default", "", f"{_STATUS_YELLOW},bold", "default"),
+    ("status_error", "light red,bold", "default", "", f"{_STATUS_RED},bold", "default"),
     ("status_tip", "dark gray", "default"),
-    # Row focus: bold black on brown. Pane focus also remaps otherwise-unstyled
-    # titles to cyan, making the active pane easier to scan.
-    ("focus", "black,bold", "brown"),
-    # Persistent "currently-active project" highlight, shown even when focus
-    # is elsewhere. Cool tone so it doesn't compete with the warm focus color.
-    ("selected", "black,bold", "dark cyan"),
+    # Explicit body colour prevents the outer pane-focus AttrMap from leaking
+    # into ordinary rows. Grass green is reserved for navigation focus:
+    # bright on pane chrome and deep behind the current cursor row.
+    ("body", "light gray", "default", "", _BODY, "default"),
+    ("focus", "white,bold", "dark green", "bold", "#ffffff,bold", _DEEP_GRASS_GREEN),
+    # Persistent right-pane target. Slate stays visible after focus moves but
+    # does not compete with the grass-green input focus.
+    ("selected", "white,bold", "dark gray", "bold", "#ffffff,bold", _SLATE),
     ("title", "white,bold", ""),
     ("dim", "dark gray", ""),
     # ButtonBar — bright bold + underline reads as a clickable control.
     ("btn", "white,bold,underline", ""),
-    ("live", "light green,bold", ""),
+    # A live tmux session is structural state, not lifecycle status. Its grass-
+    # green title is independent from the idle/busy/blocked status-dot colour.
+    ("live", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),
     ("current_path", "yellow,bold", ""),
     # Status dots — the ● glyph carries its own palette attribute so it keeps
     # its colour on any row background. Each status has three background
-    # variants so it blends into normal / focused (brown) / selected (cyan)
-    # rows; the highlight variants use brighter foregrounds to stay readable
-    # on those backgrounds. (The star is plain text — no colour — so it just
-    # inherits whatever the row's highlight is.)
-    ("status_idle", "dark green,bold", ""),
-    ("status_idle_focus", "light green,bold", "brown"),
-    ("status_idle_sel", "light green,bold", "dark cyan"),
-    ("status_busy", "yellow,bold", ""),
-    ("status_busy_focus", "yellow,bold", "brown"),
-    ("status_busy_sel", "yellow,bold", "dark cyan"),
-    ("status_blocked", "dark red,bold", ""),
-    ("status_blocked_focus", "light red,bold", "brown"),
-    ("status_blocked_sel", "light red,bold", "dark cyan"),
-    # Pane border. Dim by default; bright cyan + bold when the pane is focused
-    # so it's obvious which pane Tab/Shift-Tab landed on.
+    # variants so it blends into normal / focused (deep grass) / selected (slate)
+    # rows. The foreground itself never changes with row focus, so red/yellow/
+    # green remain stable status signals. (The star is plain text — no colour —
+    # so it just inherits whatever the row's highlight is.)
+    ("status_idle", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),
+    ("status_idle_focus", "light green,bold", "dark green",
+     "bold", f"{_GRASS_GREEN},bold", _DEEP_GRASS_GREEN),
+    ("status_idle_sel", "light green,bold", "dark gray",
+     "bold", f"{_GRASS_GREEN},bold", _SLATE),
+    ("status_busy", "yellow,bold", "", "bold", f"{_STATUS_YELLOW},bold", "default"),
+    ("status_busy_focus", "yellow,bold", "dark green",
+     "bold", f"{_STATUS_YELLOW},bold", _DEEP_GRASS_GREEN),
+    ("status_busy_sel", "yellow,bold", "dark gray",
+     "bold", f"{_STATUS_YELLOW},bold", _SLATE),
+    ("status_blocked", "light red,bold", "", "bold", f"{_STATUS_RED},bold", "default"),
+    ("status_blocked_focus", "light red,bold", "dark green",
+     "bold", f"{_STATUS_RED},bold", _DEEP_GRASS_GREEN),
+    ("status_blocked_sel", "light red,bold", "dark gray",
+     "bold", f"{_STATUS_RED},bold", _SLATE),
+    # Pane border. Dim by default; grass green when focused. Keep
+    # row selection and status colours separate so green retains a clear focus
+    # role rather than also meaning "selected" or "idle".
     ("pane", "dark gray", ""),
-    ("pane_focus", "light cyan,bold", ""),
+    ("pane_focus", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", ""),
 ]
 
 
@@ -96,20 +124,23 @@ PALETTE = [
 # green in normal use; on an error the WHOLE bar flips to dark red so the alert is
 # unmissable and the line reads as one block (not just a red pill on green). The
 # brand (status-left) follows the bar so its fg stays legible in both modes.
-_TMUX_BAR_STYLE_NORMAL = "bg=colour2,fg=colour0"    # green bar, black default fg
+_TMUX_BAR_STYLE_NORMAL = f"bg={_GRASS_GREEN},fg=colour0"  # grass, black default fg
 _TMUX_BAR_STYLE_ERROR = "bg=colour52,fg=colour231"  # dark-red bar, white fg
 _TMUX_BRAND_NORMAL = "#[fg=colour0] Railmux #[default]"
 _TMUX_BRAND_ERROR = "#[fg=colour231] Railmux #[default]"
 
 
-def _tmux_status_left(error: bool, codex_mode: bool) -> str:
+def _tmux_status_left(error: bool, mode_label: str | bool) -> str:
     """The tmux status-left segment: the ``railmux`` brand plus a current-mode
     indicator (``· Claude Code`` / ``· Codex``), rendered in the tips colour
     (colour0 = black on green, or white on red)."""
     brand = _TMUX_BRAND_ERROR if error else _TMUX_BRAND_NORMAL
     fg = "colour231" if error else "colour0"
-    label = "Codex" if codex_mode else "Claude Code"
-    return f"{brand}#[fg={fg}]· {label} #[default]"
+    # Bool support is a compatibility bridge for callers from <=0.1.1. New
+    # code passes the registered label so a third mode renders correctly.
+    if isinstance(mode_label, bool):
+        mode_label = "Codex" if mode_label else "Claude Code"
+    return f"{brand}#[fg={fg}]· {mode_label} #[default]"
 
 # Per-level foreground for the status text (status-right). No pill backgrounds:
 # info/warn/tip sit directly on the green bar (info white, warn bold gold, tip
@@ -128,7 +159,7 @@ _RUNNING_SORT_INTERVAL = 60.0
 
 @dataclass
 class _Running:
-    """One claude session opened by this railmux instance.
+    """One agent session opened by this Railmux instance.
 
     Replaces the four parallel dicts that previously tracked running sessions
     (tmux name, label, project, placeholder) and had to be kept in sync by hand.
@@ -246,13 +277,6 @@ class _FocusAwareFrame(urwid.Frame):
 
 
 @dataclass
-class _RightPaneState:
-    """What to restore when exiting history-preview mode."""
-    kind: str  # "empty" | "claude"
-    tmux_name: str | None = None  # for "claude"
-
-
-@dataclass
 class _ModeViewState:
     """UI state owned by one agent mode.
 
@@ -327,6 +351,93 @@ class App:
     )
     # Bar options set dynamically (normal green / error red); reverted on teardown.
     _TMUX_BAR_STYLE_OPTIONS = ("status-style", "status-left")
+    # Below the recommended size Railmux remains usable but warns once per
+    # size-class transition. Below the hard floor the status bar turns red;
+    # actions stay available so a remote user is never trapped by a resize.
+    _RECOMMENDED_TERMINAL_SIZE = (120, 30)
+    _MINIMUM_TERMINAL_SIZE = (80, 20)
+    _RECOMMENDED_AGENT_PANE_SIZE = (80, 20)
+    _MINIMUM_AGENT_PANE_SIZE = (50, 12)
+
+    # -- compatibility shims -------------------------------------------------
+    # Tests and third-party extensions built against pre-workspace releases may
+    # still touch the old scalar attributes. Keep them as properties backed by
+    # the primary slot; application code below uses the workspace model.
+
+    def _agent_workspace(self) -> AgentWorkspace:
+        workspace = getattr(self, "_workspace", None)
+        if workspace is None:
+            workspace = AgentWorkspace()
+            self._workspace = workspace
+        return workspace
+
+    @property
+    def _primary_slot(self) -> AgentSlot:
+        return self._agent_workspace().primary
+
+    @property
+    def _right_pane_id(self) -> str | None:
+        return self._primary_slot.pane_id
+
+    @_right_pane_id.setter
+    def _right_pane_id(self, value: str | None) -> None:
+        self._primary_slot.pane_id = value
+
+    @property
+    def _right_pane_claude(self) -> str | None:
+        return self._primary_slot.agent_tmux_name
+
+    @_right_pane_claude.setter
+    def _right_pane_claude(self, value: str | None) -> None:
+        self._primary_slot.agent_tmux_name = value
+
+    @property
+    def _active_session_id(self) -> str | None:
+        return self._primary_slot.active_session_id
+
+    @_active_session_id.setter
+    def _active_session_id(self, value: str | None) -> None:
+        self._primary_slot.active_session_id = value
+
+    @property
+    def _in_history_mode(self) -> bool:
+        return self._primary_slot.in_history_mode
+
+    @_in_history_mode.setter
+    def _in_history_mode(self, value: bool) -> None:
+        self._primary_slot.in_history_mode = value
+
+    @property
+    def _restore_state(self) -> SlotRestoreState | None:
+        return self._primary_slot.restore_state
+
+    @_restore_state.setter
+    def _restore_state(self, value: SlotRestoreState | None) -> None:
+        self._primary_slot.restore_state = value
+
+    def _modes(self) -> ModeRegistry:
+        registry = getattr(self, "_mode_registry", None)
+        if registry is None:
+            registry = DEFAULT_MODE_REGISTRY
+            self._mode_registry = registry
+        return registry
+
+    def _active_mode(self) -> AgentMode:
+        registry = self._modes()
+        key = getattr(self, "_active_mode_key", registry.default_key)
+        mode = registry.resolve(key)
+        self._active_mode_key = mode.key
+        return mode
+
+    @property
+    def _codex_mode(self) -> bool:
+        """Deprecated bool view retained for compatibility with old callers."""
+        return self._active_mode().project_source == ProjectSource.CODEX
+
+    @_codex_mode.setter
+    def _codex_mode(self, enabled: bool) -> None:
+        self._active_mode_key = (
+            CODEX_MODE.key if enabled else self._modes().default_key)
 
     def __init__(self, claude_home: Path, config: Config,
                  auto_launched: bool = False,
@@ -360,7 +471,7 @@ class App:
         self._session_cache = SessionCache(self._renames)
         self._favorites = Favorites()
         self._settings = Settings()
-        # Every claude session this railmux instance has opened, keyed by
+        # Every agent session this Railmux instance has opened, keyed by
         # session_id (or a "__new__-N" placeholder until the JSONL appears).
         self._running: dict[str, _Running] = {}
         # Wall-clock of the last Running-pane re-sort; throttles reordering to
@@ -375,8 +486,10 @@ class App:
         # hex chars, which survive ``_safe_name``'s 16-char truncation.
         import secrets
         self._proc_token: str = secrets.token_hex(3)
-        # The right pane in railmux's window; runs `tmux attach -t <claude_session>`.
-        self._right_pane_id: str | None = None
+        # Outer tmux display state. Only ``primary`` is rendered today; the
+        # bounded secondary slot is deliberately present so dual-agent support
+        # does not grow a second set of scalar fields throughout App.
+        self._workspace = AgentWorkspace()
         self._loop: urwid.MainLoop | None = None
         self._pending_restore_state: dict | None = None
         self._pending_project: Project | None = None
@@ -392,14 +505,8 @@ class App:
         # state, not a per-call local.
         self._in_paste: bool = False
         self._paste_passthrough: bool = False
-        self._last_screen_size: tuple[int, int] | None = None
-        # History-preview mode: when the right pane shows a session transcript
-        # (less) instead of a Claude session.  We remember what was there before
-        # so we can restore it when the user exits less.
-        self._in_history_mode: bool = False
-        self._restore_state: _RightPaneState | None = None
-        self._right_pane_claude: str | None = None  # tmux_name of claude session in right pane
-        self._active_session_id: str | None = None
+        self._last_workspace_size: tuple[int, int] | None = None
+        self._last_size_class: str | None = None
         self._railmux_pane_id: str | None = None  # set in run()
         self._railmux_has_focus: bool = True
         self._divider_active: bool | None = None
@@ -407,8 +514,10 @@ class App:
         self._less_mouse_flag: str = self._detect_less_mouse()
         self._scroll_manager = ScrollManager(enabled=scroll_coalescing)
         self._soft_quit_flag: bool = False
-        # Codex mode (toggle via the m key / ButtonBar).
-        self._codex_mode: bool = False
+        # Ordered provider registry + stable active key. No two-mode boolean:
+        # ``m`` cycles the registry and each key owns independent view state.
+        self._mode_registry: ModeRegistry = DEFAULT_MODE_REGISTRY
+        self._active_mode_key: str = self._mode_registry.default_key
         self._codex_index = CodexIndex(
             self._codex_home_path(), self._renames)
         self._codex_project_filter: dict[Path, int] = {}  # cwd → Codex session count
@@ -463,7 +572,7 @@ class App:
             on_help=self._open_help_modal,
             on_quit=self._open_quit_confirm,
             on_detach=self._on_detach,
-            on_mode_toggle=self._toggle_codex_mode,
+            on_mode_toggle=self._cycle_mode,
         )
         # Footer: context key hints, optional error bar, then the constant
         # button row. Status/tips are shown in the outer tmux status bar; the
@@ -486,12 +595,12 @@ class App:
         # Restore the view from a previous soft-quit, or auto-select the
         # most recent project as usual.
         state = self._load_state()
-        # Restore the last mode (Codex vs Claude) BEFORE choosing the project so
-        # the project list + selection below resolve against the correct source
-        # (the Codex filter vs. the raw Claude discovery list). ``.get`` with a
-        # falsy default keeps older state files (no key) on Claude mode.
-        if state and state.get("codex_mode"):
-            self._enter_codex_mode_on_restore()
+        # Restore the mode BEFORE choosing a project so selection resolves
+        # against the correct provider source. ``codex_mode`` remains a read-only
+        # migration path for state files written by Railmux <= 0.1.1.
+        restored_mode = self._mode_key_from_state(state)
+        if restored_mode != self._modes().default_key:
+            self._enter_mode_on_restore(restored_mode)
         # Apply the mode-specific project view immediately. In Claude mode this
         # also enforces the configured empty-project policy on the first frame.
         visible = self._visible_projects()
@@ -516,26 +625,44 @@ class App:
         # Re-open the right pane after MainLoop paints the sidebar's first frame.
         self._pending_restore_state = state
 
+    def _set_slot_active_target(
+        self, slot: AgentSlot, session_id: str | None, tmux_name: str | None,
+    ) -> None:
+        """Update one slot, painting sidebar highlights only for the active slot."""
+        slot.active_session_id = session_id
+        mode = self._modes().for_tmux_name(tmux_name) if tmux_name else None
+        slot.mode_key = mode.key if mode is not None else None
+        if slot.key == self._agent_workspace().active_slot_key:
+            self._sessions_pane.set_active_session(session_id)
+            self._running_pane.set_active(tmux_name)
+
     def _set_active_target(self, session_id: str | None,
                            tmux_name: str | None) -> None:
-        """Update persistent highlights for whatever the right pane displays."""
-        self._active_session_id = session_id
-        self._sessions_pane.set_active_session(session_id)
-        self._running_pane.set_active(tmux_name)
+        """Compatibility entry point for the currently exposed primary slot."""
+        self._set_slot_active_target(
+            self._primary_slot, session_id, tmux_name)
 
-    def _set_active_tmux_target(self, tmux_name: str) -> None:
+    def _set_active_tmux_target(
+        self, tmux_name: str, slot: AgentSlot | None = None,
+    ) -> None:
+        slot = slot or self._primary_slot
         running = self._by_tmux(tmux_name)
         session_id = None
         if running is not None and not running.is_placeholder:
             session_id = running.key
-        self._set_active_target(session_id, tmux_name)
+        self._set_slot_active_target(slot, session_id, tmux_name)
 
     def _set_divider_active(self, active: bool, *, force: bool = False) -> None:
-        """Highlight tmux's divider only while a non-railmux pane has focus."""
+        """Highlight the whole shared divider when an agent pane has focus.
+
+        With exactly two panes tmux intentionally applies active-border colour
+        to only half of their shared edge. Setting both border styles to the
+        same value is therefore required for one continuous divider.
+        """
         if not force and self._divider_active == active:
             return
         self._divider_active = active
-        style = "fg=cyan" if active else "fg=colour240"
+        style = f"fg={_GRASS_GREEN}" if active else "fg=colour240"
         tmux_ctl.set_window_border_style(style)
 
     def _set_railmux_focus(self, active: bool, *, force_border: bool = False) -> None:
@@ -562,7 +689,7 @@ class App:
 
     def _apply_right_pane_focus_after_double(self, _loop, _user_data) -> None:
         self._double_focus_alarm = None
-        pane_id = self._right_pane_id
+        pane_id = self._primary_slot.pane_id
         if pane_id is None or not tmux_ctl.select_pane(pane_id):
             self._double_focus_visual_pending = False
             self._set_railmux_focus(True)
@@ -697,6 +824,12 @@ class App:
                 # sidebar would swallow every key forever.  Focus leaving the
                 # pane is a natural reset point — the paste is over.
                 self._in_paste = False
+            elif key == "window resize":
+                # Urwid's TTY is only the sidebar pane after the agent split.
+                # Re-read the containing tmux window on the real resize event;
+                # do not launch a tmux query from every periodic refresh tick.
+                self._check_terminal_size()
+                filtered.append(key)
             else:
                 filtered.append(key)
         return filtered
@@ -744,7 +877,7 @@ class App:
         claude_tmux_name = self._pending_scroll_session
         self._pending_scroll_session = None
         if (claude_tmux_name is not None
-                and self._right_pane_claude == claude_tmux_name):
+                and self._primary_slot.agent_tmux_name == claude_tmux_name):
             self._configure_scroll_acceleration(claude_tmux_name)
 
     # --- project / session selection callbacks ---
@@ -766,7 +899,7 @@ class App:
 
     def _current_mode_key(self) -> str:
         """Stable key for state owned by the currently visible agent mode."""
-        return "codex" if self._codex_mode else "claude"
+        return self._active_mode().key
 
     def _current_mode_view_state(self) -> _ModeViewState:
         # Lazily initialise for App.__new__ unit fixtures and for future modes.
@@ -849,8 +982,8 @@ class App:
             self._cancel_pending_double_focus()
         # Opening a real session (or creating a new one) — clear any
         # history-preview state so the launch takes over the right pane.
-        self._in_history_mode = False
-        self._restore_state = None
+        self._primary_slot.in_history_mode = False
+        self._primary_slot.restore_state = None
         if session is None:
             self._launch_new_session()
             return
@@ -861,11 +994,11 @@ class App:
                             from_double: bool = False) -> None:
         if not from_double:
             self._cancel_pending_double_focus()
-        # Re-attach the right pane to this already-running claude session AND
+        # Re-attach the agent pane to this already-running session AND
         # sync the Projects/Sessions panes to that session's project, so the
         # sidebar reflects what's actually showing on the right.
-        self._in_history_mode = False
-        self._restore_state = None
+        self._primary_slot.in_history_mode = False
+        self._primary_slot.restore_state = None
         ok = self._attach_in_right_pane(entry.tmux_name, steal_focus=steal_focus)
         if not ok:
             msg = "Re-attach failed: could not connect to agent pane"
@@ -914,21 +1047,24 @@ class App:
         if not self._has_less:
             self._set_status("'less' not installed — cannot preview history")
             return
-        if not self._in_history_mode:
+        if not self._primary_slot.in_history_mode:
             self._save_restore_state()
         if self._show_transcript(session.jsonl_path,
                                  session_type=session.session_type):
-            self._in_history_mode = True
+            self._primary_slot.in_history_mode = True
             self._set_active_target(session.session_id, None)
             self._set_status(f"≡ Previewing {session.display_title} (history)")
 
     def _save_restore_state(self) -> None:
         """Remember what's in the right pane before taking it over for history."""
-        if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
-            if self._right_pane_claude and tmux_ctl.session_exists(self._right_pane_claude):
-                self._restore_state = _RightPaneState("claude", tmux_name=self._right_pane_claude)
+        slot = self._primary_slot
+        if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
+            if (slot.agent_tmux_name
+                    and tmux_ctl.session_exists(slot.agent_tmux_name)):
+                slot.restore_state = SlotRestoreState(
+                    "agent", tmux_name=slot.agent_tmux_name)
                 return
-        self._restore_state = _RightPaneState("empty")
+        slot.restore_state = SlotRestoreState("empty")
 
     @staticmethod
     def _detect_less_mouse() -> str:
@@ -974,8 +1110,9 @@ class App:
                f"{python} -m railmux.transcript --format {fmt} "
                f"--preview-limit 2000 - | "
                f"{less_env} less -R +G {mouse}").rstrip()
-        if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
-            if not tmux_ctl.respawn_pane(self._right_pane_id, cmd):
+        slot = self._primary_slot
+        if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
+            if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
                 self._set_status("failed to respawn right pane for transcript")
                 return False
         else:
@@ -983,20 +1120,22 @@ class App:
             if not new_id:
                 self._set_status("failed to create right pane for transcript")
                 return False
-            self._right_pane_id = new_id
+            slot.pane_id = new_id
             self._set_railmux_focus(self._railmux_has_focus, force_border=True)
         # Right pane is now showing a transcript, not a Claude session.
-        self._right_pane_claude = None
+        slot.agent_tmux_name = None
+        slot.mode_key = self._current_mode_key()
         self._install_fullscreen_binding()
         return True
 
     def _restore_from_history_mode(self) -> None:
         """Restore whatever was in the right pane before we entered history mode."""
-        restore = self._restore_state
-        self._restore_state = None
+        slot = self._primary_slot
+        restore = slot.restore_state
+        slot.restore_state = None
         if restore is None or restore.kind == "empty":
             return
-        if restore.kind == "claude" and restore.tmux_name:
+        if restore.kind in ("agent", "claude") and restore.tmux_name:
             if tmux_ctl.session_exists(restore.tmux_name):
                 self._attach_in_right_pane(restore.tmux_name)
                 # Sync the sidebar to the restored session's project so the
@@ -1033,23 +1172,17 @@ class App:
         # same tmux name, so counter 10 could hijack counter 1's session (#11).
         return len(key) if key.startswith("__new__-") else 16
 
-    def _claude_session_name(self, key: str) -> str:
-        """Stable tmux session name for a given claude session key."""
-        return f"cc-{self._safe_name(key, self._name_width(key))}"
-
     def _session_name(self, key: str) -> str:
-        """Stable tmux session name, using the right prefix for the active mode.
+        """Stable tmux session name using the active mode's registered prefix."""
+        return (
+            f"{self._active_mode().tmux_prefix}"
+            f"{self._safe_name(key, self._name_width(key))}"
+        )
 
-        Claude sessions: cc-<id>; Codex sessions: cx-<id>.
-        In Codex mode the key comes from a Codex session; otherwise from Claude.
-        """
-        prefix = "cx-" if self._codex_mode else "cc-"
-        return f"{prefix}{self._safe_name(key, self._name_width(key))}"
-
-    def _ensure_detached_claude(self, name: str, shell_cmd: str,
-                                env: dict[str, str] | None = None
-                                ) -> tuple[bool, str | None]:
-        """Create the detached tmux session running claude, if it doesn't already exist.
+    def _ensure_detached_agent(self, name: str, shell_cmd: str,
+                               env: dict[str, str] | None = None
+                               ) -> tuple[bool, str | None]:
+        """Create a detached agent tmux session unless it already exists.
 
         Returns ``(True, None)`` on success, ``(False, reason)`` on failure.
 
@@ -1061,6 +1194,12 @@ class App:
             return True, None
         return tmux_ctl.new_detached_session(name, shell_cmd, env=env)
 
+    def _ensure_detached_claude(self, name: str, shell_cmd: str,
+                                env: dict[str, str] | None = None
+                                ) -> tuple[bool, str | None]:
+        """Compatibility alias retained for pre-registry integrations."""
+        return self._ensure_detached_agent(name, shell_cmd, env)
+
     def _configure_scroll_acceleration(self, claude_tmux_name: str) -> None:
         """Configure coalescing for the inner pane of the nested tmux client."""
         self._scroll_manager.configure(claude_tmux_name)
@@ -1068,13 +1207,12 @@ class App:
     def _teardown_scroll_acceleration(self) -> None:
         self._scroll_manager.close()
 
-    def _attach_in_right_pane(self, claude_tmux_name: str, *,
-                               steal_focus: bool = True) -> bool:
-        """Make the right pane display the named claude tmux session.
+    def _attach_agent_slot(self, slot: AgentSlot, agent_tmux_name: str, *,
+                           steal_focus: bool = True) -> bool:
+        """Make *slot* display the named detached agent tmux session.
 
-        Either creates the right-pane split (first time) or respawns the existing
-        right pane to attach to the new claude session. Either way the previous
-        claude tmux session stays alive, detached.
+        Either creates the display split or respawns the slot's existing outer
+        pane. The previously displayed agent session stays alive and detached.
 
         When *steal_focus* is False the right pane content is updated but tmux
         focus stays on the railmux pane so the user can keep browsing the sidebar.
@@ -1083,46 +1221,73 @@ class App:
         otherwise refuses to attach from within another tmux session.
         """
         import shlex
+        if not self._agent_workspace().can_display(slot, agent_tmux_name):
+            self._set_status(
+                "That agent session is already displayed in another pane.",
+                "warn",
+            )
+            return False
         # Fast path: the right pane is already showing this session.  Skip the
         # expensive respawn and just optionally move focus.  This also prevents
         # focus flicker on double-click (the first click's respawn kills and
         # restarts tmux attach, which briefly shifts focus).
-        if (self._right_pane_id is not None
-                and self._right_pane_claude == claude_tmux_name
-                and tmux_ctl.pane_alive(self._right_pane_id)):
+        if (slot.pane_id is not None
+                and slot.agent_tmux_name == agent_tmux_name
+                and tmux_ctl.pane_alive(slot.pane_id)):
             if steal_focus:
-                tmux_ctl.select_pane(self._right_pane_id)
+                tmux_ctl.select_pane(slot.pane_id)
                 self._set_railmux_focus(False)
-            self._set_active_tmux_target(claude_tmux_name)
+            self._set_active_tmux_target(agent_tmux_name, slot)
             # Re-assert the F9 fullscreen binding: it's server-global and may
             # have been overwritten by another pane's attach since we last set
             # it, even though this pane's id is unchanged.
             self._install_fullscreen_binding()
             return True
 
-        attach_cmd = f"TMUX= exec tmux attach-session -t {shlex.quote(claude_tmux_name)}"
-        if self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id):
-            ok = tmux_ctl.respawn_pane(self._right_pane_id, attach_cmd)
-        else:
-            # railmux (left) at 30%, claude (right, the new pane) at 70%.
+        attach_cmd = (
+            f"TMUX= exec tmux attach-session -t {shlex.quote(agent_tmux_name)}")
+        created_pane = False
+        if not slot.pane_id or not tmux_ctl.pane_alive(slot.pane_id):
+            # Create the outer display pane detached with a short holding command.
+            # This lets us read its exact dimensions and pre-size the inner agent
+            # session before nested tmux attaches, avoiding Codex history reflow;
+            # it also avoids starting the user's interactive shell just to kill it.
             new_id = tmux_ctl.split_window_h(
-                attach_cmd, size_percent=70, detached=not steal_focus)
+                "sleep 10", size_percent=70, detached=True)
             if not new_id:
                 return False
-            self._right_pane_id = new_id
-            ok = True
-        if ok and self._right_pane_id and steal_focus:
-            tmux_ctl.select_pane(self._right_pane_id)
+            slot.pane_id = new_id
+            created_pane = True
+
+        # Best effort: old tmux versions or unusual window policies may reject
+        # manual sizing, in which case attach still works with its old behaviour.
+        tmux_ctl.fit_session_to_pane(agent_tmux_name, slot.pane_id)
+        self._check_agent_slot_size(slot)
+        ok = tmux_ctl.respawn_pane(slot.pane_id, attach_cmd)
+        if not ok and created_pane:
+            tmux_ctl.kill_pane(slot.pane_id)
+            slot.pane_id = None
+        if ok and slot.pane_id and steal_focus:
+            tmux_ctl.select_pane(slot.pane_id)
         if ok:
-            self._right_pane_claude = claude_tmux_name
-            self._set_active_tmux_target(claude_tmux_name)
+            slot.agent_tmux_name = agent_tmux_name
+            mode = self._modes().for_tmux_name(agent_tmux_name)
+            slot.mode_key = mode.key if mode is not None else None
+            self._set_active_tmux_target(agent_tmux_name, slot)
             self._set_railmux_focus(
                 not steal_focus and not self._double_focus_visual_pending,
                 force_border=True,
             )
-            self._schedule_scroll_acceleration(claude_tmux_name)
+            if slot.key == self._agent_workspace().active_slot_key:
+                self._schedule_scroll_acceleration(agent_tmux_name)
             self._install_fullscreen_binding()
         return ok
+
+    def _attach_in_right_pane(self, claude_tmux_name: str, *,
+                               steal_focus: bool = True) -> bool:
+        """Compatibility entry point targeting the current primary slot."""
+        return self._attach_agent_slot(
+            self._primary_slot, claude_tmux_name, steal_focus=steal_focus)
 
     def _install_fullscreen_binding(self) -> None:
         """(Re)bind F9 to fullscreen-toggle the *agent* (right) pane.
@@ -1134,11 +1299,12 @@ class App:
         (re)created because its id changes. Copy workflow: F9 → Shift-drag to
         select → Cmd/Ctrl+C → F9 to exit.
         """
-        if not self._right_pane_id:
+        pane_id = self._agent_workspace().active.pane_id
+        if not pane_id:
             return
         import subprocess as _sp
         _sp.run(
-            ["tmux", "bind-key", "-n", "F9", "resize-pane", "-Z", "-t", self._right_pane_id],
+            ["tmux", "bind-key", "-n", "F9", "resize-pane", "-Z", "-t", pane_id],
             stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
         )
 
@@ -1171,7 +1337,7 @@ class App:
                 env: dict[str, str] | None = None,
                 login_shell: bool = False,
                 session_type: str = "claude") -> bool:
-        """Create (or reuse) the detached claude tmux session for `key`,
+        """Create (or reuse) the detached agent tmux session for `key`,
         register it, and attach it in the right pane. Returns success.
 
         Shared by resume / new-session / new-project so the tracking bookkeeping
@@ -1197,7 +1363,7 @@ class App:
                      if env else None)
         shell_cmd = self._shellify(cmd, cwd=cwd, env=shell_env,
                                    login_shell=login_shell)
-        ok, err = self._ensure_detached_claude(tmux_name, shell_cmd, env=env)
+        ok, err = self._ensure_detached_agent(tmux_name, shell_cmd, env=env)
         if not ok:
             msg = f"Launch failed: {err or 'could not create agent session'}"
             self._set_status(msg, "error")
@@ -1259,8 +1425,9 @@ class App:
             return
         proj = self._selected_project
         placeholder = self._new_placeholder_key()
+        mode = self._active_mode()
         env: dict[str, str] | None = None
-        if self._codex_mode:
+        if mode.project_source == ProjectSource.CODEX:
             cmd = build_codex_new_command(
                 codex_binary=self._config.codex_binary,
                 cwd=proj.real_path,
@@ -1274,8 +1441,8 @@ class App:
             )
         if self._launch(placeholder, cmd, proj.real_path, f"{proj.display_name}/(new)",
                         proj, placeholder_path=proj.real_path, env=env,
-                        login_shell=self._codex_mode,
-                        session_type="codex" if self._codex_mode else "claude"):
+                        login_shell=mode.login_shell,
+                        session_type=mode.session_type):
             self._set_status(f"→ new session in {proj.display_name}")
 
     def _on_new_project_submit(self, path: Path) -> None:
@@ -1292,10 +1459,10 @@ class App:
         placeholder = self._new_placeholder_key()
         project: Project | None = None
         env: dict[str, str] | None = None
-        session_type = "claude"
-        login_shell = False
-        if self._codex_mode:
-            session_type = "codex"
+        mode = self._active_mode()
+        session_type = mode.session_type
+        login_shell = mode.login_shell
+        if mode.project_source == ProjectSource.CODEX:
             project = self._synthesise_codex_project(path)
             cmd = build_codex_new_command(
                 codex_binary=self._config.codex_binary,
@@ -1303,7 +1470,6 @@ class App:
                 yolo=self._settings.codex_yolo,
             )
             env = self._codex_env()
-            login_shell = True
         else:
             cmd = build_new_session_command(
                 claude_binary=self._config.claude_binary, cwd=path)
@@ -1342,7 +1508,8 @@ class App:
 
     def _right_pane_open(self) -> bool:
         """True when the tmux right pane exists (railmux sidebar is ~30% width)."""
-        return self._right_pane_id is not None and tmux_ctl.pane_alive(self._right_pane_id)
+        pane_id = self._primary_slot.pane_id
+        return pane_id is not None and tmux_ctl.pane_alive(pane_id)
 
     def _open_new_project_modal(self) -> None:
         modal = PathBrowserModal(
@@ -1474,7 +1641,8 @@ class App:
         cmd = f"cd {shlex.quote(str(proj.real_path))} && exec {shlex.quote(shell)}"
         # Split visibly in the same window: if a right pane (claude) exists,
         # put the terminal below it; otherwise split off the current pane.
-        target = self._right_pane_id if (self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id)) else None
+        pane_id = self._primary_slot.pane_id
+        target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
         new_pane = tmux_ctl.split_window_v(cmd, target=target)
         if not new_pane:
             self._set_status("failed to split for terminal")
@@ -1519,10 +1687,11 @@ class App:
     def _save_state(self) -> None:
         """Persist enough state to restore the current view after a restart."""
         data: dict = {}
-        # Persist the active mode so a restart (soft OR hard) reopens in the
-        # same Claude/Codex view. Read back with a falsy default in the restore
-        # path, so older state files without the key stay Claude-mode.
-        data["codex_mode"] = self._codex_mode
+        # Stable registry key supports any future mode. Keep the legacy boolean
+        # for one-way downgrade compatibility; new Railmux always prefers mode.
+        data["mode"] = self._current_mode_key()
+        data["codex_mode"] = (
+            self._active_mode().project_source == ProjectSource.CODEX)
         if self._selected_project is not None:
             data["project"] = self._selected_project.encoded_name
         # Focused session in the sidebar.
@@ -1530,13 +1699,14 @@ class App:
         if session is not None:
             data["session"] = session.session_id
         # What's in the right pane — so we can re-open the same thing.
-        if self._in_history_mode:
+        slot = self._primary_slot
+        if slot.in_history_mode:
             data["right_kind"] = "preview"
-            if self._active_session_id is not None:
-                data["right_session"] = self._active_session_id
-        elif self._right_pane_claude is not None:
-            data["right_kind"] = "claude"
-            data["right_tmux"] = self._right_pane_claude
+            if slot.active_session_id is not None:
+                data["right_session"] = slot.active_session_id
+        elif slot.agent_tmux_name is not None:
+            data["right_kind"] = "agent"
+            data["right_tmux"] = slot.agent_tmux_name
         else:
             data["right_kind"] = "empty"
         import json
@@ -1556,10 +1726,22 @@ class App:
         except (OSError, json.JSONDecodeError):
             return None
 
+    def _mode_key_from_state(self, state: dict | None) -> str:
+        """Resolve new registry state, then the <=0.1.1 Codex boolean."""
+        registry = self._modes()
+        if not state:
+            return registry.default_key
+        stored = state.get("mode")
+        if isinstance(stored, str):
+            return registry.resolve(stored).key
+        if state.get("codex_mode"):
+            return registry.resolve(CODEX_MODE.key).key
+        return registry.default_key
+
     def _restore_right_pane(self, state: dict) -> None:
         """Re-open the right pane to its state at soft-quit time."""
         kind = state.get("right_kind")
-        if kind == "claude":
+        if kind in ("agent", "claude"):  # "claude" written by <=0.1.1
             tmux_name = state.get("right_tmux")
             if tmux_name and tmux_ctl.session_exists(tmux_name):
                 ok = self._attach_in_right_pane(tmux_name, steal_focus=False)
@@ -1573,18 +1755,18 @@ class App:
         elif kind == "preview":
             sess_id = state.get("right_session")
             if sess_id and self._selected_project is not None:
-                if self._codex_mode:
+                if self._active_mode().project_source == ProjectSource.CODEX:
                     meta = self._codex_index.get(sess_id)
                 else:
                     meta = self._session_cache.get(
                         self._selected_project, sess_id)
                 if meta is not None and self._show_transcript(
                         meta.jsonl_path, session_type=meta.session_type):
-                    self._in_history_mode = True
+                    self._primary_slot.in_history_mode = True
                     self._set_active_target(meta.session_id, None)
 
     def _discover_orphans(self) -> None:
-        """Find detached ``cc-*`` and ``cx-*`` tmux sessions and rebuild ``_running``.
+        """Find registered agent tmux sessions and rebuild ``_running``.
 
         Called at startup so a soft-quit → restart cycle picks up every
         session that was left alive.
@@ -1616,7 +1798,12 @@ class App:
         # A Codex-only cwd has no Claude project directory. Include synthetic
         # projects from one index snapshot so its surviving cx-* tmux session
         # is re-adopted after a soft restart instead of silently disappearing.
-        if any(line.startswith("cx-") for line in out.splitlines()):
+        has_codex_session = any(
+            (mode := self._modes().for_tmux_name(line.split("\t", 1)[0]))
+            is not None and mode.project_source == ProjectSource.CODEX
+            for line in out.splitlines()
+        )
+        if has_codex_session:
             for cwd, count in self._codex_index.all_cwds().items():
                 projects.setdefault(
                     _path_key(cwd), self._synthesise_codex_project(cwd, count))
@@ -1628,12 +1815,10 @@ class App:
             if len(parts) != 2:
                 continue
             name, cwd_str = parts
-            is_claude = name.startswith("cc-")
-            is_codex = name.startswith("cx-")
-            if not (is_claude or is_codex):
+            mode = self._modes().for_tmux_name(name)
+            if mode is None:
                 continue
-            prefix_len = 3  # "cc-" or "cx-"
-            truncated = name[prefix_len:]
+            truncated = name[len(mode.tmux_prefix):]
             # A session still on its __new__-* placeholder name (soft-quit
             # before its real UUID resolved) is dropped here — full orphan
             # re-adoption of placeholders stays deferred. The dangerous part
@@ -1648,7 +1833,7 @@ class App:
             if project is None:
                 continue
             # Resolve the truncated key back to the full session_id.
-            if is_codex:
+            if mode.project_source == ProjectSource.CODEX:
                 # For Codex sessions, look up in the codex index.
                 full_id = self._resolve_truncated_codex_id(truncated, cwd)
             else:
@@ -1662,7 +1847,7 @@ class App:
                 tmux_name=name,
                 label=f"{project.display_name}/{full_id[:8]}",
                 project=project,
-                session_type="codex" if is_codex else "claude",
+                session_type=mode.session_type,
             )
             found += 1
         if found:
@@ -1873,22 +2058,32 @@ class App:
         self._codex_project_filter = index.all_cwds(refresh=False)
         return True
 
-    def _toggle_codex_mode(self) -> None:
-        """Switch between Claude Code and Codex views.
+    def _cycle_mode(self) -> None:
+        """Move to the next registered agent mode."""
+        target = self._modes().next_key(self._current_mode_key())
+        self._switch_mode(target)
+
+    def _switch_mode(self, mode_key: str) -> None:
+        """Switch to *mode_key* without encoding a two-provider toggle.
 
         Paint immediately from stale-safe snapshots, then let a daemon worker
-        refresh both NFS-backed indexes for the next UI refresh tick.
+        refresh NFS-backed indexes for the next UI refresh tick.
         """
+        target = self._modes().resolve(mode_key)
+        if target.key == self._current_mode_key():
+            return
         outgoing_project = self._selected_project
         if outgoing_project is not None:
             self._remember_project_selection(outgoing_project)
-        self._codex_mode = not self._codex_mode
-        # Repaint the tmux brand so its "· Claude Code / · Codex" indicator
-        # reflects the new mode (keeps the current error/normal bar colour).
+        self._active_mode_key = target.key
+        # Repaint the tmux brand while retaining the current error/normal colour.
         self._apply_tmux_bar(self._tmux_error_bar)
-        if self._codex_mode:
-            # First entry into Codex mode: offer auto-run (yolo). Shown once.
+        next_label = self._modes().get(
+            self._modes().next_key(target.key)).label
+        suffix = f"  (m for {next_label})"
+        if target.prompt_for_auto_run:
             self._maybe_prompt_codex_yolo()
+        if target.project_source == ProjectSource.CODEX:
             self._schedule_mode_data_refresh()
             self._projects_pane.set_projects(self._visible_projects(allow_stale=True))
             if not self._codex_project_filter:
@@ -1897,11 +2092,13 @@ class App:
                 # Its path remains in the Claude-specific memory for return.
                 self._clear_current_project()
                 if self._mode_refresh_pending():
-                    self._set_status("Codex mode — loading sessions…  (m to exit)")
+                    self._set_status(
+                        f"{target.label} mode — loading sessions…{suffix}")
                 else:
-                    self._set_status("Codex mode — no Codex sessions found  (m to exit)")
+                    self._set_status(
+                        f"{target.label} mode — no sessions found{suffix}")
                 return
-            self._set_status("Codex mode  (m to exit)")
+            self._set_status(f"{target.label} mode{suffix}")
             visible = self._visible_projects(allow_stale=True)
             selected = self._preferred_project(visible, outgoing_project)
             if selected is not None:
@@ -1911,7 +2108,7 @@ class App:
         else:
             visible = self._visible_projects(allow_stale=True)
             self._projects_pane.set_projects(visible)
-            self._set_status("Claude mode  (m for Codex)")
+            self._set_status(f"{target.label} mode{suffix}")
             # Resolve only against Claude-visible projects. A stale/deleted
             # Project object must never fall through to the Claude cache.
             selected = self._preferred_project(visible, outgoing_project)
@@ -1920,17 +2117,25 @@ class App:
             else:
                 self._clear_current_project()
 
-    def _enter_codex_mode_on_restore(self) -> None:
-        """Re-enter Codex mode during startup state restore.
+    def _toggle_codex_mode(self) -> None:
+        """Compatibility alias for integrations written before mode cycling."""
+        self._cycle_mode()
 
-        Applies the Codex project filter and repaints the Projects pane so the
-        restored project/session resolve against the Codex view. Kept separate
-        from ``_toggle_codex_mode`` (which drives status text, project selection
-        and the tmux brand) because at ``__init__`` time the loop/tmux bar are
-        not up yet and the project selection is handled by the restore path."""
-        self._codex_mode = True
-        self._codex_project_filter = self._codex_index.all_cwds()
+    def _enter_mode_on_restore(self, mode_key: str) -> None:
+        """Activate a registered mode during startup state restoration.
+
+        Kept separate from normal switching because the loop and tmux bar are
+        not available yet and project selection is handled by the restore path.
+        """
+        mode = self._modes().resolve(mode_key)
+        self._active_mode_key = mode.key
+        if mode.project_source == ProjectSource.CODEX:
+            self._codex_project_filter = self._codex_index.all_cwds()
         self._projects_pane.set_projects(self._visible_projects())
+
+    def _enter_codex_mode_on_restore(self) -> None:
+        """Compatibility alias for pre-registry tests and extensions."""
+        self._enter_mode_on_restore(CODEX_MODE.key)
 
     def _codex_home_path(self) -> Path:
         """The single resolved ``CODEX_HOME`` for this instance.
@@ -1969,7 +2174,7 @@ class App:
             projects = list_projects(self._claude_home)
             self._project_snapshot = projects
             self._project_snapshot_at = now
-        if not self._codex_mode:
+        if self._active_mode().project_source != ProjectSource.CODEX:
             if getattr(getattr(self, "_config", None),
                        "show_empty_projects", False):
                 return projects
@@ -2100,12 +2305,13 @@ class App:
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
         except Exception:
             pass
-        if self._right_pane_id:
-            try:
-                tmux_ctl.kill_pane(self._right_pane_id)
-            except Exception:
-                pass
-            self._right_pane_id = None
+        for slot in self._agent_workspace().slots:
+            if slot.pane_id:
+                try:
+                    tmux_ctl.kill_pane(slot.pane_id)
+                except Exception:
+                    pass
+                slot.clear_display()
         if self._soft_quit_flag:
             return  # <-- soft quit: leave cc-* and outer tmux session alive
         for r in list(self._running.values()):
@@ -2162,8 +2368,10 @@ class App:
         self._scroll_manager.maintain()
         background_refreshed = self._consume_mode_refresh()
         mode_refresh_pending = self._mode_refresh_pending()
-        prefix = "cx-" if self._codex_mode else "cc-"
-        needs_liveness = self._right_pane_id is not None or any(
+        mode = self._active_mode()
+        prefix = mode.tmux_prefix
+        slot = self._primary_slot
+        needs_liveness = slot.pane_id is not None or any(
             r.tmux_name.startswith(prefix) for r in self._running.values())
         server = tmux_ctl.server_snapshot() if needs_liveness else None
         child_probes: dict[str, bool | None] = {}
@@ -2183,15 +2391,17 @@ class App:
         # TODO(review #6): this still walks/stats the whole Codex session tree
         # synchronously on the UI thread each tick; move to a single rate-limited
         # background scanner serving an immutable snapshot (needs design).
-        refresh_codex = self._codex_mode or any(
-            r.tmux_name.startswith("cx-") for r in self._running.values())
+        refresh_codex = (
+            mode.project_source == ProjectSource.CODEX
+            or any(r.session_type == "codex" for r in self._running.values())
+        )
         if (refresh_codex and not background_refreshed
                 and not mode_refresh_pending):
             self._codex_index.refresh()
 
         # Refresh the Codex project filter so newly-created Codex sessions
         # make their cwd appear as a project in Codex mode.
-        if self._codex_mode:
+        if mode.project_source == ProjectSource.CODEX:
             self._codex_project_filter = self._codex_index.all_cwds(refresh=False)
         # Placeholder resolution must discover its JSONL without extra delay.
         force_projects = any(r.is_placeholder for r in self._running.values())
@@ -2214,20 +2424,22 @@ class App:
 
         # If the session we were showing in the right pane has exited,
         # kill the right pane so the TUI returns to full-screen.
-        if self._right_pane_id and self._right_pane_claude:
-            if not session_is_alive(self._right_pane_claude):
-                tmux_ctl.kill_pane(self._right_pane_id)
-                self._right_pane_id = None
-                self._right_pane_claude = None
+        if slot.pane_id and slot.agent_tmux_name:
+            if not session_is_alive(slot.agent_tmux_name):
+                tmux_ctl.kill_pane(slot.pane_id)
+                slot.pane_id = None
+                slot.agent_tmux_name = None
+                slot.mode_key = None
                 self._set_active_target(None, None)
 
         # Detect when the right pane was closed (user pressed q in less, the
         # pane was cleaned up above, or it was killed externally).
-        if self._right_pane_id and not pane_is_alive(self._right_pane_id):
-            self._right_pane_id = None
-            self._right_pane_claude = None
-            if self._in_history_mode:
-                self._in_history_mode = False
+        if slot.pane_id and not pane_is_alive(slot.pane_id):
+            slot.pane_id = None
+            slot.agent_tmux_name = None
+            slot.mode_key = None
+            if slot.in_history_mode:
+                slot.in_history_mode = False
                 self._set_active_target(None, None)
                 self._restore_from_history_mode()
             else:
@@ -2344,7 +2556,7 @@ class App:
         SAME status dot here as in the Running pane, in both Claude and Codex
         modes (Running refines via ``_effective_status``; without this the raw
         ``SessionMeta.status`` could disagree)."""
-        if self._codex_mode:
+        if self._active_mode().project_source == ProjectSource.CODEX:
             raw = self._codex_index.sessions_for_cwd(project.real_path, refresh=refresh)
         elif project.claude_dir == Path():
             raw = []
@@ -2361,7 +2573,10 @@ class App:
         for r in self._running.values():
             if r.is_placeholder or r.project is None:
                 continue
-            if r.tmux_name.startswith("cx-"):
+            registered_mode = self._modes().for_tmux_name(r.tmux_name)
+            session_type = (
+                registered_mode.session_type if registered_mode else r.session_type)
+            if session_type == "codex":
                 meta = self._codex_index.get(r.key, refresh=False)
             else:
                 meta = self._session_cache.get(r.project, r.key)
@@ -2400,7 +2615,7 @@ class App:
         ``cx-*`` sessions are shown.  The other type's sessions still run,
         but they don't belong in the current view.
         """
-        prefix = "cx-" if self._codex_mode else "cc-"
+        prefix = self._active_mode().tmux_prefix
         entries = [
             RunningEntry(tmux_name=r.tmux_name, label=r.label, status=r.status)
             for r in self._running.values()
@@ -2438,8 +2653,9 @@ class App:
             project = by_path.get(r.placeholder_path) or r.project
             if project is None:
                 continue
-            session_type = ("codex" if r.tmux_name.startswith("cx-")
-                            else r.session_type)
+            registered_mode = self._modes().for_tmux_name(r.tmux_name)
+            session_type = (
+                registered_mode.session_type if registered_mode else r.session_type)
             if session_type == "codex":
                 # Codex index was already refreshed once this tick (see
                 # _refresh); serve from that snapshot rather than re-walking
@@ -2498,7 +2714,7 @@ class App:
             r.created_at = 0.0
             self._running[candidate.session_id] = r
             claimed.add(candidate.session_id)
-            if self._right_pane_claude == r.tmux_name:
+            if self._primary_slot.agent_tmux_name == r.tmux_name:
                 self._set_active_target(candidate.session_id, r.tmux_name)
                 self._set_current_project(candidate.project)
 
@@ -3076,7 +3292,8 @@ class App:
         import subprocess as _sp
         shell = os.environ.get("SHELL", "/bin/bash")
         cmd = f"cd {shlex.quote(str(path))} && exec {shlex.quote(shell)}"
-        target = self._right_pane_id if (self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id)) else None
+        pane_id = self._agent_workspace().active.pane_id
+        target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
         new_pane = tmux_ctl.split_window_v(cmd, target=target)
         if not new_pane:
             self._set_status("failed to split for terminal")
@@ -3093,7 +3310,8 @@ class App:
         import subprocess as _sp
         shell = os.environ.get("SHELL", "/bin/bash")
         cmd = f"cd {shlex.quote(str(session.project.real_path))} && exec {shlex.quote(shell)}"
-        target = self._right_pane_id if (self._right_pane_id and tmux_ctl.pane_alive(self._right_pane_id)) else None
+        pane_id = self._agent_workspace().active.pane_id
+        target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
         new_pane = tmux_ctl.split_window_v(cmd, target=target)
         if not new_pane:
             self._set_status("failed to split for terminal")
@@ -3119,11 +3337,124 @@ class App:
 
     def _resize_divider(self, expand_railmux: bool) -> None:
         """Move the vertical divider: [ shrinks railmux, ] expands it."""
-        if not self._right_pane_id or not tmux_ctl.pane_alive(self._right_pane_id):
+        pane_id = self._primary_slot.pane_id
+        if not pane_id or not tmux_ctl.pane_alive(pane_id):
             self._set_status("No agent pane to resize against.")
             return
         direction = "-R" if expand_railmux else "-L"
-        tmux_ctl.resize_pane(self._right_pane_id, direction, 5)
+        tmux_ctl.resize_pane(pane_id, direction, 5)
+        self._check_agent_slot_size(self._primary_slot)
+
+    # --- responsive-size guard ------------------------------------------
+
+    @classmethod
+    def _terminal_size_class(cls, width: int, height: int) -> str:
+        min_width, min_height = cls._MINIMUM_TERMINAL_SIZE
+        rec_width, rec_height = cls._RECOMMENDED_TERMINAL_SIZE
+        if width < min_width or height < min_height:
+            return "critical"
+        if width < rec_width or height < rec_height:
+            return "reduced"
+        return "comfortable"
+
+    def _workspace_size(self) -> tuple[int, int] | None:
+        """Return the full Railmux workspace size, not the sidebar TTY size."""
+        pane_id = getattr(self, "_railmux_pane_id", None)
+        if pane_id:
+            size = tmux_ctl.window_size(pane_id)
+            if size is not None:
+                return size
+        try:
+            return self._loop.screen.get_cols_rows() if self._loop else None
+        except Exception:
+            return None
+
+    def _check_terminal_size(
+        self, size: tuple[int, int] | None = None,
+    ) -> None:
+        """Warn on outer-workspace size transitions without blocking input."""
+        if size is None:
+            size = self._workspace_size()
+        if not size:
+            return
+        width, height = size
+        if width <= 0 or height <= 0:
+            return
+        size_changed = (
+            getattr(self, "_last_workspace_size", None) != (width, height))
+        previous = getattr(self, "_last_size_class", None)
+        current = self._terminal_size_class(width, height)
+        self._last_workspace_size = (width, height)
+        if current != previous:
+            self._last_size_class = current
+            rec_width, rec_height = self._RECOMMENDED_TERMINAL_SIZE
+            if current == "critical":
+                self._set_status(
+                    f"Workspace {width}×{height} is too small for a friendly layout; "
+                    f"use at least {rec_width}×{rec_height} when possible.",
+                    "error",
+                    force=True,
+                )
+            elif current == "reduced":
+                self._set_status(
+                    f"Workspace {width}×{height} is cramped; "
+                    f"{rec_width}×{rec_height} or larger is recommended.",
+                    "warn",
+                    force=True,
+                )
+            elif previous in ("critical", "reduced"):
+                self._set_status(
+                    f"Workspace size restored: {width}×{height}.", "info",
+                    force=True)
+        if size_changed:
+            repeat_agent_warning = (
+                current == "comfortable"
+                and previous in ("critical", "reduced"))
+            for slot in self._agent_workspace().slots:
+                if slot.pane_id:
+                    self._check_agent_slot_size(
+                        slot, repeat_warning=repeat_agent_warning)
+
+    def _check_agent_slot_size(
+        self, slot: AgentSlot, *, repeat_warning: bool = False,
+    ) -> None:
+        """Warn when an individual agent display area is too small."""
+        if not slot.pane_id:
+            return
+        size = tmux_ctl.pane_size(slot.pane_id)
+        if size is None:
+            return
+        width, height = size
+        min_width, min_height = self._MINIMUM_AGENT_PANE_SIZE
+        rec_width, rec_height = self._RECOMMENDED_AGENT_PANE_SIZE
+        if width < min_width or height < min_height:
+            current = "critical"
+        elif width < rec_width or height < rec_height:
+            current = "reduced"
+        else:
+            current = "comfortable"
+        previous = slot.last_size_class
+        slot.last_size = size
+        if current == previous and not repeat_warning:
+            return
+        slot.last_size_class = current
+        if current == "critical":
+            self._set_status(
+                f"Agent pane {width}×{height} is too small; "
+                f"aim for at least {rec_width}×{rec_height}.",
+                "error", force=True,
+            )
+        elif current == "reduced":
+            self._set_status(
+                f"Agent pane {width}×{height} may render poorly; "
+                f"{rec_width}×{rec_height} or larger is recommended.",
+                "warn", force=True,
+            )
+        elif previous in ("critical", "reduced"):
+            self._set_status(
+                f"Agent pane size restored: {width}×{height}.",
+                "info", force=True,
+            )
 
     # --- status bar ---
 
@@ -3197,12 +3528,12 @@ class App:
         """Set the whole-bar background (status-style) + brand (status-left) for
         the normal (green) or error (dark red) mode. Called from run() for the
         initial paint, from _render_status_to_tmux on the normal↔error
-        transition, and from _toggle_codex_mode so the mode indicator repaints.
+        transition, and from mode cycling so the mode indicator repaints.
         Best-effort — a tmux hiccup must not raise into the UI."""
         if not self._tmux_status_enabled or not self._tmux_status_session:
             return
         bar = _TMUX_BAR_STYLE_ERROR if error else _TMUX_BAR_STYLE_NORMAL
-        brand = _tmux_status_left(error, self._codex_mode)
+        brand = _tmux_status_left(error, self._active_mode().label)
         try:
             import subprocess as _sp
             for opt, val in (("status-style", bar), ("status-left", brand)):
@@ -3218,7 +3549,8 @@ class App:
         except Exception:
             pass
 
-    def _set_status(self, msg: str, level: str | None = None) -> None:
+    def _set_status(self, msg: str, level: str | None = None, *,
+                    force: bool = False) -> None:
         """Show an explicit status message.
 
         ``level`` is auto-classified from the message prefix when omitted, so
@@ -3234,7 +3566,7 @@ class App:
                 level = "info"
         # Don't let a still-fresh higher-severity message be overwritten by a
         # lower-severity one within its minimum-hold window.
-        if self._status_text is not None:
+        if not force and self._status_text is not None:
             hold = self._STATUS_MIN_HOLD.get(self._status_level)
             if (hold is not None
                     and time.monotonic() - self._status_since < hold
@@ -3355,7 +3687,7 @@ class App:
         # (less running in the right pane), poll faster so the user sees a
         # quick response when pressing q in less or clicking the right pane.
         fast_poll = (
-            self._in_history_mode
+            self._primary_slot.in_history_mode
             or (self._railmux_pane_id is not None
                 and self._loop is not None
                 and isinstance(self._loop.widget, _CloseOnClickOverlay))
@@ -3443,12 +3775,15 @@ class App:
             from railmux.ui._widgets import ClickableRow
             ClickableRow._main_loop = self._loop
             self._hint_bar.set_loop(self._loop)
-            if self._codex_mode:
+            if self._active_mode().prompt_for_auto_run:
                 self._maybe_prompt_codex_yolo()
             try:
-                self._loop.screen.set_terminal_properties(colors=256)
+                # Urwid stores both exact RGB and an automatically downsampled
+                # fallback; tmux/terminal capabilities decide which is emitted.
+                self._loop.screen.set_terminal_properties(colors=_TERMINAL_COLORS)
             except Exception:
                 pass
+            self._check_terminal_size()
             # Intercept Ctrl-C as a regular keypress so we can show a confirm-quit
             # popup instead of slamming out via SIGINT. Ctrl-\ (quit) is left
             # active as an emergency hard-exit.

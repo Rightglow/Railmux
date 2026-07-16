@@ -1,8 +1,24 @@
 # Railmux roadmap
 
-This file records design candidates, not release commitments.
+This is a set of design candidates, not a release commitment. Architecture
+invariants already agreed are recorded in `docs/ARCHITECTURE.md`.
 
 ## Under discussion
+
+### Dual-agent workspace
+
+Expose the prepared primary/secondary `AgentWorkspace` model through a small
+Pane menu: `Open selected in split`, `Close split`, and `Rotate split`. Decide
+the direct keyboard shortcut only after the menu interaction has been used in
+practice. Validate Claude+Claude, Codex+Codex, and mixed-provider layouts on
+macOS and Linux before enabling restoration of the secondary pane.
+
+Open questions:
+
+- Whether F9 uses the focused agent slot, or primary when the sidebar is focused.
+- Whether transcript preview always uses primary or may use an existing secondary.
+- Whether swapping primary/secondary belongs in the first public iteration.
+- Exact minimum per-agent width/height for choosing stacked vs side-by-side.
 
 ### De-nested agent pane rendering
 
@@ -57,3 +73,56 @@ Open questions:
   which versions must retain the nested-client fallback.
 - How much Claude Code improves when de-nested, since its alternate-screen,
   application-owned mouse path cannot use Codex's copy-mode batching unchanged.
+
+### Codex interrupt transcript replay
+
+Codex currently consolidates an incomplete streamed answer after Esc by
+clearing and rebuilding its canonical inline transcript. Railmux does not see
+or forward that Esc, and the attach-time pre-sizing path is not involved, but a
+nested tmux client can make the upstream rebuild visibly sweep from old content
+back to the prompt.
+
+Do not silently force alternate-screen mode or truncate Codex history to hide
+this: both change native scrollback/copy behavior. Possible experiments are an
+explicit, documented Codex reflow-row limit, a future tmux version with proven
+application synchronized-output support, and the de-nested pane prototype
+above. Any workaround must remain opt-in until its history tradeoff and Codex
+version compatibility are clear.
+
+### Compact/portrait navigation
+
+For a narrow or portrait terminal, consider showing sidebar and agent as two
+exclusive views instead of squeezing them side by side. Activating an item in
+the sidebar would switch to the agent view. A very small top menu/status pane
+could preserve mode, current project/session, and a clear `Back to sidebar`
+action without pretending the agent is fullscreen.
+
+This can be a good responsive layout, but should not be implemented as an
+implicit resize side effect until these questions are answered:
+
+- Is the switch triggered only below a startup threshold, or manually?
+- How does mouse/keyboard focus return without intercepting agent input?
+- Does F9 mean terminal fullscreen or merely hide the compact top menu?
+- Can tmux rearrange the panes without resizing/reflowing a running agent TUI?
+- What state is preserved when moving between compact and regular layouts?
+
+A promising implementation is two outer tmux windows (`sidebar` and `agent`)
+rather than two panes squeezed to near-zero width. Window switching keeps both
+processes alive and gives each view the full terminal. The existing Railmux tmux
+status line could move to the top in compact mode and act as the small feedback/
+navigation surface; a dedicated menu pane would cost space and add another
+focus target. This remains a hypothesis to prototype, not an agreed design.
+
+### Provider adapters
+
+The mode registry now supports a third stable mode and independent view state.
+Extract backend operations behind a provider adapter before adding a provider
+whose discovery/launch/delete model differs from both existing backends.
+
+### Visual polish
+
+Evaluate the grass-green focus system on several terminal themes. Preserve
+distinct meanings for bright pane chrome, the deep-green cursor, the slate
+persistent target, grass-green live-session titles, and agent status dots. Tmux draws
+a half-colour shared edge for exactly two panes, so a dual-agent layout must
+prototype border ownership rather than relying on active-border style alone.

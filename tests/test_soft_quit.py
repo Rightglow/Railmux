@@ -130,7 +130,8 @@ def test_save_state_always_writes_right_kind(tmp_path, monkeypatch):
     app._save_state()
     assert (tmp_path / "state.json").is_file()
     data = app._load_state()
-    assert data == {"right_kind": "empty", "codex_mode": False}
+    assert data == {
+        "right_kind": "empty", "mode": "claude", "codex_mode": False}
 
 
 def test_save_state_with_claude_in_right_pane(tmp_path, monkeypatch):
@@ -140,7 +141,7 @@ def test_save_state_with_claude_in_right_pane(tmp_path, monkeypatch):
     app._right_pane_claude = "cc-abc123"
     app._save_state()
     data = app._load_state()
-    assert data["right_kind"] == "claude"
+    assert data["right_kind"] == "agent"
     assert data["right_tmux"] == "cc-abc123"
 
 
@@ -157,12 +158,13 @@ def test_save_state_with_preview_in_right_pane(tmp_path, monkeypatch):
 
 
 def test_save_state_persists_codex_mode(tmp_path, monkeypatch):
-    """Restart must remember the last mode: _save_state records _codex_mode."""
+    """Restart records the stable mode key plus the downgrade boolean."""
     monkeypatch.setattr(App, "_state_path", staticmethod(lambda: tmp_path / "state.json"))
     app = _minimal_app(selected_project=_project("myproj"))
     app._codex_mode = True
     app._save_state()
     data = app._load_state()
+    assert data["mode"] == "codex"
     assert data["codex_mode"] is True
 
 
@@ -933,7 +935,7 @@ def test_launch_snapshots_pre_existing_ids(monkeypatch):
     app._codex_index.sessions_for_cwd.return_value = [
         _codex_session(proj, existing, mtime=5.0)]
     app._shellify = lambda *a, **k: "SHELLCMD"
-    app._ensure_detached_claude = lambda *a, **k: (True, None)
+    app._ensure_detached_agent = lambda *a, **k: (True, None)
     app._attach_in_right_pane = lambda *a, **k: True
     app._session_name = lambda key: "cx-abc"
 

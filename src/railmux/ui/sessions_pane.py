@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 
 import urwid
 
@@ -46,7 +47,7 @@ _SELECTED_MAP = {None: "selected", "dim": "selected",
                  "status_idle": "status_idle_sel",
                  "status_busy": "status_busy_sel",
                  "status_blocked": "status_blocked_sel"}
-# Focus highlight (brown bg). Status dots need their own remap so the coloured
+# Focus highlight (deep-grass bg). Status dots need their own remap so the coloured
 # ● inherits the focus background instead of leaving a black gap; everything
 # else (title, star, meta) collapses to the plain "focus" attribute.
 _FOCUS_REMAP = {None: "focus", "live": "focus", "dim": "focus",
@@ -69,7 +70,12 @@ class _SessionRow(ClickableRow):
         # Status dot stays in a fixed leftmost column so the status column
         # aligns across rows; the star sits next to the title it marks.
         title_markup: list = []
-        title_markup.append(_STATUS_DOTS.get(session.status, ("dim", "○")))
+        # Lifecycle status is meaningful only while a tmux session is live.
+        # Historical rows use one neutral hollow marker rather than preserving
+        # a stale idle/busy/blocked state from their final saved event.
+        dot = (_STATUS_DOTS.get(session.status, ("dim", "○"))
+               if is_running else ("dim", "○"))
+        title_markup.append(dot)
         title_markup.append("  ")
         if is_favorite:
             # Plain text (no colour) so the star simply inherits the row's
@@ -133,7 +139,10 @@ class SessionsPane(urwid.WidgetWrap):
         self._pile = urwid.Pile([
             ("weight", 1, self._listbox),
         ])
-        self._linebox = urwid.LineBox(self._pile, title="Sessions")
+        # Keep pane focus on the LineBox border/title. Without an explicit body
+        # attr, the outer AttrMap also turns every ordinary session title green.
+        self._body = urwid.AttrMap(self._pile, "body")
+        self._linebox = urwid.LineBox(self._body, title="Sessions")
         # Start focused on the listbox when it has selectable content.
         if self._walker:
             self._pile.focus_position = 0
@@ -240,11 +249,11 @@ class SessionsPane(urwid.WidgetWrap):
             is_fav = s.session_id in self._favorite_ids
             selected_id = self._selected_session_id or self._active_session_id
             is_sel = s.session_id == selected_id
-            on_dbl = lambda s=s: self._on_double_select(s)
+            on_dbl = partial(self._on_double_select, s)
             if is_running:
-                on_click = lambda s=s: self._on_select(s, steal_focus=False)
+                on_click = partial(self._on_select, s, steal_focus=False)
             else:
-                on_click = (lambda s=s: self._on_preview(s)) if self._on_preview else None
+                on_click = partial(self._on_preview, s) if self._on_preview else None
             rows.append(_SessionRow(
                 s,
                 is_running=is_running, is_favorite=is_fav,

@@ -2,11 +2,10 @@
 
 from pathlib import Path
 
-import pytest
 import urwid
 
 from railmux.models import Project, SessionMeta
-from railmux.ui.sessions_pane import SessionsPane, _SessionRow, _NewSessionRow
+from railmux.ui.sessions_pane import SessionsPane, _SessionRow
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -327,7 +326,7 @@ def test_status_dot_blocked():
     assert dot[0] == "status_blocked"
 
 
-def test_session_row_renders_status_dot():
+def test_running_session_row_renders_status_dot():
     proj = _project()
     s = _session(proj, title="Busy Session")
     # Force a non-idle status
@@ -336,10 +335,27 @@ def test_session_row_renders_status_dot():
                     message_count=s.message_count, token_total=s.token_total,
                     last_mtime=s.last_mtime, status="busy")
     pane = SessionsPane(on_select=lambda s: None)
-    pane.set_sessions(proj, [s], running_ids=set(), favorite_ids=set())
+    pane.set_sessions(
+        proj, [s], running_ids={s.session_id}, favorite_ids=set())
     row = [w for w in pane._walker if isinstance(w, _SessionRow)][0]
-    # The row should render — no crash on tuple status dot
-    assert row is not None
+    title = row._wrapped_widget.base_widget.contents[0][0]
+    assert title.text.startswith("●")
+    assert title.attrib[0][0] == "status_busy"
+
+
+def test_stopped_session_row_uses_neutral_hollow_marker():
+    proj = _project()
+    s = _session(proj, title="Stopped Session")
+    s = SessionMeta(project=s.project, session_id=s.session_id,
+                    jsonl_path=s.jsonl_path, title=s.title,
+                    message_count=s.message_count, token_total=s.token_total,
+                    last_mtime=s.last_mtime, status="blocked")
+
+    row = _SessionRow(s, is_running=False)
+    title = row._wrapped_widget.base_widget.contents[0][0]
+
+    assert title.text.startswith("○")
+    assert title.attrib[0] == ("dim", 1)
 
 
 # ── attribute maps ──────────────────────────────────────────────────────

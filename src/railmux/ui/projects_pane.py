@@ -68,7 +68,10 @@ class ProjectsPane(urwid.WidgetWrap):
         # Start with focus on the ListBox so j/k works immediately.
         if self._walker:
             self._pile.focus_position = 2
-        super().__init__(urwid.LineBox(self._pile, title="Projects"))
+        # Give body cells an explicit attribute so App's outer pane-focus map
+        # colours only the LineBox chrome (border/title), never ordinary rows.
+        self._body = urwid.AttrMap(self._pile, "body")
+        super().__init__(urwid.LineBox(self._body, title="Projects"))
 
     def _build_rows(self, projects: list[Project]) -> list:
         needle = self._filter.lower()

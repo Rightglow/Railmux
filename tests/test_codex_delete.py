@@ -434,7 +434,7 @@ def test_launch_never_passes_secret_via_any_channel(monkeypatch):
         return True, None
 
     monkeypatch.setattr(app, "_shellify", fake_shellify)
-    monkeypatch.setattr(app, "_ensure_detached_claude", fake_ensure)
+    monkeypatch.setattr(app, "_ensure_detached_agent", fake_ensure)
     monkeypatch.setattr(app, "_attach_in_right_pane", lambda *a, **k: True)
     monkeypatch.setattr(app, "_session_name", lambda key: "cx-abc")
 

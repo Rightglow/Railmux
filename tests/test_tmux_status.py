@@ -220,6 +220,9 @@ def test_status_left_pure_function():
     error = _tmux_status_left(True, True)
     assert error.startswith(_TMUX_BRAND_ERROR)
     assert error.endswith("· Codex #[default]")
+
+    third = _tmux_status_left(False, "Review Agent")
+    assert third.endswith("· Review Agent #[default]")
     assert "bold" not in error
 
 
@@ -242,3 +245,7 @@ def test_level_styles_are_pill_free():
     assert "bold" in _TMUX_LEVEL_STYLE["error"]
     # The bar/brand styles are what carry the background.
     assert "bg=" in _TMUX_BAR_STYLE_NORMAL and "bg=" in _TMUX_BAR_STYLE_ERROR
+
+
+def test_normal_bar_uses_grass_green_accent():
+    assert _TMUX_BAR_STYLE_NORMAL.startswith("bg=#5faf00,")

@@ -58,7 +58,10 @@ class RunningSessionsPane(urwid.WidgetWrap):
             [urwid.Text(("dim", "  (no running sessions)"), align="left")]
         )
         self._listbox = urwid.ListBox(self._walker)
-        self._linebox = urwid.LineBox(self._listbox, title="Running")
+        # Keep App's pane-focus colour on chrome instead of leaking it into
+        # unstyled running-session text.
+        self._body = urwid.AttrMap(self._listbox, "body")
+        self._linebox = urwid.LineBox(self._body, title="Running")
         super().__init__(self._linebox)
 
     def set_active(self, tmux_name: str | None) -> None:

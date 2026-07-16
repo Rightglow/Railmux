@@ -117,6 +117,92 @@ def test_fast_path_still_rebinds(monkeypatch):
         f"F9 bind not found in fast path: {bind_calls}")
 
 
+def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
+    app = _bare_app(_right_pane_id="%5", _right_pane_claude="cc-old")
+    app._set_active_tmux_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._schedule_scroll_acceleration = MagicMock()
+    app._install_fullscreen_binding = MagicMock()
+    app._check_agent_slot_size = MagicMock()
+    events = []
+
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.fit_session_to_pane",
+        lambda session, pane: events.append(("fit", session, pane)) or True,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.respawn_pane",
+        lambda pane, _cmd: events.append(("respawn", pane)) or True,
+    )
+
+    assert app._attach_in_right_pane("cx-new", steal_focus=False) is True
+    assert events == [
+        ("fit", "cx-new", "%5"),
+        ("respawn", "%5"),
+    ]
+    assert app._primary_slot.agent_tmux_name == "cx-new"
+    assert app._primary_slot.mode_key == "codex"
+
+
+def test_first_attach_creates_detached_pane_then_fits_and_respawns(monkeypatch):
+    app = _bare_app()
+    app._set_active_tmux_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._schedule_scroll_acceleration = MagicMock()
+    app._install_fullscreen_binding = MagicMock()
+    app._check_agent_slot_size = MagicMock()
+    events = []
+
+    def split(cmd, **kwargs):
+        events.append(("split", cmd, kwargs))
+        return "%8"
+
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.split_window_h", split)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.fit_session_to_pane",
+        lambda session, pane: events.append(("fit", session, pane)) or True,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.respawn_pane",
+        lambda pane, _cmd: events.append(("respawn", pane)) or True,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.select_pane",
+        lambda pane: events.append(("select", pane)) or True,
+    )
+
+    assert app._attach_in_right_pane("cc-new") is True
+    assert events == [
+        ("split", "sleep 10", {"size_percent": 70, "detached": True}),
+        ("fit", "cc-new", "%8"),
+        ("respawn", "%8"),
+        ("select", "%8"),
+    ]
+
+
+def test_failed_first_respawn_removes_new_outer_pane(monkeypatch):
+    app = _bare_app()
+    app._check_agent_slot_size = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.split_window_h",
+        lambda _cmd, **_kwargs: "%8")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.fit_session_to_pane", lambda *_args: True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.respawn_pane", lambda *_args: False)
+    killed = []
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.kill_pane",
+        lambda pane: killed.append(pane) or True,
+    )
+
+    assert app._attach_in_right_pane("cc-new") is False
+    assert killed == ["%8"]
+    assert app._primary_slot.pane_id is None
+
+
 def test_keymap_references_f9():
     """Verify the keymap entry was updated from F3 to F9."""
     from railmux.ui.keymap import BINDINGS

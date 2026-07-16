@@ -61,7 +61,7 @@ BINDINGS: list[Binding] = [
     # Sessions only — delete removes the session JSONL.
     Binding(("d", "D"), "d", "del", "_on_delete_session",
             contexts=(CTX_SESSIONS, CTX_RUNNING)),
-    # All three — toggle between Claude Code and Codex mode.
+    # All three — cycle through the ordered agent-mode registry.
     Binding(("m", "M"), "m", "Mode", "_toggle_codex_mode",
             contexts=_ALL_CTX),
     # All three — opens a shell in the active project's directory.

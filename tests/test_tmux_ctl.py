@@ -13,6 +13,8 @@ from railmux.tmux_ctl import (
     enable_clipboard_passthrough,
     install_scroll_bindings,
     open_rollout_uuids_for_pid,
+    fit_session_to_pane,
+    pane_size,
     pane_pid_for_session,
     prepare_scroll_bindings,
     process_has_child,
@@ -27,6 +29,9 @@ from railmux.tmux_ctl import (
     scroll_lines_per_event,
     scroll_bindings_owned_by,
     server_snapshot,
+    resize_session_window,
+    session_attached_count,
+    window_size,
     wait_window_user_option,
     wait_for_processes_exit,
 )
@@ -425,6 +430,69 @@ def test_split_window_h_can_leave_focus_on_current_pane():
     ]
     assert "-d" in args
     assert "-l" in args
+
+
+def test_pane_size_parses_exact_dimensions():
+    with _mock_check_output("108\t38") as output:
+        assert pane_size("%9") == (108, 38)
+
+    assert output.call_args.args[0] == [
+        "tmux", "display-message", "-p", "-t", "%9",
+        "#{pane_width}\t#{pane_height}",
+    ]
+
+
+def test_window_size_parses_containing_workspace_dimensions():
+    with _mock_check_output("155\t38") as output:
+        assert window_size("%142") == (155, 38)
+
+    assert output.call_args.args[0] == [
+        "tmux", "display-message", "-p", "-t", "%142",
+        "#{window_width}\t#{window_height}",
+    ]
+
+
+def test_window_size_rejects_invalid_dimensions():
+    with _mock_check_output("0\t38"):
+        assert window_size("%142") is None
+    with _mock_check_output("not-a-size"):
+        assert window_size("%142") is None
+
+
+def test_resize_session_window_targets_detached_agent():
+    with _mock_check_call() as call:
+        assert resize_session_window("cx-agent", 108, 38) is True
+
+    assert call.call_args.args[0] == [
+        "tmux", "resize-window", "-t", "cx-agent",
+        "-x", "108", "-y", "38",
+    ]
+
+
+def test_fit_session_to_pane_is_best_effort(monkeypatch):
+    monkeypatch.setattr(
+        tmux_ctl, "session_attached_count", lambda _session: 0)
+    monkeypatch.setattr(tmux_ctl, "pane_size", lambda _pane: (90, 31))
+    resize = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "resize_session_window", resize)
+
+    assert fit_session_to_pane("cc-agent", "%4") is True
+    resize.assert_called_once_with("cc-agent", 90, 31)
+
+    monkeypatch.setattr(tmux_ctl, "pane_size", lambda _pane: None)
+    assert fit_session_to_pane("cc-agent", "%4") is False
+
+
+def test_session_attached_count_and_fit_guard(monkeypatch):
+    with _mock_check_output("2"):
+        assert session_attached_count("cc-agent") == 2
+
+    monkeypatch.setattr(
+        tmux_ctl, "session_attached_count", lambda _session: 1)
+    resize = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "resize_session_window", resize)
+    assert fit_session_to_pane("cc-agent", "%4") is False
+    resize.assert_not_called()
 
 
 # ── new_detached_session: inner-session options ──────────────────────────

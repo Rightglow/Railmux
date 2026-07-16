@@ -1,6 +1,12 @@
 # railmux
 
-Terminal UI for Claude Code sessions — urwid left sidebar + tmux right pane.
+Terminal UI for Claude Code and Codex sessions — urwid sidebar + tmux agent workspace.
+
+## Architecture changes
+
+Before changing modes, providers, pane layout, preview/fullscreen behavior, or
+soft-restart state, read `docs/ARCHITECTURE.md`. Candidate UX work and unresolved
+questions live in `ROADMAP.md`; roadmap entries are not implementation approval.
 
 ## Non-obvious constraint
 

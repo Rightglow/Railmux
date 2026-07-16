@@ -110,11 +110,17 @@ Clicking a running session attaches to it immediately (focus stays left so you c
 
 ## Status indicators
 
-Each session shows a coloured ● reflecting its current state:
+Each running session shows a coloured ● reflecting its current state:
 
 - **Green** — idle (assistant last responded normally)
 - **Yellow** — busy (assistant is processing)
 - **Red** — blocked (waiting for tool approval)
+
+A grass-green title identifies a live tmux session independently of its status;
+stopped sessions use a neutral hollow ○. The same grass green is used for the
+focused pane chrome and tmux status bar. The current cursor uses a deeper green
+background, while the session displayed in the agent pane remains marked in
+neutral slate after keyboard focus moves away.
 
 For Codex rollouts with lifecycle events, only `task_complete`, `turn_aborted`,
 or `thread_rolled_back` ends an active turn; intermediate assistant messages and

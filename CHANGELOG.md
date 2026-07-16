@@ -9,13 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added provider-neutral mode and at-most-two-slot agent-workspace foundations,
+  plus internal architecture/roadmap guidance for future providers and dual
+  agent panes. Current releases still expose the original single-agent layout.
+- Warn when the outer workspace is below the recommended 120x30 layout size, or an
+  individual agent pane is below 80x20, with stronger non-blocking warnings
+  below 80x20 and 50x12 respectively.
 - Missing-`tmux` startup checks now offer an explicit, default-no installation
   prompt for Homebrew on macOS and `apt-get` on Debian/Ubuntu/WSL. Other common
   Linux package managers receive an actionable manual command, while
   non-interactive launches never attempt to modify the system.
 
+### Changed
+
+- Use one grass-green focus system (`#5FAF00`): bright pane chrome and tmux
+  status bar, a deep-green cursor row, a neutral slate persistent target, and
+  grass-green live-session titles. Red/yellow/green status dots retain their
+  meaning across cursor and target backgrounds, while stopped sessions use a
+  neutral hollow marker. True-colour terminals receive the exact accent and
+  other terminals use an automatically downsampled fallback.
+
 ### Fixed
 
+- Read the containing tmux window rather than the narrow Urwid sidebar when
+  evaluating workspace dimensions, so a restored split no longer reports a
+  full-screen terminal as critically small. Rechecks are resize-event driven
+  instead of adding a tmux query to every poll tick.
+- Paint both tmux border styles together so the two-pane shared divider changes
+  as one continuous line instead of showing only its lower half in focus green.
+- Pre-size detached agent tmux windows to the exact outer pane dimensions before
+  attach, preventing an immediate Codex resize from visibly replaying/reflowing
+  long history when switching running sessions.
 - Check for the `tmux` executable before every TUI startup path, including an
   inherited or explicitly forced inside-tmux launch, instead of entering a TUI
   whose controls cannot work when `TMUX` is set but the binary is absent.

@@ -1,7 +1,8 @@
 """Thin wrappers around the tmux CLI.
 
-railmux uses tmux to host the claude side-pane. All tmux interaction goes
-through this module so error handling and command shape stay consistent.
+Railmux uses tmux to host detached agents and their display panes. All tmux
+interaction goes through this module so error handling and command shape stay
+consistent.
 """
 from __future__ import annotations
 
@@ -396,6 +397,103 @@ def list_panes() -> list[str]:
         return []
 
 
+def pane_size(pane_id: str) -> tuple[int, int] | None:
+    """Return ``(width, height)`` for an outer display pane."""
+    try:
+        out = subprocess.check_output(
+            [
+                "tmux", "display-message", "-p", "-t", pane_id,
+                "#{pane_width}\t#{pane_height}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        raw_width, raw_height = out.split("\t", 1)
+        width, height = int(raw_width), int(raw_height)
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+    except (OSError, subprocess.CalledProcessError, UnicodeError, ValueError):
+        return None
+
+
+def window_size(pane_id: str) -> tuple[int, int] | None:
+    """Return the drawable outer-window size containing *pane_id*.
+
+    This is deliberately different from :func:`pane_size`: a process running
+    in Railmux's sidebar sees only that pane's TTY dimensions, while layout
+    suitability depends on the full tmux window shared by the sidebar and
+    agent workspace.
+    """
+    try:
+        out = subprocess.check_output(
+            [
+                "tmux", "display-message", "-p", "-t", pane_id,
+                "#{window_width}\t#{window_height}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        raw_width, raw_height = out.split("\t", 1)
+        width, height = int(raw_width), int(raw_height)
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+    except (OSError, subprocess.CalledProcessError, UnicodeError, ValueError):
+        return None
+
+
+def resize_session_window(session_name: str, width: int, height: int) -> bool:
+    """Pre-size a detached agent window before a nested client attaches.
+
+    Detached tmux sessions commonly start at 80x24. Attaching one directly to a
+    differently-sized outer pane sends an immediate resize to the agent TUI,
+    which can replay/reflow a long Codex transcript visibly. Matching the inner
+    window first makes the subsequent attach size-stable.
+    """
+    if width <= 0 or height <= 0:
+        return False
+    try:
+        subprocess.check_call(
+            [
+                "tmux", "resize-window", "-t", session_name,
+                "-x", str(width), "-y", str(height),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def session_attached_count(session_name: str) -> int | None:
+    """Number of clients attached to *session_name*, or None on probe failure."""
+    try:
+        out = subprocess.check_output(
+            [
+                "tmux", "display-message", "-p", "-t", session_name,
+                "#{session_attached}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        count = int(out)
+        return count if count >= 0 else None
+    except (OSError, subprocess.CalledProcessError, UnicodeError, ValueError):
+        return None
+
+
+def fit_session_to_pane(session_name: str, pane_id: str) -> bool:
+    """Best-effort size synchronization used immediately before attach.
+
+    Only detached sessions are resized. An independently attached client owns
+    its current dimensions and must not be disrupted merely because Railmux is
+    about to become another client.
+    """
+    if session_attached_count(session_name) != 0:
+        return False
+    size = pane_size(pane_id)
+    return bool(size and resize_session_window(session_name, *size))
+
+
 def split_window_h(cmd: str = "", target: str | None = None,
                    size_percent: int | None = None,
                    detached: bool = False) -> str | None:
@@ -491,20 +589,15 @@ def set_window_option(name: str, value: str) -> bool:
         return False
 
 
-def set_window_border_style(value: str) -> bool:
-    """Set active and inactive pane borders to one window-scoped style.
-
-    tmux assigns sections of a shared border to different panes. Updating both
-    options together keeps the full divider one colour and uses one tmux client
-    process per focus transition.
-    """
+def set_window_border_styles(inactive: str, active: str) -> bool:
+    """Set inactive and active border styles in one window-scoped tmux call."""
     if not in_tmux():
         return False
     try:
         subprocess.check_call(
             [
-                "tmux", "set-window-option", "pane-border-style", value,
-                ";", "set-window-option", "pane-active-border-style", value,
+                "tmux", "set-window-option", "pane-border-style", inactive,
+                ";", "set-window-option", "pane-active-border-style", active,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -512,6 +605,11 @@ def set_window_border_style(value: str) -> bool:
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
+
+
+def set_window_border_style(value: str) -> bool:
+    """Paint active and inactive border segments with one continuous colour."""
+    return set_window_border_styles(value, value)
 
 
 def select_pane(pane_id: str) -> bool:

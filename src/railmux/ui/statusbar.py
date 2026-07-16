@@ -81,7 +81,7 @@ class ButtonBar(urwid.WidgetWrap):
     no background — so the row stays clean while still reading as clickable.
 
     ``? Help``  ``q Quit``  ``C-b d Detach`` are always present.
-    ``m Mode`` toggles between Claude Code and Codex (optional, at end).
+    ``m Mode`` cycles the registered agent modes (optional, at end).
     """
 
     def __init__(self, on_help: Callable[[], None],
@@ -237,4 +237,3 @@ class HintBar(urwid.WidgetWrap):
         if size:
             self._reflow(size[0])
         return super().render(size, focus)
-
