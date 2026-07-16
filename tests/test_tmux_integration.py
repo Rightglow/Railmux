@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import uuid
 from pathlib import Path
 
 import pytest
@@ -26,45 +25,37 @@ def isolated_tmux(monkeypatch):
     if shutil.which("tmux") is None:
         pytest.skip("tmux is not installed")
 
-    # Unix-domain socket paths are commonly capped at 104–108 bytes. pytest's
-    # nested tmp_path can exceed that on macOS/Linux, so use a short private
-    # directory directly under the platform temp root.
-    socket_root = Path(tempfile.mkdtemp(prefix="rx-tmux-"))
+    # Unix-domain socket paths are commonly capped at 104–108 bytes. macOS's
+    # default TMPDIR lives under /private/var/folders and can exceed that limit
+    # after tmux appends its own components. Keep the explicit socket pathname
+    # short while retaining a private directory for isolation.
+    socket_root = Path(tempfile.mkdtemp(prefix="rx-", dir="/tmp"))
     socket_root.chmod(0o700)
-    socket_label = f"railmux-smoke-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    socket_path = str(socket_root / "s")
     session_name = "railmux-smoke-display"
-    monkeypatch.setenv("TMUX_TMPDIR", str(socket_root))
     monkeypatch.delenv("TMUX", raising=False)
     monkeypatch.delenv("TMUX_PANE", raising=False)
 
-    socket_path: str | None = None
     try:
         subprocess.run(
             [
-                "tmux", "-L", socket_label, "-f", "/dev/null",
+                "tmux", "-S", socket_path, "-f", "/dev/null",
                 "new-session", "-d", "-s", session_name, "sleep 60",
             ],
             check=True,
             capture_output=True,
             text=True,
         )
-        socket_path = subprocess.check_output(
-            [
-                "tmux", "-L", socket_label, "display-message", "-p",
-                "-t", session_name, "#{socket_path}",
-            ],
-            text=True,
-        ).strip()
         server_pid = subprocess.check_output(
             [
-                "tmux", "-L", socket_label, "display-message", "-p",
+                "tmux", "-S", socket_path, "display-message", "-p",
                 "-t", session_name, "#{pid}",
             ],
             text=True,
         ).strip()
         pane_id = subprocess.check_output(
             [
-                "tmux", "-L", socket_label, "display-message", "-p",
+                "tmux", "-S", socket_path, "display-message", "-p",
                 "-t", session_name, "#{pane_id}",
             ],
             text=True,
@@ -76,13 +67,8 @@ def isolated_tmux(monkeypatch):
         tmux_ctl.tmux_version.cache_clear()
         yield session_name, pane_id, socket_path
     finally:
-        kill_command = (
-            ["tmux", "-S", socket_path, "kill-server"]
-            if socket_path
-            else ["tmux", "-L", socket_label, "kill-server"]
-        )
         subprocess.run(
-            kill_command,
+            ["tmux", "-S", socket_path, "kill-server"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
