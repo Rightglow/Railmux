@@ -160,6 +160,32 @@ def test_decode_schemas_fail_closed_independently():
     assert restart_state.decode_instance(dict(local, schema_version=2), identity) is None
 
 
+def test_portable_view_round_trips_stable_display_without_tmux_authority():
+    payload = {
+        "schema_version": restart_state.SCHEMA_VERSION,
+        "kind": "portable",
+        "view": restart_state.build_view({
+            "mode": "codex",
+            "project": "-tmp-sidebar",
+            "right_kind": "agent",
+            "right_mode": "claude",
+            "right_session": "session-uuid",
+            "right_project": "-tmp-agent-project",
+            "right_tmux": "cc-must-not-be-serialized",
+        }),
+    }
+
+    assert restart_state.decode_portable(payload) == {
+        "mode": "codex",
+        "project": "-tmp-sidebar",
+        "right_kind": "agent",
+        "right_mode": "claude",
+        "right_session": "session-uuid",
+        "right_project": "-tmp-agent-project",
+    }
+    assert "right_tmux" not in json.dumps(payload)
+
+
 def test_legacy_migration_extracts_no_process_authority():
     view = restart_state.legacy_portable_view({
         "codex_mode": True,

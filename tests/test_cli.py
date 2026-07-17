@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from railmux.cli import is_ssh_session, main
+from railmux.cli import _show_startup_message, is_ssh_session, main
 from railmux.config import ConfigError
 
 
@@ -122,3 +122,20 @@ def test_invalid_config_is_actionable_without_traceback(
     assert "invalid TOML" in stderr
     assert "Traceback" not in stderr
     app_cls.assert_not_called()
+
+
+def test_startup_message_paints_and_flushes_only_on_a_tty(monkeypatch):
+    output = MagicMock()
+    output.isatty.return_value = True
+    monkeypatch.setattr("railmux.cli.sys.stdout", output)
+
+    _show_startup_message()
+
+    output.write.assert_called_once_with(
+        "\033[2J\033[HRestoring Railmux workspace...\n")
+    output.flush.assert_called_once_with()
+
+    output.reset_mock()
+    output.isatty.return_value = False
+    _show_startup_message()
+    output.write.assert_not_called()

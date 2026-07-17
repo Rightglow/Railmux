@@ -98,6 +98,7 @@ PALETTE = [
     ("selected", "white,bold", "dark gray", "bold", "#ffffff,bold", _SLATE),
     ("title", "white,bold", ""),
     ("dim", "dark gray", ""),
+    ("modal_key", "yellow,bold", "", "bold", f"{_STATUS_YELLOW},bold", "default"),
     # ButtonBar — bright bold + underline reads as a clickable control.
     ("btn", "white,bold,underline", ""),
     ("btn_pressed", "white,bold", "dark green", "bold", "#ffffff,bold", _DEEP_GRASS_GREEN),
@@ -733,21 +734,54 @@ class App:
         self._pending_restore_state = state
 
     def _set_slot_active_target(
-        self, slot: AgentSlot, session_id: str | None, tmux_name: str | None,
+        self,
+        slot: AgentSlot,
+        session_id: str | None,
+        tmux_name: str | None,
+        *,
+        mode_key: str | None = None,
+        project_key: str | None = None,
     ) -> None:
         """Update one slot, painting sidebar highlights only for the active slot."""
         slot.active_session_id = session_id
-        mode = self._modes().for_tmux_name(tmux_name) if tmux_name else None
-        slot.mode_key = mode.key if mode is not None else None
+        if mode_key is not None:
+            try:
+                slot.mode_key = self._modes().get(mode_key).key
+            except KeyError:
+                slot.mode_key = None
+        elif tmux_name:
+            mode = self._modes().for_tmux_name(tmux_name)
+            slot.mode_key = mode.key if mode is not None else None
+        elif session_id is None:
+            slot.mode_key = None
+
+        if project_key is not None:
+            slot.project_key = project_key
+        elif tmux_name:
+            running = self._by_tmux(tmux_name)
+            slot.project_key = (
+                running.project.encoded_name
+                if running is not None and running.project is not None
+                else None
+            )
+        elif session_id is None:
+            slot.project_key = None
         if slot.key == self._agent_workspace().active_slot_key:
             self._sessions_pane.set_active_session(session_id)
             self._running_pane.set_active(tmux_name)
 
     def _set_active_target(self, session_id: str | None,
-                           tmux_name: str | None) -> None:
+                           tmux_name: str | None, *,
+                           mode_key: str | None = None,
+                           project_key: str | None = None) -> None:
         """Compatibility entry point for the currently exposed primary slot."""
         self._set_slot_active_target(
-            self._primary_slot, session_id, tmux_name)
+            self._primary_slot,
+            session_id,
+            tmux_name,
+            mode_key=mode_key,
+            project_key=project_key,
+        )
 
     def _set_active_tmux_target(
         self, tmux_name: str, slot: AgentSlot | None = None,
@@ -959,17 +993,47 @@ class App:
     def _restore_pending_right_pane(self, _loop, _user_data) -> None:
         """Restore persisted state, retaining its file if restoration raises."""
         state = self._pending_restore_state
+        right_mode = state.get("right_mode") if state is not None else None
+        codex_snapshot_ready = True
+        index = getattr(self, "_codex_index", None)
+        if isinstance(index, BackgroundCodexIndex):
+            codex_snapshot_ready = index.current_snapshot().generation > 0
         if getattr(self, "_codex_recovery_pending", False) and state is not None:
             # Exact live targets adopted from stamps are safe to display even
             # while the first filesystem generation is still pending. A
             # metadata-dependent target waits and is retried after settlement.
             if state.get("right_kind") == "agent":
                 target = state.get("right_tmux")
-                if not isinstance(target, str) or not any(
-                        item.tmux_name == target
-                        for item in self._running.values()):
+                session_id = state.get("right_session")
+                represented = (
+                    isinstance(target, str)
+                    and any(item.tmux_name == target
+                            for item in self._running.values())
+                ) or (
+                    isinstance(session_id, str)
+                    and session_id in self._running
+                )
+                if not represented:
                     return
-            elif state.get("right_kind") != "empty":
+            elif state.get("right_kind") == "preview":
+                if (right_mode == CODEX_MODE.key
+                        or (right_mode is None
+                            and self._active_mode().key == CODEX_MODE.key)):
+                    return
+        if state is not None and not codex_snapshot_ready:
+            kind = state.get("right_kind")
+            uses_codex_metadata = (
+                kind == "preview"
+                and (right_mode == CODEX_MODE.key
+                     or (right_mode is None
+                         and self._active_mode().key == CODEX_MODE.key))
+            ) or (
+                kind == "agent"
+                and right_mode == CODEX_MODE.key
+                and isinstance(state.get("right_session"), str)
+                and state["right_session"] not in self._running
+            )
+            if uses_codex_metadata:
                 return
         self._pending_restore_state = None
         if state is None:
@@ -1206,7 +1270,12 @@ class App:
         if self._show_transcript(session.jsonl_path,
                                  session_type=session.session_type):
             self._primary_slot.in_history_mode = True
-            self._set_active_target(session.session_id, None)
+            self._set_active_target(
+                session.session_id,
+                None,
+                mode_key=self._current_mode_key(),
+                project_key=session.project.encoded_name,
+            )
             if not self._show_attention_status(session.attention):
                 self._set_status(
                     f"≡ Previewing {session.display_title} (history)")
@@ -1933,7 +2002,7 @@ class App:
         # Save again at the point of commitment.  The confirmation modal may
         # have been open for a while and placeholder bindings can resolve in
         # the meantime.
-        self._save_state()
+        self._save_state(portable_right=True)
         self._begin_exit(soft=True)
 
     def _begin_exit(self, *, soft: bool) -> None:
@@ -2004,6 +2073,35 @@ class App:
             data["session_filter"] = sessions_pane.filter_text
         return data
 
+    def _portable_right_state_data(self) -> dict:
+        """Return a stable display wish with no node-local tmux authority."""
+        slot = self._primary_slot
+        session_id = slot.active_session_id
+        mode_key = slot.mode_key
+        if not session_id or session_id.startswith("__new__-") or not mode_key:
+            return {}
+        try:
+            self._modes().get(mode_key)
+        except KeyError:
+            return {}
+        if slot.in_history_mode:
+            kind = "preview"
+        elif slot.agent_tmux_name is not None:
+            running = self._by_tmux(slot.agent_tmux_name)
+            if running is None or running.is_placeholder or running.key != session_id:
+                return {}
+            kind = "agent"
+        else:
+            return {}
+        data = {
+            "right_kind": kind,
+            "right_mode": mode_key,
+            "right_session": session_id,
+        }
+        if slot.project_key:
+            data["right_project"] = slot.project_key
+        return data
+
     def _recovery_state_data(self) -> dict:
         data: dict = {}
         slot = self._primary_slot
@@ -2016,6 +2114,7 @@ class App:
             data["right_tmux"] = slot.agent_tmux_name
         else:
             data["right_kind"] = "empty"
+        data.update(self._portable_right_state_data())
 
         bindings: list[dict] = []
         for running in self._running.values():
@@ -2043,13 +2142,18 @@ class App:
             data["running_bindings"] = bindings
         return data
 
-    def _save_state(self) -> None:
+    def _save_state(self, *, portable_right: bool = False) -> None:
         """Persist portable view state and exact-owner recovery independently."""
-        view = restart_state.build_view(self._view_state_data())
+        view_data = self._view_state_data()
+        portable_view_data = dict(view_data)
+        if portable_right:
+            portable_view_data.update(self._portable_right_state_data())
+        portable_view = restart_state.build_view(portable_view_data)
+        local_view = restart_state.build_view(view_data)
         portable = {
             "schema_version": restart_state.SCHEMA_VERSION,
             "kind": "portable",
-            "view": view,
+            "view": portable_view,
         }
         if getattr(self, "_portable_state_writable", True):
             restart_state.write_portable(portable, self._portable_state_path())
@@ -2064,7 +2168,7 @@ class App:
             "owner": identity.to_json(),
             # Local view takes precedence over shared portable defaults, so two
             # simultaneous windows each restore their own display and focus.
-            "view": view,
+            "view": local_view,
             "recovery": self._recovery_state_data(),
         }
         if getattr(self, "_local_state_writable", True):
@@ -2126,13 +2230,72 @@ class App:
             return registry.resolve(CODEX_MODE.key).key
         return registry.default_key
 
+    def _right_mode_from_state(self, state: dict) -> AgentMode | None:
+        stored = state.get("right_mode")
+        if stored is None:
+            return self._active_mode()
+        if not isinstance(stored, str):
+            return None
+        try:
+            return self._modes().get(stored)
+        except KeyError:
+            return None
+
+    def _right_project_from_state(self, state: dict) -> Project | None:
+        project_key = state.get("right_project")
+        candidates = list(getattr(self, "_project_snapshot", None) or [])
+        selected = self._selected_project
+        if selected is not None and all(
+                item.encoded_name != selected.encoded_name for item in candidates):
+            candidates.append(selected)
+        if isinstance(project_key, str):
+            return next(
+                (item for item in candidates
+                 if item.encoded_name == project_key),
+                None,
+            )
+        return selected
+
+    def _restore_preview_target(self, state: dict) -> bool:
+        session_id = state.get("right_session")
+        mode = self._right_mode_from_state(state)
+        if not isinstance(session_id, str) or mode is None:
+            return False
+        if mode.project_source == ProjectSource.CODEX:
+            meta = self._codex_index.get(session_id)
+        else:
+            project = self._right_project_from_state(state)
+            if project is None:
+                return False
+            meta = self._session_cache.get(project, session_id)
+        if (meta is None or meta.session_type != mode.session_type
+                or not self._show_transcript(
+                    meta.jsonl_path, session_type=meta.session_type)):
+            return False
+        self._primary_slot.in_history_mode = True
+        self._set_active_target(
+            meta.session_id,
+            None,
+            mode_key=mode.key,
+            project_key=meta.project.encoded_name,
+        )
+        return True
+
     def _restore_right_pane(self, state: dict) -> bool:
         """Re-open the right pane to its state at soft-quit time."""
         kind = state.get("right_kind")
         if kind in ("agent", "claude"):  # "claude" written by <=0.1.1
             tmux_name = state.get("right_tmux")
-            if tmux_name and tmux_ctl.session_exists(tmux_name):
-                running = self._by_tmux(tmux_name)
+            session_id = state.get("right_session")
+            running = (
+                self._running.get(session_id)
+                if isinstance(session_id, str) else None
+            )
+            if running is not None:
+                tmux_name = running.tmux_name
+            if (isinstance(tmux_name, str)
+                    and tmux_ctl.session_exists(tmux_name)):
+                running = running or self._by_tmux(tmux_name)
                 if running is None:
                     # If the requested tmux was a historical duplicate, a
                     # validated state binding may lead to the canonical writer
@@ -2154,6 +2317,17 @@ class App:
                     self._set_status(msg, "error")
                     self._show_error(msg)
                     return False
+                actual_mode = self._modes().for_tmux_name(running.tmux_name)
+                expected_mode = (
+                    self._right_mode_from_state(state)
+                    if "right_mode" in state else actual_mode
+                )
+                if (expected_mode is None or actual_mode is None
+                        or expected_mode.key != actual_mode.key):
+                    msg = "Restore deferred: previous provider identity changed"
+                    self._set_status(msg, "error")
+                    self._show_error(msg)
+                    return False
                 if (running.orphan is not None
                         and not self._running_action_valid(running)):
                     msg = "Restore deferred: marked tmux identity changed"
@@ -2169,21 +2343,15 @@ class App:
                     self._set_status(msg, "error")
                     self._show_error(msg)
                     return False
+                return True
+            # A portable restart wish never authorizes process adoption. If its
+            # stable session is not live on this tmux server, reopen the same
+            # transcript read-only instead of resuming or launching anything.
+            if isinstance(session_id, str):
+                return self._restore_preview_target(state)
             return True
         elif kind == "preview":
-            sess_id = state.get("right_session")
-            if sess_id and self._selected_project is not None:
-                if self._active_mode().project_source == ProjectSource.CODEX:
-                    meta = self._codex_index.get(sess_id)
-                else:
-                    meta = self._session_cache.get(
-                        self._selected_project, sess_id)
-                if meta is not None and self._show_transcript(
-                        meta.jsonl_path, session_type=meta.session_type):
-                    self._primary_slot.in_history_mode = True
-                    self._set_active_target(meta.session_id, None)
-                    return True
-                return False
+            return self._restore_preview_target(state)
         return True
 
     @staticmethod
@@ -2472,9 +2640,12 @@ class App:
         except (OSError, _sp.CalledProcessError):
             return False
         self._last_orphan_probe_ok = True
+        project_snapshot = getattr(self, "_project_snapshot", None)
+        if project_snapshot is None:
+            project_snapshot = list_projects(self._claude_home)
         projects = {
             self._path_key(p.real_path): p
-            for p in list_projects(self._claude_home)
+            for p in project_snapshot
         }
         # A Codex-only cwd has no Claude project directory. Include synthetic
         # projects from one index snapshot so its surviving cx-* tmux session
@@ -2840,6 +3011,31 @@ class App:
             **kw,
         )
         self._loop.widget = overlay
+
+    def _show_delete_confirm(self, modal: DeleteConfirmModal) -> None:
+        """Show a compact confirmation that grows only for wrapped content."""
+        columns, rows = 80, 24
+        if self._loop is not None:
+            try:
+                columns, rows = self._loop.screen.get_cols_rows()
+            except Exception:
+                pass
+        width = 54
+        effective_width = min(
+            100,
+            int(width * 1.6) if self._right_pane_open() else width,
+        )
+        overlay_columns = max(8, columns * effective_width // 100)
+        height = min(
+            modal.preferred_height(overlay_columns),
+            max(1, rows - 2),
+        )
+        self._show_overlay(
+            modal,
+            width=width,
+            height=height,
+            fixed_height=True,
+        )
 
     def _close_modal(self) -> None:
         if self._loop is not None:
@@ -4023,7 +4219,7 @@ class App:
                 on_confirm=lambda: self._do_delete_session(session),
                 on_cancel=self._close_modal,
             )
-            self._show_overlay(modal, width=54, height=45)
+            self._show_delete_confirm(modal)
 
         elif pos == 2:
             # Running pane — kill the detached tmux session.
@@ -4059,7 +4255,7 @@ class App:
                     entry.identity_token),
                 on_cancel=self._close_modal,
             )
-            self._show_overlay(modal, width=54, height=45)
+            self._show_delete_confirm(modal)
 
         else:
             self._set_status("Use d on a session row or running-entry row to delete.")
@@ -4612,7 +4808,7 @@ class App:
             on_confirm=lambda s=session: self._do_delete_session(s),
             on_cancel=self._close_modal,
         )
-        self._show_overlay(modal, width=54, height=45)
+        self._show_delete_confirm(modal)
 
     # --- resize divider ---
 
@@ -4986,6 +5182,12 @@ class App:
 
     def _on_tick(self, loop, _user_data) -> None:
         self._refresh()
+        if self._pending_restore_state is not None:
+            # A portable Codex preview may have been waiting for the first
+            # immutable history generation even when no live recovery
+            # candidate existed. Retry after refresh; the restore callback's
+            # readiness checks keep generation zero non-blocking.
+            loop.set_alarm_in(0, self._restore_pending_right_pane)
         # When a click-outside overlay is showing OR we're in history mode
         # (less running in the right pane), poll faster so the user sees a
         # quick response when pressing q in less or clicking the right pane.

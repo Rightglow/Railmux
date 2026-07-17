@@ -12,6 +12,14 @@ from railmux import tmux_ctl
 from railmux.system_deps import ensure_tmux_available
 
 
+def _show_startup_message() -> None:
+    """Paint immediate feedback before App performs its initial discovery."""
+    if not sys.stdout.isatty():
+        return
+    sys.stdout.write("\033[2J\033[HRestoring Railmux workspace...\n")
+    sys.stdout.flush()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="railmux",
@@ -86,6 +94,10 @@ def main(argv: list[str] | None = None) -> int:
             display_path = "the Railmux configuration file"
         print(f"error: {display_path}: {exc}", file=sys.stderr)
         return 2
+    # App construction performs bounded initial provider/tmux discovery before
+    # Urwid can paint its first frame. A tiny terminal-native surface prevents
+    # that interval from looking like a hung empty tmux pane.
+    _show_startup_message()
     # Lazy import so non-TUI invocations (--version etc) don't pull urwid.
     from railmux.ui.app import App
     app = App(

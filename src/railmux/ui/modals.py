@@ -354,6 +354,9 @@ class DeleteConfirmModal(urwid.WidgetWrap):
                  on_confirm: Callable[[], None], on_cancel: Callable[[], None]) -> None:
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
+        self._action = action
+        self._session_name = session_name
+        self._detail = detail
         rows = [
             _Selectable(urwid.Text(("title", f"{action}?"), align="center")),
             _Selectable(urwid.Divider()),
@@ -365,7 +368,10 @@ class DeleteConfirmModal(urwid.WidgetWrap):
         footer = urwid.Pile([
             urwid.Divider(),
             urwid.Text(
-                ("dim", "y / Enter = confirm\nn / Esc = cancel"),
+                [
+                    ("modal_key", "y / Enter"), " = confirm\n",
+                    ("modal_key", "n / Esc"), " = cancel",
+                ],
                 align="center",
                 wrap="clip",
             ),
@@ -376,6 +382,21 @@ class DeleteConfirmModal(urwid.WidgetWrap):
             focus_part="body",
         )
         super().__init__(urwid.LineBox(self._frame, title="Confirm action"))
+
+    def preferred_height(self, maxcol: int) -> int:
+        """Return a compact height while leaving long content scrollable."""
+        inner = max(1, maxcol - 2)  # LineBox left/right border
+        body_rows = (
+            urwid.Text(f"{self._action}?").rows((inner,))
+            + 1
+            + urwid.Text(self._session_name).rows((inner,))
+            + 1
+            + urwid.Text(self._detail).rows((inner,))
+        )
+        # LineBox borders (2) + footer divider/action rows (3). Cap the body so
+        # pathological titles use the existing ListBox instead of growing into
+        # a nearly full-height confirmation window.
+        return min(16, max(8, body_rows + 5))
 
     def selectable(self) -> bool:
         return True

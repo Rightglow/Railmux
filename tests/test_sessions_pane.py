@@ -178,7 +178,7 @@ def test_stale_preview_callback_rechecks_live_running_session(monkeypatch):
         app, "_show_transcript",
         lambda *_args, **_kwargs: previewed.append(True) or True,
     )
-    monkeypatch.setattr(app, "_set_active_target", lambda *_args: None)
+    monkeypatch.setattr(app, "_set_active_target", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(app, "_set_status", lambda *_args: None)
 
     pane = SessionsPane(
@@ -240,7 +240,7 @@ def test_stale_running_registry_does_not_hide_stopped_preview(monkeypatch):
         app, "_show_transcript",
         lambda *_args, **_kwargs: previewed.append(True) or True,
     )
-    monkeypatch.setattr(app, "_set_active_target", lambda *_args: None)
+    monkeypatch.setattr(app, "_set_active_target", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(app, "_set_status", lambda *_args: None)
 
     app._on_session_preview(session)

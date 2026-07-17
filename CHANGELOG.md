@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Show an immediate startup surface while initial provider and tmux discovery
+  runs, reuse the already-built project snapshot during orphan recovery, and
+  avoid leaving a newly-created terminal pane apparently blank.
+- Size destructive confirmation dialogs from their wrapped content, cap long
+  bodies to a scrollable viewport, and render their action keys with an
+  explicit high-contrast style.
 - Make the one-line Button Bar responsive at narrow sidebar widths and paint a
   short pressed state before synchronous actions, so remote clicks receive an
   immediate visual acknowledgement without adding another focusable widget.
@@ -87,6 +93,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Restore the most recently displayed stable agent session or transcript after
+  a soft restart even when the outer tmux pane is recreated. Portable state
+  carries only provider/session/project view identity: live processes must be
+  rediscovered and validated locally, otherwise Railmux opens a read-only
+  preview and never resumes or launches a provider implicitly.
 - Keep double-click intent intact when a Sessions row redirects through an
   already-running entry, preventing the delayed right-pane focus transfer from
   being cancelled and bouncing back to the sidebar.

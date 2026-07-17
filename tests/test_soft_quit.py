@@ -257,6 +257,44 @@ def test_save_state_with_preview_in_right_pane(tmp_path, monkeypatch):
     assert data["right_session"] == "abc123"
 
 
+def test_soft_quit_portable_state_keeps_stable_agent_not_tmux_name(
+        tmp_path, monkeypatch):
+    local_path = tmp_path / "local.json"
+    portable_path = tmp_path / "portable.json"
+    monkeypatch.setattr(App, "_state_path", staticmethod(lambda: local_path))
+    monkeypatch.setattr(
+        App, "_portable_state_path", staticmethod(lambda: portable_path))
+    project = _project("myproj")
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    app = _minimal_app(selected_project=project)
+    app._running[session_id] = _Running(
+        key=session_id,
+        tmux_name="cc-12345678-1234-12",
+        label="myproj/session",
+        project=project,
+        session_type="claude",
+    )
+    app._right_pane_claude = "cc-12345678-1234-12"
+    app._active_session_id = session_id
+    app._primary_slot.mode_key = "claude"
+    app._primary_slot.project_key = project.encoded_name
+
+    app._save_state(portable_right=True)
+
+    portable = restart_state.decode_portable(
+        restart_state.read_json_object(portable_path))
+    assert portable == {
+        "mode": "claude",
+        "project": project.encoded_name,
+        "right_kind": "agent",
+        "right_mode": "claude",
+        "right_session": session_id,
+        "right_project": project.encoded_name,
+    }
+    assert "cc-12345678-1234-12" not in portable_path.read_text()
+    assert app._load_state()["right_tmux"] == "cc-12345678-1234-12"
+
+
 def test_save_state_persists_codex_mode(tmp_path, monkeypatch):
     """Restart records the stable provider registry key."""
     monkeypatch.setattr(App, "_state_path", staticmethod(lambda: tmp_path / "state.json"))
@@ -553,6 +591,18 @@ def test_discover_orphans_restores_persisted_binding_without_procfs(
 
     assert app._running[session_id].tmux_name == "cx-new---abcdef-1"
     assert app._running[session_id].label.endswith("/Recovered")
+
+
+def test_discover_orphans_reuses_initial_project_snapshot():
+    project = _project("cached-startup")
+    app = _minimal_app(selected_project=project)
+    app._project_snapshot = [project]
+
+    with patch("subprocess.check_output", return_value=""), patch(
+            "railmux.ui.app.list_projects") as scan:
+        assert app._discover_orphans() is True
+
+    scan.assert_not_called()
 
 
 def test_discover_orphans_prefers_valid_tmux_stamp_without_procfs(monkeypatch):
@@ -899,6 +949,71 @@ def test_restore_right_pane_refuses_unrepresented_live_tmux(monkeypatch):
     app._attach_in_right_pane.assert_not_called()
 
 
+def test_restore_portable_agent_by_validated_session_id(monkeypatch):
+    project = _project("portable")
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    running = _Running(
+        key=session_id,
+        tmux_name="cc-12345678-1234-12",
+        label="portable/session",
+        project=project,
+        session_type="claude",
+    )
+    app = _minimal_app(selected_project=project)
+    app._running[session_id] = running
+    app._attach_in_right_pane = MagicMock(return_value=True)
+    app._set_status = MagicMock()
+    app._show_error = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.session_exists", lambda name: name == running.tmux_name)
+
+    restored = app._restore_right_pane({
+        "right_kind": "agent",
+        "right_mode": "claude",
+        "right_session": session_id,
+        "right_project": project.encoded_name,
+    })
+
+    assert restored is True
+    app._attach_in_right_pane.assert_called_once_with(
+        running.tmux_name, steal_focus=False)
+
+
+def test_restore_preview_uses_persisted_mode_and_project_not_sidebar_mode():
+    preview_project = _project("preview")
+    sidebar_project = _project("sidebar")
+    session_id = "preview-session"
+    meta = MagicMock()
+    meta.session_id = session_id
+    meta.session_type = "claude"
+    meta.jsonl_path = Path("/tmp/preview.jsonl")
+    meta.project = preview_project
+    app = _minimal_app(selected_project=sidebar_project)
+    app._codex_mode = True
+    app._project_snapshot = [preview_project, sidebar_project]
+    app._session_cache.get.return_value = meta
+    app._codex_index = MagicMock()
+    app._show_transcript = MagicMock(return_value=True)
+    app._set_active_target = MagicMock()
+
+    restored = app._restore_right_pane({
+        "right_kind": "preview",
+        "right_mode": "claude",
+        "right_session": session_id,
+        "right_project": preview_project.encoded_name,
+    })
+
+    assert restored is True
+    app._session_cache.get.assert_called_once_with(preview_project, session_id)
+    app._codex_index.get.assert_not_called()
+    app._set_active_target.assert_called_once_with(
+        session_id,
+        None,
+        mode_key="claude",
+        project_key=preview_project.encoded_name,
+    )
+
+
 def test_pending_restore_retains_state_after_incomplete_running_recovery(
         tmp_path, monkeypatch):
     state_path = tmp_path / "state.json"
@@ -935,6 +1050,37 @@ def test_pending_index_allows_exact_running_target_restore(monkeypatch):
 
     app._restore_pending_right_pane(None, None)
 
+    app._restore_right_pane.assert_called_once()
+    assert app._pending_restore_state is None
+
+
+def test_pending_codex_preview_waits_for_first_history_generation(monkeypatch):
+    class _Snapshot:
+        generation = 0
+
+    class _Index:
+        def current_snapshot(self):
+            return _Snapshot()
+
+    monkeypatch.setattr("railmux.ui.app.BackgroundCodexIndex", _Index)
+    app = _minimal_app()
+    app._codex_index = _Index()
+    app._codex_recovery_pending = False
+    app._running_recovery_ok = False
+    app._pending_restore_state = {
+        "right_kind": "preview",
+        "right_mode": "codex",
+        "right_session": "codex-session",
+    }
+    app._restore_right_pane = MagicMock(return_value=True)
+
+    app._restore_pending_right_pane(None, None)
+
+    app._restore_right_pane.assert_not_called()
+    assert app._pending_restore_state is not None
+
+    _Snapshot.generation = 1
+    app._restore_pending_right_pane(None, None)
     app._restore_right_pane.assert_called_once()
     assert app._pending_restore_state is None
 
@@ -1469,7 +1615,9 @@ def test_restore_codex_preview_uses_codex_index():
     app._selected_project = _project()
     meta = MagicMock()
     meta.session_id = "codex-session"
+    meta.session_type = "codex"
     meta.jsonl_path = Path("/tmp/codex-rollout.jsonl")
+    meta.project = app._selected_project
     app._codex_index = MagicMock()
     app._codex_index.get.return_value = meta
     app._session_cache = MagicMock()
@@ -1485,7 +1633,12 @@ def test_restore_codex_preview_uses_codex_index():
     # renders correctly (#5), not just the path.
     app._show_transcript.assert_called_once_with(
         meta.jsonl_path, session_type=meta.session_type)
-    app._set_active_target.assert_called_once_with(meta.session_id, None)
+    app._set_active_target.assert_called_once_with(
+        meta.session_id,
+        None,
+        mode_key="codex",
+        project_key=meta.project.encoded_name,
+    )
 
 
 # ── #11: placeholder names are namespaced per process (no restart collision)

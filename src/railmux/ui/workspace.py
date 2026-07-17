@@ -59,6 +59,7 @@ class AgentSlot:
     in_history_mode: bool = False
     restore_state: SlotRestoreState | None = None
     mode_key: str | None = None
+    project_key: str | None = None
     last_size: tuple[int, int] | None = None
     last_size_class: str | None = None
     transport_kind: DisplayTransportKind = DisplayTransportKind.NESTED
@@ -75,6 +76,7 @@ class AgentSlot:
         self.in_history_mode = False
         self.restore_state = None
         self.mode_key = None
+        self.project_key = None
         self.last_size = None
         self.last_size_class = None
         self.transport_kind = DisplayTransportKind.NESTED

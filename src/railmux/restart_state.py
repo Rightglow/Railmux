@@ -242,6 +242,23 @@ def validate_view(raw: object) -> dict | None:
         value = _bounded_string(filters.get(source), 512)
         if value is not None:
             view[output] = value
+    display = active.get("display")
+    if display is not None:
+        if not isinstance(display, dict) or len(display) > 8:
+            return None
+        kind = _bounded_string(display.get("kind"), 16)
+        display_mode = _bounded_string(display.get("mode"), 64)
+        session = _bounded_string(display.get("session"), 256)
+        if kind not in {"agent", "preview"} or not display_mode or not session:
+            return None
+        view.update({
+            "right_kind": kind,
+            "right_mode": display_mode,
+            "right_session": session,
+        })
+        project = _bounded_string(display.get("project"), 512)
+        if project is not None:
+            view["right_project"] = project
     return view
 
 
@@ -263,6 +280,21 @@ def build_view(flat: dict) -> dict:
             filters[target] = value
     if filters:
         active["filters"] = filters
+    kind = flat.get("right_kind")
+    display_mode = flat.get("right_mode")
+    session = flat.get("right_session")
+    if (kind in {"agent", "preview"}
+            and isinstance(display_mode, str) and display_mode
+            and isinstance(session, str) and session):
+        display = {
+            "kind": kind,
+            "mode": display_mode,
+            "session": session,
+        }
+        project = flat.get("right_project")
+        if isinstance(project, str):
+            display["project"] = project
+        active["display"] = display
     return {"active_mode": mode, "modes": {mode: active}}
 
 
@@ -296,6 +328,8 @@ def decode_instance(
     string_fields = {
         "right_tmux": 256,
         "right_session": 256,
+        "right_mode": 64,
+        "right_project": 512,
     }
     for key, limit in string_fields.items():
         value = _bounded_string(recovery.get(key), limit)

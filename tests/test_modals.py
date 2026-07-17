@@ -1,6 +1,7 @@
 """Tests for railmux.ui.modals — PathBrowser directory navigation and filter."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from railmux.models import (
     AttentionCategory,
@@ -8,6 +9,7 @@ from railmux.models import (
     Project,
     SessionMeta,
 )
+from railmux.ui.app import App
 
 from railmux.ui.modals import (
     ContextMenu,
@@ -63,6 +65,60 @@ def _attention_session(tmp_path: Path) -> SessionMeta:
 def _rendered_text(widget, size=(60, 24)) -> str:
     canvas = widget.render(size, focus=False)
     return "\n".join(line.decode(errors="replace") for line in canvas.text)
+
+
+def _rendered_attrs(widget, size=(60, 24)) -> set[str | None]:
+    canvas = widget.render(size, focus=False)
+    return {
+        attr
+        for row in canvas.content()
+        for attr, _charset, _text in row
+    }
+
+
+def test_delete_confirm_height_tracks_content_and_caps_long_names():
+    short = DeleteConfirmModal(
+        "Delete session", "short", "Permanent removal.",
+        on_confirm=lambda: None, on_cancel=lambda: None,
+    )
+    long = DeleteConfirmModal(
+        "Delete session", "very long title " * 80, "Permanent removal.",
+        on_confirm=lambda: None, on_cancel=lambda: None,
+    )
+
+    assert short.preferred_height(40) < long.preferred_height(40)
+    assert short.preferred_height(40) <= 10
+    assert long.preferred_height(40) == 16
+
+
+def test_delete_confirm_action_keys_use_high_contrast_attribute():
+    modal = DeleteConfirmModal(
+        "Delete session", "short", "Permanent removal.",
+        on_confirm=lambda: None, on_cancel=lambda: None,
+    )
+
+    assert "modal_key" in _rendered_attrs(
+        modal, size=(40, modal.preferred_height(40)))
+
+
+def test_app_uses_compact_fixed_height_for_short_delete_confirm():
+    app = App.__new__(App)
+    app._loop = MagicMock()
+    app._loop.screen.get_cols_rows.return_value = (40, 24)
+    app._right_pane_open = MagicMock(return_value=False)
+    app._show_overlay = MagicMock()
+    modal = DeleteConfirmModal(
+        "Delete session", "short", "Permanent removal.",
+        on_confirm=lambda: None, on_cancel=lambda: None,
+    )
+
+    app._show_delete_confirm(modal)
+
+    assert app._show_overlay.call_args.kwargs == {
+        "width": 54,
+        "height": 10,
+        "fixed_height": True,
+    }
 
 
 def test_delete_confirm_keeps_actions_visible_for_long_name():

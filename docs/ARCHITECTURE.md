@@ -65,14 +65,19 @@ replaced as 0600 inside a verified user-owned 0700 runtime directory. Cleanup
 is bounded and removes only recognized owners proven dead; unknown/newer state
 and old but possibly-live private servers are retained.
 
-Portable state lives beside `config.toml` and contains only an active mode plus
-per-mode project/session selections and filters. It contains no tmux names,
-pane/process IDs, commands, environment values, transcripts, or recovery
-authority. A second node may use it as a view default but must ignore every
-node-local pane identity. The old fixed `railmux-state.json` has no owner proof,
-so migration may extract only validated portable view fields; right-pane and
-running-binding fields remain ignored and the legacy file is left for manual
-cleanup.
+Portable state lives beside `config.toml` and contains an active mode,
+per-mode project/session selections and filters, plus an optional right-display
+wish expressed only as provider mode, stable session ID, and project key. It
+contains no tmux names, pane/process IDs, commands, environment values,
+transcripts, or recovery authority. On restart Railmux may attach only after
+the current tmux server independently rediscovers and validates that session as
+live. If it is not live locally, the stable ID may select an existing transcript
+for read-only preview but must never authorize resume, launch, kill, or process
+adoption. A second node may therefore use it as a view default while ignoring
+every node-local pane identity. The old fixed `railmux-state.json` has no owner
+proof, so migration may extract only validated portable view fields;
+right-pane and running-binding fields remain ignored and the legacy file is
+left for manual cleanup.
 
 Detached-session tmux stamps and swap-transport markers retain their own exact
 lifetimes and validation. Runtime JSON is a cache and must not become a
@@ -153,7 +158,9 @@ the same last-known-good generation rules.
 `AgentWorkspace` owns at most two `AgentSlot` objects: `primary` and
 `secondary`. An agent slot owns every mutable fact about its outer display
 pane: pane ID, attached background session, provider key, active session ID,
-preview state, and preview restore target.
+active project key, preview state, and preview restore target. Portable restart
+state serializes only the stable provider/session/project subset of the active
+slot; exact tmux display ownership remains instance-local.
 
 The currently browsed sidebar mode and the providers displayed in agent slots
 are independent. Switching the sidebar from Claude to Codex must not replace,
