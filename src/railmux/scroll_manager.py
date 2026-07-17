@@ -28,6 +28,7 @@ class ScrollManager:
         self._bindings_backup: tmux_ctl.ScrollBindingBackup | None = None
         self._target_windows: set[str] = set()
         self._active_session: str | None = None
+        self._active_target_pane: str | None = None
         self._recovered_state = False
 
     @staticmethod
@@ -205,13 +206,17 @@ class ScrollManager:
             self._active_session = None
             self._save_state()
             return False
+        self._active_target_pane = target_pane
         return True
 
     def maintain(self) -> None:
         """Recreate a failed helper while the same agent session is visible."""
         if (self.enabled and self._active_session and self._lock_fd is not None
                 and (not self._agent_pane or not tmux_ctl.pane_alive(self._agent_pane))):
-            self.configure(self._active_session)
+            self.configure(
+                self._active_session,
+                target_pane=self._active_target_pane,
+            )
 
     def close(self) -> None:
         """Restore tmux state and release this server's ownership lock."""
@@ -220,9 +225,9 @@ class ScrollManager:
         for target_window in self._target_windows:
             tmux_ctl.set_window_user_option(
                 target_window, "@railmux_scroll_agent", None)
-        if (self._bindings_backup is not None and self._agent_pane
-                and tmux_ctl.scroll_bindings_owned_by(self._agent_pane)):
-            tmux_ctl.restore_scroll_bindings(self._bindings_backup)
+        if self._bindings_backup is not None and self._agent_pane:
+            tmux_ctl.restore_owned_scroll_bindings(
+                self._agent_pane, self._bindings_backup)
         if self._agent_session:
             tmux_ctl.kill_session(self._agent_session)
         self._remove_state()
@@ -233,3 +238,4 @@ class ScrollManager:
         self._bindings_backup = None
         self._target_windows.clear()
         self._active_session = None
+        self._active_target_pane = None

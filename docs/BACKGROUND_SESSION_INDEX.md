@@ -32,6 +32,15 @@ generation containing cached live metadata. The first injected failure exposed
 the bounded warning `Codex session scan skipped 1 transient file error(s)`;
 the immediately following equivalent permission warning was deduplicated.
 
+Startup recovery is also generation-fenced. Exact tmux stamps are rendered as
+provisional Running entries if the first scan has not published yet, then
+revalidated against one pinned generation. Deterministic tests publish a newer
+generation during a compound read and verify that both normal queries and
+`current_snapshot()` continue to expose only the pinned generation; transient
+publication, tmux-probe failures, and a clean scan that still cannot see an
+actively-written exact rollout preserve provisional Running entries for the
+next generation.
+
 Publication delay here is measured from a forced request until the generation
 is observable. Terminal paint, real NFS behavior, macOS filesystem behavior,
 and provider write races require separate runtime evidence; this synthetic run

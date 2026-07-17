@@ -989,6 +989,9 @@ def wait_window_user_option(target_window: str, name: str, value: str,
 _SCROLL_TABLES = ("copy-mode", "copy-mode-vi")
 _SCROLL_KEYS = ("WheelUpPane", "WheelDownPane")
 ScrollBindingBackup = dict[tuple[str, str], Optional[str]]
+RootWheelBindingBackup = dict[str, Optional[str]]
+_ROOT_WHEEL_KEYS = ("WheelUpPane", "WheelDownPane")
+_ROOT_WHEEL_MARKER = "railmux-wheel-forward-v1"
 
 
 def _read_key_binding(table: str, key: str) -> str | None:
@@ -1057,16 +1060,24 @@ def scroll_lines_per_event(backup: ScrollBindingBackup) -> int:
     return counts.pop() if len(counts) == 1 else 0
 
 
+def _scroll_binding_owned_by(
+    agent_pane_id: str, key: str, binding: str | None,
+) -> bool:
+    """Whether one live copy-mode binding targets this exact helper pane."""
+    direction = "U" if key == "WheelUpPane" else "D"
+    return bool(
+        binding
+        and "#{@railmux_scroll_agent}" in binding
+        and f"send-keys -t {agent_pane_id} {direction}" in binding
+    )
+
+
 def scroll_bindings_owned_by(agent_pane_id: str) -> bool:
     """True when all active wrappers still point at this manager's agent."""
-    current = read_scroll_bindings()
-    for (_table, key), binding in current.items():
-        direction = "U" if key == "WheelUpPane" else "D"
-        if (not binding
-                or "#{@railmux_scroll_agent}" not in binding
-                or f"send-keys -t {agent_pane_id} {direction}" not in binding):
-            return False
-    return True
+    return all(
+        _scroll_binding_owned_by(agent_pane_id, key, binding)
+        for (_table, key), binding in read_scroll_bindings().items()
+    )
 
 
 def _binding_command(binding: str) -> str:
@@ -1075,6 +1086,143 @@ def _binding_command(binding: str) -> str:
     if not match:
         raise ValueError(f"unrecognized tmux binding: {binding}")
     return match.group(1).replace(r"\;", ";")
+
+
+def read_root_wheel_bindings() -> RootWheelBindingBackup:
+    """Capture root-table wheel bindings changed by sidebar forwarding."""
+    return {key: _read_key_binding("root", key) for key in _ROOT_WHEEL_KEYS}
+
+
+def _root_wheel_bindings_are_defaults(
+    backup: RootWheelBindingBackup,
+) -> bool:
+    """Accept only tmux's stock root wheel behavior.
+
+    Root bindings affect every window on the server.  A user-customized wheel
+    command therefore disables Railmux forwarding instead of being embedded in
+    a wrapper whose command grammar may change across supported tmux versions.
+    """
+    down = backup.get("WheelDownPane")
+    if down is not None:
+        return False
+    up = backup.get("WheelUpPane")
+    if up is None:
+        return False
+    try:
+        body = " ".join(_binding_command(up).split())
+    except ValueError:
+        return False
+    return (
+        "mouse_any_flag" in body
+        and "send-keys -M" in body
+        and "copy-mode -e" in body
+        and _ROOT_WHEEL_MARKER not in body
+    )
+
+
+def prepare_root_wheel_bindings() -> RootWheelBindingBackup | None:
+    """Return stock root wheel bindings when they are safe to wrap."""
+    if tmux_version() < (2, 7):
+        return None
+    backup = read_root_wheel_bindings()
+    return backup if _root_wheel_bindings_are_defaults(backup) else None
+
+
+def set_root_wheel_forwarding(
+    backup: RootWheelBindingBackup,
+    token: str,
+) -> bool:
+    """Forward both wheel directions to mouse-aware pane applications.
+
+    The literal marker makes crash recovery able to distinguish Railmux's
+    wrapper from a binding the user installed while Railmux was running.
+    Non-mouse-aware panes retain the exact stock fallback; WheelDownPane was
+    unbound by default and therefore has no false branch.
+    """
+    marker = f"{_ROOT_WHEEL_MARKER}-{token}"
+    condition = (
+        "#{&&:#{mouse_any_flag},"
+        f"#{{==:{marker},{marker}}}}}"
+    )
+    try:
+        for key in _ROOT_WHEEL_KEYS:
+            args = [
+                "tmux", "bind-key", "-T", "root", key,
+                "if-shell", "-F", "-t", "=", condition,
+                "send-keys -M",
+            ]
+            binding = backup.get(key)
+            if binding is not None:
+                args.append(_binding_command(binding))
+            subprocess.check_call(
+                args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
+        return False
+    return True
+
+
+def root_wheel_bindings_owned_by(token: str) -> bool:
+    """Whether both live root bindings are this manager's wrappers."""
+    marker = f"{_ROOT_WHEEL_MARKER}-{token}"
+    return all(
+        binding is not None
+        and marker in binding
+        and "mouse_any_flag" in binding
+        and "send-keys -M" in binding
+        for binding in read_root_wheel_bindings().values()
+    )
+
+
+def root_wheel_binding_is_original_or_owned(
+    key: str,
+    binding: str | None,
+    original: str | None,
+    token: str,
+) -> bool:
+    """Crash-recovery guard for an interrupted two-binding install."""
+    if binding == original:
+        return True
+    marker = f"{_ROOT_WHEEL_MARKER}-{token}"
+    return bool(binding and marker in binding and "send-keys -M" in binding)
+
+
+def restore_root_wheel_bindings(
+    backup: RootWheelBindingBackup,
+    *,
+    token: str,
+) -> None:
+    """Restore only bindings still owned by *token*.
+
+    A user may reload tmux configuration while Railmux is open.  Per-key
+    ownership checks ensure teardown never overwrites that newer choice.
+    """
+    current = read_root_wheel_bindings()
+    marker = f"{_ROOT_WHEEL_MARKER}-{token}"
+    for key in _ROOT_WHEEL_KEYS:
+        live = current.get(key)
+        if live is None or marker not in live:
+            continue
+        original = backup.get(key)
+        try:
+            if original is None:
+                subprocess.check_call(
+                    ["tmux", "unbind-key", "-T", "root", key],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                fd, path = tempfile.mkstemp(
+                    prefix="railmux-root-wheel-", suffix=".conf")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(original + "\n")
+                    subprocess.check_call(
+                        ["tmux", "source-file", path],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                finally:
+                    os.unlink(path)
+        except (OSError, subprocess.CalledProcessError, FileNotFoundError):
+            pass
 
 
 def _set_scroll_bindings(agent_pane_id: str,
@@ -1161,6 +1309,28 @@ def restore_scroll_bindings(backup: ScrollBindingBackup) -> None:
                 )
             except (subprocess.CalledProcessError, FileNotFoundError):
                 pass
+
+
+def restore_owned_scroll_bindings(
+    agent_pane_id: str,
+    backup: ScrollBindingBackup,
+) -> None:
+    """Restore only wrappers still owned by *agent_pane_id*.
+
+    A user may reload tmux configuration while Railmux is open. Copy-mode key
+    tables are server-global, so teardown must preserve every binding changed
+    after Railmux installed its wrapper while still removing the other wrappers
+    before their helper pane is killed.
+    """
+    current = read_scroll_bindings()
+    owned = {
+        binding_key: backup.get(binding_key)
+        for binding_key, binding in current.items()
+        if binding_key in backup and _scroll_binding_owned_by(
+            agent_pane_id, binding_key[1], binding)
+    }
+    if owned:
+        restore_scroll_bindings(owned)
 
 
 def _single_line_error(text: str, limit: int = 500) -> str:

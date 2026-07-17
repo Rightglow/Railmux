@@ -127,7 +127,10 @@ def run_doctor(
         f"Config: {config_status}",
         f"Claude data: {_directory_status(claude_home)}",
         f"Codex data: {_directory_status(Path(config.codex_home).expanduser())}",
-        "No session IDs, transcript content, credentials, hostnames, or raw custom paths included.",
+        (
+            "Privacy: session IDs, transcript content, credentials, hostnames, "
+            "and raw custom paths are omitted; review before sharing."
+        ),
     )
     print("\n".join(lines), file=stdout)
     return 0

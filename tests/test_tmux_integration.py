@@ -317,6 +317,64 @@ def test_real_tmux_session_split_attach_persistence_and_styles(isolated_tmux):
     assert tmux_ctl.kill_session(agent_session)
 
 
+def test_real_copy_mode_restore_preserves_one_new_user_binding(isolated_tmux):
+    """Closing Railmux restores owned wrappers without undoing a tmux reload."""
+    _display_session, helper_pane, _socket_path = isolated_tmux
+    backup = tmux_ctl.prepare_scroll_bindings()
+    assert backup is not None
+    assert tmux_ctl.rebind_scroll_agent(helper_pane, backup)
+
+    subprocess.run(
+        [
+            "tmux", "bind-key", "-T", "copy-mode", "WheelDownPane",
+            "send-keys", "-X", "cancel",
+        ],
+        check=True,
+    )
+    tmux_ctl.restore_owned_scroll_bindings(helper_pane, backup)
+    current = tmux_ctl.read_scroll_bindings()
+
+    custom = current[("copy-mode", "WheelDownPane")]
+    assert custom is not None and "send-keys -X cancel" in custom
+    for binding_key, original in backup.items():
+        if binding_key == ("copy-mode", "WheelDownPane"):
+            continue
+        assert current[binding_key] == original
+
+
+def test_real_root_wheel_install_restore_and_user_reload(isolated_tmux):
+    """Root wheel wrappers round-trip exactly and never undo a newer key."""
+    backup = tmux_ctl.prepare_root_wheel_bindings()
+    assert backup is not None
+
+    first_token = "integration-first"
+    assert tmux_ctl.set_root_wheel_forwarding(backup, first_token)
+    installed = tmux_ctl.read_root_wheel_bindings()
+    assert all(
+        binding is not None
+        and f"railmux-wheel-forward-v1-{first_token}" in binding
+        and "send-keys -M" in binding
+        for binding in installed.values()
+    )
+    tmux_ctl.restore_root_wheel_bindings(backup, token=first_token)
+    assert tmux_ctl.read_root_wheel_bindings() == backup
+
+    second_token = "integration-second"
+    assert tmux_ctl.set_root_wheel_forwarding(backup, second_token)
+    subprocess.run(
+        [
+            "tmux", "bind-key", "-T", "root", "WheelDownPane",
+            "display-message", "user-custom-wheel",
+        ],
+        check=True,
+    )
+    tmux_ctl.restore_root_wheel_bindings(backup, token=second_token)
+    current = tmux_ctl.read_root_wheel_bindings()
+    assert current["WheelUpPane"] == backup["WheelUpPane"]
+    custom = current["WheelDownPane"]
+    assert custom is not None and "user-custom-wheel" in custom
+
+
 def test_real_tmux_swap_recovery_direct_kill_and_fallback(isolated_tmux):
     display_session, owner_pane, socket_path = isolated_tmux
     outer_id = tmux_ctl.current_session_id()

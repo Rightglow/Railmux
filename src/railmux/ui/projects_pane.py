@@ -8,7 +8,12 @@ from railmux.fuzzy import fuzzy_match
 import urwid
 
 from railmux.models import Project
-from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.ui._widgets import (
+    ClickableRow,
+    ScrollableSidebarPane,
+    remember_focus,
+    restore_focus,
+)
 
 
 class _ProjectRow(ClickableRow):
@@ -32,7 +37,7 @@ class _NewProjectRow(ClickableRow):
         )
 
 
-class ProjectsPane(urwid.WidgetWrap):
+class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     """Pinned + New project header + scrollable list of projects below it.
 
     Layout:
@@ -74,6 +79,10 @@ class ProjectsPane(urwid.WidgetWrap):
         # colours only the LineBox chrome (border/title), never ordinary rows.
         self._body = urwid.AttrMap(self._pile, "body")
         super().__init__(urwid.LineBox(self._body, title="Projects"))
+
+    def _wheel_chrome_rows(self) -> int:
+        # LineBox borders plus the pinned New Project row and divider.
+        return 4
 
     def _build_rows(self, projects: list[Project]) -> list:
         needle = self._filter.lower()

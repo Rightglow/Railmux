@@ -11,6 +11,7 @@ from railmux.models import (
 
 from railmux.ui.modals import (
     ContextMenu,
+    DeleteConfirmModal,
     PathBrowser,
     PathBrowserModal,
     RunningInfoModal,
@@ -62,6 +63,53 @@ def _attention_session(tmp_path: Path) -> SessionMeta:
 def _rendered_text(widget, size=(60, 24)) -> str:
     canvas = widget.render(size, focus=False)
     return "\n".join(line.decode(errors="replace") for line in canvas.text)
+
+
+def test_delete_confirm_keeps_actions_visible_for_long_name():
+    modal = DeleteConfirmModal(
+        "Delete session",
+        "long session title " * 12,
+        "The session file will be permanently removed from disk.",
+        on_confirm=lambda: None,
+        on_cancel=lambda: None,
+    )
+
+    text = _rendered_text(modal, size=(30, 12))
+
+    assert "Enter = confirm" in text
+    assert "Esc = cancel" in text
+
+
+def test_delete_confirm_keeps_actions_visible_for_long_cjk_name():
+    modal = DeleteConfirmModal(
+        "Kill running session",
+        "很长的会话名称" * 20,
+        "The detached tmux session will be killed.",
+        on_confirm=lambda: None,
+        on_cancel=lambda: None,
+    )
+
+    text = _rendered_text(modal, size=(24, 8))
+
+    assert "confirm" in text
+    assert "cancel" in text
+
+
+def test_delete_confirm_scrolls_long_body_but_keeps_footer():
+    modal = DeleteConfirmModal(
+        "Delete session",
+        "word " * 80,
+        "PERMANENT CONSEQUENCE",
+        on_confirm=lambda: None,
+        on_cancel=lambda: None,
+    )
+
+    for _ in range(12):
+        modal.keypress((30, 10), "page down")
+    text = _rendered_text(modal, size=(30, 10))
+
+    assert "PERMANENT CONSEQUENCE" in text
+    assert "Enter = confirm" in text
 
 
 def test_session_info_renders_attention_and_retry(tmp_path: Path):

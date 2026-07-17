@@ -100,9 +100,23 @@ def test_cache_get_missing_returns_none(tmp_path):
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     from railmux.ui.app import App, _Running
+    from railmux import restart_state
     ch = tmp_path / ".claude"
     (ch / "projects").mkdir(parents=True)
-    a = App(claude_home=ch, config=Config(), auto_launched=False)
+    monkeypatch.setattr(restart_state, "capture_outer_identity", lambda: None)
+    monkeypatch.setattr(
+        App, "_portable_state_path",
+        staticmethod(lambda: tmp_path / "portable.json"),
+    )
+    monkeypatch.setattr(
+        restart_state, "legacy_state_path", lambda: tmp_path / "legacy.json")
+    monkeypatch.setattr(
+        App, "_discover_orphans", lambda self, state=None, **kwargs: True)
+    a = App(
+        claude_home=ch,
+        config=Config(codex_home=str(tmp_path / ".codex")),
+        auto_launched=False,
+    )
     return a, _Running
 
 

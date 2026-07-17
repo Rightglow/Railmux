@@ -10,7 +10,12 @@ import urwid
 
 from railmux.fuzzy import fuzzy_match
 from railmux.models import Project, SessionMeta
-from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.ui._widgets import (
+    ClickableRow,
+    ScrollableSidebarPane,
+    remember_focus,
+    restore_focus,
+)
 
 
 def _format_when(epoch: float) -> str:
@@ -122,7 +127,7 @@ class _NewSessionRow(ClickableRow):
                          on_click)
 
 
-class SessionsPane(urwid.WidgetWrap):
+class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     def __init__(self, on_select: Callable[[SessionMeta | None], None],
                  on_preview: "Callable[[SessionMeta], None] | None" = None,
                  on_context: "Callable[[SessionMeta], None] | None" = None,
@@ -158,6 +163,10 @@ class SessionsPane(urwid.WidgetWrap):
         if self._walker:
             self._pile.focus_position = 0
         super().__init__(self._linebox)
+
+    def _wheel_chrome_rows(self) -> int:
+        # A selected project adds the pinned New Session row and divider.
+        return 4 if self._project is not None else 2
 
     def set_sessions(self, project: Project | None, sessions: list[SessionMeta],
                      running_ids: set[str] | None = None,

@@ -206,7 +206,8 @@ def test_paste_into_rename_modal_passes_through():
 def test_paste_into_delete_confirm_is_still_blocked():
     # The hazard case: a pasted 'y' must NOT confirm a pending delete.
     app = _with_modal(
-        _paste_app(), DeleteConfirmModal("t", "d", lambda: None, lambda: None))
+        _paste_app(), DeleteConfirmModal(
+            "Delete session", "t", "d", lambda: None, lambda: None))
     out = app._filter_input(["begin paste", "y", "end paste"], [])
     assert out == []
     app._set_status.assert_called_once()
@@ -331,7 +332,30 @@ def test_new_session_intent_cancels_pending_double_focus(monkeypatch):
     assert app._frame._window_active is True
     set_border.assert_called_once_with("fg=colour240", "fg=colour240")
     app._loop.draw_screen.assert_called_once_with()
-    app._launch_resume.assert_called_once_with(session, steal_focus=False)
+    app._launch_resume.assert_called_once_with(
+        session, steal_focus=False, from_double=False)
+
+
+def test_double_click_intent_reaches_resume_without_cancelling_focus():
+    """The Sessions -> resume hop must preserve double-click intent.
+
+    A live-session resume is redirected through ``_on_running_select``. Losing
+    the marker at this first hop makes that redirect cancel the delayed
+    right-pane focus alarm and visibly bounce focus back to Sessions.
+    """
+    app = App.__new__(App)
+    app._in_history_mode = True
+    app._restore_state = object()
+    app._cancel_pending_double_focus = MagicMock()
+    app._launch_resume = MagicMock()
+    session = MagicMock()
+
+    app._on_session_select(
+        session, steal_focus=False, from_double=True)
+
+    app._cancel_pending_double_focus.assert_not_called()
+    app._launch_resume.assert_called_once_with(
+        session, steal_focus=False, from_double=True)
 
 
 

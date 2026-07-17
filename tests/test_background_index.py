@@ -103,6 +103,7 @@ def test_compound_read_stays_on_one_generation() -> None:
         scanner.sessions = (_meta("two", 2.0),)
         index.refresh()
         assert index.wait_for_generation(2)
+        assert index.current_snapshot().generation == 1
         assert index.get("one", refresh=False) is not None
         assert index.get("two", refresh=False) is None
         index.end_read()

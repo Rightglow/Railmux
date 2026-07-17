@@ -19,6 +19,7 @@ from railmux.tmux_ctl import (
     prepare_scroll_bindings,
     process_has_child,
     restore_scroll_bindings,
+    restore_owned_scroll_bindings,
     session_rollout_ids,
     set_window_border_style,
     set_window_user_option,
@@ -355,6 +356,73 @@ def test_tmux_older_than_27_disables_scroll_coalescing():
     read.assert_not_called()
 
 
+def _default_root_wheel_backup():
+    return {
+        "WheelUpPane": (
+            'bind-key -T root WheelUpPane if-shell -F '
+            '"#{||:#{pane_in_mode},#{mouse_any_flag}}" '
+            '{ send-keys -M } { copy-mode -e }'
+        ),
+        "WheelDownPane": None,
+    }
+
+
+def test_root_wheel_forwarding_requires_stock_bindings_and_tmux_27():
+    backup = _default_root_wheel_backup()
+    with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 4)), \
+         patch("railmux.tmux_ctl.read_root_wheel_bindings",
+               return_value=backup):
+        assert tmux_ctl.prepare_root_wheel_bindings() == backup
+
+    custom = dict(backup, WheelDownPane=(
+        "bind-key -T root WheelDownPane display-message custom"))
+    with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 4)), \
+         patch("railmux.tmux_ctl.read_root_wheel_bindings",
+               return_value=custom):
+        assert tmux_ctl.prepare_root_wheel_bindings() is None
+
+    with patch("railmux.tmux_ctl.tmux_version", return_value=(2, 6)), \
+         patch("railmux.tmux_ctl.read_root_wheel_bindings") as read:
+        assert tmux_ctl.prepare_root_wheel_bindings() is None
+    read.assert_not_called()
+
+
+def test_root_wheel_forwarding_installs_both_directions_with_owner_marker():
+    backup = _default_root_wheel_backup()
+    with _mock_check_call() as call:
+        assert tmux_ctl.set_root_wheel_forwarding(backup, "owner123")
+
+    assert call.call_count == 2
+    up, down = [item.args[0] for item in call.call_args_list]
+    assert up[:5] == ["tmux", "bind-key", "-T", "root", "WheelUpPane"]
+    assert down[:5] == ["tmux", "bind-key", "-T", "root", "WheelDownPane"]
+    assert all(
+        any("railmux-wheel-forward-v1-owner123" in arg for arg in argv)
+        for argv in (up, down)
+    )
+    assert any("copy-mode -e" in arg for arg in up)
+    assert not any("copy-mode -e" in arg for arg in down)
+
+
+def test_root_wheel_restore_does_not_overwrite_user_change():
+    backup = _default_root_wheel_backup()
+    owned = (
+        "bind-key -T root WheelUpPane if-shell -F "
+        '"railmux-wheel-forward-v1-owner123" "send-keys -M"'
+    )
+    current = {
+        "WheelUpPane": owned,
+        "WheelDownPane": (
+            "bind-key -T root WheelDownPane display-message user-custom"),
+    }
+    with patch("railmux.tmux_ctl.read_root_wheel_bindings",
+               return_value=current), _mock_check_call() as call:
+        tmux_ctl.restore_root_wheel_bindings(backup, token="owner123")
+
+    assert call.call_count == 1
+    assert call.call_args.args[0][:2] == ["tmux", "source-file"]
+
+
 def test_window_user_option_uses_tmux_27_compatible_command():
     with _mock_check_call() as call:
         assert set_window_user_option("cc-session", "@railmux_scroll_agent", "1")
@@ -419,6 +487,54 @@ def test_restore_scroll_bindings_replays_saved_binding_and_unbinds_missing():
     assert call.call_args_list[1].args[0] == [
         "tmux", "unbind-key", "-T", "copy-mode", "WheelDownPane",
     ]
+
+
+def test_restore_owned_scroll_bindings_preserves_custom_key():
+    owned_up = (
+        "bind-key -T copy-mode WheelUpPane if-shell -F "
+        "#{@railmux_scroll_agent} 'send-keys -t %9 U' fallback"
+    )
+    owned_vi_up = owned_up.replace("copy-mode ", "copy-mode-vi ")
+    owned_vi_down = (
+        "bind-key -T copy-mode-vi WheelDownPane if-shell -F "
+        "#{@railmux_scroll_agent} 'send-keys -t %9 D' fallback"
+    )
+    current = {
+        ("copy-mode", "WheelUpPane"): owned_up,
+        ("copy-mode", "WheelDownPane"): "bind-key -T copy-mode WheelDownPane custom",
+        ("copy-mode-vi", "WheelUpPane"): owned_vi_up,
+        ("copy-mode-vi", "WheelDownPane"): owned_vi_down,
+    }
+    backup = {
+        ("copy-mode", "WheelUpPane"): "original-up",
+        ("copy-mode", "WheelDownPane"): "original-down",
+        ("copy-mode-vi", "WheelUpPane"): None,
+        ("copy-mode-vi", "WheelDownPane"): "original-vi-down",
+    }
+    with patch("railmux.tmux_ctl.read_scroll_bindings", return_value=current), \
+         patch("railmux.tmux_ctl.restore_scroll_bindings") as restore:
+        restore_owned_scroll_bindings("%9", backup)
+
+    restore.assert_called_once_with({
+        ("copy-mode", "WheelUpPane"): "original-up",
+        ("copy-mode-vi", "WheelUpPane"): None,
+        ("copy-mode-vi", "WheelDownPane"): "original-vi-down",
+    })
+
+
+def test_restore_owned_scroll_bindings_ignores_another_helper():
+    current = {
+        ("copy-mode", "WheelUpPane"): (
+            "bind-key -T copy-mode WheelUpPane if-shell -F "
+            "#{@railmux_scroll_agent} 'send-keys -t %other U' fallback"
+        ),
+    }
+    with patch("railmux.tmux_ctl.read_scroll_bindings", return_value=current), \
+         patch("railmux.tmux_ctl.restore_scroll_bindings") as restore:
+        restore_owned_scroll_bindings(
+            "%ours", {("copy-mode", "WheelUpPane"): "original"})
+
+    restore.assert_not_called()
 
 
 def test_session_has_child_distinguishes_no_child_from_probe_error():

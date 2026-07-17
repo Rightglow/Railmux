@@ -84,6 +84,8 @@ class ButtonBar(urwid.WidgetWrap):
     ``m Mode`` cycles the registered agent modes (optional, at end).
     """
 
+    _PRESS_HOLD_SECONDS = 0.15
+
     def __init__(self, on_help: Callable[[], None],
                  on_quit: Callable[[], None],
                  on_detach: Callable[[], None],
@@ -92,57 +94,130 @@ class ButtonBar(urwid.WidgetWrap):
         self._on_help = on_help
         self._on_quit = on_quit
         self._on_detach = on_detach
-        self._hit_areas: list[tuple[int, int, Callable[[], None]]] = []
+        callbacks = {
+            "help": ("?", self._on_help),
+            "quit": ("Q", self._on_quit),
+            "detach": ("D", self._on_detach),
+        }
+        self._button_specs: list[
+            tuple[str, str, str, Callable[[], None]]
+        ] = []
+        trail = keymap.hint_text_for(None).split("\n", 1)[1]
+        for item in trail.split(" · "):
+            key, sep, desc = item.rpartition(" ")
+            if not sep:
+                continue
+            desc_key = desc.lower()
+            callback_spec = callbacks.get(desc_key)
+            if callback_spec is None:
+                continue
+            tiny, callback = callback_spec
+            capitalized = desc[0].upper() + desc[1:]
+            self._button_specs.append(
+                (f"{key} {capitalized}", capitalized, tiny, callback))
+        if self._on_mode_toggle is not None:
+            self._button_specs.append(
+                ("m Mode", "Mode", "M", self._on_mode_toggle))
+        self._hit_areas: list[
+            tuple[int, int, int, Callable[[], None]]
+        ] = []
+        self._layout_tier = "full"
+        self._pressed_index: int | None = None
+        self._clear_alarm: object | None = None
+        self._loop: urwid.MainLoop | None = None
         self._text = urwid.Text("", align="left", wrap="clip")
         super().__init__(urwid.AttrMap(self._text, "dim"))
-        self._rebuild()
+        self._rebuild("full")
 
-    def _rebuild(self) -> None:
+    def set_loop(self, loop: urwid.MainLoop) -> None:
+        self._loop = loop
+
+    def _labels_for_width(self, maxcol: int) -> tuple[str, list[str]]:
+        variants = {
+            "full": [spec[0] for spec in self._button_specs],
+            "compact": [spec[1] for spec in self._button_specs],
+            "tiny": [spec[2] for spec in self._button_specs],
+        }
+        for tier in ("full", "compact"):
+            labels = variants[tier]
+            if sum(map(len, labels)) + max(0, len(labels) - 1) <= maxcol:
+                return tier, labels
+        return "tiny", variants["tiny"]
+
+    def _ensure_width(self, maxcol: int) -> None:
+        tier, _labels = self._labels_for_width(maxcol)
+        if tier != self._layout_tier:
+            self._rebuild(tier)
+
+    def _rebuild(self, tier: str) -> None:
         """Build the markup list and hit-area index from scratch."""
-        GAP = " "
+        gap = " "
+        label_idx = {"full": 0, "compact": 1, "tiny": 2}[tier]
+        self._layout_tier = tier
         self._hit_areas.clear()
         markup: list = []
         col: int = 0
 
-        def _add(label: str, cb: Callable[[], None]) -> None:
+        def _add(index: int, label: str, cb: Callable[[], None]) -> None:
             nonlocal col
             if markup:
-                markup.append(GAP)
-                col += len(GAP)
-            self._hit_areas.append((col, col + len(label), cb))
-            markup.append(("btn", label))
+                markup.append(gap)
+                col += len(gap)
+            self._hit_areas.append((col, col + len(label), index, cb))
+            attr = "btn_pressed" if index == self._pressed_index else "btn"
+            markup.append((attr, label))
             col += len(label)
 
-        trail = keymap.hint_text_for(None).split("\n", 1)[1]
-        for item in trail.split(" · "):
-            # Capitalize the description word (the last space-separated token)
-            # so the button reads as a label ("? Help") rather than a hint
-            # ("? help").  rsplit avoids corrupting "C-b d detach" → "C-b d Detach".
-            key, sep, desc = item.rpartition(" ")
-            if sep:
-                item = f"{key}{sep}{desc[0].upper()}{desc[1:]}"
-            item_lower = item.lower()
-            _add(item,
-                 self._on_help if "help" in item_lower else
-                 self._on_quit if "quit" in item_lower else
-                 self._on_detach if "detach" in item_lower else
-                 (lambda: None))
-
-        if self._on_mode_toggle is not None:
-            _add("m Mode", self._on_mode_toggle)
+        for index, spec in enumerate(self._button_specs):
+            _add(index, spec[label_idx], spec[3])
 
         self._text.set_text(markup)
+
+    def render(self, size, focus: bool = False):
+        self._ensure_width(size[0])
+        return super().render(size, focus)
 
     def selectable(self) -> bool:
         return False
 
     def mouse_event(self, size, event, button, col, row, focus):
         if event == "mouse press" and button == 1 and row == 0:
-            for start, end, cb in self._hit_areas:
+            self._ensure_width(size[0])
+            for start, end, index, cb in self._hit_areas:
                 if start <= col < end:
-                    cb()
+                    self._pressed_index = index
+                    self._rebuild(self._layout_tier)
+                    self._invalidate()
+                    loop = self._loop
+                    if loop is not None:
+                        try:
+                            # Emit the acknowledgement frame before a callback
+                            # performs synchronous tmux or filesystem work.
+                            loop.draw_screen()
+                        except Exception:
+                            pass
+                    try:
+                        cb()
+                    finally:
+                        if loop is None:
+                            self._clear_pressed(None, None)
+                        else:
+                            if self._clear_alarm is not None:
+                                loop.remove_alarm(self._clear_alarm)
+                            self._clear_alarm = loop.set_alarm_in(
+                                self._PRESS_HOLD_SECONDS,
+                                self._clear_pressed,
+                            )
                     return True
         return super().mouse_event(size, event, button, col, row, focus)
+
+    def _clear_pressed(self, _loop, _user_data) -> None:
+        self._clear_alarm = None
+        if self._pressed_index is None:
+            return
+        self._pressed_index = None
+        self._rebuild(self._layout_tier)
+        self._invalidate()
 
 
 class HintBar(urwid.WidgetWrap):

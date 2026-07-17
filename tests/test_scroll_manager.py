@@ -35,25 +35,23 @@ def mocked_tmux():
          patch("railmux.scroll_manager.tmux_ctl.session_exists",
                return_value=False), \
          patch("railmux.scroll_manager.tmux_ctl.kill_session") as kill, \
-         patch("railmux.scroll_manager.tmux_ctl.restore_scroll_bindings") as restore:
-        owned = patch(
-            "railmux.scroll_manager.tmux_ctl.scroll_bindings_owned_by",
-            return_value=True,
+         patch("railmux.scroll_manager.tmux_ctl.restore_scroll_bindings") as restore, \
+         patch(
+             "railmux.scroll_manager.tmux_ctl.restore_owned_scroll_bindings"
+         ) as restore_owned:
+        yield SimpleNamespace(
+            session_pane_id=session_pane_id,
+            pane_alive=pane_alive,
+            start=start,
+            wait_ready=wait_ready,
+            prepare=prepare,
+            rebind=rebind,
+            set_target=set_target,
+            set_option=set_option,
+            kill=kill,
+            restore=restore,
+            restore_owned=restore_owned,
         )
-        with owned as bindings_owned:
-            yield SimpleNamespace(
-                session_pane_id=session_pane_id,
-                pane_alive=pane_alive,
-                start=start,
-                wait_ready=wait_ready,
-                prepare=prepare,
-                rebind=rebind,
-                set_target=set_target,
-                set_option=set_option,
-                kill=kill,
-                restore=restore,
-                bindings_owned=bindings_owned,
-            )
 
 
 def test_second_manager_cannot_overwrite_live_owner(tmp_path):
@@ -112,6 +110,22 @@ def test_dead_agent_is_recreated_by_maintenance(tmp_path):
         manager.maintain()
         assert tmux.start.call_count == 2
         assert tmux.rebind.call_count == 2
+        manager.close()
+
+
+def test_dead_agent_reuses_explicit_swap_target_during_maintenance(tmp_path):
+    with patch("railmux.scroll_manager.tempfile.gettempdir", return_value=str(tmp_path)), \
+         patch.dict(os.environ, {"TMUX": "/tmp/test-socket,1,0"}), \
+         mocked_tmux() as tmux:
+        manager = ScrollManager(True)
+        assert manager.configure("cc-a", target_pane="%real")
+        tmux.pane_alive.return_value = False
+
+        manager.maintain()
+
+        assert tmux.start.call_count == 2
+        assert tmux.set_target.call_args_list[-1].args == ("%20", "%real")
+        tmux.session_pane_id.assert_not_called()
         manager.close()
 
 

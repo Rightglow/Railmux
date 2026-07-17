@@ -93,6 +93,9 @@ class BackgroundCodexIndex:
             return self._initial_failure and self._snapshot.generation == 0
 
     def current_snapshot(self) -> IndexSnapshot:
+        pinned = getattr(self._reader, "view", None)
+        if pinned is not None:
+            return pinned[0]
         with self._condition:
             return self._snapshot
 

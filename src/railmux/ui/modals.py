@@ -109,6 +109,28 @@ class QuitConfirmModal(urwid.WidgetWrap):
         return key
 
 
+class ExitProgressModal(urwid.WidgetWrap):
+    """Non-interactive status shown while synchronous teardown completes."""
+
+    def __init__(self, running_count: int, *, soft: bool) -> None:
+        if soft:
+            detail = (
+                f"Keeping {running_count} agent session"
+                f"{'s' if running_count != 1 else ''} running."
+            )
+        else:
+            detail = (
+                f"Stopping {running_count} agent session"
+                f"{'s' if running_count != 1 else ''}."
+            )
+        body = urwid.Filler(urwid.Pile([
+            urwid.Text(("title", "Exiting…"), align="center"),
+            urwid.Divider(),
+            urwid.Text(("dim", detail), align="center"),
+        ]), valign="middle")
+        super().__init__(urwid.LineBox(body, title="Railmux"))
+
+
 class _Selectable(urwid.WidgetWrap):
     """Tiny wrapper that makes any widget selectable for ListBox navigation."""
     def __init__(self, widget):
@@ -321,24 +343,39 @@ class RunningInfoModal(urwid.WidgetWrap):
 class DeleteConfirmModal(urwid.WidgetWrap):
     """Confirm-delete popup for a session. y/Y/Enter confirms; n/N/Esc cancels.
 
-    Uses a scrollable ListBox so content is never clipped, even when the
-    overlay height is smaller than the body (e.g. long session titles, or
-    the right pane shrinking the railmux sidebar).
+    The potentially long session name and consequences live in a scrollable
+    body. The destructive-action keys stay in a fixed footer so a narrow
+    sidebar can never hide how to confirm or cancel.
     """
 
-    def __init__(self, title: str, detail: str,
+    _NAV_KEYS = {"up", "down", "page up", "page down", "home", "end"}
+
+    def __init__(self, action: str, session_name: str, detail: str,
                  on_confirm: Callable[[], None], on_cancel: Callable[[], None]) -> None:
         self._on_confirm = on_confirm
         self._on_cancel = on_cancel
         rows = [
-            _Selectable(urwid.Text(title, align="center")),
+            _Selectable(urwid.Text(("title", f"{action}?"), align="center")),
+            _Selectable(urwid.Divider()),
+            _Selectable(urwid.Text(session_name, align="center")),
             _Selectable(urwid.Divider()),
             _Selectable(urwid.Text(detail, align="center")),
-            _Selectable(urwid.Divider()),
-            _Selectable(urwid.Text(("dim", "y / Enter = delete,  n / Esc = cancel"), align="center")),
         ]
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
-        super().__init__(urwid.LineBox(self._listbox, title="Confirm delete"))
+        footer = urwid.Pile([
+            urwid.Divider(),
+            urwid.Text(
+                ("dim", "y / Enter = confirm\nn / Esc = cancel"),
+                align="center",
+                wrap="clip",
+            ),
+        ])
+        self._frame = urwid.Frame(
+            body=self._listbox,
+            footer=footer,
+            focus_part="body",
+        )
+        super().__init__(urwid.LineBox(self._frame, title="Confirm action"))
 
     def selectable(self) -> bool:
         return True
@@ -350,8 +387,10 @@ class DeleteConfirmModal(urwid.WidgetWrap):
         if key in ("n", "N", "esc"):
             self._on_cancel()
             return None
-        if key in ("up", "down"):
-            self._listbox.keypress(size, key)
+        if key in self._NAV_KEYS:
+            # Delegate through LineBox -> Frame so each decoration adjusts the
+            # inner ListBox geometry correctly before navigation.
+            super().keypress(size, key)
             return None
         return key
 

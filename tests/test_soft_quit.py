@@ -584,6 +584,152 @@ def test_discover_orphans_prefers_valid_tmux_stamp_without_procfs(monkeypatch):
     assert app._running[session_id].tmux_name == "cx-new---abcdef-1"
 
 
+def test_generation_zero_keeps_exact_codex_stamp_visible(monkeypatch):
+    """A slow first scan must not drop an exact live session from Running."""
+    cwd = Path("/tmp/codex-only")
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.all_cwds.return_value = {}
+    app._codex_index.get.return_value = None
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.session_rollout_ids", lambda *a: None)
+    stamp = json.dumps({
+        "key": session_id,
+        "tmux_name": "cx-new---abcdef-1",
+        "session_type": "codex",
+        "cwd": str(cwd),
+    }, separators=(",", ":"), sort_keys=True)
+
+    with patch(
+            "subprocess.check_output",
+            return_value=f"cx-new---abcdef-1\t{cwd}\t100\t{stamp}\n"), patch(
+            "railmux.ui.app.list_projects", return_value=[]):
+        complete = app._discover_orphans(
+            allow_missing_codex_metadata=True)
+
+    assert complete is True
+    assert app._running[session_id].tmux_name == "cx-new---abcdef-1"
+    assert app._running[session_id].status == "busy"
+
+
+def test_first_codex_generation_revalidates_provisional_recovery():
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    app = _minimal_app()
+    app._running[session_id] = _Running(
+        key=session_id,
+        tmux_name="cx-new---abcdef-1",
+        label="codex-only/12345678",
+        project=_project("codex-only"),
+        status="busy",
+        session_type="codex",
+    )
+    app._codex_recovery_pending = True
+    app._codex_recovery_state = {"running_bindings_version": 1}
+    app._codex_recovery_generation = 0
+    app._codex_provisional_recovery_keys = {session_id}
+    app._pending_restore_state = None
+    app._loop = None
+    app._codex_index = MagicMock()
+    app._codex_index.current_snapshot.return_value = MagicMock(
+        generation=1, report=MagicMock(transient_errors=0))
+    app._codex_index.is_unavailable = False
+
+    def rediscover(_state, *, allow_missing_codex_metadata):
+        assert allow_missing_codex_metadata is False
+        assert session_id not in app._running
+        app._running[session_id] = _Running(
+            key=session_id,
+            tmux_name="cx-new---abcdef-1",
+            label="codex-only/Recovered",
+            project=_project("codex-only"),
+            status="idle",
+            session_type="codex",
+        )
+        return True
+
+    app._discover_orphans = MagicMock(side_effect=rediscover)
+    app._retry_pending_codex_recovery()
+
+    assert app._codex_recovery_pending is False
+    assert app._running_recovery_ok is True
+    assert app._running[session_id].label.endswith("/Recovered")
+
+
+def test_transient_first_generation_keeps_provisional_session_visible():
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    recovered = _Running(
+        key=session_id,
+        tmux_name="cx-new---abcdef-1",
+        label="codex-only/12345678",
+        project=_project("codex-only"),
+        status="busy",
+        session_type="codex",
+    )
+    app = _minimal_app()
+    app._running = {session_id: recovered}
+    app._codex_recovery_pending = True
+    app._codex_recovery_state = {"running_bindings_version": 1}
+    app._codex_recovery_generation = 0
+    app._codex_provisional_recovery_keys = {session_id}
+    app._last_orphan_probe_ok = True
+    app._codex_index = MagicMock()
+    app._codex_index.current_snapshot.return_value = MagicMock(
+        generation=1, report=MagicMock(transient_errors=1))
+    app._discover_orphans = MagicMock(return_value=False)
+
+    app._retry_pending_codex_recovery()
+
+    assert app._codex_recovery_pending is True
+    assert app._running[session_id] is recovered
+    assert app._codex_provisional_recovery_keys == {session_id}
+
+
+def test_clean_generation_keeps_exact_session_until_metadata_appears():
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    recovered = _Running(
+        key=session_id,
+        tmux_name="cx-new---abcdef-1",
+        label="codex-only/12345678",
+        project=_project("codex-only"),
+        status="busy",
+        session_type="codex",
+    )
+    app = _minimal_app()
+    app._running = {session_id: recovered}
+    app._codex_recovery_pending = True
+    app._codex_recovery_state = {"running_bindings_version": 1}
+    app._codex_recovery_generation = 0
+    app._codex_provisional_recovery_keys = {session_id}
+    app._last_orphan_probe_ok = True
+    app._codex_index = MagicMock()
+    app._codex_index.current_snapshot.return_value = MagicMock(
+        generation=1, report=MagicMock(transient_errors=0))
+    app._codex_index.get.return_value = None
+    app._discover_orphans = MagicMock(return_value=False)
+
+    app._retry_pending_codex_recovery()
+
+    assert app._codex_recovery_pending is True
+    assert app._running[session_id] is recovered
+    assert app._codex_provisional_recovery_keys == {session_id}
+
+
+def test_unavailable_initial_index_keeps_recovery_pending_for_later_retry():
+    app = _minimal_app()
+    app._codex_recovery_pending = True
+    app._codex_recovery_generation = 0
+    app._codex_index = MagicMock()
+    app._codex_index.current_snapshot.return_value = MagicMock(
+        generation=0, report=None)
+    app._codex_index.is_unavailable = True
+
+    app._retry_pending_codex_recovery()
+
+    assert app._codex_recovery_pending is True
+
+
 def test_stamp_running_writes_session_local_identity(monkeypatch):
     project = _project("codex-only")
     running = _Running(
@@ -768,6 +914,31 @@ def test_pending_restore_retains_state_after_incomplete_running_recovery(
     assert state_path.exists()
 
 
+def test_pending_index_allows_exact_running_target_restore(monkeypatch):
+    state_path = Path("/tmp/not-used-state")
+    app = _minimal_app()
+    app._codex_recovery_pending = True
+    app._running_recovery_ok = False
+    app._pending_restore_state = {
+        "right_kind": "agent",
+        "right_tmux": "cx-new---abcdef-1",
+    }
+    app._running["session"] = _Running(
+        key="session",
+        tmux_name="cx-new---abcdef-1",
+        label="project/session",
+        project=_project("codex-only"),
+        session_type="codex",
+    )
+    app._restore_right_pane = MagicMock(return_value=True)
+    monkeypatch.setattr(App, "_state_path", staticmethod(lambda: state_path))
+
+    app._restore_pending_right_pane(None, None)
+
+    app._restore_right_pane.assert_called_once()
+    assert app._pending_restore_state is None
+
+
 def test_launch_resume_attaches_recovered_writer_instead_of_resuming_again():
     project = _project("codex-only")
     session_id = "12345678-1234-1234-1234-1234567890ab"
@@ -785,9 +956,14 @@ def test_launch_resume_attaches_recovered_writer_instead_of_resuming_again():
     app._on_running_select = MagicMock()
     app._launch = MagicMock()
 
-    app._launch_resume(meta)
+    app._launch_resume(meta, steal_focus=False, from_double=True)
 
-    app._on_running_select.assert_called_once()
+    entry = app._on_running_select.call_args.args[0]
+    assert entry.tmux_name == running.tmux_name
+    assert app._on_running_select.call_args.kwargs == {
+        "steal_focus": False,
+        "from_double": True,
+    }
     app._launch.assert_not_called()
 
 
@@ -922,6 +1098,51 @@ def test_discover_orphans_handles_tmux_error():
 
 
 # ── _teardown_tmux branching ────────────────────────────────────────────
+
+def test_begin_exit_paints_progress_before_synchronous_cleanup():
+    app = _minimal_app()
+    app._exit_in_progress = False
+    app._soft_quit_flag = False
+    app._loop = MagicMock()
+    app._close_modal = MagicMock()
+    events = []
+    app._show_overlay = MagicMock(
+        side_effect=lambda *_args, **_kwargs: events.append("overlay"))
+    app._loop.draw_screen.side_effect = lambda: events.append("draw")
+    app._teardown_tmux = MagicMock(
+        side_effect=lambda **_kwargs: events.append("teardown"))
+
+    with pytest.raises(urwid.ExitMainLoop):
+        app._begin_exit(soft=False)
+
+    assert events[:3] == ["overlay", "draw", "teardown"]
+    app._teardown_tmux.assert_called_once_with(defer_outer=True)
+
+
+def test_teardown_phases_are_idempotent():
+    app = _minimal_app()
+    app._soft_quit_flag = False
+    app._auto_launched = True
+    app._scroll_manager = MagicMock()
+    app._root_wheel_manager = MagicMock()
+    app._running = {
+        "abc123": _Running(
+            key="abc123", tmux_name="cc-abc123", label="test", project=None),
+    }
+    transport = MagicMock()
+    transport.close_all.return_value = True
+    app._display_transport_manager = transport
+
+    with patch("railmux.ui.app.tmux_ctl") as tmux:
+        tmux.current_session_name.return_value = "railmux"
+        app._teardown_tmux()
+        app._teardown_tmux()
+
+    transport.close_all.assert_called_once_with()
+    app._root_wheel_manager.close.assert_called_once_with()
+    assert tmux.kill_session.call_count == 2
+    tmux.kill_session.assert_any_call("cc-abc123")
+    tmux.kill_session.assert_any_call("railmux")
 
 def test_teardown_soft_quit_skips_session_kill():
     """With _soft_quit_flag set, cc-* and outer tmux sessions are left alive."""

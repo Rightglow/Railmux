@@ -143,6 +143,12 @@ def _ensure_private_runtime_tree() -> None:
     _ensure_private_dir(base / "railmux" / "instances")
 
 
+def runtime_state_dir() -> Path:
+    """Return the verified private directory for runtime coordination."""
+    _ensure_private_runtime_tree()
+    return runtime_base() / "railmux"
+
+
 def read_json_object(path: Path) -> dict | None:
     """Read a bounded JSON object, treating every malformed shape as absent."""
     try:

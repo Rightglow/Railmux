@@ -14,6 +14,36 @@ from typing import Any
 import urwid
 
 
+class ScrollableSidebarPane:
+    """Route wheel presses anywhere in pane chrome to its ``ListBox``.
+
+    tmux targets mouse events by pointer coordinates, not keyboard focus.  A
+    pane title, border, pinned action row, or divider should therefore scroll
+    the list under it exactly like a body row.  Subclasses provide the number
+    of rows occupied by their LineBox plus fixed inner chrome.
+    """
+
+    _listbox: urwid.ListBox
+
+    def _wheel_chrome_rows(self) -> int:
+        return 2  # LineBox top and bottom borders
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        if event == "mouse press" and button in (4, 5):
+            if len(size) >= 2:
+                maxcol, maxrow = size[:2]
+                rows = maxrow - self._wheel_chrome_rows()
+                if maxcol > 2 and rows > 0:
+                    self._listbox.keypress(
+                        (maxcol - 2, rows),
+                        "up" if button == 4 else "down",
+                    )
+            # Consume even at a boundary or critically-small geometry so the
+            # event cannot leak into a sibling pane or tmux copy mode.
+            return True
+        return super().mouse_event(size, event, button, col, row, focus)
+
+
 class ClickableRow(urwid.WidgetWrap):
     """A selectable list row that handles single- and double-click.
 

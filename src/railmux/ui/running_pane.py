@@ -8,7 +8,12 @@ import urwid
 
 from railmux.fuzzy import fuzzy_match
 from railmux.models import AttentionState
-from railmux.ui._widgets import ClickableRow, remember_focus, restore_focus
+from railmux.ui._widgets import (
+    ClickableRow,
+    ScrollableSidebarPane,
+    remember_focus,
+    restore_focus,
+)
 # Reuse the status-dot glyphs and the focus/selected attribute maps so the
 # coloured ● blends into highlighted rows the same way it does in the Sessions
 # pane (extra keys like "dim" are harmless here).
@@ -55,7 +60,7 @@ class _RunningRow(ClickableRow):
                          immediate_click=True)
 
 
-class RunningSessionsPane(urwid.WidgetWrap):
+class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     """Lists every agent session this Railmux instance has opened.
 
     Enter on a row re-attaches the display pane to that detached agent session.

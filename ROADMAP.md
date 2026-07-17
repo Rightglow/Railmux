@@ -57,8 +57,10 @@ default frame budget.
 
 The low-risk scheduling step remains independent of pane migration:
 copy-mode now renders the leading wheel update immediately and coalesces the
-remainder of a burst on a 100 ms frame (10 FPS). A faster adaptive or
-user-configurable frame still requires real-provider measurements.
+remainder of a burst on a 100 ms frame (10 FPS). A faster user-configurable
+frame still requires real-provider measurements. Do not add periodic ping,
+SSH/TCP probing, or automatic frame-rate selection: the server cannot observe
+local terminal paint, so those signals cannot reliably choose a redraw budget.
 
 Lifecycle invariants for the prototype:
 
@@ -74,9 +76,9 @@ Lifecycle invariants for the prototype:
   independent attached client or its pane topology is not the supported
   single-agent shape.
 - Keep scroll routing scoped to marked agent panes. Evolve the current fixed
-  100 ms frame toward a configurable/adaptive 33--50 ms interval only after
-  measurements justify it; disabling coalescing remains a diagnostic fallback,
-  not the intended performance solution.
+  100 ms frame toward a configurable 33--50 ms interval only after measurements
+  justify it; disabling coalescing remains a diagnostic fallback, not the
+  intended performance solution.
 
 Proven implementation facts:
 
@@ -141,6 +143,22 @@ processes alive and gives each view the full terminal. The existing Railmux tmux
 status line could move to the top in compact mode and act as the small feedback/
 navigation surface; a dedicated menu pane would cost space and add another
 focus target. This remains a hypothesis to prototype, not an agreed design.
+
+### Sidebar chrome alternatives
+
+The current three independent `LineBox` sections are structurally correct and
+keep per-pane focus obvious, but they repeat adjacent top/bottom borders and
+cost two more rows than a shared container. Prototype a single outer frame with
+two labelled section dividers (`Projects`, `Sessions`, `Running`) before the
+dual-agent UI increases layout pressure. The experiment must preserve distinct
+per-section focus chrome, mouse-wheel routing over titles/dividers, and readable
+degradation at the existing minimum terminal size.
+
+Do not treat small vertical-line seams on macOS as proof of a missing canvas
+cell: compare Unicode versus `pane-border-lines simple`, terminal fonts, and
+`pane-border-indicators` first. Railmux should not take ownership of those tmux
+options without reproducible evidence that they cause the artifact and without
+exact restoration of the user's prior values.
 
 ### Provider adapters
 

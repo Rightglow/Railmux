@@ -38,6 +38,12 @@ tmux name). `ClickableRow`'s class-level double-click state and `click_key` are
 the reference pattern. Rendering caches are an optimization only and must not
 become a second state authority.
 
+Click intent must also survive controller redirects. In particular, opening a
+Sessions row may discover that its provider is already live and redirect
+through the Running action. Carry the explicit double-click intent through that
+chain; `steal_focus=False` is not a substitute because ordinary single-click
+selection uses the same value.
+
 Portable soft-restart state writes the stable active `mode` key inside a
 per-mode view map. The ownerless `codex_mode` boolean remains a read-only
 migration fallback for Railmux 0.1.x files; it is never copied into new state.
@@ -117,6 +123,17 @@ survive unchanged. Renames are a read-time overlay; delete uses a temporary ID
 tombstone until a later generation confirms removal. Neither mutates a
 published snapshot.
 
+Compound operations pin one generation, including both query methods and
+`current_snapshot()`. Startup requests the first scan before recovery, but an
+exact live tmux marker/stamp must remain visible in Running even while the
+index is still at generation zero. Such an entry is provisional: the first
+coherent generation removes and re-adopts it so metadata can refine its label
+or reject a wrong cwd. A failed tmux probe, a generation with transient errors,
+an unavailable initial source, or clean metadata that has not exposed the
+actively-written rollout yet retains the provisional entry and instance
+recovery file for a later generation; it must never publish a temporary empty
+Running view.
+
 A failed or incomplete tree walk retains the last known-good generation. A
 transient per-file error retains that file's cached metadata, publishes the
 otherwise coherent generation with a bounded warning, and retries later. A
@@ -182,6 +199,13 @@ must branch before the detached-session kill loop. Hard-quit destruction must
 remain below that explicit decision so adding teardown work cannot silently
 turn a soft restart into loss of live agents.
 
+User-requested exit paints a non-interactive progress surface before any
+synchronous pane/session cleanup. Core cleanup runs while Urwid still owns the
+sidebar, so the sidebar cannot disappear while the agent pane remains alive.
+Core and outer-session phases are separately idempotent: the visible path may
+complete core cleanup, while `run()`'s `finally` retries an interrupted phase
+and performs only the remaining outer-session cleanup.
+
 The experimental floor is tmux 2.7. tmux 2.7 and 2.8 lack `resize-window`, so
 their native swap geometry may reflow a long inline transcript. This is a
 performance/visual limitation, not permission to alter provider history or
@@ -208,6 +232,31 @@ single-pane behavior:
 Preview, terminal placement, F9 fullscreen, focus styling, scroll management,
 liveness, teardown, and soft restart must all operate on an explicit slot when
 the secondary slot becomes user-visible.
+
+## Mouse routing preserves user tmux configuration
+
+tmux routes wheel events by pointer location rather than keyboard focus. Each
+sidebar pane therefore consumes buttons 4/5 at its outer widget boundary and
+routes them to its own `ListBox`, including events over titles, borders,
+dividers, and pinned action rows.
+
+For tmux to deliver both directions to Urwid, Railmux temporarily wraps the
+server-global root `WheelUpPane` and `WheelDownPane` bindings. This is allowed
+only on tmux 2.7+ when the root bindings match stock behavior; a custom binding
+disables forwarding without mutation. All Railmux panes on one tmux server
+share a versioned transaction in the private runtime directory, keyed by the
+server lifetime and owned by immutable pane IDs. The final live owner restores
+only per-key wrappers still carrying its random marker, so a user configuration
+reload always wins. A later instance may prune dead owners and repair or remove
+an interrupted transaction, but must never infer ownership from command shape
+alone.
+
+Copy-mode coalescing follows the same user-configuration rule. Its helper keeps
+the exact currently displayed pane target, including a real pane moved by the
+swap transport, and must reuse that target if the helper is recreated. On
+teardown, restore each copy-mode wheel binding independently only while it
+still targets that exact helper pane; a binding changed by the user is newer
+authority and must remain untouched.
 
 ## Size and attach invariants
 

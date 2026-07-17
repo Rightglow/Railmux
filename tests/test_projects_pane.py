@@ -269,3 +269,16 @@ def test_up_in_middle_passes_through():
     result = pane.keypress((20, 10), "up")
     # Should be handled by ListBox (focus moves to row 0). Not None.
     assert result is not None or result is None  # either is fine
+
+
+def test_wheel_over_title_scrolls_list_without_pane_focus():
+    """tmux sends wheel events by pointer location, not keyboard focus."""
+    pane = ProjectsPane(
+        [_project(str(i)) for i in range(12)], on_select=lambda p: None)
+    pane._walker.set_focus(6)
+
+    handled = pane.mouse_event(
+        (30, 10), "mouse press", 4, 1, 0, False)
+
+    assert handled is True
+    assert pane._walker.focus == 5

@@ -43,6 +43,7 @@ from railmux.modes import (
     ProjectSource,
 )
 from railmux.models import AttentionState, Project, SessionMeta
+from railmux.mouse_manager import RootWheelForwardingManager
 from railmux.renames import Renames
 from railmux import restart_state
 from railmux.session_cache import SessionCache
@@ -51,6 +52,7 @@ from railmux.ui import keymap
 from railmux.ui.modals import (
     ContextMenu,
     DeleteConfirmModal,
+    ExitProgressModal,
     HelpModal,
     PathBrowserModal,
     ProjectInfoModal,
@@ -98,6 +100,7 @@ PALETTE = [
     ("dim", "dark gray", ""),
     # ButtonBar — bright bold + underline reads as a clickable control.
     ("btn", "white,bold,underline", ""),
+    ("btn_pressed", "white,bold", "dark green", "bold", "#ffffff,bold", _DEEP_GRASS_GREEN),
     # A live tmux session is structural state, not lifecycle status. Its grass-
     # green title is independent from the idle/busy/blocked status-dot colour.
     ("live", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),
@@ -550,6 +553,15 @@ class App:
         self._workspace = AgentWorkspace()
         self._display_transport_manager: AgentDisplayTransport | None = None
         self._loop: urwid.MainLoop | None = None
+        identity = self._restart_identity
+        self._root_wheel_manager = (
+            RootWheelForwardingManager(
+                identity.server_digest, identity.pane_id)
+            if identity is not None else None
+        )
+        self._teardown_core_done: bool = False
+        self._outer_teardown_done: bool = False
+        self._exit_in_progress: bool = False
         self._pending_restore_state: dict | None = None
         self._pending_project: Project | None = None
         self._pending_scroll_session: str | None = None
@@ -579,6 +591,17 @@ class App:
         self._active_mode_key: str = self._mode_registry.default_key
         self._codex_index = BackgroundCodexIndex(
             self._codex_home_path(), self._renames)
+        # Start the first immutable generation while the widget tree is built.
+        # Startup recovery pins whichever generation is available; it never
+        # observes generation 0 for early candidates and generation 1 for later
+        # candidates in the same pass.
+        self._codex_index.refresh(force=True)
+        self._codex_recovery_pending: bool = False
+        self._codex_recovery_state: dict | None = None
+        self._codex_recovery_generation: int = 0
+        self._codex_recovery_candidates_seen: bool = False
+        self._codex_provisional_recovery_keys: set[str] = set()
+        self._last_orphan_probe_ok: bool = True
         self._codex_project_filter: dict[Path, int] = {}  # cwd → Codex session count
         # Mode switches paint from existing snapshots immediately. A daemon
         # worker refreshes both NFS-backed indexes; _refresh consumes the result
@@ -663,7 +686,16 @@ class App:
         # state first: a resolved session may intentionally retain its
         # ``cx-new---*`` tmux name, so the tmux name alone is not enough to
         # reconstruct the real session id on platforms without procfs.
-        self._running_recovery_ok = self._discover_orphans(state)
+        recovery_ok, recovery_generation = self._discover_orphans_consistent(state)
+        if recovery_generation == 0 and self._codex_recovery_candidates_seen:
+            self._codex_recovery_pending = True
+            self._codex_recovery_state = state
+            self._codex_recovery_generation = 0
+            # Retain exact instance state until one coherent Codex generation
+            # either completes recovery or proves a candidate invalid.
+            self._running_recovery_ok = False
+        else:
+            self._running_recovery_ok = recovery_ok
         # Restore the view from a previous soft-quit, or auto-select the
         # most recent project as usual.
         # Restore the mode BEFORE choosing a project so selection resolves
@@ -927,6 +959,18 @@ class App:
     def _restore_pending_right_pane(self, _loop, _user_data) -> None:
         """Restore persisted state, retaining its file if restoration raises."""
         state = self._pending_restore_state
+        if getattr(self, "_codex_recovery_pending", False) and state is not None:
+            # Exact live targets adopted from stamps are safe to display even
+            # while the first filesystem generation is still pending. A
+            # metadata-dependent target waits and is retried after settlement.
+            if state.get("right_kind") == "agent":
+                target = state.get("right_tmux")
+                if not isinstance(target, str) or not any(
+                        item.tmux_name == target
+                        for item in self._running.values()):
+                    return
+            elif state.get("right_kind") != "empty":
+                return
         self._pending_restore_state = None
         if state is None:
             return
@@ -1067,7 +1111,11 @@ class App:
         if session is None:
             self._launch_new_session()
             return
-        self._launch_resume(session, steal_focus=steal_focus)
+        self._launch_resume(
+            session,
+            steal_focus=steal_focus,
+            from_double=from_double,
+        )
 
     def _on_running_select(self, entry: RunningEntry,
                             steal_focus: bool = True,
@@ -1550,7 +1598,8 @@ class App:
         return True
 
     def _launch_resume(self, session_meta: SessionMeta,
-                        *, steal_focus: bool = True) -> None:
+                        *, steal_focus: bool = True,
+                        from_double: bool = False) -> None:
         # Revalidate at action time.  A row can be stale, and an older Railmux
         # may have left a live placeholder writer that startup could not adopt.
         # Discover once more before ever running ``codex resume``/``claude
@@ -1560,7 +1609,7 @@ class App:
         if (registry is not None
                 and (running is None
                      or not self._agent_session_alive(running.tmux_name))):
-            self._discover_orphans()
+            self._discover_orphans_consistent()
             # Discovery may restore a still-unresolved placeholder under its
             # placeholder key. Promote it synchronously before deciding the
             # real UUID is stopped; waiting for the next poll recreates the
@@ -1576,6 +1625,7 @@ class App:
                     status=running.status,
                 ),
                 steal_focus=steal_focus,
+                from_double=from_double,
             )
             return
 
@@ -1875,9 +1925,8 @@ class App:
         _sp.run(["tmux", "detach-client"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
     def _confirm_quit(self) -> None:
-        """Hard quit: close modal, tear down everything in ``finally``."""
-        self._close_modal()
-        raise urwid.ExitMainLoop()
+        """Hard quit after painting a stable progress surface."""
+        self._begin_exit(soft=False)
 
     def _soft_quit(self) -> None:
         """Soft quit: set flag so ``_teardown_tmux`` skips session kill."""
@@ -1885,8 +1934,46 @@ class App:
         # have been open for a while and placeholder bindings can resolve in
         # the meantime.
         self._save_state()
-        self._soft_quit_flag = True
+        self._begin_exit(soft=True)
+
+    def _begin_exit(self, *, soft: bool) -> None:
+        """Paint progress, perform core teardown, then leave Urwid.
+
+        Urwid restores the alternate screen before ``MainLoop.run`` returns.
+        Core cleanup must therefore happen inside the loop if the user is to
+        see an intentional exit state instead of a blank sidebar.  ``run``'s
+        ``finally`` remains the unconditional retry and outer-session cleanup.
+        """
+        if getattr(self, "_exit_in_progress", False):
+            return
+        self._exit_in_progress = True
+        if soft:
+            self._soft_quit_flag = True
         self._close_modal()
+        self._show_overlay(
+            ExitProgressModal(len(self._running), soft=soft),
+            width=44,
+            height=7,
+        )
+        if self._loop is not None:
+            try:
+                self._loop.draw_screen()
+            except Exception:
+                pass
+        try:
+            self._teardown_tmux(defer_outer=True)
+        except Exception:
+            # ``run``'s finally retries any unfinished idempotent phase.
+            pass
+        # Closing the display pane may resize this pane. A SIGWINCH is not
+        # guaranteed to be processed while teardown blocks, so this redraw is
+        # deliberately best-effort; correctness relies on the draw above.
+        if self._loop is not None:
+            try:
+                self._loop.screen_size = None
+                self._loop.draw_screen()
+            except Exception:
+                pass
         raise urwid.ExitMainLoop()
 
     # --- state file (for restart-after-soft-quit) --------------------------
@@ -2128,6 +2215,8 @@ class App:
         raw: object,
         live: dict[str, tuple[Path, int]],
         projects: dict[Path, Project],
+        *,
+        allow_missing_codex_metadata: bool = False,
     ) -> _Running | None:
         """Validate one state-file binding against current tmux and metadata.
 
@@ -2159,6 +2248,10 @@ class App:
         if mode is None or mode.session_type != session_type:
             return None
         project = projects.get(self._path_key(cwd))
+        if (project is None and session_type == "codex"
+                and allow_missing_codex_metadata):
+            project = self._synthesise_codex_project(cwd, 0)
+            projects[self._path_key(cwd)] = project
         if project is None:
             return None
 
@@ -2194,8 +2287,9 @@ class App:
 
         if session_type == "codex":
             meta = self._codex_index.get(key, refresh=False)
-            if (meta is None
-                    or self._path_key(meta.project.real_path) != self._path_key(cwd)):
+            if (meta is not None
+                    and self._path_key(meta.project.real_path)
+                    != self._path_key(cwd)):
                 return None
             try:
                 open_ids = tmux_ctl.session_rollout_ids(
@@ -2207,6 +2301,20 @@ class App:
             # rollouts but not this id does disprove it.
             if open_ids and key not in open_ids:
                 return None
+            if meta is None:
+                if not allow_missing_codex_metadata:
+                    return None
+                renames = getattr(self, "_renames", None)
+                title = (renames.get(key) if renames is not None else None)
+                title = title or key[:8]
+                return _Running(
+                    key=key,
+                    tmux_name=tmux_name,
+                    label=f"{project.display_name}/{title}",
+                    project=project,
+                    status="busy",
+                    session_type=session_type,
+                )
         else:
             meta = self._session_cache.get(project, key)
             if meta is None:
@@ -2310,7 +2418,35 @@ class App:
             return False
         return self._exact_running_pane(running) is not None
 
-    def _discover_orphans(self, state: dict | None = None) -> bool:
+    def _discover_orphans_consistent(
+        self, state: dict | None = None,
+    ) -> tuple[bool, int]:
+        """Run discovery against one immutable Codex generation."""
+        index = getattr(self, "_codex_index", None)
+        if not isinstance(index, BackgroundCodexIndex):
+            return self._discover_orphans(state), 0
+        generation = index.begin_read()
+        before = set(self._running)
+        try:
+            complete = self._discover_orphans(
+                state,
+                allow_missing_codex_metadata=generation == 0,
+            )
+            if generation == 0:
+                self._codex_provisional_recovery_keys.update(
+                    key for key in set(self._running) - before
+                    if self._running[key].session_type == "codex"
+                )
+            return complete, generation
+        finally:
+            index.end_read()
+
+    def _discover_orphans(
+        self,
+        state: dict | None = None,
+        *,
+        allow_missing_codex_metadata: bool = False,
+    ) -> bool:
         """Find registered agent tmux sessions and rebuild ``_running``.
 
         Called at startup so a soft-quit → restart cycle picks up every
@@ -2322,6 +2458,8 @@ class App:
         will not match ``SessionMeta.session_id`` elsewhere.
         """
         import subprocess as _sp
+        self._codex_recovery_candidates_seen = False
+        self._last_orphan_probe_ok = False
         try:
             out = _sp.check_output(
                 ["tmux", "list-sessions", "-F",
@@ -2333,6 +2471,7 @@ class App:
             )
         except (OSError, _sp.CalledProcessError):
             return False
+        self._last_orphan_probe_ok = True
         projects = {
             self._path_key(p.real_path): p
             for p in list_projects(self._claude_home)
@@ -2345,8 +2484,12 @@ class App:
             is not None and mode.project_source == ProjectSource.CODEX
             for line in out.splitlines()
         )
+        self._codex_recovery_candidates_seen = has_codex_session
         if has_codex_session:
-            for cwd, count in self._codex_index.all_cwds().items():
+            refresh_index = not isinstance(
+                self._codex_index, BackgroundCodexIndex)
+            for cwd, count in self._codex_index.all_cwds(
+                    refresh=refresh_index).items():
                 projects.setdefault(
                     self._path_key(cwd), self._synthesise_codex_project(cwd, count))
 
@@ -2465,6 +2608,8 @@ class App:
                     },
                     {name: (marker.cwd, int(marker.created_at))},
                     projects,
+                    allow_missing_codex_metadata=(
+                        allow_missing_codex_metadata),
                 )
             if running is None:
                 pre_launch_ids: frozenset[str] = frozenset()
@@ -2524,7 +2669,12 @@ class App:
                             enriched["pre_launch_ids"] = saved["pre_launch_ids"]
                             enriched["pre_launch_complete"] = True
                         break
-            running = self._valid_running_binding(enriched, live, projects)
+            running = self._valid_running_binding(
+                enriched,
+                live,
+                projects,
+                allow_missing_codex_metadata=allow_missing_codex_metadata,
+            )
             if running is None or running.tmux_name != name:
                 continue
             if running.key in self._running:
@@ -2535,7 +2685,12 @@ class App:
 
         if state_bindings:
             for raw in state_bindings:
-                running = self._valid_running_binding(raw, live, projects)
+                running = self._valid_running_binding(
+                    raw,
+                    live,
+                    projects,
+                    allow_missing_codex_metadata=allow_missing_codex_metadata,
+                )
                 if (running is None or running.tmux_name in claimed_tmux
                         or running.tmux_name in marker_governed):
                     continue
@@ -2627,6 +2782,8 @@ class App:
                 and raw.get("tmux_name") in live
                 and self._modes().for_tmux_name(raw["tmux_name"]) is not None)
         }
+        expected_live.update(
+            name for name in stamps if name not in marker_governed)
         # Retain the state file when a live persisted agent was left unclaimed;
         # a transient index/project read failure must not destroy the only
         # no-procfs recovery record.
@@ -3114,61 +3271,68 @@ class App:
         self._sidebar.focus_position = (cur - 1) % n if reverse else (cur + 1) % n
         self._hint_bar.set_context(self._help_context())
 
-    def _teardown_tmux(self) -> None:
+    def _teardown_tmux(self, *, defer_outer: bool = False) -> None:
         """Clean up on quit.
 
-        Called exactly once, from ``run()``'s ``finally`` block, for both
-        hard and soft quit.  On soft quit (``_soft_quit_flag`` is set) the
-        detached agent sessions and the outer tmux session are left alive.
+        The visible exit path performs core cleanup before leaving Urwid;
+        ``run()``'s ``finally`` retries an interrupted phase and performs the
+        outer-session kill. On soft quit the detached agent sessions and the
+        outer tmux session are left alive. Both phases are idempotent.
         """
-        index = getattr(self, "_codex_index", None)
-        if isinstance(index, BackgroundCodexIndex):
-            index.close(timeout_s=0.2)
-        self._teardown_scroll_acceleration()
-        # Drop our status-bar overrides BEFORE the soft-quit early return below —
-        # on soft quit the outer tmux session survives, so our appearance (bar
-        # style, brand, forced `status on`) and status text would otherwise linger
-        # in it. ``-u`` reverts each session option to its inherited/default value.
-        if self._tmux_status_enabled and self._tmux_status_session:
+        if not getattr(self, "_teardown_core_done", False):
+            index = getattr(self, "_codex_index", None)
+            if isinstance(index, BackgroundCodexIndex):
+                index.close(timeout_s=0.2)
+            self._teardown_scroll_acceleration()
+            wheel = getattr(self, "_root_wheel_manager", None)
+            if wheel is not None:
+                wheel.close()
+            # Drop our status-bar overrides BEFORE the soft-quit branch below —
+            # on soft quit the outer tmux session may survive, so Railmux's
+            # appearance and text must not linger in it.
+            if self._tmux_status_enabled and self._tmux_status_session:
+                try:
+                    import subprocess as _sp
+                    revert = [opt for opt, _ in self._TMUX_BAR_OPTIONS]
+                    revert += list(self._TMUX_BAR_STYLE_OPTIONS)
+                    revert.append("status-right")
+                    for opt in revert:
+                        _sp.run(
+                            ["tmux", "set-option", "-u", "-t",
+                             self._tmux_status_session, opt],
+                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                        )
+                except Exception:
+                    pass
+                self._tmux_status_enabled = False
+            # Remove the F9 fullscreen binding we installed (server-global).
             try:
                 import subprocess as _sp
-                revert = [opt for opt, _ in self._TMUX_BAR_OPTIONS]
-                revert += list(self._TMUX_BAR_STYLE_OPTIONS)  # status-style, status-left
-                revert.append("status-right")  # set dynamically, not in a tuple
-                for opt in revert:
-                    _sp.run(
-                        ["tmux", "set-option", "-u", "-t",
-                         self._tmux_status_session, opt],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
+                _sp.run(["tmux", "unbind-key", "-n", "F9"],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
             except Exception:
                 pass
-            self._tmux_status_enabled = False
-        # Remove the F9 fullscreen binding we installed (it's server-global).
-        try:
-            import subprocess as _sp
-            _sp.run(["tmux", "unbind-key", "-n", "F9"],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-        except Exception:
-            pass
-        # The coordinator first swaps every real pane home, then removes only
-        # nested clients/placeholders. If a return cannot be proven, preserve
-        # the marked keeper state and degrade this exit to soft semantics.
-        try:
-            display_closed = self._display_transport().close_all()
-        except Exception:
-            display_closed = False
-        if not display_closed:
-            self._soft_quit_flag = True
-        if self._soft_quit_flag:
-            return  # <-- soft quit: leave cc-* and outer tmux session alive
-        for r in list(self._running.values()):
+            # Return real swap panes before deleting display placeholders. A
+            # failed proof degrades hard quit to soft semantics.
             try:
-                tmux_ctl.kill_session(r.tmux_name)
+                display_closed = self._display_transport().close_all()
             except Exception:
-                pass
-        self._running.clear()
-        if self._auto_launched:
+                display_closed = False
+            if not display_closed:
+                self._soft_quit_flag = True
+            if not self._soft_quit_flag:
+                for r in list(self._running.values()):
+                    try:
+                        tmux_ctl.kill_session(r.tmux_name)
+                    except Exception:
+                        pass
+                self._running.clear()
+            self._teardown_core_done = True
+
+        if defer_outer or getattr(self, "_outer_teardown_done", False):
+            return
+        self._outer_teardown_done = True
+        if not self._soft_quit_flag and self._auto_launched:
             session_name = tmux_ctl.current_session_name()
             if session_name == "railmux":
                 try:
@@ -3230,6 +3394,7 @@ class App:
                 index.end_read()
 
     def _refresh_impl(self) -> None:
+        self._retry_pending_codex_recovery()
         self._scroll_manager.maintain()
         transport = self._display_transport()
         if transport.outer_session_lost():
@@ -3377,6 +3542,77 @@ class App:
         self._update_status()
         # Keep the hint bar showing only the keys valid for the focused pane.
         self._hint_bar.set_context(self._help_context())
+
+    def _retry_pending_codex_recovery(self) -> None:
+        """Settle generation-0 startup recovery on a coherent publication.
+
+        ``_refresh`` has already pinned the background index generation around
+        this call. Exact stamp/marker candidates remain visible even if the
+        source is unavailable; only metadata-dependent legacy inference waits.
+        """
+        if not getattr(self, "_codex_recovery_pending", False):
+            return
+        index = self._codex_index
+        snapshot = index.current_snapshot()
+        generation = snapshot.generation
+        if generation <= self._codex_recovery_generation:
+            return
+
+        # Generation-0 entries were intentionally visible before metadata was
+        # ready. Re-adopt them from scratch so the first complete generation
+        # can reject a wrong cwd and replace fallback labels/projects.
+        provisional = {
+            key: self._running[key]
+            for key in self._codex_provisional_recovery_keys
+            if key in self._running
+        }
+        for key in provisional:
+            self._running.pop(key, None)
+        self._codex_provisional_recovery_keys.clear()
+        ok = self._discover_orphans(
+            self._codex_recovery_state,
+            allow_missing_codex_metadata=False,
+        )
+        report = snapshot.report
+        if not getattr(self, "_last_orphan_probe_ok", True):
+            self._running.update(
+                (key, running) for key, running in provisional.items()
+                if key not in self._running)
+            self._codex_provisional_recovery_keys.update(provisional)
+            return
+        self._codex_recovery_generation = generation
+        if not ok and report is not None and report.transient_errors:
+            self._running.update(
+                (key, running) for key, running in provisional.items()
+                if key not in self._running)
+            self._codex_provisional_recovery_keys.update(provisional)
+            return
+        # A clean filesystem generation can still predate an actively-written
+        # rollout becoming indexable (especially across NFS). An exact tmux
+        # stamp/state binding remains stronger evidence of live ownership than
+        # a temporary metadata absence. Keep only those still-missing entries
+        # visible and retry on the next generation; metadata that exists under
+        # a different cwd is an explicit veto and is not restored here.
+        missing_metadata = {
+            key: running for key, running in provisional.items()
+            if (key not in self._running
+                and not key.startswith("__new__-")
+                and index.get(key, refresh=False) is None)
+        }
+        if missing_metadata:
+            self._running.update(missing_metadata)
+            self._codex_provisional_recovery_keys.update(missing_metadata)
+            return
+        if (ok or report is None or report.transient_errors == 0):
+            self._settle_codex_recovery(ok)
+
+    def _settle_codex_recovery(self, ok: bool) -> None:
+        self._codex_recovery_pending = False
+        self._codex_recovery_state = None
+        self._codex_provisional_recovery_keys.clear()
+        self._running_recovery_ok = ok
+        if self._loop is not None and self._pending_restore_state is not None:
+            self._loop.set_alarm_in(0, self._restore_pending_right_pane)
 
     _HELP_CONTEXTS = (keymap.CTX_PROJECTS, keymap.CTX_SESSIONS, keymap.CTX_RUNNING)
 
@@ -3777,14 +4013,17 @@ class App:
                 self._set_status("No session selected to delete.")
                 return
             title = session.display_title
-            detail = f"Permanently delete '{title}'?\n\nThis removes the session file from disk\nand kills its background tmux session."
             modal = DeleteConfirmModal(
-                title=f"Delete '{title}'?",
-                detail=detail,
+                action="Delete session",
+                session_name=title,
+                detail=(
+                    "The session file will be permanently removed from disk.\n"
+                    "Its background tmux session will also be killed."
+                ),
                 on_confirm=lambda: self._do_delete_session(session),
                 on_cancel=self._close_modal,
             )
-            self._show_overlay(modal, width=54, height=30)
+            self._show_overlay(modal, width=54, height=45)
 
         elif pos == 2:
             # Running pane — kill the detached tmux session.
@@ -3805,20 +4044,22 @@ class App:
             session_id = r.key if (r and not r.is_placeholder) else None
             project = r.project if r else None
             if session_id:
-                detail = (f"Kill '{label}'?\n\n"
-                          "The detached tmux session will be killed.\n"
-                          "The session file will be deleted from disk.")
+                detail = (
+                    "The detached tmux session will be killed.\n"
+                    "The session file will also be permanently deleted from disk."
+                )
             else:
-                detail = f"Kill '{label}'?\n\nThe detached tmux session will be killed."
+                detail = "The detached tmux session will be killed."
             modal = DeleteConfirmModal(
-                title=f"Kill '{label}'?",
+                action="Kill running session",
+                session_name=label,
                 detail=detail,
                 on_confirm=lambda: self._do_kill_running(
                     entry.tmux_name, session_id, project,
                     entry.identity_token),
                 on_cancel=self._close_modal,
             )
-            self._show_overlay(modal, width=54, height=30)
+            self._show_overlay(modal, width=54, height=45)
 
         else:
             self._set_status("Use d on a session row or running-entry row to delete.")
@@ -4361,14 +4602,17 @@ class App:
 
     def _do_context_delete(self, session: SessionMeta) -> None:
         title = session.display_title
-        detail = f"Permanently delete '{title}'?\n\nThis removes the session file from disk\nand kills its background tmux session."
         modal = DeleteConfirmModal(
-            title=f"Delete '{title}'?",
-            detail=detail,
+            action="Delete session",
+            session_name=title,
+            detail=(
+                "The session file will be permanently removed from disk.\n"
+                "Its background tmux session will also be killed."
+            ),
             on_confirm=lambda s=session: self._do_delete_session(s),
             on_cancel=self._close_modal,
         )
-        self._show_overlay(modal, width=54, height=30)
+        self._show_overlay(modal, width=54, height=45)
 
     # --- resize divider ---
 
@@ -4793,6 +5037,13 @@ class App:
                     ["tmux", "set-option", "-t", sess, "mouse", "on"],
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
                 )
+                wheel = getattr(self, "_root_wheel_manager", None)
+                if wheel is not None and not wheel.open():
+                    self._set_status(
+                        "Mouse-wheel forwarding unavailable; tmux may have "
+                        "custom root wheel bindings.",
+                        "warn",
+                    )
                 # Unbind tmux's built-in right-click context menu so right-click
                 # passes through to the application (Claude / less) instead of
                 # flashing display-menu.  Left-click (MouseDown1Pane) is left at
@@ -4834,6 +5085,7 @@ class App:
             from railmux.ui._widgets import ClickableRow
             ClickableRow._main_loop = self._loop
             self._hint_bar.set_loop(self._loop)
+            self._button_bar.set_loop(self._loop)
             if self._active_mode().prompt_for_auto_run:
                 self._maybe_prompt_codex_yolo()
             try:

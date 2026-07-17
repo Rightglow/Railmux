@@ -1,6 +1,8 @@
 """Status-bar state machine (level classification, TTL expiry, idle tips) plus
 the HintBar/ButtonBar footer widgets. The status text itself is rendered into
 the outer tmux bar (see test_tmux_status.py), not an in-pane widget."""
+from unittest.mock import MagicMock
+
 import pytest
 
 from railmux.config import Config
@@ -10,13 +12,22 @@ from railmux.ui.statusbar import TIPS, ButtonBar, HintBar
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
+    from railmux import restart_state
     ch = tmp_path / ".claude"
     (ch / "projects").mkdir(parents=True)
     # App startup normally re-adopts real detached tmux sessions. Status tests
     # must not inherit the developer machine's external tmux/Codex state or
     # depend on which optional command-line tools the test runner installed.
     monkeypatch.setattr(
-        app_mod.App, "_discover_orphans", lambda self, state=None: None)
+        app_mod.App, "_discover_orphans",
+        lambda self, state=None, **kwargs: True)
+    monkeypatch.setattr(restart_state, "capture_outer_identity", lambda: None)
+    monkeypatch.setattr(
+        app_mod.App, "_portable_state_path",
+        staticmethod(lambda: tmp_path / "portable.json"),
+    )
+    monkeypatch.setattr(
+        restart_state, "legacy_state_path", lambda: tmp_path / "legacy.json")
     monkeypatch.setattr(app_mod.tmux_ctl, "has_tmux", lambda: True)
     real_which = app_mod.shutil.which
     monkeypatch.setattr(
@@ -25,7 +36,11 @@ def app(tmp_path, monkeypatch):
         lambda command: "/test/bin/claude"
         if command == "claude" else real_which(command),
     )
-    return app_mod.App(claude_home=ch, config=Config(), auto_launched=False)
+    return app_mod.App(
+        claude_home=ch,
+        config=Config(codex_home=str(tmp_path / ".codex")),
+        auto_launched=False,
+    )
 
 
 @pytest.fixture
@@ -377,3 +392,69 @@ def test_buttonbar_not_selectable():
     """ButtonBar must not steal keyboard focus from the sidebar."""
     bar = ButtonBar(on_help=lambda: None, on_quit=lambda: None, on_detach=lambda: None)
     assert bar.selectable() is False
+
+
+def test_buttonbar_uses_responsive_labels_without_losing_actions():
+    bar = ButtonBar(
+        on_help=lambda: None,
+        on_quit=lambda: None,
+        on_detach=lambda: None,
+        on_mode_toggle=lambda: None,
+    )
+
+    expected = {
+        20: ("?", "Q", "D", "M"),
+        24: ("Help", "Quit", "Detach", "Mode"),
+        32: ("Help", "Quit", "Detach", "Mode"),
+        36: ("? Help", "q Quit", "C-b d Detach", "m Mode"),
+    }
+    for width, labels in expected.items():
+        text = "".join(
+            line.decode() for line in bar.render((width,), False).text)
+        assert all(label in text for label in labels)
+        assert len(bar._hit_areas) == 4
+
+
+def test_buttonbar_compact_hit_areas_match_visible_actions():
+    calls = []
+    bar = ButtonBar(
+        on_help=lambda: calls.append("help"),
+        on_quit=lambda: calls.append("quit"),
+        on_detach=lambda: calls.append("detach"),
+        on_mode_toggle=lambda: calls.append("mode"),
+    )
+    bar.render((24,), False)
+
+    for start, end, _index, _cb in list(bar._hit_areas):
+        bar.mouse_event(
+            (24,), "mouse press", 1, (start + end) // 2, 0, False)
+
+    assert calls == ["help", "quit", "detach", "mode"]
+
+
+def test_buttonbar_pressed_frame_precedes_callback_and_clears():
+    events = []
+    bar = ButtonBar(
+        on_help=lambda: events.append(("callback", bar._pressed_index)),
+        on_quit=lambda: None,
+        on_detach=lambda: None,
+    )
+    loop = MagicMock()
+    alarm = object()
+    loop.draw_screen.side_effect = lambda: events.append(("draw", bar._pressed_index))
+    loop.set_alarm_in.return_value = alarm
+    bar.set_loop(loop)
+    bar.render((60,), False)
+    start, end, _index, _cb = bar._hit_areas[0]
+
+    assert bar.mouse_event(
+        (60,), "mouse press", 1, (start + end) // 2, 0, False)
+
+    assert events == [("draw", 0), ("callback", 0)]
+    delay, clear = loop.set_alarm_in.call_args.args
+    assert delay == ButtonBar._PRESS_HOLD_SECONDS
+    assert bar._pressed_index == 0
+
+    clear(loop, None)
+
+    assert bar._pressed_index is None

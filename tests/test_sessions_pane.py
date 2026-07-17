@@ -74,6 +74,23 @@ def test_empty_state_updates_for_current_provider():
     assert "Press n to start one" in pane._walker[0].text
 
 
+def test_wheel_over_pinned_new_row_scrolls_session_list():
+    project = _project()
+    sessions = [
+        _session(project, session_id=str(i), title=f"Session {i}")
+        for i in range(12)
+    ]
+    pane = SessionsPane(on_select=lambda _session: None)
+    pane.set_sessions(project, sessions, running_ids=set(), favorite_ids=set())
+    pane._walker.set_focus(6)
+
+    handled = pane.mouse_event(
+        (30, 10), "mouse press", 5, 1, 1, False)
+
+    assert handled is True
+    assert pane._walker.focus == 7
+
+
 # ── callback dispatch ────────────────────────────────────────────────────
 
 def test_non_running_sessions_get_preview_and_open():

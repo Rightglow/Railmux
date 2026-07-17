@@ -60,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Make the one-line Button Bar responsive at narrow sidebar widths and paint a
+  short pressed state before synchronous actions, so remote clicks receive an
+  immediate visual acknowledgement without adding another focusable widget.
+- Clarify the final `railmux --doctor` privacy note and remind users to review
+  the redacted report before sharing it.
 - Group blocked Running sessions ahead of other activity states during the
   existing throttled recency sort, without changing status-dot semantics or
   causing per-poll row movement.
@@ -81,6 +86,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved demo-GIF slot.
 
 ### Fixed
+
+- Keep double-click intent intact when a Sessions row redirects through an
+  already-running entry, preventing the delayed right-pane focus transfer from
+  being cancelled and bouncing back to the sidebar.
+- Recreate a failed scroll helper against the exact displayed pane in swap
+  mode, and restore copy-mode wheel bindings per key so a user tmux reload is
+  preserved without leaving other wrappers pointed at a dead helper.
+- Keep delete/kill confirmation controls visible for long ASCII or CJK session
+  names by showing the name once in a scrollable body, pinning the action keys,
+  and allocating more vertical space in the narrow sidebar.
+- Deliver both macOS trackpad and mouse-wheel directions to every scrollable
+  sidebar list, even when the pointer is over pane chrome or keyboard focus is
+  elsewhere. Server-global tmux bindings are shared crash-safely, installed
+  only over stock behavior, and restored without overwriting later user config.
+- Keep an `Exiting…` progress surface visible while synchronous tmux cleanup
+  runs, and split teardown into idempotent core/outer phases so the sidebar no
+  longer disappears before the agent pane or repeats destructive cleanup.
+- Preserve exact Codex sessions in Running across a soft restart while the
+  background history index publishes its first generation. Startup recovery
+  now pins one immutable generation, shows exact provisional entries instead
+  of a false empty list, and revalidates them without dropping them on transient
+  index/tmux failures or temporary rollout visibility delays.
 
 - Close the crash window in which a new provider could outlive Railmux before
   receiving recovery metadata. Placeholder resolution now uses Linux rollout

@@ -114,6 +114,18 @@ def test_set_running_unchanged_preserves_rows():
     assert all(current is prior for current, prior in zip(pane._walker, rows))
 
 
+def test_wheel_over_bottom_border_scrolls_running_list():
+    pane = RunningSessionsPane(on_select=lambda e: None)
+    pane.set_running([_entry(f"cc-{i}") for i in range(12)])
+    pane._walker.set_focus(6)
+
+    handled = pane.mouse_event(
+        (30, 10), "mouse press", 4, 1, 9, False)
+
+    assert handled is True
+    assert pane._walker.focus == 5
+
+
 # ── filtering ───────────────────────────────────────────────────────────
 
 def _running_names(pane: RunningSessionsPane) -> list[str]:

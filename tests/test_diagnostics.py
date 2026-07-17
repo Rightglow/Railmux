@@ -69,6 +69,8 @@ def test_doctor_report_is_useful_and_redacts_user_values(
     assert "true-colour=no" in report
     assert "Config: ~/.config/railmux/config.toml; valid=yes" in report
     assert "Claude data: <custom>" in report
+    assert "Privacy:" in report
+    assert "review before sharing" in report
     for secret in (
         str(home), "private-user", "private-host", "private-client",
         "company-secret-project", "sk-secret-token",
