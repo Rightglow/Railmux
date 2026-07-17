@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from railmux.models import (
@@ -32,6 +32,19 @@ _TOOL_BLOCK_AGE_S = 120
 
 
 FileSignature = tuple[int, int]  # (mtime_ns, size)
+
+
+@dataclass(frozen=True)
+class ScanReport:
+    """Bounded, privacy-safe accounting for one index refresh."""
+
+    complete: bool
+    warning: str | None
+    paths_seen: int
+    stat_count: int
+    parse_count: int
+    transient_errors: int
+    duration_s: float
 
 
 class _ScanError:
@@ -103,9 +116,22 @@ class CodexIndex:
 
     # -- public API -------------------------------------------------------
 
-    def refresh(self) -> None:
+    def refresh(self) -> ScanReport:
         """Refresh cached metadata once for a group of related queries."""
-        self._refresh()
+        return self._refresh()
+
+    def snapshot(self) -> tuple[SessionMeta, ...]:
+        """Return a coherent immutable view of the current raw cache.
+
+        ``SessionMeta`` and ``Project`` are frozen dataclasses.  Keeping the
+        original objects (rather than reconstructing selected fields) also
+        preserves fields added by newer providers, including attention state.
+        """
+        return tuple(sorted(
+            self._canonical().values(),
+            key=lambda meta: (meta.last_mtime, str(meta.jsonl_path)),
+            reverse=True,
+        ))
 
     def all_cwds(self, *, refresh: bool = True) -> dict[Path, int]:
         """Map from cwd to Codex session count for every cwd that has at
@@ -157,15 +183,31 @@ class CodexIndex:
 
     # -- internal ---------------------------------------------------------
 
-    def _refresh(self) -> None:
+    def _refresh(self) -> ScanReport:
         """Stat cached files and re-scan any whose mtime changed (or new files)."""
+        started = time.monotonic()
         sessions_dir = self._sessions_dir
         if not sessions_dir.is_dir():
-            return
+            # A genuinely absent provider home is a valid empty source.  An
+            # existing but inaccessible node is a scan failure and must not be
+            # mistaken for a successful empty snapshot.
+            missing = not sessions_dir.exists()
+            return ScanReport(
+                complete=missing,
+                warning=None if missing else "Codex session directory is unavailable",
+                paths_seen=0,
+                stat_count=0,
+                parse_count=0,
+                transient_errors=0 if missing else 1,
+                duration_s=time.monotonic() - started,
+            )
 
         now = time.time()
         current_paths: set[Path] = set()
         walk_failed = False
+        stat_count = 0
+        parse_count = 0
+        transient_errors = 0
 
         def _walk_error(_error: OSError) -> None:
             nonlocal walk_failed
@@ -181,8 +223,10 @@ class CodexIndex:
                     path = Path(root) / name
                     current_paths.add(path)
                     try:
+                        stat_count += 1
                         stat = path.stat()
                     except OSError:
+                        transient_errors += 1
                         continue
                     signature = (stat.st_mtime_ns, stat.st_size)
                     cached = self._entries.get(path)
@@ -204,6 +248,7 @@ class CodexIndex:
                         neg = self._negative.get(path)
                         if neg is not None and neg == signature:
                             continue
+                    parse_count += 1
                     result = _scan_codex_session(path)
                     if isinstance(result, SessionMeta):
                         self._entries[path] = (signature, result)
@@ -224,7 +269,7 @@ class CodexIndex:
                         # (its signature won't match a live entry and it isn't
                         # in the negative cache), and it reappears once the
                         # transient error clears.
-                        pass
+                        transient_errors += 1
         except OSError:
             walk_failed = True
 
@@ -237,6 +282,24 @@ class CodexIndex:
             for stale in list(self._negative):
                 if stale not in current_paths:
                     del self._negative[stale]
+
+        warning = None
+        if walk_failed:
+            warning = "Codex session tree scan was incomplete"
+        elif transient_errors:
+            warning = (
+                f"Codex session scan skipped {transient_errors} transient "
+                "file error(s)"
+            )
+        return ScanReport(
+            complete=not walk_failed,
+            warning=warning,
+            paths_seen=len(current_paths),
+            stat_count=stat_count,
+            parse_count=parse_count,
+            transient_errors=transient_errors,
+            duration_s=time.monotonic() - started,
+        )
 
 
 # Tool-call / output record pairs, matched by ``call_id``.  Real Codex 0.144.x

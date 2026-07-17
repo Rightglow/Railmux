@@ -154,6 +154,15 @@ immutable pane ID, so same-named sessions on private servers and multiple
 windows on one server cannot restore one another. Legacy ownerless files
 migrate view fields only; process recovery remains fail-closed.
 
+### Background Codex session index
+
+Codex tree walking and rollout parsing now run in one rate-limited background
+worker. The UI consumes immutable, monotonically numbered last-known-good
+snapshots; requests coalesce, placeholder discovery can accelerate the next
+scan, transient failures retain live rows, and shutdown never waits
+indefinitely for filesystem IO. Synthetic local delay measurements and their
+limitations are recorded in `docs/BACKGROUND_SESSION_INDEX.md`.
+
 ### Focus and status colour semantics
 
 Railmux now uses distinct meanings for grass-green pane chrome and live-session

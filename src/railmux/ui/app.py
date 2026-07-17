@@ -20,7 +20,7 @@ import urwid
 
 from railmux import orphan_marker, tmux_ctl
 from railmux.atomic_file import atomic_write_text
-from railmux.codex_index import CodexIndex
+from railmux.background_index import BackgroundCodexIndex
 from railmux.config import Config
 from railmux.display_transport import (
     AgentDisplayTransport,
@@ -577,7 +577,7 @@ class App:
         # ``m`` cycles the registry and each key owns independent view state.
         self._mode_registry: ModeRegistry = DEFAULT_MODE_REGISTRY
         self._active_mode_key: str = self._mode_registry.default_key
-        self._codex_index = CodexIndex(
+        self._codex_index = BackgroundCodexIndex(
             self._codex_home_path(), self._renames)
         self._codex_project_filter: dict[Path, int] = {}  # cwd → Codex session count
         # Mode switches paint from existing snapshots immediately. A daemon
@@ -586,7 +586,7 @@ class App:
         self._mode_refresh_lock = threading.Lock()
         self._mode_refresh_thread: threading.Thread | None = None
         self._mode_refresh_result: (
-            tuple[list[Project] | None, CodexIndex | None, str | None] | None
+            tuple[list[Project] | None, str | None] | None
         ) = None
 
         projects = list_projects(claude_home)
@@ -1421,7 +1421,7 @@ class App:
         return tmux_ctl.session_exists(tmux_name)
 
     def _existing_session_ids(self, cwd: Path, project: Project | None,
-                              session_type: str) -> frozenset[str]:
+                              session_type: str) -> tuple[frozenset[str], bool]:
         """Session ids already present in *cwd* right now (pre-launch snapshot).
 
         Codex reads a fresh Codex-index scan of the cwd; Claude reads the
@@ -1429,12 +1429,20 @@ class App:
         or a brand-new project dir). Used by ``_launch`` to fence off (#12)
         pre-existing rollouts from placeholder resolution."""
         if session_type == "codex":
-            raw = self._codex_index.sessions_for_cwd(cwd, refresh=True)
+            index = self._codex_index
+            if isinstance(index, BackgroundCodexIndex):
+                complete = index.refresh_and_wait(0.5)
+                raw = index.sessions_for_cwd(cwd, refresh=False)
+            else:  # compatibility for lightweight integrations/test doubles
+                raw = index.sessions_for_cwd(cwd, refresh=True)
+                complete = True
         elif project is not None and project.claude_dir != Path():
             raw = self._session_cache.list_sessions(project)
+            complete = True
         else:
             raw = []
-        return frozenset(s.session_id for s in raw)
+            complete = True
+        return frozenset(s.session_id for s in raw), complete
 
     def _launch(self, key: str, cmd: list[str], cwd: Path, label: str,
                 project: Project | None, placeholder_path: Path | None = None,
@@ -1471,8 +1479,9 @@ class App:
         # starting the child, so placeholder resolution only ever binds a NEWLY
         # appeared id — never a rollout another process wrote to the same cwd.
         pre_launch_ids: frozenset[str] = frozenset()
+        pre_launch_complete = True
         if placeholder_path is not None:
-            pre_launch_ids = self._existing_session_ids(
+            pre_launch_ids, pre_launch_complete = self._existing_session_ids(
                 placeholder_path, project, session_type)
         # Only the non-secret CODEX_HOME may appear in the command string.
         shell_env = ({k: v for k, v in env.items() if k == "CODEX_HOME"}
@@ -1529,6 +1538,7 @@ class App:
             session_type=session_type,
             pre_launch_ids=pre_launch_ids,
             orphan=launch_marker,
+            allow_heuristic_resolution=pre_launch_complete,
         )
         self._stamp_running(self._running[key])
         if not self._attach_in_right_pane(tmux_name, steal_focus=steal_focus):
@@ -2758,7 +2768,7 @@ class App:
         self._show_overlay(modal, width=60, height=45)
 
     def _schedule_mode_data_refresh(self) -> None:
-        """Refresh both NFS-backed mode indexes without blocking the UI thread."""
+        """Refresh Claude project discovery without blocking the UI thread."""
         thread = self._mode_refresh_thread
         if thread is not None and thread.is_alive():
             return
@@ -2767,18 +2777,14 @@ class App:
                 return
 
         claude_home = self._claude_home
-        codex_home = self._codex_home_path()
-        renames = self._renames
         lock = self._mode_refresh_lock
 
         def _worker() -> None:
             try:
                 projects = list_projects(claude_home)
-                index = CodexIndex(codex_home, renames)
-                index.refresh()
-                result = (projects, index, None)
+                result = (projects, None)
             except Exception as exc:
-                result = (None, None, str(exc))
+                result = (None, str(exc))
             with lock:
                 self._mode_refresh_result = result
 
@@ -2791,6 +2797,15 @@ class App:
         thread.start()
 
     def _mode_refresh_pending(self) -> bool:
+        project_pending = self._project_refresh_pending()
+        index = getattr(self, "_codex_index", None)
+        background = isinstance(index, BackgroundCodexIndex)
+        codex_pending = index.is_pending if background else False
+        codex_cold = (not index.has_snapshot and not index.is_unavailable
+                      if background else False)
+        return project_pending or codex_pending or codex_cold
+
+    def _project_refresh_pending(self) -> bool:
         thread = getattr(self, "_mode_refresh_thread", None)
         lock = getattr(self, "_mode_refresh_lock", None)
         if lock is None:
@@ -2798,6 +2813,14 @@ class App:
         with lock:
             has_result = self._mode_refresh_result is not None
         return has_result or (thread is not None and thread.is_alive())
+
+    def _request_codex_refresh(self, *, force: bool = False) -> None:
+        """Request a nonblocking Codex generation (test-double compatible)."""
+        index = self._codex_index
+        if isinstance(index, BackgroundCodexIndex):
+            index.refresh(force=force)
+        else:
+            index.refresh()
 
     def _consume_mode_refresh(self) -> bool:
         """Install a completed worker result on the UI thread."""
@@ -2809,8 +2832,12 @@ class App:
             self._mode_refresh_result = None
         if result is None:
             return False
-        projects, index, error = result
-        if error is not None or projects is None or index is None:
+        legacy_index = None
+        if len(result) == 3:  # <=0.1.1 test/integration payload
+            projects, legacy_index, error = result
+        else:
+            projects, error = result
+        if error is not None or projects is None:
             self._set_status(
                 f"Background mode refresh failed: {error or 'unknown error'}",
                 "warn",
@@ -2818,8 +2845,10 @@ class App:
             return False
         self._project_snapshot = projects
         self._project_snapshot_at = time.monotonic()
-        self._codex_index = index
-        self._codex_project_filter = index.all_cwds(refresh=False)
+        if (legacy_index is not None
+                and not isinstance(self._codex_index, BackgroundCodexIndex)):
+            self._codex_index = legacy_index
+        self._codex_project_filter = self._codex_index.all_cwds(refresh=False)
         return True
 
     def _cycle_mode(self) -> None:
@@ -2885,6 +2914,7 @@ class App:
         if target.prompt_for_auto_run:
             self._maybe_prompt_codex_yolo()
         if target.project_source == ProjectSource.CODEX:
+            self._request_codex_refresh(force=True)
             self._schedule_mode_data_refresh()
             self._projects_pane.set_projects(self._visible_projects(allow_stale=True))
             if not self._codex_project_filter:
@@ -2895,6 +2925,12 @@ class App:
                 if self._mode_refresh_pending():
                     self._set_status(
                         f"{target.label} mode — loading sessions…{suffix}")
+                elif (isinstance(self._codex_index, BackgroundCodexIndex)
+                      and self._codex_index.is_unavailable):
+                    self._set_status(
+                        f"{target.label} mode — session index unavailable{suffix}",
+                        "warn",
+                    )
                 else:
                     self._set_status(
                         f"{target.label} mode — no sessions found{suffix}")
@@ -2975,9 +3011,12 @@ class App:
         if (projects is None or force
                 or (not allow_stale
                     and now - self._project_snapshot_at >= self._PROJECT_SCAN_INTERVAL)):
-            projects = list_projects(self._claude_home)
-            self._project_snapshot = projects
-            self._project_snapshot_at = now
+            # The initial snapshot is built before Urwid starts. Thereafter a
+            # normal UI tick only schedules the single coalesced discovery
+            # worker and keeps painting the last-good project generation.
+            if not self._project_refresh_pending():
+                self._schedule_mode_data_refresh()
+            projects = projects or []
         if self._active_mode().project_source != ProjectSource.CODEX:
             if getattr(getattr(self, "_config", None),
                        "show_empty_projects", False):
@@ -3082,6 +3121,9 @@ class App:
         hard and soft quit.  On soft quit (``_soft_quit_flag`` is set) the
         detached agent sessions and the outer tmux session are left alive.
         """
+        index = getattr(self, "_codex_index", None)
+        if isinstance(index, BackgroundCodexIndex):
+            index.close(timeout_s=0.2)
         self._teardown_scroll_acceleration()
         # Drop our status-bar overrides BEFORE the soft-quit early return below —
         # on soft quit the outer tmux session survives, so our appearance (bar
@@ -3177,6 +3219,17 @@ class App:
     # --- periodic refresh ---
 
     def _refresh(self) -> None:
+        """Refresh every visible view against one coherent Codex generation."""
+        index = getattr(self, "_codex_index", None)
+        if isinstance(index, BackgroundCodexIndex):
+            index.begin_read()
+        try:
+            self._refresh_impl()
+        finally:
+            if isinstance(index, BackgroundCodexIndex):
+                index.end_read()
+
+    def _refresh_impl(self) -> None:
         self._scroll_manager.maintain()
         transport = self._display_transport()
         if transport.outer_session_lost():
@@ -3216,7 +3269,7 @@ class App:
             ]:
                 del self._running[key]
             self._set_active_target(None, None)
-        background_refreshed = self._consume_mode_refresh()
+        self._consume_mode_refresh()
         mode_refresh_pending = self._mode_refresh_pending()
         mode = self._active_mode()
         prefix = mode.tmux_prefix
@@ -3234,25 +3287,27 @@ class App:
                 return pane_id in server.panes
             return tmux_ctl.pane_alive(pane_id)
 
-        # A refresh may need several Codex views. Walk its session tree once,
-        # then serve each view from the same mtime-keyed index snapshot.
-        # TODO(review #6): this still walks/stats the whole Codex session tree
-        # synchronously on the UI thread each tick; move to a single rate-limited
-        # background scanner serving an immutable snapshot (needs design).
+        # A refresh may need several Codex views. Ask the single rate-limited
+        # worker for a new immutable generation; every query below returns
+        # immediately from the last known-good snapshot.
         refresh_codex = (
             mode.project_source == ProjectSource.CODEX
             or any(r.session_type == "codex" for r in self._running.values())
         )
-        if (refresh_codex and not background_refreshed
-                and not mode_refresh_pending):
-            self._codex_index.refresh()
+        force_projects = any(r.is_placeholder for r in self._running.values())
+        if refresh_codex:
+            self._request_codex_refresh(force=force_projects)
+        warning = (self._codex_index.take_warning()
+                   if isinstance(self._codex_index, BackgroundCodexIndex)
+                   else None)
+        if warning:
+            self._set_status(warning, "warn")
 
         # Refresh the Codex project filter so newly-created Codex sessions
         # make their cwd appear as a project in Codex mode.
         if mode.project_source == ProjectSource.CODEX:
             self._codex_project_filter = self._codex_index.all_cwds(refresh=False)
         # Placeholder resolution must discover its JSONL without extra delay.
-        force_projects = any(r.is_placeholder for r in self._running.values())
         projects = self._visible_projects(
             force=force_projects and not mode_refresh_pending,
             allow_stale=mode_refresh_pending)
@@ -3960,7 +4015,11 @@ class App:
             self._set_status(f"codex delete failed: {label}", "error")
             return
         self._forget_running(session_id, tmux_name)
-        self._codex_index.invalidate()
+        if isinstance(self._codex_index, BackgroundCodexIndex):
+            self._codex_index.invalidate(
+                tombstone=session_id if is_real else None)
+        else:
+            self._codex_index.invalidate()
         self._invalidate_project_snapshot()
         self._refresh()
         self._set_status(f"{'Deleted' if is_real else 'Killed'}: {label}")

@@ -517,16 +517,20 @@ def test_visible_projects_reuses_short_lived_snapshot(app, monkeypatch):
     monkeypatch.setattr(
         "railmux.ui.app.time.monotonic", lambda: now[0])
     monkeypatch.setattr(
-        "railmux.ui.app.list_projects",
-        lambda _home: calls.append(True) or [refreshed],
-    )
+        a, "_schedule_mode_data_refresh", lambda: calls.append(True))
+    monkeypatch.setattr(a, "_project_refresh_pending", lambda: False)
 
     assert a._visible_projects() == [cached]
     assert calls == []
 
     now[0] = 104.0
-    assert a._visible_projects() == [refreshed]
+    assert a._visible_projects() == [cached]
     assert calls == [True]
+    # Worker results are installed on the UI thread as one coherent project
+    # generation; the scheduling tick keeps rendering the prior snapshot.
+    a._project_snapshot = [refreshed]
+    a._project_snapshot_at = now[0]
+    assert a._visible_projects() == [refreshed]
 
 
 def test_visible_projects_force_bypasses_snapshot(app, monkeypatch):

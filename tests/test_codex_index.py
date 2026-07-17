@@ -1063,9 +1063,11 @@ def test_codex_index_partial_walk_keeps_unvisited_cached_sessions(
         onerror(OSError("temporary NFS failure"))
 
     monkeypatch.setattr(index_module.os, "walk", partial_walk)
-    idx.refresh()
+    report = idx.refresh()
     assert idx.get("sid-a", refresh=False) is not None
     assert idx.get("sid-b", refresh=False) is not None
+    assert report.complete is False
+    assert report.warning is not None
 
 
 def test_scan_codex_open_error_returns_scan_error(tmp_path):
@@ -1146,8 +1148,11 @@ def test_codex_index_transient_error_retried_not_hidden(tmp_path, monkeypatch):
     idx = CodexIndex(tmp_path)
 
     # First refresh: transient error -> not indexed, but not permanently hidden.
-    idx.refresh()
+    first_report = idx.refresh()
     assert idx.get(sid, refresh=False) is None
+    assert first_report.complete is True
+    assert first_report.transient_errors == 1
+    assert first_report.warning is not None
 
     # Signature is unchanged.  A *filtered* file would stay negative-cached and
     # be skipped here; a transient error must be retried instead.

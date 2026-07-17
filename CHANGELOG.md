@@ -58,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Group blocked Running sessions ahead of other activity states during the
   existing throttled recency sort, without changing status-dot semantics or
   causing per-poll row movement.
+- Move Codex history tree walking and rollout parsing off the UI thread into a
+  single rate-limited worker. Sidebar refreshes now read immutable generation
+  snapshots, coalesce repeated requests, retain the last good view on scan
+  failure, and bound shutdown even when filesystem IO is stuck.
 - Raise copy-mode wheel coalescing from 2 FPS to 10 FPS over SSH while keeping
   the immediate leading update, native scroll distance, and both nested and
   experimental swap transport lifecycles unchanged.

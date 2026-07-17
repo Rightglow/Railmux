@@ -81,6 +81,36 @@ carry the marker token and recheck live session/pane identity. Stopping an
 unresolved entry may kill only that exact tmux identity and cannot delete a
 provider file because no provider UUID is authorized.
 
+## Session indexes publish immutable generations
+
+The Codex history tree is owned by one `BackgroundCodexIndex` worker. Urwid
+ticks only query its latest immutable `IndexSnapshot`; they must never call the
+underlying `CodexIndex` tree walk or rollout parser. Repeated requests coalesce,
+ordinary scans are rate-limited, and placeholder discovery may request a
+shorter bounded interval without creating another worker or an unbounded scan
+loop.
+
+Each successful publication increments a generation and carries complete
+frozen `SessionMeta` values. Do not reconstruct a selected subset of their
+fields at this boundary: provider-specific fields such as attention state must
+survive unchanged. Renames are a read-time overlay; delete uses a temporary ID
+tombstone until a later generation confirms removal. Neither mutates a
+published snapshot.
+
+A failed or incomplete tree walk retains the last known-good generation. A
+transient per-file error retains that file's cached metadata, publishes the
+otherwise coherent generation with a bounded warning, and retries later. A
+partial failure with no usable snapshot is not published as successful empty
+state. Shutdown signals the daemon and waits only for a bounded interval, since
+filesystem IO cannot be cancelled portably; a late worker may not publish
+after close.
+
+Claude's `SessionCache` remains a separate source. Its UI path scans only the
+selected project directory, caps cold parsing to the newest entries, and parses
+only changed files. Moving that bounded per-project source to another worker is
+not required by the Codex whole-tree invariant, but any future worker must use
+the same last-known-good generation rules.
+
 ## The agent workspace is independent of the sidebar mode
 
 `AgentWorkspace` owns at most two `AgentSlot` objects: `primary` and
