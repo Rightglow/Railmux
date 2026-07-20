@@ -17,7 +17,7 @@ from railmux.display_transport import (
     AgentDisplayTransport,
     recover_interrupted_swaps,
 )
-from railmux.function_key_manager import RootFunctionKeyManager
+from railmux.tmux_binding_manager import SharedTmuxBindingManager
 from railmux.modes import CODEX_MODE
 from railmux.models import Project
 from railmux.ui.app import App, _Running
@@ -659,7 +659,7 @@ def test_real_local_workspace_restore_rebuilds_layout_target_and_focus(
     app._redraw_focus_state_now = lambda: None
     app._check_agent_slot_size = lambda *_args, **_kwargs: None
     app._schedule_scroll_acceleration = lambda *_args: None
-    app._install_function_key_bindings = lambda: None
+    app._install_tmux_bindings = lambda: None
     statuses = []
     app._set_status = lambda *args, **_kwargs: statuses.append(args)
     app._agent_region_size = lambda: (160, 30)
@@ -806,12 +806,12 @@ def test_real_root_wheel_install_restore_and_user_reload(isolated_tmux):
     assert custom is not None and "user-custom-wheel" in custom
 
 
-def test_real_function_key_manager_round_trip_and_user_reload(
+def test_real_tmux_binding_manager_round_trip_and_user_reload(
         isolated_tmux, monkeypatch, tmp_path):
-    """F8/F9 wrappers are valid tmux commands and restore per-key authority."""
+    """Global wrappers execute and restore their exact per-key authority."""
     _display_session, owner_pane, _socket_path = isolated_tmux
     monkeypatch.setattr(
-        "railmux.function_key_manager.restart_state.runtime_state_dir",
+        "railmux.tmux_binding_manager.restart_state.runtime_state_dir",
         lambda: tmp_path,
     )
     subprocess.run(
@@ -827,17 +827,23 @@ def test_real_function_key_manager_round_trip_and_user_reload(
         stderr=subprocess.DEVNULL,
     )
     original = tmux_ctl.read_root_function_bindings()
+    original_prefix_tab = tmux_ctl.read_prefix_target_binding()
     assert original["F8"] is not None and original["F9"] is None
 
-    manager = RootFunctionKeyManager("integration-server", owner_pane)
+    manager = SharedTmuxBindingManager("integration-server", owner_pane)
     assert manager.open()
     current = tmux_ctl.read_root_function_bindings()
+    current_prefix_tab = tmux_ctl.read_prefix_target_binding()["Tab"]
     assert all(
         binding is not None
         and "railmux-function-forward-v1-" in binding
         and tmux_ctl.RAILMUX_CONTROLLER_OPTION in binding
         for binding in current.values()
     )
+    assert current_prefix_tab is not None
+    assert "railmux-target-toggle-v1-" in current_prefix_tab
+    assert tmux_ctl.RAILMUX_CONTROLLER_OPTION in current_prefix_tab
+    assert tmux_ctl.RAILMUX_TARGET_OPTION in current_prefix_tab
     assert tmux_ctl.show_window_user_option(
         owner_pane, tmux_ctl.RAILMUX_CONTROLLER_OPTION) == owner_pane
 
@@ -899,6 +905,28 @@ def test_real_function_key_manager_round_trip_and_user_reload(
                 text=True,
             )
         )
+        assert tmux_ctl.set_window_user_option(
+            owner_pane, tmux_ctl.RAILMUX_TARGET_OPTION, other_pane)
+        subprocess.run(
+            ["tmux", "send-keys", "-K", "-c", client_name, "C-b"],
+            check=True,
+        )
+        subprocess.run(
+            ["tmux", "send-keys", "-K", "-c", client_name, "Tab"],
+            check=True,
+        )
+        assert _wait_until(
+            lambda: tmux_ctl.active_pane_id(owner_pane) == owner_pane)
+        subprocess.run(
+            ["tmux", "send-keys", "-K", "-c", client_name, "C-b"],
+            check=True,
+        )
+        subprocess.run(
+            ["tmux", "send-keys", "-K", "-c", client_name, "Tab"],
+            check=True,
+        )
+        assert _wait_until(
+            lambda: tmux_ctl.active_pane_id(owner_pane) == other_pane)
         subprocess.run(
             ["tmux", "detach-client", "-t", client_name], check=True)
         output = client_process.communicate(timeout=2)[0]
@@ -920,6 +948,7 @@ def test_real_function_key_manager_round_trip_and_user_reload(
     restored = tmux_ctl.read_root_function_bindings()
     assert restored["F8"] == original["F8"]
     assert restored["F9"] is not None and "new-user-f9" in restored["F9"]
+    assert tmux_ctl.read_prefix_target_binding() == original_prefix_tab
     assert tmux_ctl.show_window_user_option(
         owner_pane, tmux_ctl.RAILMUX_CONTROLLER_OPTION) is None
 

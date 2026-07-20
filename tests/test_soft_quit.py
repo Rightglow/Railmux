@@ -430,7 +430,7 @@ def test_restore_workspace_rebuilds_both_slots_target_and_agent_focus(
     app._layout_fits = MagicMock(return_value=True)
     app._set_railmux_focus = MagicMock()
     app._paint_slot_active_target = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
 
     def restore_primary(_state, slot):
         slot.pane_id = "%2"
@@ -484,7 +484,7 @@ def test_restore_workspace_keeps_dual_layout_when_secondary_content_fails(
     app._layout_fits = MagicMock(return_value=True)
     app._set_railmux_focus = MagicMock()
     app._paint_slot_active_target = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
 
     def create_primary():
         workspace.primary.pane_id = "%2"
@@ -534,7 +534,7 @@ def test_restore_workspace_geometry_fallback_remembers_validated_secondary(
     app._layout_fits = MagicMock(return_value=False)
     app._set_railmux_focus = MagicMock()
     app._paint_slot_active_target = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._set_status = MagicMock()
     app._running["secondary-session"] = _Running(
         key="secondary-session",
@@ -584,7 +584,7 @@ def test_restore_workspace_keeps_layout_when_primary_content_falls_back_empty(
     app._layout_fits = MagicMock(return_value=True)
     app._set_railmux_focus = MagicMock()
     app._paint_slot_active_target = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._restore_agent_target = MagicMock(return_value=False)
 
     def create_primary():

@@ -21,6 +21,8 @@ CTX_RUNNING = "running"
 CTX_AGENT = "agent"  # right-hand agent pane has focus
 CTX_AGENT_P1_SIDE_BY_SIDE = "agent-p1-side-by-side"
 CTX_AGENT_P2_SIDE_BY_SIDE = "agent-p2-side-by-side"
+CTX_AGENT_P1_STACKED = "agent-p1-stacked"
+CTX_AGENT_P2_STACKED = "agent-p2-stacked"
 _ALL_CTX = (CTX_PROJECTS, CTX_SESSIONS, CTX_RUNNING)
 
 
@@ -42,6 +44,8 @@ BINDINGS: list[Binding] = [
     Binding(("up", "down"), "↑↓", "move",
             contexts=_ALL_CTX),
     Binding(("tab", "shift tab"), "Tab", "pane",
+            contexts=_ALL_CTX),
+    Binding((), "C-b Tab", "Target",
             contexts=_ALL_CTX),
     Binding(("enter",), "↵", "open",
             contexts=_ALL_CTX),
@@ -82,12 +86,19 @@ BINDINGS: list[Binding] = [
     # Display-only: handled by a tmux root binding, not railmux.
     Binding((), "F9", "fullscreen"),
     # Agent panes — tmux owns these navigation keys, so they are hints only.
-    Binding((), "C-b ←", "back",
-            contexts=(CTX_AGENT, CTX_AGENT_P1_SIDE_BY_SIDE)),
+    Binding((), "C-b Tab/←", "Sidebar",
+            contexts=(CTX_AGENT, CTX_AGENT_P1_SIDE_BY_SIDE,
+                      CTX_AGENT_P1_STACKED, CTX_AGENT_P2_STACKED)),
+    Binding((), "C-b Tab", "Sidebar",
+            contexts=(CTX_AGENT_P2_SIDE_BY_SIDE,)),
     Binding((), "C-b →", "Pane 2",
             contexts=(CTX_AGENT_P1_SIDE_BY_SIDE,)),
     Binding((), "C-b ←", "Pane 1",
             contexts=(CTX_AGENT_P2_SIDE_BY_SIDE,)),
+    Binding((), "C-b ↓", "Pane 2",
+            contexts=(CTX_AGENT_P1_STACKED,)),
+    Binding((), "C-b ↑", "Pane 1",
+            contexts=(CTX_AGENT_P2_STACKED,)),
 ]
 
 _TRAILING: list[Binding] = [

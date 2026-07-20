@@ -42,7 +42,7 @@ from railmux.modes import (
     ProjectSource,
 )
 from railmux.models import AttentionState, Project, SessionMeta
-from railmux.function_key_manager import RootFunctionKeyManager
+from railmux.tmux_binding_manager import SharedTmuxBindingManager
 from railmux.mouse_manager import RootWheelForwardingManager
 from railmux.renames import Renames
 from railmux import restart_state
@@ -587,11 +587,13 @@ class App:
                 identity.server_digest, identity.pane_id)
             if identity is not None else None
         )
-        self._root_function_key_manager = (
-            RootFunctionKeyManager(
+        self._tmux_binding_manager = (
+            SharedTmuxBindingManager(
                 identity.server_digest, identity.pane_id)
             if identity is not None else None
         )
+        self._projected_target_pane_id: str | None = None
+        self._target_toggle_warning_shown = False
         self._teardown_core_done: bool = False
         self._outer_teardown_done: bool = False
         self._exit_in_progress: bool = False
@@ -957,6 +959,13 @@ class App:
         # Pane 2 is closed.
         self._divider_active = state if applied and indicators_applied else None
 
+    def _retry_pending_divider_style(self) -> None:
+        """Heal a partial tmux border update on the next normal refresh."""
+        if (hasattr(self, "_divider_active")
+                and self._divider_active is None):
+            self._set_divider_active(
+                not getattr(self, "_railmux_has_focus", True))
+
     def _set_railmux_focus(self, active: bool, *, force_border: bool = False) -> None:
         """Synchronize urwid focus maps and the tmux center divider."""
         self._railmux_has_focus = active
@@ -990,7 +999,7 @@ class App:
         if slot is None:
             return workspace.target
         if slot.key != workspace.target_slot_key:
-            workspace.set_target(slot.key)
+            self._set_workspace_target(slot.key)
             self._paint_slot_active_target(
                 slot, slot.active_session_id, slot.agent_tmux_name)
             # While focus stays somewhere in the agent region, tmux does not
@@ -1432,7 +1441,7 @@ class App:
         if slot is None:
             slot = (self._agent_workspace().slot_for_agent(entry.tmux_name)
                     or self._agent_workspace().target)
-        self._agent_workspace().set_target(slot.key)
+        self._set_workspace_target(slot.key)
         if not from_double:
             self._cancel_pending_double_focus()
         selected = self._by_tmux(entry.tmux_name)
@@ -1632,7 +1641,7 @@ class App:
         slot.mode_key = self._current_mode_key()
         self._set_divider_active(
             not getattr(self, "_railmux_has_focus", True), force=True)
-        self._install_function_key_bindings()
+        self._install_tmux_bindings()
         return True
 
     def _sync_sidebar_to_agent_project(self, tmux_name: str | None) -> None:
@@ -1764,7 +1773,7 @@ class App:
                 f"Using nested agent display: {outcome.reason}", "warn")
         if slot.key == self._agent_workspace().target_slot_key:
             self._schedule_scroll_acceleration(agent_tmux_name)
-        self._install_function_key_bindings()
+        self._install_tmux_bindings()
         return True
 
     def _reconcile_failed_attach_target(
@@ -1800,11 +1809,50 @@ class App:
         return self._attach_agent_slot(
             self._primary_slot, claude_tmux_name, steal_focus=steal_focus)
 
-    def _install_function_key_bindings(self) -> None:
-        """Ensure the shared F8/F9 forwarding transaction is active."""
-        manager = getattr(self, "_root_function_key_manager", None)
-        if manager is not None:
-            manager.open()
+    def _install_tmux_bindings(self) -> None:
+        """Ensure global forwarding and the current Target projection exist."""
+        manager = getattr(self, "_tmux_binding_manager", None)
+        if manager is not None and manager.open():
+            if manager.target_toggle_available:
+                self._sync_target_pane_option(force=True)
+            elif not getattr(self, "_target_toggle_warning_shown", False):
+                self._target_toggle_warning_shown = True
+                self._set_status(
+                    "Ctrl-B Tab unavailable; existing tmux binding preserved.",
+                    "warn",
+                )
+
+    def _set_workspace_target(self, slot_key: str) -> AgentSlot:
+        """Apply one Target transition and refresh its tmux projection."""
+        slot = self._agent_workspace().set_target(slot_key)
+        self._sync_target_pane_option()
+        return slot
+
+    def _sync_target_pane_option(self, *, force: bool = False) -> bool:
+        """Project the authoritative outer Target pane for prefix-Tab."""
+        owner = getattr(self, "_railmux_pane_id", None)
+        if owner is None:
+            return False
+        pane_id = self._agent_workspace().target.pane_id
+        desired = pane_id if pane_id and pane_id.startswith("%") else ""
+        current = getattr(self, "_projected_target_pane_id", None)
+        if not force and current == desired:
+            return True
+        applied = tmux_ctl.set_window_user_option(
+            owner, tmux_ctl.RAILMUX_TARGET_OPTION, desired)
+        if applied:
+            self._projected_target_pane_id = desired
+        return applied
+
+    def _clear_target_pane_option(self) -> None:
+        """Release only the exact Target projection this process installed."""
+        owner = getattr(self, "_railmux_pane_id", None)
+        expected = getattr(self, "_projected_target_pane_id", None)
+        if owner is None or expected is None:
+            return
+        if tmux_ctl.unset_window_user_option_if_value(
+                owner, tmux_ctl.RAILMUX_TARGET_OPTION, expected):
+            self._projected_target_pane_id = None
 
     def _toggle_agent_fullscreen(self) -> None:
         """Zoom the focused agent, or the last active agent from the sidebar."""
@@ -1937,7 +1985,7 @@ class App:
             workspace.collapsed_secondary_agent = remembered_agent
         workspace.layout = WorkspaceLayout.SINGLE
         self._resize_sidebar_for_layout(WorkspaceLayout.SINGLE)
-        workspace.set_target(AgentWorkspace.PRIMARY)
+        self._set_workspace_target(AgentWorkspace.PRIMARY)
         if not sidebar_focused and workspace.primary.pane_id:
             tmux_ctl.select_pane(workspace.primary.pane_id)
         self._paint_slot_active_target(
@@ -1945,7 +1993,7 @@ class App:
             workspace.primary.active_session_id,
             workspace.primary.agent_tmux_name,
         )
-        self._install_function_key_bindings()
+        self._install_tmux_bindings()
         self._set_railmux_focus(sidebar_focused, force_border=True)
         if announce:
             if remembered_agent is None:
@@ -2007,7 +2055,7 @@ class App:
                 self._display_transport().close_slot(secondary)
                 workspace.layout = WorkspaceLayout.SINGLE
                 self._resize_sidebar_for_layout(WorkspaceLayout.SINGLE)
-                workspace.set_target(AgentWorkspace.PRIMARY)
+                self._set_workspace_target(AgentWorkspace.PRIMARY)
                 self._set_railmux_focus(sidebar_focused, force_border=True)
                 self._set_status(
                     "Could not create Pane 2; any remembered agent remains "
@@ -2015,10 +2063,10 @@ class App:
                     "error",
                 )
                 return
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
             if not sidebar_focused and workspace.primary.pane_id:
                 tmux_ctl.select_pane(workspace.primary.pane_id)
-            self._install_function_key_bindings()
+            self._install_tmux_bindings()
             self._set_railmux_focus(sidebar_focused, force_border=True)
             self._set_status(f"Layout → {new_layout.value}")
             return
@@ -2063,7 +2111,7 @@ class App:
                 self._display_transport().close_slot(secondary)
                 workspace.layout = WorkspaceLayout.SINGLE
                 self._resize_sidebar_for_layout(WorkspaceLayout.SINGLE)
-                workspace.set_target(AgentWorkspace.PRIMARY)
+                self._set_workspace_target(AgentWorkspace.PRIMARY)
                 self._set_status(
                     "Rotate failed; Pane 2's agent continues in Running.", "error")
             else:
@@ -2072,14 +2120,14 @@ class App:
             return
 
         if active_before == old_secondary_id and secondary.pane_id:
-            workspace.set_target(AgentWorkspace.SECONDARY)
+            self._set_workspace_target(AgentWorkspace.SECONDARY)
             tmux_ctl.select_pane(secondary.pane_id)
         elif active_before == primary_id:
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
             tmux_ctl.select_pane(primary_id)
         else:
-            workspace.set_target(target_slot_before)
-        self._install_function_key_bindings()
+            self._set_workspace_target(target_slot_before)
+        self._install_tmux_bindings()
         self._resize_sidebar_for_layout(new_layout)
         self._set_railmux_focus(sidebar_focused, force_border=True)
         self._set_status(f"Layout → {new_layout.value}")
@@ -2189,7 +2237,7 @@ class App:
                 if primary.in_history_mode else None
             )
             primary.clear_display()
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
             if restore_target is not None:
                 if not self._attach_agent_slot(
                         primary, restore_target, steal_focus=False):
@@ -2203,7 +2251,7 @@ class App:
                 self._sync_sidebar_to_agent_project(restore_target)
             if not sidebar_focused and primary.pane_id is not None:
                 tmux_ctl.select_pane(primary.pane_id)
-            self._install_function_key_bindings()
+            self._install_tmux_bindings()
             self._set_railmux_focus(
                 sidebar_focused or primary.pane_id is None,
                 force_border=True,
@@ -2227,7 +2275,7 @@ class App:
             primary.clear_display()
             secondary.clear_display()
             workspace.layout = WorkspaceLayout.SINGLE
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
 
             # Restore the former Pane 1 when possible. Otherwise promote the
             # surviving Pane 2 agent into a freshly-owned primary slot.
@@ -2250,9 +2298,9 @@ class App:
 
             if (old_target_key == AgentWorkspace.SECONDARY
                     and secondary.pane_id is not None):
-                workspace.set_target(AgentWorkspace.SECONDARY)
+                self._set_workspace_target(AgentWorkspace.SECONDARY)
             else:
-                workspace.set_target(AgentWorkspace.PRIMARY)
+                self._set_workspace_target(AgentWorkspace.PRIMARY)
             self._resize_sidebar_for_layout(workspace.layout)
             self._paint_slot_active_target(
                 workspace.target,
@@ -2264,7 +2312,7 @@ class App:
                     workspace.target.agent_tmux_name)
             if not sidebar_focused and workspace.target.pane_id:
                 tmux_ctl.select_pane(workspace.target.pane_id)
-            self._install_function_key_bindings()
+            self._install_tmux_bindings()
             self._set_railmux_focus(sidebar_focused, force_border=True)
             self._set_status(
                 "Pane 1 disappeared; surviving agent panes were rebuilt.",
@@ -2281,11 +2329,11 @@ class App:
                 and self._attach_agent_slot(
                     secondary, secondary_target, steal_focus=False)):
             workspace.collapsed_secondary_agent = secondary_target
-            workspace.set_target(old_target_key)
+            self._set_workspace_target(old_target_key)
         else:
             transport.close_slot(secondary)
             workspace.layout = WorkspaceLayout.SINGLE
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
             if (workspace.collapsed_secondary_agent is not None
                     and not session_is_alive(
                         workspace.collapsed_secondary_agent)):
@@ -2301,7 +2349,7 @@ class App:
                 workspace.target.agent_tmux_name)
         if not sidebar_focused and workspace.target.pane_id:
             tmux_ctl.select_pane(workspace.target.pane_id)
-        self._install_function_key_bindings()
+        self._install_tmux_bindings()
         self._set_railmux_focus(sidebar_focused, force_border=True)
         self._set_status(
             "Pane 2 disappeared; workspace layout was reconciled.", "warn")
@@ -2768,7 +2816,7 @@ class App:
             on_cancel=self._close_modal,
             running_count=len(self._running),
         )
-        self._show_overlay(modal, width=50, height=40)
+        self._show_quit_confirm(modal)
 
     # --- project shortcut: terminal ---
 
@@ -3351,7 +3399,7 @@ class App:
         if not primary_ok or workspace.primary.pane_id is None:
             workspace.layout = WorkspaceLayout.SINGLE
             self._resize_sidebar_for_layout(WorkspaceLayout.SINGLE)
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
             self._set_railmux_focus(True, force_border=True)
             return False
 
@@ -3382,7 +3430,7 @@ class App:
             workspace.layout = WorkspaceLayout.SINGLE
         if workspace.layout is WorkspaceLayout.SINGLE:
             self._resize_sidebar_for_layout(WorkspaceLayout.SINGLE)
-            workspace.set_target(AgentWorkspace.PRIMARY)
+            self._set_workspace_target(AgentWorkspace.PRIMARY)
             collapsed = live_represented(saved.get("collapsed_secondary"))
             if collapsed is None and requested is not WorkspaceLayout.SINGLE:
                 secondary_saved = slots[AgentWorkspace.SECONDARY]
@@ -3392,7 +3440,7 @@ class App:
                 workspace.collapsed_secondary_agent = collapsed
         else:
             self._resize_sidebar_for_layout(workspace.layout)
-            workspace.set_target(saved["target"])
+            self._set_workspace_target(saved["target"])
 
         target = workspace.target
         self._paint_slot_active_target(
@@ -3405,14 +3453,14 @@ class App:
         )
         if (focus_key != "sidebar" and focus_slot.pane_id is not None
                 and tmux_ctl.select_pane(focus_slot.pane_id)):
-            workspace.set_target(focus_slot.key)
+            self._set_workspace_target(focus_slot.key)
             self._set_railmux_focus(False, force_border=True)
         else:
             railmux_pane = getattr(self, "_railmux_pane_id", None)
             if railmux_pane is not None:
                 tmux_ctl.select_pane(railmux_pane)
             self._set_railmux_focus(True, force_border=True)
-        self._install_function_key_bindings()
+        self._install_tmux_bindings()
         return content_ok and secondary_ok
 
     def _restore_right_pane(self, state: dict) -> bool:
@@ -4344,6 +4392,31 @@ class App:
             fixed_height=True,
         )
 
+    def _show_quit_confirm(self, modal: QuitConfirmModal) -> None:
+        """Show the quit choices at a height derived from their wrapped text."""
+        columns, rows = 80, 24
+        if self._loop is not None:
+            try:
+                columns, rows = self._loop.screen.get_cols_rows()
+            except Exception:
+                pass
+        width = 50
+        effective_width = min(
+            100,
+            int(width * 1.6) if self._right_pane_open() else width,
+        )
+        overlay_columns = max(8, columns * effective_width // 100)
+        height = min(
+            modal.preferred_height(overlay_columns),
+            max(1, rows - 2),
+        )
+        self._show_overlay(
+            modal,
+            width=width,
+            height=height,
+            fixed_height=True,
+        )
+
     def _close_modal(self) -> None:
         if self._loop is not None:
             self._loop.widget = self._frame
@@ -4798,10 +4871,10 @@ class App:
             wheel = getattr(self, "_root_wheel_manager", None)
             if wheel is not None:
                 wheel.close()
-            function_keys = getattr(
-                self, "_root_function_key_manager", None)
-            if function_keys is not None:
-                function_keys.close()
+            self._clear_target_pane_option()
+            bindings = getattr(self, "_tmux_binding_manager", None)
+            if bindings is not None:
+                bindings.close()
             # Drop our status-bar overrides BEFORE the soft-quit branch below —
             # on soft quit the outer tmux session may survive, so Railmux's
             # appearance and text must not linger in it.
@@ -4914,6 +4987,7 @@ class App:
         if (not getattr(self, "_railmux_has_focus", True)
                 and self._agent_workspace().secondary.is_open):
             self._sync_target_slot_from_tmux()
+        self._retry_pending_divider_style()
         transport = self._display_transport()
         if transport.outer_session_lost():
             # A grouped keeper may still own the window after an external
@@ -4939,7 +5013,7 @@ class App:
                     "error",
                 )
         if rebound_for_client:
-            self._install_function_key_bindings()
+            self._install_tmux_bindings()
         dead_display_agents = self._reap_dead_display_slots(transport)
         if dead_display_agents:
             for key in [
@@ -5111,15 +5185,21 @@ class App:
     def _help_context(self) -> str:
         """Map the focused sidebar pane (0/1/2) to a keymap context name.
 
-        Agent focus uses a compact tmux-navigation context. In side-by-side
-        Pane 1, include the direct right-arrow route to Pane 2."""
+        Agent focus uses a compact context whose spatial arrows match the
+        current layout and focused slot."""
         if not self._railmux_has_focus:
             workspace = self._agent_workspace()
-            if (workspace.layout is WorkspaceLayout.SIDE_BY_SIDE
-                    and workspace.secondary.is_open):
-                if workspace.target_slot_key == AgentWorkspace.PRIMARY:
-                    return keymap.CTX_AGENT_P1_SIDE_BY_SIDE
-                return keymap.CTX_AGENT_P2_SIDE_BY_SIDE
+            if workspace.secondary.is_open:
+                primary = (
+                    workspace.target_slot_key == AgentWorkspace.PRIMARY)
+                if workspace.layout is WorkspaceLayout.SIDE_BY_SIDE:
+                    if primary:
+                        return keymap.CTX_AGENT_P1_SIDE_BY_SIDE
+                    return keymap.CTX_AGENT_P2_SIDE_BY_SIDE
+                if workspace.layout is WorkspaceLayout.STACKED:
+                    if primary:
+                        return keymap.CTX_AGENT_P1_STACKED
+                    return keymap.CTX_AGENT_P2_STACKED
             return keymap.CTX_AGENT
         pos = self._sidebar.focus_position
         if 0 <= pos < len(self._HELP_CONTEXTS):
@@ -6568,7 +6648,7 @@ class App:
 
             self._railmux_pane_id = tmux_ctl.current_pane_id()
             self._set_railmux_focus(True, force_border=True)
-            self._install_function_key_bindings()
+            self._install_tmux_bindings()
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
             # not text input.

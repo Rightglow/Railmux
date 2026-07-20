@@ -15,6 +15,7 @@ def _action_legend(
     *,
     align: str = "left",
     separator: str = "\n",
+    wrap: str = "clip",
 ) -> urwid.Text:
     """Render modal actions with keys visually distinct from descriptions."""
     markup: list = []
@@ -22,7 +23,7 @@ def _action_legend(
         if index:
             markup.append(separator)
         markup.extend([("modal_key", keys), f" = {description}"])
-    return urwid.Text(markup, align=align, wrap="clip")
+    return urwid.Text(markup, align=align, wrap=wrap)
 
 
 def _attention_lines(attention: AttentionState | None) -> list:
@@ -101,14 +102,33 @@ class QuitConfirmModal(urwid.WidgetWrap):
         if on_soft_quit is not None:
             actions.append(("s", "soft quit (keep sessions alive)"))
         actions.append(("n / Esc", "cancel"))
+        self._title = urwid.Text("Quit railmux?", align="center")
+        self._summary = urwid.Text(("live", summary), align="center")
+        self._actions = _action_legend(
+            actions,
+            align="center",
+            wrap="space",
+        )
         body = urwid.Pile([
-            urwid.Text("Quit railmux?", align="center"),
+            self._title,
             urwid.Divider(),
-            urwid.Text(("live", summary), align="center"),
+            self._summary,
             urwid.Divider(),
-            _action_legend(actions, align="center"),
+            self._actions,
         ])
         super().__init__(urwid.LineBox(urwid.Filler(body, valign="middle"), title="Confirm quit"))
+
+    def preferred_height(self, maxcol: int) -> int:
+        """Fit every wrapped choice while keeping the confirmation compact."""
+        inner = max(1, maxcol - 2)  # LineBox left/right border
+        body_rows = (
+            self._title.rows((inner,))
+            + 1
+            + self._summary.rows((inner,))
+            + 1
+            + self._actions.rows((inner,))
+        )
+        return max(8, body_rows + 2)  # LineBox top/bottom borders
 
     def selectable(self) -> bool:
         return True
@@ -199,9 +219,15 @@ class HelpModal(urwid.WidgetWrap):
              "Fullscreen agent → Shift-drag select → Cmd/Ctrl+C → F9"),
         ]),
         ("tmux", [
-            ("Ctrl-B → / ←", "Move focus between railmux and agent panes"),
+            ("Ctrl-B Tab", "Toggle between sidebar and the Target pane"),
+            ("Ctrl-B arrows", "Move spatially between sidebar / agent panes"),
             ("F8", "Cycle layout even while an agent pane has focus"),
             ("Ctrl-B d", "Detach from railmux (keep sessions alive)"),
+        ]),
+        ("Workspace indicator (bottom-left)", [
+            ("▣", "Single agent pane"),
+            ("◧ / ◨", "Side-by-side; filled half is the Target pane"),
+            ("⬒ / ⬓", "Stacked; filled half is the Target pane"),
         ]),
         ("", [
             ("Each session runs in its own detached tmux session.",

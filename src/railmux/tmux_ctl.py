@@ -1135,11 +1135,15 @@ _SCROLL_KEYS = ("WheelUpPane", "WheelDownPane")
 ScrollBindingBackup = dict[tuple[str, str], Optional[str]]
 RootWheelBindingBackup = dict[str, Optional[str]]
 RootFunctionBindingBackup = dict[str, Optional[str]]
+PrefixTargetBindingBackup = dict[str, Optional[str]]
 _ROOT_WHEEL_KEYS = ("WheelUpPane", "WheelDownPane")
 _ROOT_WHEEL_MARKER = "railmux-wheel-forward-v1"
 _ROOT_FUNCTION_KEYS = ("F8", "F9")
 _ROOT_FUNCTION_MARKER = "railmux-function-forward-v1"
+_PREFIX_TARGET_KEY = "Tab"
+_PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
 RAILMUX_CONTROLLER_OPTION = "@railmux_controller_pane"
+RAILMUX_TARGET_OPTION = "@railmux_target_pane"
 
 
 def _read_key_binding(table: str, key: str) -> str | None:
@@ -1482,6 +1486,143 @@ def restore_root_function_bindings(
                     os.unlink(path)
         except (OSError, subprocess.CalledProcessError, FileNotFoundError):
             pass
+
+
+def read_prefix_target_binding() -> PrefixTargetBindingBackup:
+    """Capture the prefix-Tab binding used for Sidebar/Target toggling."""
+    return {_PREFIX_TARGET_KEY: _read_key_binding("prefix", _PREFIX_TARGET_KEY)}
+
+
+def prepare_prefix_target_binding() -> PrefixTargetBindingBackup | None:
+    if tmux_version() < (2, 7):
+        return None
+    backup = read_prefix_target_binding()
+    binding = backup[_PREFIX_TARGET_KEY]
+    if binding and _PREFIX_TARGET_MARKER in binding:
+        return None
+    # A server-global wrapper cannot preserve repeat semantics only outside
+    # Railmux. Notes are likewise absent from normal list-keys output and would
+    # be lost on restoration, so leave either kind of user binding untouched.
+    if binding is not None:
+        if re.match(r"^bind-key\s+-r\b", binding):
+            return None
+        try:
+            _binding_command(binding)
+        except ValueError:
+            return None
+        if tmux_version() >= (3, 2):
+            try:
+                note = subprocess.check_output(
+                    ["tmux", "list-keys", "-N", "-T", "prefix", "-1",
+                     _PREFIX_TARGET_KEY],
+                    stderr=subprocess.DEVNULL,
+                ).decode().strip()
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                return None
+            if note:
+                return None
+    return backup
+
+
+def set_prefix_target_binding(
+    backup: PrefixTargetBindingBackup, token: str,
+) -> bool:
+    """Toggle directly between a Railmux controller and its Target pane.
+
+    Prefix Tab is server-global, so the outer condition limits Railmux's
+    behavior to windows carrying our controller option. Other windows replay
+    the exact previous binding, or remain a no-op when Tab was unbound.
+    """
+    marker = f"{_PREFIX_TARGET_MARKER}-{token}"
+    condition = (
+        "#{&&:#{!=:#{@railmux_controller_pane},},"
+        f"#{{==:{marker},{marker}}}}}"
+    )
+    try:
+        original = backup.get(_PREFIX_TARGET_KEY)
+        fallback = (
+            _binding_command(original)
+            if original is not None else 'run-shell "true"'
+        )
+        # if-shell parses its selected command again. Keep every tmux format
+        # inside run-shell's quoted payload so a leading # cannot become a
+        # comment. Pane IDs are Railmux-owned values (%N); an empty Target
+        # intentionally does nothing, and a stale Target makes select-pane
+        # fail without moving focus.
+        toggle = (
+            'run-shell "if [ \'#{pane_id}\' = '
+            '\'#{@railmux_controller_pane}\' ]; then '
+            'if [ -n \'#{@railmux_target_pane}\' ]; then '
+            'tmux select-pane -t \'#{@railmux_target_pane}\'; fi; '
+            'else tmux select-pane -t \'#{@railmux_controller_pane}\'; fi; '
+            f': {marker}"'
+        )
+        subprocess.check_call(
+            [
+                "tmux", "bind-key", "-T", "prefix", _PREFIX_TARGET_KEY,
+                "if-shell", "-F", condition, toggle, fallback,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def prefix_target_binding_owned_by(token: str) -> bool:
+    marker = f"{_PREFIX_TARGET_MARKER}-{token}"
+    binding = read_prefix_target_binding().get(_PREFIX_TARGET_KEY)
+    return bool(
+        binding
+        and marker in binding
+        and RAILMUX_CONTROLLER_OPTION in binding
+        and RAILMUX_TARGET_OPTION in binding
+    )
+
+
+def prefix_target_binding_is_original_or_owned(
+    binding: str | None,
+    original: str | None,
+    token: str,
+) -> bool:
+    if binding == original:
+        return True
+    marker = f"{_PREFIX_TARGET_MARKER}-{token}"
+    return bool(binding and marker in binding)
+
+
+def restore_prefix_target_binding(
+    backup: PrefixTargetBindingBackup, *, token: str,
+) -> None:
+    """Restore prefix Tab only while the live binding is still ours."""
+    live = read_prefix_target_binding().get(_PREFIX_TARGET_KEY)
+    marker = f"{_PREFIX_TARGET_MARKER}-{token}"
+    if live is None or marker not in live:
+        return
+    original = backup.get(_PREFIX_TARGET_KEY)
+    try:
+        if original is None:
+            subprocess.check_call(
+                ["tmux", "unbind-key", "-T", "prefix", _PREFIX_TARGET_KEY],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            fd, path = tempfile.mkstemp(
+                prefix="railmux-prefix-target-", suffix=".conf")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(original + "\n")
+                subprocess.check_call(
+                    ["tmux", "source-file", path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            finally:
+                os.unlink(path)
+    except (OSError, subprocess.CalledProcessError, FileNotFoundError):
+        pass
 
 
 def unset_window_user_option_if_value(

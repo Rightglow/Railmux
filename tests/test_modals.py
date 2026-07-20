@@ -16,6 +16,7 @@ from railmux.ui.app import App
 from railmux.ui.modals import (
     ContextMenu,
     DeleteConfirmModal,
+    HelpModal,
     PathBrowser,
     PathBrowserModal,
     ProjectInfoModal,
@@ -135,6 +136,36 @@ def test_modal_action_legends_use_high_contrast_attribute(tmp_path):
         assert "modal_key" in _rendered_attrs(modal), type(modal).__name__
 
 
+def test_quit_confirm_wraps_all_choices_in_narrow_sidebar():
+    modal = QuitConfirmModal(
+        on_confirm=lambda: None,
+        on_soft_quit=lambda: None,
+        on_cancel=lambda: None,
+        running_count=12,
+    )
+    height = modal.preferred_height(22)
+
+    text = " ".join(
+        _rendered_text(modal, size=(22, height)).replace("│", " ").split())
+
+    assert "quit and kill all sessions" in text
+    assert "soft quit (keep sessions alive)" in text
+    assert "n / Esc = cancel" in text
+
+
+def test_help_explains_bottom_left_workspace_target_indicator():
+    modal = HelpModal(on_close=lambda: None)
+
+    text = _rendered_text(modal, size=(60, 80))
+    normalized = " ".join(text.replace("│", " ").split())
+
+    assert "Workspace indicator (bottom-left)" in text
+    assert "▣" in text
+    assert "◧ / ◨" in text
+    assert "⬒ / ⬓" in text
+    assert "filled half is the Target pane" in normalized
+
+
 def test_rename_ctrl_u_clears_entire_title_without_closing():
     submitted = MagicMock()
     cancelled = MagicMock()
@@ -173,6 +204,28 @@ def test_app_uses_compact_fixed_height_for_short_delete_confirm():
     assert app._show_overlay.call_args.kwargs == {
         "width": 54,
         "height": 10,
+        "fixed_height": True,
+    }
+
+
+def test_app_sizes_quit_confirm_for_wrapped_choices():
+    app = App.__new__(App)
+    app._loop = MagicMock()
+    app._loop.screen.get_cols_rows.return_value = (30, 24)
+    app._right_pane_open = MagicMock(return_value=True)
+    app._show_overlay = MagicMock()
+    modal = QuitConfirmModal(
+        on_confirm=lambda: None,
+        on_soft_quit=lambda: None,
+        on_cancel=lambda: None,
+        running_count=2,
+    )
+
+    app._show_quit_confirm(modal)
+
+    assert app._show_overlay.call_args.kwargs == {
+        "width": 50,
+        "height": modal.preferred_height(24),
         "fixed_height": True,
     }
 

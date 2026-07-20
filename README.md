@@ -62,6 +62,7 @@ setup does not behave as expected.
 |-----|--------|
 | `↑` / `↓` | Move selection within the focused pane |
 | `Tab` / `Shift-Tab` | Cycle focus through Projects, Sessions, Running panes |
+| `Ctrl-B Tab` | Toggle directly between the sidebar and Target pane |
 | `Esc` | Move focus up: Running → Sessions → Projects |
 | `/` | Filter the focused Projects, Sessions, or Running pane by name |
 
@@ -108,7 +109,7 @@ to single leaves Pane 2's agent running in the background.
 In a split, focus an agent pane to make it the Target pane. After focus returns
 to the sidebar, single-click or `␣` acts in that pane without moving keyboard
 focus; double-click or `Enter` opens there and transfers focus. The status bar
-shows the current layout and Target pane:
+at the bottom-left shows the current layout and Target pane:
 
 | Symbol | Meaning |
 |--------|---------|
@@ -118,7 +119,10 @@ shows the current layout and Target pane:
 
 Agent borders turn green around the Focused pane. When focus is in the sidebar,
 the borders return to gray while the status symbol continues to show the Target
-pane.
+pane. `Ctrl-B Tab` returns directly from either agent pane to the sidebar without
+changing that Target, then toggles back to it. `Ctrl-B` plus an arrow remains
+spatial: left/right moves across a side-by-side split, while up/down moves
+between stacked agent panes.
 
 ### Finding running sessions
 
@@ -266,6 +270,22 @@ menu.”** Without it, iTerm2 opens its own menu instead of sending the click to
 Railmux.
 
 ![iTerm2 Pointer settings with “Right click reported to apps, does not open menu” enabled](https://raw.githubusercontent.com/Rightglow/Railmux/main/docs/assets/iterm2-right-click.png)
+
+VS Code and Cursor users can change **Terminal › Integrated: Right Click
+Behavior** when the editor's own menu prevents right-click from reaching
+Railmux. **copyPaste** is the recommended starting point: Railmux handles
+right-click while its mouse-aware sidebar is active, and the editor retains its
+convenient copy/paste behavior elsewhere in the terminal. Cursor exposes the
+same VS Code setting. Configure it in User Settings JSON:
+
+```json
+{
+  "terminal.integrated.rightClickBehavior": "copyPaste"
+}
+```
+
+Use `nothing` instead if your editor version still intercepts right-click or you
+prefer all right-click events to pass directly to terminal applications.
 
 **F8 (layout) and F9 (fullscreen)**: the operating system or terminal may
 consume function keys before tmux sees them. On macOS, either hold `Fn` when

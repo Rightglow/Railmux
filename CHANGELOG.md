@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Document terminal-side right-click and F8/F9 forwarding, including the iTerm2
   Pointer setting required for Railmux's context menu.
+- Wrap quit-confirmation choices to stay readable in a narrow sidebar, and
+  document the bottom-left layout/Target-pane indicator in Help and README.
 - Preserve idle agent sessions created by Railmux 0.1.3 and earlier, before
   durable tmux identity markers:
   conservatively migrate only detached, single-pane sessions whose immutable
@@ -50,6 +52,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single, `◧`/`◨` for side-by-side, and `⬒`/`⬓` for stacked. The filled half
   identifies the Target pane across focus changes, including direct mouse
   movement between P1 and P2 without returning through the sidebar.
+- Add `Ctrl-B Tab` as a direct Sidebar/Target-pane toggle so keyboard users can
+  return from Pane 2 without passing through Pane 1 and changing the Target.
+  Preserve any existing prefix-Tab binding outside Railmux, and make agent hints
+  follow left/right side-by-side or up/down stacked geometry. Bindings that
+  cannot be replayed faithfully are left untouched without disabling F8/F9.
 - Establish **Target pane / 目标窗格** as the canonical name for the remembered
   agent pane where sidebar actions take effect, distinct from the **Focused
   pane / 焦点窗格** that currently receives keyboard input. The workspace model
@@ -61,9 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   degrade to colour-only borders on tmux versions older than 3.3. When Pane 1
   has focus, the hint bar shows `C-b → Pane 2`; Pane 2 names the matching
   `C-b ← Pane 1` route instead of calling it a direct return to Railmux.
-- Retry a failed tmux focus-border update instead of caching it, preventing the
-  old half-gray/half-green dual-pane style from surviving after returning to a
-  single agent pane.
+- Retry partial tmux focus-border and directional-indicator updates during the
+  normal refresh loop instead of caching them, preventing stale or missing
+  green focus borders and old half-gray/half-green single-pane dividers.
 - Resolve the Target pane from real tmux focus (including the last pane
   when returning to the sidebar). F9, transcript preview, terminal placement,
   status/attention targeting, scrolling, and soft-restart display selection no

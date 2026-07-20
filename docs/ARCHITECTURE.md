@@ -289,6 +289,10 @@ These are separate state axes and their names are a durable product contract:
   are the model names; code and documentation must not use “active” to mean the
   remembered sidebar action target. The previously released `active_slot_key`,
   `active`, and `activate()` names remain thin compatibility views only.
+- `AgentWorkspace` remains the Target authority. App-level Target transitions
+  project its current outer pane ID into `@railmux_target_pane` solely for the
+  managed `Ctrl-B Tab` binding; tmux pane history and the projection never
+  become independent sources of Target state.
 
 User-facing English should say **Target pane** and Chinese documentation should
 say **目标窗格**. The compact status UI uses a workspace map rather than text:
@@ -321,6 +325,15 @@ routing with focus, selection, or history.
   single → side-by-side → stacked even while an agent owns keyboard focus.
   `F9` similarly reaches the controller and uses the Target pane resolved
   from real tmux focus.
+- A crash-safe managed prefix-table `Ctrl-B Tab` binding toggles directly
+  between the sidebar controller and the projected Target pane. It must gate
+  on the Railmux window before inspecting pane IDs, preserve any prior prefix
+  Tab behavior elsewhere, no-op when no Target pane exists, and restore only
+  bindings/options still owned by its transaction. Arrow navigation remains
+  spatial and is never reinterpreted as a Target-preserving shortcut. An
+  existing repeatable or annotated prefix-Tab binding cannot be wrapped
+  faithfully by one server-global conditional binding, so Railmux leaves it
+  untouched, reports the unavailable toggle, and keeps F8/F9 forwarding active.
 - Each projected agent pane must be at least 50x12. Side-by-side is preferred
   only when both projected panes reach 80x20; otherwise the best valid layout
   wins, with stacked breaking a tie.
@@ -334,7 +347,12 @@ routing with focus, selection, or history.
   the only possible target. While side-by-side Pane 1 has keyboard focus, the
   hint bar includes `C-b → Pane 2`; Pane 2 shows `C-b ← Pane 1`. Direct P1/P2
   focus changes refresh that hint with the workspace map. Teardown restores the
-  exact inherited or explicit `pane-border-indicators` window option.
+  exact inherited or explicit `pane-border-indicators` window option. Border
+  colours and indicators form one applied state: if either tmux update fails,
+  the periodic refresh retries both until the visible focus state converges.
+  Hint-bar directions follow geometry: left/right names side-by-side neighbors,
+  up/down names stacked neighbors, and `Ctrl-B Tab` always names the direct
+  Sidebar/Target route.
 
 Attach/resume, replacement, display-transport ownership, duplicate prevention,
 close/rotate, per-pane size checks, preview/restore, terminal placement,

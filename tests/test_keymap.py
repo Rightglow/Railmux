@@ -6,7 +6,9 @@ from railmux.ui.app import App
 from railmux.ui.keymap import (
     CTX_AGENT,
     CTX_AGENT_P1_SIDE_BY_SIDE,
+    CTX_AGENT_P1_STACKED,
     CTX_AGENT_P2_SIDE_BY_SIDE,
+    CTX_AGENT_P2_STACKED,
     CTX_PROJECTS,
     CTX_RUNNING,
     CTX_SESSIONS,
@@ -148,11 +150,10 @@ def test_trailing_line_identical_across_sidebar_contexts():
 
 # ── agent context ────────────────────────────────────────────────────────
 
-def test_hint_text_for_agent_shows_only_back_and_fullscreen():
-    """When the right-hand agent pane has focus, only C-b ← and F9 appear."""
+def test_hint_text_for_single_agent_shows_sidebar_routes_and_fullscreen():
     text = hint_text_for(CTX_AGENT)
-    assert "back" in text
-    assert "fullscreen" in text
+    assert "C-b Tab/← Sidebar" in text
+    assert "F9 fullscreen" in text
     # Sidebar keys must not appear.
     assert "move" not in text
     assert "pane" not in text
@@ -173,7 +174,7 @@ def test_hint_text_for_agent_shows_only_back_and_fullscreen():
 def test_side_by_side_primary_agent_hint_includes_pane_2_route():
     text = hint_text_for(CTX_AGENT_P1_SIDE_BY_SIDE)
 
-    assert "C-b ← back" in text
+    assert "C-b Tab/← Sidebar" in text
     assert "C-b → Pane 2" in text
     assert "F9 fullscreen" in text
 
@@ -182,8 +183,26 @@ def test_side_by_side_secondary_agent_hint_names_pane_1():
     text = hint_text_for(CTX_AGENT_P2_SIDE_BY_SIDE)
 
     assert "C-b ← Pane 1" in text
-    assert "back" not in text
+    assert "C-b Tab Sidebar" in text
+    assert "C-b ← Sidebar" not in text
     assert "F9 fullscreen" in text
+
+
+def test_stacked_agent_hints_follow_top_bottom_geometry():
+    primary = hint_text_for(CTX_AGENT_P1_STACKED)
+    secondary = hint_text_for(CTX_AGENT_P2_STACKED)
+
+    assert "C-b Tab/← Sidebar" in primary
+    assert "C-b ↓ Pane 2" in primary
+    assert "C-b ↑ Pane 1" not in primary
+    assert "C-b Tab/← Sidebar" in secondary
+    assert "C-b ↑ Pane 1" in secondary
+    assert "C-b ↓ Pane 2" not in secondary
+
+
+def test_sidebar_hint_advertises_target_toggle():
+    for context in (CTX_PROJECTS, CTX_SESSIONS, CTX_RUNNING):
+        assert "C-b Tab Target" in hint_text_for(context)
 
 
 def test_agent_context_trail_is_empty():

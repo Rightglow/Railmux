@@ -516,6 +516,48 @@ def test_root_function_restore_does_not_overwrite_user_change():
     assert call.call_args.args[0][:2] == ["tmux", "source-file"]
 
 
+def test_prefix_target_binding_scopes_toggle_and_preserves_fallback():
+    backup = {
+        "Tab": "bind-key -T prefix Tab display-message original-tab",
+    }
+
+    with _mock_check_call() as call:
+        assert tmux_ctl.set_prefix_target_binding(backup, "owner123")
+
+    argv = call.call_args.args[0]
+    assert argv[:5] == ["tmux", "bind-key", "-T", "prefix", "Tab"]
+    assert any("railmux-target-toggle-v1-owner123" in arg for arg in argv)
+    assert any(tmux_ctl.RAILMUX_CONTROLLER_OPTION in arg for arg in argv)
+    assert any(tmux_ctl.RAILMUX_TARGET_OPTION in arg for arg in argv)
+    assert argv[-1] == "display-message original-tab"
+
+
+def test_unbound_prefix_target_fallback_is_noop():
+    with _mock_check_call() as call:
+        assert tmux_ctl.set_prefix_target_binding({"Tab": None}, "owner123")
+
+    assert call.call_args.args[0][-1] == 'run-shell "true"'
+
+
+def test_prefix_target_binding_rejects_unpreservable_user_binding():
+    repeat = "bind-key -r -T prefix Tab display-message repeated"
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
+            patch.object(tmux_ctl, "read_prefix_target_binding",
+                         return_value={"Tab": repeat}):
+        assert tmux_ctl.prepare_prefix_target_binding() is None
+
+    annotated = "bind-key -T prefix Tab display-message annotated"
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
+            patch.object(tmux_ctl, "read_prefix_target_binding",
+                         return_value={"Tab": annotated}), \
+            patch.object(tmux_ctl.subprocess, "check_output",
+                         return_value=b"Tab probe note\n"):
+        assert tmux_ctl.prepare_prefix_target_binding() is None
+
+    assert not tmux_ctl.set_prefix_target_binding(
+        {"Tab": "not replayable tmux config"}, "owner123")
+
+
 def test_unset_window_user_option_requires_exact_owner_value():
     with _mock_check_output("%1"), _mock_check_call() as call:
         assert tmux_ctl.unset_window_user_option_if_value(

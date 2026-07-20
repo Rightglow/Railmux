@@ -105,7 +105,7 @@ def _reconcile_app() -> tuple[App, AgentWorkspace, MagicMock]:
     app._railmux_has_focus = True
     app._set_status = MagicMock()
     app._paint_slot_active_target = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._sync_sidebar_to_agent_project = MagicMock()
     app._attach_agent_slot = MagicMock(return_value=True)

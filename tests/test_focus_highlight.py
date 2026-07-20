@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 import urwid
 
+from railmux import tmux_ctl
 from railmux.models import Project, SessionMeta
 from railmux.display_transport import AttachOutcome
 from railmux.ui import keymap
@@ -179,6 +180,38 @@ def test_agent_to_agent_click_repaints_layout_indicator(monkeypatch):
     assert app._workspace.target_slot_key == AgentWorkspace.PRIMARY
     app._hint_bar.set_context.assert_called_once_with(
         keymap.CTX_AGENT_P1_SIDE_BY_SIDE)
+
+
+def test_target_transition_projects_outer_pane_for_prefix_tab(monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%2"
+    app._workspace.secondary.pane_id = "%3"
+    app._workspace.layout = WorkspaceLayout.STACKED
+    app._railmux_pane_id = "%1"
+    app._projected_target_pane_id = None
+    set_option = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_user_option", set_option)
+
+    app._set_workspace_target(AgentWorkspace.SECONDARY)
+
+    set_option.assert_called_once_with(
+        "%1", tmux_ctl.RAILMUX_TARGET_OPTION, "%3")
+    assert app._workspace.target is app._workspace.secondary
+
+
+def test_stacked_agent_help_context_tracks_focused_slot():
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.STACKED
+    app._workspace.primary.pane_id = "%2"
+    app._workspace.secondary.pane_id = "%3"
+    app._railmux_has_focus = False
+
+    assert app._help_context() == keymap.CTX_AGENT_P1_STACKED
+    app._workspace.set_target(AgentWorkspace.SECONDARY)
+    assert app._help_context() == keymap.CTX_AGENT_P2_STACKED
 
 
 def test_dual_workspace_keeps_inactive_borders_gray(monkeypatch):
@@ -410,6 +443,25 @@ def test_failed_border_update_is_not_cached(monkeypatch):
     assert app._divider_active is None
 
 
+def test_refresh_retry_heals_arrow_and_green_border_partial_update(monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._railmux_has_focus = False
+    app._divider_active = None
+    app._sync_border_indicators = MagicMock(return_value=True)
+    set_border = MagicMock(side_effect=[False, True])
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_border_styles", set_border)
+
+    app._set_divider_active(True)
+    app._retry_pending_divider_style()
+
+    assert set_border.call_count == 2
+    assert app._divider_active == (
+        True, WorkspaceLayout.SIDE_BY_SIDE, None)
+
+
 def test_resize_event_checks_workspace_but_ordinary_input_does_not():
     app = _paste_app()
     app._check_terminal_size = MagicMock()
@@ -593,7 +645,7 @@ def test_single_click_prepaints_sidebar_before_agent_transport_switch():
     app._set_active_tmux_target = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._schedule_scroll_acceleration = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._modes = MagicMock()
     app._modes.return_value.for_tmux_name.return_value = MagicMock(key="claude")
     app._running = {

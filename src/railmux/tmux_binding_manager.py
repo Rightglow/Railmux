@@ -1,4 +1,4 @@
-"""Crash-safe shared ownership of tmux root-table F8/F9 bindings."""
+"""Crash-safe shared ownership of Railmux's server-global tmux bindings."""
 from __future__ import annotations
 
 import fcntl
@@ -14,13 +14,13 @@ from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
 
 
-_VERSION = 1
+_VERSION = 2
 _KEYS = ("F8", "F9")
 _MAX_STATE_BYTES = 64 * 1024
 
 
-class RootFunctionKeyManager:
-    """Share one marker-owned F8/F9 wrapper across live Railmux panes."""
+class SharedTmuxBindingManager:
+    """Share marker-owned F8/F9 and prefix-Tab wrappers across instances."""
 
     def __init__(self, server_digest: str, owner_pane_id: str) -> None:
         key = "".join(ch for ch in server_digest if ch.isalnum())[:32]
@@ -31,6 +31,12 @@ class RootFunctionKeyManager:
         self._lock_path: Path | None = None
         self._state_path: Path | None = None
         self._registered = False
+        self._prefix_tab_managed = False
+
+    @property
+    def target_toggle_available(self) -> bool:
+        """Whether this instance owns the prefix-Tab Target toggle."""
+        return self._registered and self._prefix_tab_managed
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -59,12 +65,21 @@ class RootFunctionKeyManager:
             raw = json.loads(self._state_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, json.JSONDecodeError):
             return None
-        if not isinstance(raw, dict) or raw.get("version") != _VERSION:
+        if (not isinstance(raw, dict)
+                or raw.get("version") not in {1, _VERSION}):
             return None
         token = raw.get("token")
         phase = raw.get("phase")
         owners = raw.get("owners")
         backup = raw.get("backup")
+        prefix_backup = raw.get("prefix_tab_backup")
+        prefix_managed = raw.get("prefix_tab_managed")
+        prefix_valid = (
+            isinstance(prefix_backup, dict)
+            and set(prefix_backup) == {"Tab"}
+            and all(value is None or isinstance(value, str)
+                    for value in prefix_backup.values())
+        )
         if (not isinstance(token, str) or not token or len(token) > 64
                 or phase not in {"installing", "active"}
                 or not isinstance(owners, dict) or len(owners) > 1024
@@ -73,7 +88,10 @@ class RootFunctionKeyManager:
                        for owner, window in owners.items())
                 or not isinstance(backup, dict) or set(backup) != set(_KEYS)
                 or any(value is not None and not isinstance(value, str)
-                       for value in backup.values())):
+                       for value in backup.values())
+                or (raw["version"] == _VERSION
+                    and (not prefix_valid
+                         or not isinstance(prefix_managed, bool)))):
             return None
         return raw
 
@@ -142,6 +160,26 @@ class RootFunctionKeyManager:
                     return False
                 state = self._load()
                 if state is not None:
+                    if state["version"] == 1:
+                        prefix_tab_backup = (
+                            tmux_ctl.prepare_prefix_target_binding())
+                        # F8/F9 forwarding shipped before prefix Tab joined the
+                        # same transaction. Re-enter the crash-safe installing
+                        # phase so an existing live/stale v1 lease upgrades in
+                        # place instead of leaving its marker permanently
+                        # unclaimable after a code update.
+                        state["version"] = _VERSION
+                        state["phase"] = "installing"
+                        state["prefix_tab_managed"] = (
+                            prefix_tab_backup is not None)
+                        state["prefix_tab_backup"] = (
+                            prefix_tab_backup or {"Tab": None})
+                        # Persist the newly captured original before prefix
+                        # Tab is mutated. A crash after the tmux write must
+                        # leave a v2/installing record that can recognize and
+                        # restore its marker-owned live binding.
+                        if not self._save(state):
+                            return False
                     token = state["token"]
                     state["owners"] = self._prune_owners(state, live)
                     if state["phase"] == "installing":
@@ -152,23 +190,54 @@ class RootFunctionKeyManager:
                                 state["backup"].get(key), token)
                             for key in _KEYS
                         )
+                        if state["prefix_tab_managed"]:
+                            current_tab = (
+                                tmux_ctl.read_prefix_target_binding()["Tab"])
+                            safe = (
+                                safe
+                                and tmux_ctl.prefix_target_binding_is_original_or_owned(
+                                    current_tab,
+                                    state["prefix_tab_backup"].get("Tab"),
+                                    token,
+                                )
+                            )
                         if not safe:
                             if state["owners"]:
                                 return False
                             tmux_ctl.restore_root_function_bindings(
                                 state["backup"], token=token)
+                            if state["prefix_tab_managed"]:
+                                tmux_ctl.restore_prefix_target_binding(
+                                    state["prefix_tab_backup"], token=token)
                             self._remove_state()
                             state = None
                         else:
                             if not tmux_ctl.set_root_function_forwarding(
                                     state["backup"], token):
                                 return False
+                            if (state["prefix_tab_managed"]
+                                    and not tmux_ctl.set_prefix_target_binding(
+                                        state["prefix_tab_backup"], token)):
+                                tmux_ctl.restore_prefix_target_binding(
+                                    state["prefix_tab_backup"], token=token)
+                                state["prefix_tab_managed"] = False
+                                if not self._save(state):
+                                    return False
                             state["phase"] = "active"
-                    elif not tmux_ctl.root_function_bindings_owned_by(token):
+                    elif not (
+                        tmux_ctl.root_function_bindings_owned_by(token)
+                        and (
+                            not state["prefix_tab_managed"]
+                            or tmux_ctl.prefix_target_binding_owned_by(token)
+                        )
+                    ):
                         if state["owners"]:
                             return False
                         tmux_ctl.restore_root_function_bindings(
                             state["backup"], token=token)
+                        if state["prefix_tab_managed"]:
+                            tmux_ctl.restore_prefix_target_binding(
+                                state["prefix_tab_backup"], token=token)
                         self._remove_state()
                         state = None
                     if state is not None:
@@ -192,9 +261,11 @@ class RootFunctionKeyManager:
                                     break
                             return False
                         self._registered = True
+                        self._prefix_tab_managed = state["prefix_tab_managed"]
                         return True
 
                 backup = tmux_ctl.prepare_root_function_bindings()
+                prefix_tab_backup = tmux_ctl.prepare_prefix_target_binding()
                 if backup is None:
                     return False
                 token = secrets.token_hex(8)
@@ -204,6 +275,8 @@ class RootFunctionKeyManager:
                     "token": token,
                     "owners": {self._owner_pane_id: owner_window_id},
                     "backup": backup,
+                    "prefix_tab_managed": prefix_tab_backup is not None,
+                    "prefix_tab_backup": prefix_tab_backup or {"Tab": None},
                 }
                 if not self._save(state):
                     return False
@@ -212,13 +285,28 @@ class RootFunctionKeyManager:
                         backup, token=token)
                     self._remove_state()
                     return False
+                if (state["prefix_tab_managed"]
+                        and not tmux_ctl.set_prefix_target_binding(
+                            state["prefix_tab_backup"], token)):
+                    tmux_ctl.restore_prefix_target_binding(
+                        state["prefix_tab_backup"], token=token)
+                    state["prefix_tab_managed"] = False
+                    if not self._save(state):
+                        tmux_ctl.restore_root_function_bindings(
+                            backup, token=token)
+                        self._remove_state()
+                        return False
                 state["phase"] = "active"
                 if not self._save(state) or not self._set_controller():
                     tmux_ctl.restore_root_function_bindings(
                         backup, token=token)
+                    if state["prefix_tab_managed"]:
+                        tmux_ctl.restore_prefix_target_binding(
+                            state["prefix_tab_backup"], token=token)
                     self._remove_state()
                     return False
                 self._registered = True
+                self._prefix_tab_managed = state["prefix_tab_managed"]
                 return True
         except OSError:
             return False
@@ -260,6 +348,9 @@ class RootFunctionKeyManager:
                         return
                     tmux_ctl.restore_root_function_bindings(
                         state["backup"], token=state["token"])
+                    if state["prefix_tab_managed"]:
+                        tmux_ctl.restore_prefix_target_binding(
+                            state["prefix_tab_backup"], token=state["token"])
                     self._remove_state()
             except OSError:
                 pass
@@ -271,3 +362,4 @@ class RootFunctionKeyManager:
                     self._owner_pane_id,
                 )
             self._registered = False
+            self._prefix_tab_managed = False

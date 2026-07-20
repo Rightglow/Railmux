@@ -31,25 +31,40 @@ def _bare_app(**attrs):
     app._restore_state = None
     app._active_session_id = None
     app._double_focus_visual_pending = False
-    app._root_function_key_manager = MagicMock()
+    app._tmux_binding_manager = MagicMock()
     for k, v in attrs.items():
         setattr(app, k, v)
     return app
 
 
-def test_install_uses_shared_function_key_manager():
+def test_install_uses_shared_tmux_binding_manager():
     manager = MagicMock()
-    app = _bare_app(_root_function_key_manager=manager)
+    app = _bare_app(_tmux_binding_manager=manager)
 
-    app._install_function_key_bindings()
+    app._install_tmux_bindings()
 
     manager.open.assert_called_once_with()
 
 
-def test_install_skips_without_function_key_manager():
-    app = _bare_app(_root_function_key_manager=None)
+def test_install_skips_without_tmux_binding_manager():
+    app = _bare_app(_tmux_binding_manager=None)
 
-    app._install_function_key_bindings()  # must not raise
+    app._install_tmux_bindings()  # must not raise
+
+
+def test_unavailable_target_toggle_warns_once_without_projection():
+    manager = MagicMock()
+    manager.target_toggle_available = False
+    app = _bare_app(_tmux_binding_manager=manager)
+    app._set_status = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+
+    app._install_tmux_bindings()
+    app._install_tmux_bindings()
+
+    app._sync_target_pane_option.assert_not_called()
+    app._set_status.assert_called_once_with(
+        "Ctrl-B Tab unavailable; existing tmux binding preserved.", "warn")
 
 
 def test_f8_dispatches_rotate_without_sidebar_action_lookup():
@@ -99,7 +114,7 @@ def test_f8_restores_remembered_secondary_as_side_by_side(monkeypatch):
     app._agent_session_alive = MagicMock(return_value=True)
     app._agent_region_size = MagicMock(return_value=(160, 40))
     app._layout_fits = MagicMock(return_value=True)
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._set_status = MagicMock()
 
@@ -130,7 +145,7 @@ def test_f8_creates_empty_secondary_without_preselected_session(monkeypatch):
     app._agent_session_alive = MagicMock(return_value=False)
     app._agent_region_size = MagicMock(return_value=(160, 40))
     app._layout_fits = MagicMock(return_value=True)
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._set_status = MagicMock()
 
@@ -162,7 +177,7 @@ def test_f8_skips_unusable_columns_and_opens_stacked(monkeypatch):
     app._layout_fits = MagicMock(
         side_effect=lambda _region, layout:
         layout is WorkspaceLayout.STACKED)
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._set_status = MagicMock()
 
@@ -267,7 +282,7 @@ def test_f8_keeps_dual_layout_when_secondary_cannot_close():
 
 def test_teardown_releases_managed_function_bindings(monkeypatch):
     manager = MagicMock()
-    app = _bare_app(_root_function_key_manager=manager)
+    app = _bare_app(_tmux_binding_manager=manager)
     monkeypatch.setattr(
         "railmux.ui.app.atomic_write_text", lambda *args, **kwargs: None)
 
@@ -278,11 +293,11 @@ def test_teardown_releases_managed_function_bindings(monkeypatch):
 
 def test_reinstall_is_delegated_idempotently_to_manager():
     manager = MagicMock()
-    app = _bare_app(_root_function_key_manager=manager)
+    app = _bare_app(_tmux_binding_manager=manager)
 
-    app._install_function_key_bindings()
+    app._install_tmux_bindings()
     app._right_pane_id = "%17"
-    app._install_function_key_bindings()
+    app._install_tmux_bindings()
 
     assert manager.open.call_count == 2
 
@@ -336,7 +351,7 @@ def test_fast_path_still_rebinds(monkeypatch):
 
     result = app._attach_in_right_pane("cc-test", steal_focus=False)
     assert result is True
-    app._root_function_key_manager.open.assert_called_once_with()
+    app._tmux_binding_manager.open.assert_called_once_with()
 
 
 def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
@@ -344,7 +359,7 @@ def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
     app._set_active_tmux_target = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._schedule_scroll_acceleration = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._check_agent_slot_size = MagicMock()
     events = []
 
@@ -373,7 +388,7 @@ def test_first_attach_creates_detached_pane_then_fits_and_respawns(monkeypatch):
     app._set_active_tmux_target = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._schedule_scroll_acceleration = MagicMock()
-    app._install_function_key_bindings = MagicMock()
+    app._install_tmux_bindings = MagicMock()
     app._check_agent_slot_size = MagicMock()
     events = []
 
