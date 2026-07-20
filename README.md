@@ -16,13 +16,6 @@ interrupts in-progress responses or tool calls.
 - **Codex mode** — reads `~/.codex/sessions/*`, same sidebar workflow for Codex sessions
 - Press `m` to cycle through the available modes
 
-## Demo
-
-> **Demo GIF coming soon.** This slot is reserved for the interactive Railmux
-> walkthrough and can be replaced without restructuring the README.
-
-<!-- Replace the blockquote above with assets/railmux-demo.gif when available. -->
-
 ## Why Railmux?
 
 Without Railmux, managing multiple agent sessions means manually tracking tmux
@@ -101,68 +94,46 @@ The rename popup starts with the current title pre-filled. Press
 `Ctrl-U` to clear the entire input, `Enter` to save a non-empty title, or `Esc`
 to cancel.
 
-### Dual-agent split
+### Dual-agent layouts
 
 Railmux distinguishes the **Focused pane** from the **Target pane**. The Focused
-pane currently receives keyboard input. The Target pane is the remembered P1 or
-P2 where actions started from the sidebar take effect; Chinese documentation
-uses **焦点窗格** and **目标窗格** respectively.
+pane receives keyboard input; the Target pane is where actions started from the
+sidebar take effect. They can differ while you browse the sidebar.
 
-Open the first agent normally, then press `F8` to create Pane 2 and cycle single,
-side-by-side, and stacked layouts even while an agent has keyboard focus. A new
-Pane 2 may remain empty until you use it; on narrower terminals F8 skips an
-orientation that cannot provide two usable panes. Returning to single remembers
-Pane 2 for the next cycle and leaves its agent running in the background. A
-same-instance soft restart restores the layout, both pane contents, Target pane,
-and keyboard focus after validating the exact local tmux identities. If one
-content wish is no longer valid, Railmux keeps the usable layout with a branded
-empty pane; if the terminal can no longer fit the split, it falls back to single
-and keeps the displaced live agent in Running. Killing a displayed session
-safely detaches it first and keeps the chosen layout open; its agent pane returns
-to the resize-aware Railmux empty surface instead of disappearing or retaining a
-stale interactive client.
+Open the first agent normally, then press `F8` to cycle through single,
+side-by-side, and stacked layouts. Pane 2 can remain empty until you choose a
+session for it, and layouts that do not fit the terminal are skipped. Returning
+to single leaves Pane 2's agent running in the background.
 
-The sidebar uses roughly 30% of the window in single-agent mode. Dual-agent
-layouts reduce it to roughly 20%, with a 30-column floor, so both agents gain
-working width without making session metadata unusably narrow. Returning to
-single restores the 30% sidebar.
+In a split, focus an agent pane to make it the Target pane. After focus returns
+to the sidebar, single-click or `␣` acts in that pane without moving keyboard
+focus; double-click or `Enter` opens there and transfers focus. The status bar
+shows the current layout and Target pane:
 
-The bottom brand keeps a one-cell workspace indicator after the provider name:
-`▣` is single-pane; `◧`/`◨` are side-by-side with the filled half naming the
-left/right Target pane; `⬒`/`⬓` are stacked with the filled half naming the
-top/bottom Target pane. For example, `Railmux · Codex · ◨` means a side-by-side
-layout targeting the right pane. The indicator remains visible across focus
-changes. When focus returns to Railmux, agent borders become gray while the
-filled half continues to identify the pane used for stopped-session preview,
-running-session switching,
-Enter/double-click open, F9, terminal placement, status, and attention state.
-Move through an empty Pane 2 and back to Railmux to target it; no extra
-split-specific menu action is needed. In a single-agent layout P1 is the only
-possible target, so no separate inactive-target marker is needed.
+| Symbol | Meaning |
+|--------|---------|
+| `▣` | Single pane |
+| `◧` / `◨` | Side-by-side, targeting left / right |
+| `⬒` / `⬓` | Stacked, targeting top / bottom |
 
-In the side-by-side layout, arrows on the green shared borders point inward at
-the agent pane that actually owns keyboard focus. They disappear when focus
-returns to Railmux and do not alter the stacked layout. tmux versions before
-3.3 retain the same focus colours without directional arrows.
+Agent borders turn green around the Focused pane. When focus is in the sidebar,
+the borders return to gray while the status symbol continues to show the Target
+pane.
 
-When a mode has no projects or sessions, its empty state names the active
-provider and points to `+ New project` or `n`, so an unavailable provider never
-looks like data from the previous mode.
+### Finding running sessions
 
-Running-pane filtering is in-memory and never reads transcript bodies. Plain
-text matches the visible session label, project, and provider; add
-`project:<name>` to restrict a search to one project. Claude Code and Codex keep
-independent Running filters. Blocked sessions move ahead of other Running rows
-on the existing throttled recency sort, while their red status dots still
-update immediately.
+Plain text matches the visible session label, project, and provider without
+searching message content. Add `project:<name>` to restrict the list to one
+project. Claude Code and Codex keep independent Running filters, and blocked
+sessions move ahead of the other results.
 
 ### Mouse
 
 | Action | Effect |
 |--------|--------|
-| Left-click (non-running) | Preview session history in the last agent pane |
-| Left-click (running) | Switch the last agent pane to that session |
-| Double-click | Open/attach in the last agent pane and move focus there |
+| Left-click (non-running) | Preview session history in the Target pane |
+| Left-click (running) | Switch the Target pane to that session |
+| Double-click | Open/attach in the Target pane and move focus there |
 | Right-click | Context menu (Open, Preview, Info, Rename, Star, Kill, Term, Delete) |
 
 The terminal must report mouse buttons to applications for these actions to
@@ -172,25 +143,20 @@ ordinary mouse reporting; see [FAQ 2](#2-mouse-buttons-or-f8f9-dont-work--whats-
 ## History preview
 
 For a stopped session, left-click or press `␣` to view conversation history in
-the last agent pane without starting or resuming the agent. The preview reads the saved JSONL
-directly, so it cannot send a message or mutate the session. It follows the
-providers' conversation structure as closely as their saved data allows:
-user/assistant messages, tool calls and abbreviated tool output are
-colour-coded, while internal system context and encrypted reasoning are hidden.
-Plaintext Codex reasoning summaries are shown when present.
+the Target pane without starting or resuming the agent. Preview is read-only: it
+cannot send a message or change the session. User and assistant messages, tool
+calls, and abbreviated tool output are colour-coded, while internal context and
+encrypted reasoning are hidden.
 
-The viewer uses `less`, the standard pager available on both Linux and macOS,
-because neither provider currently exposes a native read-only history view.
-It opens at the latest activity and streams at most the latest 2,000 JSONL
-records for fast previews of large sessions. Press `/` to search, `n`/`N` to
-move between matches, and `q` to exit; the right pane restores whatever was
-there before. Shell/editor commands and pager history are disabled in preview
-mode. Double-click to skip the preview and open the session directly.
+Preview opens at the latest activity in `less`; large sessions are limited to
+their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between
+matches, and `q` to exit and restore the pane. Double-click to skip preview and
+open the session directly.
 
-For a running session, single-click or `␣` switches the remembered agent pane
-to it while focus stays in Railmux. For a stopped session, the same inputs open
-a read-only preview. Double-click or Enter opens either kind and transfers
-focus. The context-menu Preview action follows the single-click/`␣` rule.
+For a running session, single-click or `␣` switches the Target pane to it while
+focus stays in Railmux. For a stopped session, the same inputs open a read-only
+preview. Double-click or Enter opens either kind and transfers focus. The
+context-menu Preview action follows the single-click/`␣` rule.
 
 ## Status indicators
 
@@ -200,11 +166,11 @@ Each running session shows a coloured ● reflecting its current state:
 - **Yellow** — busy (assistant is processing)
 - **Red** — blocked (waiting for tool approval)
 
-An independent magenta **!** marks the last provider outcome that still needs
-attention, such as a generic abort or provider error. It does not replace the
-activity dot: a live session can be idle and still show `!`, while a stopped
-historical session keeps its neutral `○` liveness marker alongside the badge.
-Session Info and Running Info show the sanitized category and summary.
+An independent magenta **!** marks an outcome that still needs attention, such
+as an abort or provider error. It does not replace the activity dot: a live
+session can be idle and still show `!`, while a stopped historical session keeps
+its neutral `○` marker alongside the badge. Session Info and Running Info show
+the available details.
 
 A grass-green title identifies a live tmux session independently of its status;
 stopped sessions use a neutral hollow ○. The same grass green is used for the
@@ -212,31 +178,18 @@ focused pane chrome and tmux status bar. The current cursor uses a deeper green
 background, while the session displayed in the agent pane remains marked in
 neutral slate after keyboard focus moves away.
 
-For Codex rollouts with lifecycle events, only `task_complete`, `turn_aborted`,
-or `thread_rolled_back` ends an active turn; intermediate assistant messages and
-tool results remain busy. Older rollouts without lifecycle records fall back to
-their last user/assistant message. Because Codex has no reliable approval-wait
-signal, a pending tool must remain unchanged for two minutes before it turns
-red, reducing false alerts from normal long-running commands.
+## Sessions and restarts
 
-Codex error details are read only from dedicated lifecycle/error records, never
-from user or assistant transcript text. Current observed rollouts do not persist
-a reliable capacity/rate-limit reason, so Railmux labels those records
-generically instead of guessing from message content.
+Each opened agent runs in a detached tmux session, so switching sessions does
+not interrupt it. To leave agents running when you quit Railmux, press `s` for
+soft quit in the confirmation popup; restarting the same Railmux instance then
+restores the usable workspace when those sessions are still available. A normal
+quit confirmation ends all running sessions instead.
 
-## How it works
-
-`railmux` reads agent session files from `~/.claude/projects/*` (Claude Code) or `~/.codex/sessions/*` (Codex) and lists everything. Pressing `Enter` on a session does two things: (1) if a detached tmux session for that session doesn't already exist, railmux creates one with `tmux new-session -d`; (2) railmux's right pane displays it so you see and interact with the agent. By default Railmux transactionally swaps the real agent pane into the display window, while its detached home session stays alive behind a placeholder. Unsupported or unverified environments automatically use the compatibility nested-tmux display instead.
-
-Soft quit keeps detached agents alive. On restart, process-bearing recovery
-state is isolated to the exact outer tmux pane, so separate Railmux windows or
-private tmux servers cannot restore one another's display. Mode, project, and
-sidebar filters are also saved as non-process view preferences for use on a
-later login; those portable preferences never authorize an attach or kill.
-If Railmux stops while a new provider is still creating its session UUID, the
-Running pane restores it as an explicit unresolved entry. It can be reopened or
-stopped by exact tmux identity, but Railmux will not guess at or delete an
-unknown provider history file.
+If Railmux stops while a provider is still creating a new session, the Running
+pane may show it as unresolved. You can reopen or stop that agent, but Railmux
+will not offer to delete provider history until it can identify the session
+safely.
 
 ## Configuration
 
@@ -260,17 +213,14 @@ show_empty_projects = false
 # How often to refresh the session list (ms)
 poll_interval_ms = 1000
 
-# Prefer the real agent pane through validated transactional tmux swaps.
-# Default: "swap". Set "nested" to force the compatibility display.
+# Agent display mode (default: "swap").
+# Set "nested" only when troubleshooting an unusual tmux environment.
 agent_transport = "swap" # or "nested"
 ```
 
-The `swap` transport requires tmux 2.7 or newer and the auto-launched `railmux`
-tmux session. Railmux automatically falls back to `nested` for old tmux,
-unmanaged sessions, independent clients, unsupported agent topology, or any
-unverified transition. See
-[`docs/DENESTED_AGENT_PANE.md`](docs/DENESTED_AGENT_PANE.md) for tested
-lifecycle behavior, fallbacks, performance observations, and limitations.
+Most users should leave `agent_transport` unchanged. Railmux automatically uses
+the compatible `nested` display when the default `swap` mode is not safe for the
+current tmux environment.
 
 ## Diagnostics
 
@@ -328,9 +278,8 @@ terminal session.
 
 ### 3. Using railmux over SSH
 
-railmux works over SSH out of the box — the scroll‑agent integration is
-SSH‑transparent, so mouse scrolling in the agent pane works the same as
-locally. These tweaks improve responsiveness and scrollback:
+railmux works over SSH out of the box, including mouse scrolling in the agent
+pane. These tweaks improve responsiveness and scrollback:
 
 **Server** (`~/.tmux.conf` on the remote machine):
 
@@ -383,3 +332,7 @@ it is not required on macOS or any other platform.
 ## Acknowledgements
 
 The tmux sidebar idea and initial architecture came from [regmi-saugat/ccmgr](https://github.com/regmi-saugat/ccmgr). railmux extends it with Codex support, session history preview, starring, in-app renaming, mouse interaction, and a status bar integrated into the tmux status line.
+
+## Contributing
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

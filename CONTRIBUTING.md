@@ -47,6 +47,10 @@ entry in [`docs/README.md`](docs/README.md). Keep durable invariants and runtime
 evidence there; completed task prompts and generated diffs should not become
 parallel sources of truth.
 
+Keep the root [`README.md`](README.md) focused on installing and using Railmux.
+Implementation rationale, recovery rules, compatibility boundaries, and other
+maintainer-only detail belong under [`docs/`](docs/README.md).
+
 ## Pull requests
 
 - Open an issue first for non-trivial changes so we can agree on the approach before you write code.

@@ -12,6 +12,14 @@ Before planning a non-trivial behavior or architecture change:
    and [`README.md`](README.md) as the user contract, not an internal design
    specification.
 
+Keep the repository-front-page [`README.md`](README.md) task-oriented and
+user-facing: installation, supported workflows, controls, configuration, and
+troubleshooting belong there. Put implementation rationale, invariants,
+recovery authority, compatibility boundaries, provider parsing rules, and
+maintainer procedures in the document selected by [`docs/README.md`](docs/README.md)
+or in [`CONTRIBUTING.md`](CONTRIBUTING.md). Link rather than duplicate when a
+short user-facing explanation needs deeper engineering context.
+
 Do not use completed task prompts, generated diffs, or review transcripts as a
 competing source of truth. When implementation changes a durable invariant,
 compatibility boundary, recovery authority, or evidence-based product decision,

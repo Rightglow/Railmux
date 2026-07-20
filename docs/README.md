@@ -25,8 +25,11 @@ Related repository-level documents have different roles:
 - [`../ROADMAP.md`](../ROADMAP.md) contains candidates and open product
   questions, not implementation commitments.
 - [`../CHANGELOG.md`](../CHANGELOG.md) records user-visible changes.
-- [`../README.md`](../README.md) documents supported user workflows and should
-  not carry internal design detail.
+- [`../README.md`](../README.md) is the user-facing landing page: keep it to
+  installation, supported workflows, controls, configuration, and
+  troubleshooting. It should describe observable behavior without carrying
+  implementation rationale, recovery authority, parser rules, or transaction
+  detail.
 
 ## Documentation policy
 

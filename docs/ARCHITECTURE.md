@@ -193,6 +193,9 @@ are independent. Switching the sidebar from Claude to Codex must not replace,
 close, or reinterpret an already displayed Claude agent. Do not put display
 pane fields back onto `App` as parallel scalars; the old `_right_pane_*`
 properties exist only as compatibility shims backed by the primary slot.
+An empty Projects or Sessions view must name the currently browsed provider and
+offer its relevant new-project/session action; it must never retain content from
+the previously browsed provider.
 
 Exact-owner local restart state serializes the layout, both slot contents,
 Target pane, keyboard focus, preview rollback target, and any live collapsed
@@ -426,9 +429,8 @@ segment directly. Side-by-side Pane 1 necessarily colours both adjacent shared
 borders, so tmux 3.3+ adds arrows pointing inward at the exact active pane.
 When the sidebar owns focus, arrows are removed, every dual-agent border is
 gray, and the status brand's filled layout glyph names the remembered target.
-This remains a
-prototype visual contract: validate its glyph and colour rendering on each
-supported tmux/terminal combination before treating the geometry as final.
+Glyph and colour changes must preserve that distinction between keyboard focus
+and the remembered Target pane across supported tmux/terminal combinations.
 
 ## Liveness, activity, and attention are separate axes
 
@@ -438,11 +440,23 @@ or `blocked`). An optional attention value records the last actionable terminal
 outcome without changing either of those facts. Provider errors and aborts must
 never prune a live registry entry or reuse the red blocked dot.
 
+For Codex rollouts with lifecycle events, only `task_complete`, `turn_aborted`,
+or `thread_rolled_back` ends an active turn; intermediate assistant messages and
+tool results remain busy. Older rollouts without lifecycle records fall back to
+the last user/assistant message. Codex does not persist a reliable approval-wait
+signal, so a pending tool must remain unchanged for two minutes before the
+session becomes blocked. This delay avoids classifying ordinary long-running
+commands as approval waits.
+
 Attention summaries come only from dedicated provider error/lifecycle fields and
 must be short and sanitized. Never classify an error from user prompts,
 assistant messages, tool output, or titles. A newer turn start and a newer
 successful turn clear stale attention. User interrupts and explicit rollbacks
 are not provider failures.
+
+Current observed Codex rollouts do not persist a reliable capacity or rate-limit
+reason. Such lifecycle errors remain generic unless a dedicated provider field
+supplies a safe category; message text must never be used to guess one.
 
 Running-pane filtering is a view over the live registry, never a mutation of
 that registry. The pane retains the complete provider-scoped entry snapshot,
