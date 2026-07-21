@@ -76,6 +76,8 @@ class _PaneGeometry:
     y: int
     width: int
     height: int
+    history_server: tmux_server.TmuxServerTarget | None = None
+    history_pane_id: str | None = None
 
 
 _ANSI_FG = {
@@ -328,7 +330,7 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
                 "list-panes", "-t", session_id,
                 "-F", "#{session_id}\t#{window_zoomed_flag}\t#{pane_active}\t"
                 "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t"
-                "#{pane_height}",
+                f"#{{pane_height}}\t#{{{tmux_server.HISTORY_SOURCE_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -341,7 +343,7 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
     for raw_row in output.splitlines():
         fields = raw_row.split("\t")
         if (
-            len(fields) != 8
+            len(fields) != 9
             or fields[0] != session_id
             or fields[1] not in ("0", "1")
             or fields[2] not in ("0", "1")
@@ -349,7 +351,7 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
             return ()
         pane_id = fields[3]
         try:
-            left, top, width, height = map(int, fields[4:])
+            left, top, width, height = map(int, fields[4:8])
         except ValueError:
             return ()
         if (
@@ -363,10 +365,24 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
         ):
             return ()
         seen.add(pane_id)
+        history_server = None
+        history_pane_id = None
+        marker = fields[8]
+        if marker:
+            source = tmux_server.resolve_history_source(marker, timeout=0.25)
+            if source is not None:
+                history_server, history_session_id = source
+                history_pane_id = tmux_server.target_single_pane_id(
+                    history_server, history_session_id, timeout=0.25)
+                if history_pane_id is None:
+                    history_server = None
         rows.append((
             fields[1] == "1",
             fields[2] == "1",
-            _PaneGeometry(pane_id, left, top, width, height),
+            _PaneGeometry(
+                pane_id, left, top, width, height,
+                history_server, history_pane_id,
+            ),
         ))
     if not rows or len({zoomed for zoomed, _active, _pane in rows}) != 1:
         return ()
@@ -395,11 +411,22 @@ def _capture_pane_history(
     max_lines: int,
 ) -> HistorySnapshot | None:
     try:
-        output = subprocess.check_output(
-            tmux_server.tmux_argv(
+        if pane.history_server is not None and pane.history_pane_id is not None:
+            if not tmux_server.target_is_live(
+                    pane.history_server, timeout=0.25):
+                return None
+            argv = tmux_server.target_argv(
+                pane.history_server,
+                "capture-pane", "-p", "-e", "-t", pane.history_pane_id,
+                "-S", f"-{max_lines}",
+            )
+        else:
+            argv = tmux_server.tmux_argv(
                 "capture-pane", "-p", "-e", "-t", pane.pane_id,
                 "-S", f"-{max_lines}",
-            ),
+            )
+        output = subprocess.check_output(
+            argv,
             stderr=subprocess.DEVNULL,
             timeout=1.0,
         )

@@ -425,7 +425,7 @@ def test_local_history_routes_sidebar_immediately_and_owns_agent_wheel():
     assert agent_action.protocol_frame == b""
 
 
-def test_local_history_cross_region_pointer_restores_and_forwards_complete_drag():
+def test_local_history_cross_agent_click_preserves_prefetched_routes():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
     prefetch_id, _limit = decode_history_prefetch(prefetch.data)
@@ -447,10 +447,29 @@ def test_local_history_cross_region_pointer_restores_and_forwards_complete_drag(
     assert action.restore_live is True
     assert action.refresh_routes is True
     assert view.active is False
-    assert view.visible_routes == ()
+    assert view.visible_routes == (first, second)
     assert view.pointer_event(
         SgrMouseEvent(b"release-other", 0, 70, 2, False)
     ).forwarded_input == b"release-other"
+
+
+def test_local_history_sidebar_click_invalidates_agent_routes():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    prefetch_id, _limit = decode_history_prefetch(prefetch.data)
+    snapshot = HistorySnapshot(
+        prefetch_id, "%8", 30, 0, 30, 3,
+        tuple(f"line-{index}".encode() for index in range(8)),
+    )
+    view.accept_prefetch(HistoryBatch(prefetch_id, (snapshot,)))
+    view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+
+    action = view.pointer_event(SgrMouseEvent(b"sidebar", 0, 5, 2, True))
+
+    assert action.forwarded_input == b"sidebar"
+    assert action.restore_live is True
+    assert action.refresh_routes is True
+    assert view.visible_routes == ()
 
 
 def test_local_history_captures_an_in_pane_pointer_gesture_until_release():
@@ -770,8 +789,8 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4\t0\t1\t%1\t0\t0\t30\t20\n"
-            "$4\t0\t0\t%8\t31\t0\t49\t20\n"
+            "$4\t0\t1\t%1\t0\t0\t30\t20\t\n"
+            "$4\t0\t0\t%8\t31\t0\t49\t20\t\n"
         ),
     )
 
@@ -784,18 +803,18 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     ("rows", "expected"),
     [
         (
-            "$4\t1\t1\t%1\t0\t0\t80\t24\n"
-            "$4\t1\t0\t%8\t31\t0\t49\t20\n",
+            "$4\t1\t1\t%1\t0\t0\t80\t24\t\n"
+            "$4\t1\t0\t%8\t31\t0\t49\t20\t\n",
             (),
         ),
         (
-            "$4\t1\t0\t%1\t0\t0\t30\t20\n"
-            "$4\t1\t1\t%8\t0\t0\t80\t24\n",
+            "$4\t1\t0\t%1\t0\t0\t30\t20\t\n"
+            "$4\t1\t1\t%8\t0\t0\t80\t24\t\n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4\t1\t1\t%1\t0\t0\t80\t24\n"
-            "$4\t0\t0\t%8\t31\t0\t49\t20\n",
+            "$4\t1\t1\t%1\t0\t0\t80\t24\t\n"
+            "$4\t0\t0\t%8\t31\t0\t49\t20\t\n",
             (),
         ),
     ],
@@ -811,6 +830,38 @@ def test_server_exposes_only_coherent_visible_panes_when_zoomed(
     )
 
     assert fast_display_server._list_agent_panes("$4") == expected
+
+
+def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
+    target = fast_display_server.tmux_server.TmuxServerTarget(
+        "/tmp/default", 44)
+    monkeypatch.setattr(
+        fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: (
+            '$4\t0\t1\t%1\t0\t0\t30\t20\t\n'
+            '$4\t0\t0\t%8\t31\t0\t49\t20\t{"source":1}\n'
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_server.tmux_server,
+        "resolve_history_source",
+        lambda marker, **_kwargs: (target, "$7") if marker else None,
+    )
+    monkeypatch.setattr(
+        fast_display_server.tmux_server,
+        "target_single_pane_id",
+        lambda candidate, session, **_kwargs: (
+            "%2" if (candidate, session) == (target, "$7") else None
+        ),
+    )
+
+    assert fast_display_server._list_agent_panes("$4") == (
+        fast_display_server._PaneGeometry(
+            "%8", 31, 0, 49, 20, target, "%2"),
+    )
 
 
 def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
@@ -843,6 +894,41 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
     assert not any(
         destructive in calls[0][0]
         for destructive in ("kill-pane", "kill-session", "resize-pane", "send-keys")
+    )
+
+
+def test_server_captures_nested_history_from_real_pane_without_resizing(
+    monkeypatch,
+):
+    target = fast_display_server.tmux_server.TmuxServerTarget(
+        "/tmp/default", 44)
+    pane = fast_display_server._PaneGeometry(
+        "%8", 31, 0, 49, 2, target, "%2")
+    monkeypatch.setattr(
+        fast_display_server, "_pane_at_pointer", lambda *_args: pane)
+    monkeypatch.setattr(
+        fast_display_server.tmux_server,
+        "target_is_live",
+        lambda candidate, **_kwargs: candidate == target,
+    )
+    calls = []
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda argv, **_kwargs: calls.append(argv) or b"old\nnew\n",
+    )
+
+    snapshot = fast_display_server.capture_history_snapshot(
+        "$4", 7, 40, 5, 300)
+
+    assert snapshot.pane_id == "%8"
+    assert calls == [[
+        "tmux", "-S", "/tmp/default", "capture-pane", "-p", "-e",
+        "-t", "%2", "-S", "-300",
+    ]]
+    assert not any(
+        item in calls[0]
+        for item in ("resize-pane", "swap-pane", "send-keys", "kill-pane")
     )
 
 

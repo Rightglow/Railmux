@@ -357,7 +357,10 @@ Help's controller-pane zoom, modal close, and resize invalidate the old pointer
 map before it can be reused. Terminal-native selection overrides remain
 terminal-dependent. Use `--no-mouse` when reliable ordinary terminal selection
 is more important than local history. History preserves text colours and common
-character styles.
+character styles. For upgrade-only legacy sessions displayed through a nested
+tmux client, Railmux reads scrollback from the identity-validated real agent
+pane rather than the zero-history wrapper; it does not resize or alter the old
+session.
 Bracketed paste and terminal focus events follow the active remote application.
 The protocol is experimental, so keep the local and remote Railmux versions
 matched.

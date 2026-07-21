@@ -143,3 +143,53 @@ def test_target_session_id_rejects_ambiguous_or_malformed_output(monkeypatch):
     )
 
     assert tmux_server.target_session_id(target, "railmux") is None
+
+
+def test_nested_history_source_round_trip_revalidates_exact_legacy_target(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/default", 44)
+    marker = tmux_server.encode_history_source(target, "$7", legacy=True)
+    monkeypatch.setattr(
+        tmux_server, "discover_legacy_target", lambda **_kwargs: target)
+    has_session = []
+    monkeypatch.setattr(
+        tmux_server,
+        "target_has_session",
+        lambda candidate, session, **_kwargs: (
+            has_session.append((candidate, session)) or True
+        ),
+    )
+
+    assert marker is not None
+    assert tmux_server.resolve_history_source(marker) == (target, "$7")
+    assert has_session == [(target, "$7")]
+
+
+def test_nested_history_source_rejects_changed_server_or_extra_fields(monkeypatch):
+    target = tmux_server.TmuxServerTarget("/tmp/default", 44)
+    marker = tmux_server.encode_history_source(target, "$7", legacy=True)
+    monkeypatch.setattr(
+        tmux_server,
+        "discover_legacy_target",
+        lambda **_kwargs: tmux_server.TmuxServerTarget("/tmp/default", 45),
+    )
+
+    assert marker is not None
+    assert tmux_server.resolve_history_source(marker) is None
+    assert tmux_server.resolve_history_source(
+        marker[:-1] + ',"unexpected":true}'
+    ) is None
+
+
+def test_target_single_pane_id_requires_one_live_exact_pane(monkeypatch):
+    target = tmux_server.TmuxServerTarget("/tmp/default", 44)
+    outputs = iter((
+        "44\t$7\t%2\t0\n",
+        "44\t$7\t%2\t0\n44\t$7\t%3\t0\n",
+    ))
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda *_args, **_kwargs: next(outputs))
+
+    assert tmux_server.target_single_pane_id(target, "$7") == "%2"
+    assert tmux_server.target_single_pane_id(target, "$7") is None

@@ -1,6 +1,7 @@
 """Transactional de-nested display transport (tmux is modeled in memory)."""
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -35,6 +36,7 @@ class FakeTmux:
                 "%3", 303, "agent-b", "$3", "@3", False, 80, 24),
         }
         self.window_options: dict[tuple[str, str], str] = {}
+        self.pane_options: dict[tuple[str, str], str] = {}
         self.session_options: dict[tuple[str, str], str] = {}
         self.next_pane = 10
         self.next_session = 10
@@ -67,6 +69,7 @@ class FakeTmux:
             "show_session_user_option": self.show_session_user_option,
             "set_window_user_option": self.set_window_user_option,
             "show_window_user_option": self.show_window_user_option,
+            "set_pane_user_option": self.set_pane_user_option,
             "swap_panes": self.swap_panes,
             "kill_session": self.kill_session,
             "kill_pane": self.kill_pane,
@@ -158,6 +161,16 @@ class FakeTmux:
     def show_window_user_option(self, window, name):
         return self.window_options.get((window, name))
 
+    def set_pane_user_option(self, pane, name, value):
+        if pane not in self.panes:
+            return False
+        key = (pane, name)
+        if value is None:
+            self.pane_options.pop(key, None)
+        else:
+            self.pane_options[key] = value
+        return True
+
     def swap_panes(self, source, target):
         self.swap_calls.append((source, target))
         if self.fail_swap_at == len(self.swap_calls):
@@ -228,6 +241,11 @@ class FakeTmux:
 @pytest.fixture
 def rig(monkeypatch):
     fake = FakeTmux(monkeypatch)
+    monkeypatch.setattr(
+        transport_mod.tmux_server,
+        "discover_target",
+        lambda **_kwargs: tmux_server.TmuxServerTarget("/tmp/dedicated", 77),
+    )
     workspace = AgentWorkspace()
     manager = AgentDisplayTransport(
         workspace, "swap", auto_launched=True,
@@ -319,6 +337,15 @@ def test_legacy_target_always_uses_nested_attach_and_ignore_size(
     command = fake.respawned[-1][1]
     assert "tmux -S '/tmp/legacy socket' attach-session -f ignore-size -t '$9'" == command.removeprefix("TMUX= exec ")
     assert "agent-a::legacy" not in command
+    marker = fake.pane_options[
+        (workspace.primary.pane_id, tmux_server.HISTORY_SOURCE_OPTION)
+    ]
+    assert json.loads(marker) == {
+        "schema_version": 1,
+        "scope": "legacy",
+        "server_pid": 91,
+        "session_id": "$9",
+    }
 
 
 def test_switching_from_swap_to_legacy_returns_real_agent_home_first(
@@ -506,6 +533,8 @@ def test_prepare_kill_detaches_nested_client_into_same_empty_pane(rig):
     assert manager.create_secondary(WorkspaceLayout.SIDE_BY_SIDE)
     pane_id = workspace.secondary.pane_id
     assert manager.attach(workspace.secondary, "agent-b").ok
+    marker_key = (pane_id, tmux_server.HISTORY_SOURCE_OPTION)
+    assert marker_key in fake.pane_options
 
     assert manager.prepare_kill("agent-b")
 
@@ -514,6 +543,7 @@ def test_prepare_kill_detaches_nested_client_into_same_empty_pane(rig):
     assert workspace.secondary.agent_tmux_name is None
     assert fake.respawned[-1][0] == pane_id
     assert "railmux.pane_surface --empty 2" in fake.respawned[-1][1]
+    assert marker_key not in fake.pane_options
 
 
 def test_swap_empty_surface_failure_reports_that_agent_is_already_home(rig):

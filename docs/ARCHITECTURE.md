@@ -33,6 +33,11 @@ coexist without routing actions to each other. Cross-server display always uses
 a nested `attach-session -f ignore-size`; it must first return any swap-owned
 dedicated pane home. Automatic teardown never kills a legacy session. An
 explicit user Kill may do so only after revalidating both pinned identities.
+The nested wrapper carries a bounded source marker containing no socket path.
+SSH history capture re-resolves its declared server scope, PID, immutable
+session ID, and sole live pane before reading scrollback from the real source;
+the wrapper's geometry remains the only pointer authority. This read-only path
+must never resize, swap, send keys to, or otherwise mutate the legacy session.
 This is a deprecated upgrade bridge, not a second supported storage model.
 Remove `legacy_sessions.py`, the `_Running` legacy fields, and their routing
 branches together after a documented compatibility window and after supported

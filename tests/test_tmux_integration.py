@@ -182,6 +182,142 @@ def test_dedicated_label_routes_fast_server_to_private_tmux(monkeypatch):
         shutil.rmtree(socket_root, ignore_errors=True)
 
 
+def test_nested_history_prefetch_reads_real_source_pane(monkeypatch):
+    """A nested wrapper's zero scrollback must not hide its source history."""
+    dedicated_root = Path(tempfile.mkdtemp(prefix="rx-history-d-", dir="/tmp"))
+    source_root = Path(tempfile.mkdtemp(prefix="rx-history-s-", dir="/tmp"))
+    dedicated_root.chmod(0o700)
+    source_root.chmod(0o700)
+    label = f"rx-history-{os.getpid()}"
+    source_socket = str(source_root / "s")
+    monkeypatch.setenv("TMUX_TMPDIR", str(dedicated_root))
+    monkeypatch.setenv(tmux_server.SOCKET_LABEL_ENV, label)
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+
+    try:
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "-f", "/dev/null", "new-session", "-d", "-s", "probe",
+                "sleep 60",
+            ),
+            check=True,
+        )
+        controller = subprocess.check_output(
+            tmux_server.tmux_argv(
+                "display-message", "-p", "-t", "probe", "#{pane_id}"
+            ),
+            text=True,
+        ).strip()
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "set-window-option", "-t", "probe",
+                "@railmux_controller_pane", controller,
+            ),
+            check=True,
+        )
+        wrapper = subprocess.check_output(
+            tmux_server.tmux_argv(
+                "split-window", "-d", "-h", "-P", "-F", "#{pane_id}",
+                "-t", "probe", "sleep 60",
+            ),
+            text=True,
+        ).strip()
+        subprocess.run(
+            tmux_server.tmux_argv("select-pane", "-t", wrapper), check=True)
+
+        subprocess.run(
+            [
+                "tmux", "-S", source_socket, "-f", "/dev/null",
+                "new-session", "-d", "-s", "legacy",
+                "i=0; while [ $i -lt 160 ]; do "
+                "echo source-history-$i; i=$((i+1)); done; sleep 60",
+            ],
+            check=True,
+        )
+        source_identity = subprocess.check_output(
+            [
+                "tmux", "-S", source_socket, "display-message", "-p",
+                "-t", "legacy", "#{socket_path}\t#{pid}\t#{session_id}",
+            ],
+            text=True,
+        ).strip().split("\t")
+        source_target = tmux_server.TmuxServerTarget(
+            source_identity[0], int(source_identity[1]))
+        source_session_id = source_identity[2]
+        assert _wait_until(
+            lambda: int(subprocess.check_output(
+                [
+                    "tmux", "-S", source_socket, "display-message", "-p",
+                    "-t", "legacy", "#{history_size}",
+                ],
+                text=True,
+            ).strip()) > 100
+        )
+
+        marker = tmux_server.encode_history_source(
+            source_target, source_session_id, legacy=True)
+        assert marker is not None
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "set-option", "-p", "-t", wrapper,
+                tmux_server.HISTORY_SOURCE_OPTION, marker,
+            ),
+            check=True,
+        )
+        # NestedDisplayTransport stamps the wrapper immediately before respawn.
+        # Prove real tmux preserves that pane-local identity across the respawn.
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "respawn-pane", "-k", "-t", wrapper, "sleep 60"
+            ),
+            check=True,
+        )
+        assert subprocess.check_output(
+            tmux_server.tmux_argv(
+                "show-options", "-pv", "-t", wrapper,
+                tmux_server.HISTORY_SOURCE_OPTION,
+            ),
+            text=True,
+        ).strip() == marker
+        monkeypatch.setattr(
+            tmux_server,
+            "discover_legacy_target",
+            lambda **_kwargs: source_target,
+        )
+
+        session_id = tmux_server.target_session_id(
+            tmux_server.discover_target(), "probe")
+        assert session_id is not None
+        panes = fast_display_server._list_agent_panes(session_id)
+        assert len(panes) == 1
+        assert panes[0].pane_id == wrapper
+        assert panes[0].history_pane_id == tmux_server.target_single_pane_id(
+            source_target, source_session_id)
+        batch = fast_display_server.capture_history_batch(
+            __import__("pyte"), session_id, 7, 300)
+        assert len(batch.snapshots) == 1
+        snapshot = batch.snapshots[0]
+        assert snapshot.pane_id == wrapper
+        assert len(snapshot.lines) > snapshot.height
+        assert any(b"source-history-" in line for line in snapshot.lines)
+    finally:
+        subprocess.run(
+            tmux_server.tmux_argv("kill-server"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        subprocess.run(
+            ["tmux", "-S", source_socket, "kill-server"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        shutil.rmtree(dedicated_root, ignore_errors=True)
+        shutil.rmtree(source_root, ignore_errors=True)
+
+
 def test_local_watchdog_escapes_a_frozen_private_tmux(monkeypatch):
     """A stopped private server must not retain the outer launcher forever."""
     socket_root = Path(tempfile.mkdtemp(prefix="rx-watchdog-", dir="/tmp"))

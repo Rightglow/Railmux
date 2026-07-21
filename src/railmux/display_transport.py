@@ -180,6 +180,32 @@ def _verified_displayed(state: SwapState) -> bool:
 class NestedDisplayTransport:
     """The compatibility transport: a nested tmux attach client."""
 
+    @staticmethod
+    def _history_source(
+        agent_tmux_name: str,
+        server_target: tmux_server.TmuxServerTarget | None,
+        session_target: str | None,
+    ) -> str | None:
+        legacy = server_target is not None
+        target = server_target
+        session_id = session_target
+        if target is None:
+            try:
+                target = tmux_server.discover_target(timeout=0.5)
+            except tmux_server.TmuxServerError:
+                return None
+            topology = tmux_ctl.session_topology(agent_tmux_name)
+            session_id = topology.session_id if topology is not None else None
+        if target is None or session_id is None:
+            return None
+        return tmux_server.encode_history_source(
+            target, session_id, legacy=legacy)
+
+    @staticmethod
+    def _set_history_source(pane_id: str, value: str | None) -> bool:
+        return tmux_ctl.set_pane_user_option(
+            pane_id, tmux_server.HISTORY_SOURCE_OPTION, value)
+
     def attach(
         self,
         slot: AgentSlot,
@@ -192,6 +218,9 @@ class NestedDisplayTransport:
                 and slot.transport_kind == DisplayTransportKind.NESTED
                 and slot.agent_tmux_name == agent_tmux_name
                 and tmux_ctl.pane_alive(slot.pane_id)):
+            marker = self._history_source(
+                agent_tmux_name, server_target, session_target)
+            self._set_history_source(slot.pane_id, marker)
             return AttachOutcome(True, DisplayTransportKind.NESTED)
 
         created = False
@@ -207,6 +236,9 @@ class NestedDisplayTransport:
             created = True
 
         assert slot.pane_id is not None
+        marker = self._history_source(
+            agent_tmux_name, server_target, session_target)
+        self._set_history_source(slot.pane_id, marker)
         if server_target is None:
             tmux_ctl.fit_session_to_pane(agent_tmux_name, slot.pane_id)
             argv = ["tmux", "attach-session", "-t", agent_tmux_name]
@@ -227,6 +259,7 @@ class NestedDisplayTransport:
             )
         command = "TMUX= exec " + " ".join(shlex.quote(arg) for arg in argv)
         if not tmux_ctl.respawn_pane(slot.pane_id, command):
+            self._set_history_source(slot.pane_id, None)
             if created:
                 tmux_ctl.kill_pane(slot.pane_id)
                 slot.pane_id = None
@@ -376,8 +409,10 @@ class AgentDisplayTransport:
         if not slot.pane_id or not tmux_ctl.pane_alive(slot.pane_id):
             slot.pane_id = tmux_ctl.split_window_h(
                 _PLACEHOLDER_COMMAND, size_percent=70, detached=True)
-        elif not tmux_ctl.respawn_pane(slot.pane_id, _PLACEHOLDER_COMMAND):
-            return None
+        else:
+            NestedDisplayTransport._set_history_source(slot.pane_id, None)
+            if not tmux_ctl.respawn_pane(slot.pane_id, _PLACEHOLDER_COMMAND):
+                return None
         if slot.pane_id is None:
             return None
         if old_agent:
@@ -638,6 +673,7 @@ class AgentDisplayTransport:
         pane_id = slot.pane_id
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
             return False
+        NestedDisplayTransport._set_history_source(pane_id, None)
         if not tmux_ctl.respawn_pane(pane_id, _empty_slot_command(slot)):
             return False
         slot.clear_content()
@@ -658,6 +694,7 @@ class AgentDisplayTransport:
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
             slot.clear_display()
             return KillPreparation(True)
+        NestedDisplayTransport._set_history_source(pane_id, None)
         if not tmux_ctl.respawn_pane(pane_id, _empty_slot_command(slot)):
             if was_swap:
                 # return_home already detached the real pane. Keep the model

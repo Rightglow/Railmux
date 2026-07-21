@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Development wheels from this tree identify themselves as
+`0.2.1.dev20260721` so they cannot be confused with the tagged 0.2.0 wheel.
+
 ### Added
 
 - Add low-frequency, identity-pinned tmux watchdogs outside both the ordinary
@@ -39,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nested client with `ignore-size`, preserved by automatic/hard-exit cleanup,
   and killed only after an explicit user action revalidates the old server PID
   and immutable tmux session ID.
+- Restore local SSH history prefetch for nested and legacy displays by reading
+  scrollback from the exact revalidated source pane while retaining the outer
+  wrapper's screen geometry. Ordinary cross-agent focus clicks now preserve the
+  warm 300-line cache instead of briefly routing wheel input back through tmux.
 - Route sidebar wheel events directly to Railmux instead of batching them
   behind a rejected pane-history request, keep agent scrolling exclusively in
   the local history layer, and prevent reported clicks or drags from discarding

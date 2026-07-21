@@ -438,6 +438,13 @@ class LocalHistoryView:
                 if event.pressed and not event.button & 32:
                     self._local_pointer_capture = True
                 return HistoryAction()
+            if self._route_at(event) is not None:
+                self.cancel()
+                return HistoryAction(
+                    forwarded_input=event.raw,
+                    restore_live=True,
+                    refresh_routes=True,
+                )
             self.invalidate_routes()
             return HistoryAction(
                 forwarded_input=event.raw,
@@ -445,6 +452,11 @@ class LocalHistoryView:
                 refresh_routes=True,
             )
         if event.pressed and not event.button & 32:
+            if self._route_at(event) is not None:
+                return HistoryAction(
+                    forwarded_input=event.raw,
+                    refresh_routes=True,
+                )
             self.invalidate_routes()
             return HistoryAction(
                 forwarded_input=event.raw,

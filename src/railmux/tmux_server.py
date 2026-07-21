@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -13,7 +14,9 @@ from typing import Iterator, Mapping, MutableMapping, Sequence
 
 DEFAULT_SOCKET_LABEL = "railmux"
 SOCKET_LABEL_ENV = "RAILMUX_TMUX_LABEL"
+HISTORY_SOURCE_OPTION = "@railmux_history_source_v1"
 _LABEL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+_HISTORY_SOURCE_SCHEMA = 1
 
 
 class TmuxServerError(RuntimeError):
@@ -181,6 +184,115 @@ def target_session_id(
         if session_id.startswith("$") and session_id[1:].isdigit():
             matches.append(session_id)
     return matches[0] if len(matches) == 1 else None
+
+
+def encode_history_source(
+    target: TmuxServerTarget,
+    session_id: str,
+    *,
+    legacy: bool,
+) -> str | None:
+    """Encode a non-authoritative locator for a nested display's history."""
+    if (
+        target.server_pid <= 0
+        or not session_id.startswith("$")
+        or not session_id[1:].isdigit()
+    ):
+        return None
+    return json.dumps(
+        {
+            "schema_version": _HISTORY_SOURCE_SCHEMA,
+            "scope": "legacy" if legacy else "dedicated",
+            "server_pid": target.server_pid,
+            "session_id": session_id,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def resolve_history_source(
+    raw: str,
+    *,
+    timeout: float = 0.5,
+) -> tuple[TmuxServerTarget, str] | None:
+    """Resolve and revalidate one bounded nested-history locator."""
+    if not raw or len(raw) > 256:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version", "scope", "server_pid", "session_id",
+    }:
+        return None
+    scope = payload.get("scope")
+    server_pid = payload.get("server_pid")
+    session_id = payload.get("session_id")
+    if (
+        payload.get("schema_version") != _HISTORY_SOURCE_SCHEMA
+        or scope not in ("dedicated", "legacy")
+        or not isinstance(server_pid, int)
+        or isinstance(server_pid, bool)
+        or server_pid <= 0
+        or not isinstance(session_id, str)
+        or not session_id.startswith("$")
+        or not session_id[1:].isdigit()
+    ):
+        return None
+    try:
+        target = (
+            discover_legacy_target(timeout=timeout)
+            if scope == "legacy"
+            else discover_target(timeout=timeout)
+        )
+    except TmuxServerError:
+        return None
+    if (
+        target is None
+        or target.server_pid != server_pid
+        or not target_has_session(target, session_id, timeout=timeout)
+    ):
+        return None
+    return target, session_id
+
+
+def target_single_pane_id(
+    target: TmuxServerTarget,
+    session_id: str,
+    *,
+    timeout: float = 0.5,
+) -> str | None:
+    """Return the sole live pane of an exact target session, fail closed."""
+    if not session_id.startswith("$") or not session_id[1:].isdigit():
+        return None
+    try:
+        output = subprocess.check_output(
+            target_argv(
+                target, "list-panes", "-s", "-t", session_id, "-F",
+                "#{pid}\t#{session_id}\t#{pane_id}\t#{pane_dead}",
+            ),
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    panes: list[str] = []
+    for line in output.splitlines():
+        fields = line.split("\t")
+        if len(fields) != 4 or fields[:2] != [str(target.server_pid), session_id]:
+            return None
+        pane_id, dead = fields[2:]
+        if (
+            dead != "0"
+            or not pane_id.startswith("%")
+            or not pane_id[1:].isdigit()
+        ):
+            return None
+        panes.append(pane_id)
+    return panes[0] if len(panes) == 1 else None
 
 
 def kill_target_session(
