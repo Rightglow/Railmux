@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TextIO
 
 from railmux import __version__
+from railmux import legacy_sessions, tmux_health, tmux_server
 from railmux.config import Config, ConfigError, default_config_path, load_config
 
 
@@ -87,6 +88,62 @@ def _terminal_capabilities(environ: dict[str, str]) -> str:
     return f"256-colour={_yes_no(colours_256)}, true-colour={_yes_no(truecolour)}"
 
 
+def _dedicated_tmux_status() -> str:
+    """Return a bounded health result without exposing the socket pathname."""
+    if shutil.which("tmux") is None:
+        return "unavailable (tmux not found)"
+    try:
+        target = tmux_server.discover_target(timeout=1.0)
+    except tmux_server.TmuxServerUnresponsive:
+        return "unresponsive (watchdog will not kill or restart it)"
+    except tmux_server.TmuxServerError:
+        return "configuration error"
+    if target is None:
+        return "not running"
+    context = (
+        "current process is inside it"
+        if tmux_server.is_current_server(target)
+        else "current process is outside it"
+    )
+    return f"healthy ({context})"
+
+
+def _legacy_tmux_status() -> str:
+    """Report only a bounded count; never expose session names or paths."""
+    target, sessions, complete = legacy_sessions.discover(timeout=1.0)
+    if not complete:
+        return "unavailable (inventory timed out or changed)"
+    if target is None:
+        return "not running"
+    count = sum(
+        session.name.startswith(("cc-", "cx-")) for session in sessions
+    )
+    if count:
+        return f"healthy ({count} Railmux candidate(s); restart recommended)"
+    return "healthy (no Railmux candidates)"
+
+
+def _last_tmux_incident() -> str:
+    incident = tmux_health.read_last_incident()
+    if incident is None:
+        return "none recorded"
+    descriptions = {
+        "launcher-watchdog-timeout": "local client watchdog timeout",
+        "launcher-server-exit": "dedicated tmux server exited",
+        "remote-display-watchdog-timeout": "SSH display watchdog timeout",
+        "remote-display-server-exit": "SSH tmux server exited",
+        "startup-probe-timeout": "startup health probe timeout",
+    }
+    description = descriptions.get(incident.reason, "tmux health failure")
+    age = tmux_health.incident_age(incident.recorded_at)
+    if incident.reason.endswith("-server-exit"):
+        return f"{description}; {age}"
+    return (
+        f"{description}; {incident.consecutive_failures} consecutive failures; "
+        f"{age}"
+    )
+
+
 def run_doctor(
     *,
     claude_home: Path,
@@ -119,6 +176,10 @@ def run_doctor(
         f"Python: {python_version}",
         f"Platform: {system} ({machine})",
         f"tmux: {_version('tmux', '-V')}",
+        f"Dedicated Railmux tmux: {_dedicated_tmux_status()}",
+        f"Legacy default tmux: {_legacy_tmux_status()}",
+        "Tmux watchdog: enabled; reports and exits, never auto-kills or restarts",
+        f"Last tmux incident: {_last_tmux_incident()}",
         f"Claude Code: {_version(config.claude_binary)}",
         f"Codex: {_version(config.codex_binary)}",
         f"Inside tmux: {_yes_no(bool(env.get('TMUX')))}",

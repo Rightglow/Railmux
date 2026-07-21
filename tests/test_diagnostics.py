@@ -2,6 +2,7 @@ from io import StringIO
 from types import SimpleNamespace
 
 from railmux.diagnostics import _version, run_doctor
+from railmux.tmux_health import TmuxIncident
 
 
 def test_version_preserves_tmux_letter_suffix(monkeypatch):
@@ -47,6 +48,19 @@ def test_doctor_report_is_useful_and_redacts_user_values(
             returncode=0,
         ),
     )
+    monkeypatch.setattr(
+        "railmux.diagnostics._dedicated_tmux_status",
+        lambda: "healthy (current process is outside it)",
+    )
+    monkeypatch.setattr(
+        "railmux.diagnostics.tmux_health.read_last_incident",
+        lambda: TmuxIncident(100, "remote-display",
+                             "remote-display-watchdog-timeout", 3),
+    )
+    monkeypatch.setattr(
+        "railmux.diagnostics.tmux_health.incident_age",
+        lambda _recorded: "2 minutes ago",
+    )
     output = StringIO()
 
     assert run_doctor(
@@ -64,6 +78,10 @@ def test_doctor_report_is_useful_and_redacts_user_values(
     assert "Railmux diagnostics" in report
     assert "Claude Code: 9.8.7" in report
     assert "Inside tmux: yes" in report
+    assert "Dedicated Railmux tmux: healthy" in report
+    assert "Tmux watchdog: enabled" in report
+    assert "SSH display watchdog timeout; 3 consecutive failures; " \
+        "2 minutes ago" in report
     assert "SSH transport: yes" in report
     assert "256-colour=yes" in report
     assert "true-colour=no" in report
@@ -90,6 +108,13 @@ def test_doctor_reports_missing_tools_and_invalid_config(
     config_dir.joinpath("config.toml").write_text("[broken")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("railmux.diagnostics.shutil.which", lambda _binary: None)
+    monkeypatch.setattr(
+        "railmux.diagnostics._dedicated_tmux_status",
+        lambda: "unavailable (tmux not found)",
+    )
+    monkeypatch.setattr(
+        "railmux.diagnostics.tmux_health.read_last_incident", lambda: None
+    )
     output = StringIO()
 
     assert run_doctor(
@@ -97,6 +122,8 @@ def test_doctor_reports_missing_tools_and_invalid_config(
 
     report = output.getvalue()
     assert "tmux: not found" in report
+    assert "Dedicated Railmux tmux: unavailable" in report
+    assert "Last tmux incident: none recorded" in report
     assert "Claude Code: not found" in report
     assert "Codex: not found" in report
     assert "valid=no (invalid TOML)" in report

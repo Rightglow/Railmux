@@ -36,6 +36,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+fast-client = [
+  "pyte>=0.8.2,<0.9",
+]
 dev = [
   "pytest>=8.0",
   "build>=1.2",

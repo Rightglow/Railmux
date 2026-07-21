@@ -50,9 +50,19 @@ exact command and requires explicit confirmation (default: no); it never
 installs Homebrew itself or modifies the system during non-interactive runs.
 Other common Linux package managers receive a copyable installation command.
 
-If you are not already inside tmux, Railmux launches its own tmux session. Run
-`railmux --doctor` for a privacy-safe dependency and environment report when
-setup does not behave as expected.
+Railmux always launches or attaches its workspace on a dedicated tmux socket,
+including when invoked from inside another tmux client. This isolates Railmux's
+sessions, bindings, hooks, and experimental SSH display traffic from the
+default tmux server. Sessions left on the historical default socket by an older
+Railmux release remain visible in the same Running sidebar with a `legacy ·
+restart recommended` label. Opening one does not resize it; automatic exit
+cleanup preserves it, while an explicit Kill still works after exact identity
+validation. It does not move, delete, or rewrite provider session files under
+`~/.codex` or `~/.claude`; sessions can still be resumed normally. Run
+`railmux doctor` for a privacy-safe dependency and environment report when
+setup does not behave as expected. Use one interactive Railmux terminal window
+at a time; simultaneous multi-window use is currently only
+[partially supported](#6-can-i-open-railmux-in-multiple-terminal-windows).
 
 ## Keys
 
@@ -229,14 +239,17 @@ current tmux environment.
 ## Diagnostics
 
 ```bash
-railmux --doctor
+railmux doctor
 ```
 
-The doctor command works even when `tmux` is missing. It reports component
-versions, terminal capability hints, configuration health, and whether provider
-data directories are accessible. Its output is designed for issue reports: it
-does not include hostnames, usernames, session IDs, transcripts, credentials,
-environment values, configured commands, or raw custom paths.
+The doctor command works even when `tmux` is missing. It reports component versions, terminal capability
+hints, configuration health, dedicated-server reachability, watchdog state,
+the number of legacy candidates on the default server, the age and bounded
+category of the last recorded tmux incident, and whether provider data
+directories are accessible. Its output is designed for issue
+reports: it does not include hostnames, usernames, session IDs, transcripts,
+credentials, environment values, configured commands, socket paths, or raw
+custom paths.
 
 ## FAQ
 
@@ -319,6 +332,42 @@ If the connection is so slow that the sidebar can't refresh one frame per
 second, skip the mouse and use keyboard navigation — `↑↓ / Tab / Enter`
 cover every operation and don't depend on a fast redraw.
 
+#### Experimental latest-state SSH display
+
+For terminals that struggle with large tmux redraw bursts, Railmux also has an
+experimental client that transmits coalesced screen state instead of every
+intermediate terminal update. Install the current Railmux checkout on both
+machines (the remote installation needs the `fast-client` extra), detach any
+ordinary client with `Ctrl-B d`, then run locally:
+
+```bash
+railmux ssh your-server
+```
+
+The default remote session is started automatically when absent. `Ctrl-B d`
+detaches normally; `Ctrl-]` is an emergency local disconnect. Mouse forwarding
+is on by default. The client refreshes a 300-line hot cache for each agent pane;
+wheel-up displays it immediately and fills up to 2000 lines in the background.
+Agent-pane wheel events are then handled only locally, while sidebar scrolling
+continues to reach Railmux normally. Scroll to the bottom or press `Esc` to
+return to live output. Reported clicks and drags are ignored while history is
+visible if the gesture starts inside that same pane; clicking another agent or
+the sidebar restores the latest screen and changes focus normally. F8/F9,
+Help's controller-pane zoom, modal close, and resize invalidate the old pointer
+map before it can be reused. Terminal-native selection overrides remain
+terminal-dependent. Use `--no-mouse` when reliable ordinary terminal selection
+is more important than local history. History preserves text colours and common
+character styles.
+Bracketed paste and terminal focus events follow the active remote application.
+The protocol is experimental, so keep the local and remote Railmux versions
+matched.
+
+Both the ordinary launcher and SSH display keep a low-frequency watchdog
+outside the attached tmux client. Three consecutive dedicated-server health
+failures restore the local terminal, end only that display client, and record a
+privacy-safe incident shown by `railmux doctor`. The watchdog never kills or
+restarts tmux or a system crash collector; provider rollout files are untouched.
+
 ### 4. Will automated review sessions pollute my session list?
 
 **Codex**: sessions created by `codex exec` (headless automation, pre‑commit
@@ -348,6 +397,22 @@ pip install railmux
 
 `pipx install railmux` is an optional convenience for a globally available CLI;
 it is not required on macOS or any other platform.
+
+### 6. Can I open Railmux in multiple terminal windows?
+
+Only with limited support. Normal launches attach to the same managed `railmux`
+tmux session, so two terminal windows are two clients controlling one shared
+workspace—not independent Railmux instances. They share focus, Target pane,
+layout, and tmux window dimensions; simultaneous input can interfere, and
+different terminal sizes may resize the workspace as activity moves between
+clients.
+
+For a predictable experience, use one interactive Railmux window at a time.
+Detached agent sessions keep running in the background, so closing or detaching
+the visible client does not stop them. Advanced users can launch separate
+instances inside separate tmux sessions or servers, but that is not yet a
+polished multi-window workflow and the instances still share provider history
+and Railmux configuration on disk.
 
 ## Acknowledgements
 

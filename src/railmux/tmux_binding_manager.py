@@ -14,7 +14,7 @@ from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
 
 
-_VERSION = 3
+_VERSION = 4
 _KEYS = ("F8", "F9")
 _MAX_STATE_BYTES = 64 * 1024
 
@@ -33,11 +33,18 @@ class SharedTmuxBindingManager:
         self._registered = False
         self._prefix_tab_managed = False
         self._right_click_managed = False
+        self._selection_hook_managed = False
+        self._selection_hook_index: int | None = None
 
     @property
     def target_toggle_available(self) -> bool:
         """Whether this instance owns the prefix-Tab Target toggle."""
         return self._registered and self._prefix_tab_managed
+
+    @property
+    def selection_isolation_available(self) -> bool:
+        """Whether pane copy-mode changes can drive selection isolation."""
+        return self._registered and self._selection_hook_managed
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -67,7 +74,7 @@ class SharedTmuxBindingManager:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
         if (not isinstance(raw, dict)
-                or raw.get("version") not in {1, 2, _VERSION}):
+                or raw.get("version") not in {1, 2, 3, _VERSION}):
             return None
         token = raw.get("token")
         phase = raw.get("phase")
@@ -77,6 +84,8 @@ class SharedTmuxBindingManager:
         prefix_managed = raw.get("prefix_tab_managed")
         right_click_backup = raw.get("right_click_backup")
         right_click_managed = raw.get("right_click_managed")
+        selection_hook_managed = raw.get("selection_hook_managed")
+        selection_hook_index = raw.get("selection_hook_index")
         prefix_valid = (
             isinstance(prefix_backup, dict)
             and set(prefix_backup) == {"Tab"}
@@ -101,9 +110,16 @@ class SharedTmuxBindingManager:
                 or (raw["version"] >= 2
                     and (not prefix_valid
                          or not isinstance(prefix_managed, bool)))
-                or (raw["version"] == _VERSION
+                or (raw["version"] >= 3
                     and (not right_click_valid
-                         or not isinstance(right_click_managed, bool)))):
+                         or not isinstance(right_click_managed, bool)))
+                or (raw["version"] >= 4
+                    and (not isinstance(selection_hook_managed, bool)
+                         or (selection_hook_managed
+                             and (not isinstance(selection_hook_index, int)
+                                  or not 9000 <= selection_hook_index < 9100))
+                         or (not selection_hook_managed
+                             and selection_hook_index is not None)))):
             return None
         return raw
 
@@ -167,6 +183,7 @@ class SharedTmuxBindingManager:
                 live = self._live_panes()
                 if live is None or self._owner_pane_id not in live:
                     return False
+                tmux_ctl.cleanup_stale_selection_markers(live)
                 owner_window_id = self._owner_window_id()
                 if owner_window_id is None:
                     return False
@@ -186,7 +203,7 @@ class SharedTmuxBindingManager:
                         state["prefix_tab_backup"] = (
                             prefix_tab_backup or {"Tab": None})
                         upgraded = True
-                    if state["version"] < _VERSION:
+                    if state["version"] < 3:
                         right_click_backup = (
                             tmux_ctl.prepare_root_right_click_binding())
                         # Right-click routing joined the same lease in v3. Its
@@ -196,6 +213,12 @@ class SharedTmuxBindingManager:
                         state["right_click_backup"] = (
                             right_click_backup
                             or {"MouseDown3Pane": None})
+                        upgraded = True
+                    if state["version"] < 4:
+                        hook_index = tmux_ctl.prepare_selection_mode_hook()
+                        state["selection_hook_managed"] = (
+                            hook_index is not None)
+                        state["selection_hook_index"] = hook_index
                         upgraded = True
                     if upgraded:
                         state["version"] = _VERSION
@@ -237,6 +260,12 @@ class SharedTmuxBindingManager:
                                     token,
                                 )
                             )
+                        if state["selection_hook_managed"]:
+                            safe = (
+                                safe
+                                and tmux_ctl.selection_mode_hook_is_absent_or_owned(
+                                    state["selection_hook_index"], token)
+                            )
                         if not safe:
                             if state["owners"]:
                                 return False
@@ -248,6 +277,9 @@ class SharedTmuxBindingManager:
                             if state["right_click_managed"]:
                                 tmux_ctl.restore_root_right_click_binding(
                                     state["right_click_backup"], token=token)
+                            if state["selection_hook_managed"]:
+                                tmux_ctl.restore_selection_mode_hook(
+                                    state["selection_hook_index"], token)
                             self._remove_state()
                             state = None
                         else:
@@ -270,6 +302,15 @@ class SharedTmuxBindingManager:
                                 state["right_click_managed"] = False
                                 if not self._save(state):
                                     return False
+                            if (state["selection_hook_managed"]
+                                    and not tmux_ctl.set_selection_mode_hook(
+                                        state["selection_hook_index"], token)):
+                                tmux_ctl.restore_selection_mode_hook(
+                                    state["selection_hook_index"], token)
+                                state["selection_hook_managed"] = False
+                                state["selection_hook_index"] = None
+                                if not self._save(state):
+                                    return False
                             state["phase"] = "active"
                     elif not (
                         tmux_ctl.root_function_bindings_owned_by(token)
@@ -280,6 +321,11 @@ class SharedTmuxBindingManager:
                         and (
                             not state["right_click_managed"]
                             or tmux_ctl.root_right_click_binding_owned_by(token)
+                        )
+                        and (
+                            not state["selection_hook_managed"]
+                            or tmux_ctl.selection_mode_hook_owned_by(
+                                state["selection_hook_index"], token)
                         )
                     ):
                         if state["owners"]:
@@ -292,6 +338,9 @@ class SharedTmuxBindingManager:
                         if state["right_click_managed"]:
                             tmux_ctl.restore_root_right_click_binding(
                                 state["right_click_backup"], token=token)
+                        if state["selection_hook_managed"]:
+                            tmux_ctl.restore_selection_mode_hook(
+                                state["selection_hook_index"], token)
                         self._remove_state()
                         state = None
                     if state is not None:
@@ -318,12 +367,17 @@ class SharedTmuxBindingManager:
                         self._prefix_tab_managed = state["prefix_tab_managed"]
                         self._right_click_managed = (
                             state["right_click_managed"])
+                        self._selection_hook_managed = (
+                            state["selection_hook_managed"])
+                        self._selection_hook_index = (
+                            state["selection_hook_index"])
                         return True
 
                 backup = tmux_ctl.prepare_root_function_bindings()
                 prefix_tab_backup = tmux_ctl.prepare_prefix_target_binding()
                 right_click_backup = (
                     tmux_ctl.prepare_root_right_click_binding())
+                selection_hook_index = tmux_ctl.prepare_selection_mode_hook()
                 if backup is None:
                     return False
                 token = secrets.token_hex(8)
@@ -338,6 +392,8 @@ class SharedTmuxBindingManager:
                     "right_click_managed": right_click_backup is not None,
                     "right_click_backup": (
                         right_click_backup or {"MouseDown3Pane": None}),
+                    "selection_hook_managed": selection_hook_index is not None,
+                    "selection_hook_index": selection_hook_index,
                 }
                 if not self._save(state):
                     return False
@@ -371,6 +427,24 @@ class SharedTmuxBindingManager:
                                 state["prefix_tab_backup"], token=token)
                         self._remove_state()
                         return False
+                if (state["selection_hook_managed"]
+                        and not tmux_ctl.set_selection_mode_hook(
+                            state["selection_hook_index"], token)):
+                    tmux_ctl.restore_selection_mode_hook(
+                        state["selection_hook_index"], token)
+                    state["selection_hook_managed"] = False
+                    state["selection_hook_index"] = None
+                    if not self._save(state):
+                        tmux_ctl.restore_root_function_bindings(
+                            backup, token=token)
+                        if state["prefix_tab_managed"]:
+                            tmux_ctl.restore_prefix_target_binding(
+                                state["prefix_tab_backup"], token=token)
+                        if state["right_click_managed"]:
+                            tmux_ctl.restore_root_right_click_binding(
+                                state["right_click_backup"], token=token)
+                        self._remove_state()
+                        return False
                 state["phase"] = "active"
                 if not self._save(state) or not self._set_controller():
                     tmux_ctl.restore_root_function_bindings(
@@ -381,11 +455,16 @@ class SharedTmuxBindingManager:
                     if state["right_click_managed"]:
                         tmux_ctl.restore_root_right_click_binding(
                             state["right_click_backup"], token=token)
+                    if state["selection_hook_managed"]:
+                        tmux_ctl.restore_selection_mode_hook(
+                            state["selection_hook_index"], token)
                     self._remove_state()
                     return False
                 self._registered = True
                 self._prefix_tab_managed = state["prefix_tab_managed"]
                 self._right_click_managed = state["right_click_managed"]
+                self._selection_hook_managed = state["selection_hook_managed"]
+                self._selection_hook_index = state["selection_hook_index"]
                 return True
         except OSError:
             return False
@@ -433,6 +512,9 @@ class SharedTmuxBindingManager:
                     if state["right_click_managed"]:
                         tmux_ctl.restore_root_right_click_binding(
                             state["right_click_backup"], token=state["token"])
+                    if state["selection_hook_managed"]:
+                        tmux_ctl.restore_selection_mode_hook(
+                            state["selection_hook_index"], state["token"])
                     self._remove_state()
             except OSError:
                 pass
@@ -446,3 +528,5 @@ class SharedTmuxBindingManager:
             self._registered = False
             self._prefix_tab_managed = False
             self._right_click_managed = False
+            self._selection_hook_managed = False
+            self._selection_hook_index = None

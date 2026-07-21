@@ -17,7 +17,13 @@ from pathlib import Path
 
 import urwid
 
-from railmux import orphan_marker, tmux_ctl
+from railmux import (
+    legacy_sessions,
+    orphan_marker,
+    tmux_ctl,
+    tmux_health,
+    tmux_server,
+)
 from railmux.atomic_file import atomic_write_text
 from railmux.background_index import BackgroundCodexIndex
 from railmux.config import Config
@@ -48,6 +54,7 @@ from railmux.renames import Renames
 from railmux import restart_state
 from railmux.session_cache import SessionCache
 from railmux.scroll_manager import ScrollManager
+from railmux.selection_isolation import SelectionIsolationManager
 from railmux.ui import keymap
 from railmux.ui.modals import (
     ContextMenu,
@@ -147,6 +154,11 @@ PALETTE = [
      "bold", "#ff5fff,bold", _DEEP_GRASS_GREEN),
     ("attention_sel", "light magenta,bold", "dark gray",
      "bold", "#ff5fff,bold", _SLATE),
+    ("legacy", "yellow,bold", "", "bold", f"{_STATUS_YELLOW},bold", "default"),
+    ("legacy_focus", "yellow,bold", "dark green",
+     "bold", f"{_STATUS_YELLOW},bold", _DEEP_GRASS_GREEN),
+    ("legacy_sel", "yellow,bold", "dark gray",
+     "bold", f"{_STATUS_YELLOW},bold", _SLATE),
     # Pane border. Dim by default; grass green when focused. Keep
     # row selection and status colours separate so green retains a clear focus
     # role rather than also meaning "selected" or "idle".
@@ -232,10 +244,26 @@ class _Running:
     session_type: str = "claude"           # "claude" | "codex" — which CLI owns it
     attention: AttentionState | None = None
     orphan: orphan_marker.Marker | None = None
+    # Sessions created before Railmux moved to its dedicated tmux server stay
+    # usable in-place.  These fields pin their old server/session identity and
+    # make every action route explicitly instead of relying on ``$TMUX``.
+    legacy_server: tmux_server.TmuxServerTarget | None = None
+    legacy_session_id: str | None = None
+    provider_session_id: str | None = None
 
     @property
     def is_placeholder(self) -> bool:
         return self.key.startswith("__new__-")
+
+    @property
+    def is_legacy(self) -> bool:
+        return self.legacy_server is not None
+
+    @property
+    def logical_session_id(self) -> str | None:
+        if self.provider_session_id is not None:
+            return self.provider_session_id
+        return None if self.is_placeholder else self.key
 
 
 class _CloseOnClickOverlay(urwid.Overlay):
@@ -592,6 +620,10 @@ class App:
                 identity.server_digest, identity.pane_id)
             if identity is not None else None
         )
+        self._selection_isolation_manager = (
+            SelectionIsolationManager(identity.pane_id)
+            if identity is not None else None
+        )
         self._projected_target_pane_id: str | None = None
         self._target_toggle_warning_shown = False
         self._teardown_core_done: bool = False
@@ -729,8 +761,9 @@ class App:
         self._frame = _FocusAwareFrame(
             body=self._sidebar_body, footer=self._footer)
         # Backstop for direct ``--inside-tmux`` starts. The normal CLI also
-        # audits before ``new-session -A`` so a stale outer session cannot
-        # prevent a new App process from launching.
+        # audits the explicitly targeted dedicated server before
+        # ``new-session -A`` so a stale outer session cannot prevent a new App
+        # process from launching.
         if tmux_ctl.in_tmux():
             recover_interrupted_swaps()
         state = self._load_state()
@@ -739,6 +772,7 @@ class App:
         # ``cx-new---*`` tmux name, so the tmux name alone is not enough to
         # reconstruct the real session id on platforms without procfs.
         recovery_ok, recovery_generation = self._discover_orphans_consistent(state)
+        self._discover_legacy_running(force=True)
         if recovery_generation == 0 and self._codex_recovery_candidates_seen:
             self._codex_recovery_pending = True
             self._codex_recovery_state = state
@@ -840,7 +874,7 @@ class App:
         running = self._by_tmux(tmux_name)
         if running is None or running.is_placeholder:
             return None
-        return running.key
+        return getattr(running, "logical_session_id", running.key)
 
     def _paint_slot_active_tmux_target(
         self, slot: AgentSlot, tmux_name: str,
@@ -1424,7 +1458,7 @@ class App:
         """Clear only the visible mode; keep its remembered path for later."""
         self._set_current_project(None, remember=False)
         self._sessions_pane.set_sessions(
-            None, [], running_ids=set(self._running),
+            None, [], running_ids=self._running_session_ids(),
             favorite_ids=self._favorites.get_ids())
 
     def _on_project_select(self, project: Project | None) -> None:
@@ -1437,7 +1471,7 @@ class App:
         self._set_current_project(project)
         sessions = self._pane_sessions(
             project, refresh=not self._mode_refresh_pending())
-        self._sessions_pane.set_sessions(project, sessions, running_ids=set(self._running),
+        self._sessions_pane.set_sessions(project, sessions, running_ids=self._running_session_ids(),
                 favorite_ids=self._favorites.get_ids())
         self._set_status(f"Project: {project.real_path}  ({len(sessions)} sessions)")
 
@@ -1539,7 +1573,7 @@ class App:
                 self._sessions_pane.set_sessions(
                     project,
                     sessions,
-                    running_ids=set(self._running),
+                    running_ids=self._running_session_ids(),
                     favorite_ids=self._favorites.get_ids(),
                 )
         if not self._show_attention_status(entry.attention):
@@ -1550,7 +1584,7 @@ class App:
 
     def _on_session_row_preview(self, session: SessionMeta) -> None:
         """Apply click semantics after rechecking whether the row is live."""
-        running = getattr(self, "_running", {}).get(session.session_id)
+        running = self._by_session_id(session.session_id)
         if (running is not None
                 and self._agent_session_alive(running.tmux_name)):
             self._on_running_select(
@@ -1611,7 +1645,7 @@ class App:
         slot = slot or self._agent_workspace().target
         if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
             if (slot.agent_tmux_name
-                    and tmux_ctl.session_exists(slot.agent_tmux_name)):
+                    and self._agent_session_alive(slot.agent_tmux_name)):
                 slot.restore_state = SlotRestoreState(
                     "agent", tmux_name=slot.agent_tmux_name)
                 return
@@ -1710,7 +1744,7 @@ class App:
         self._sessions_pane.set_sessions(
             project,
             sessions,
-            running_ids=set(self._running),
+            running_ids=self._running_session_ids(),
             favorite_ids=self._favorites.get_ids(),
         )
 
@@ -1778,6 +1812,9 @@ class App:
                 "warn",
             )
             return False
+        selection = getattr(self, "_selection_isolation_manager", None)
+        if selection is not None:
+            selection.release_all()
         previous_session_id = slot.active_session_id
         previous_tmux_name = slot.agent_tmux_name
         # A swap becomes visible to tmux in the middle of this synchronous
@@ -1789,7 +1826,16 @@ class App:
         # painted the right-pane focus transition.
         self._paint_slot_active_tmux_target(slot, agent_tmux_name)
         self._redraw_focus_state_now()
-        outcome = self._display_transport().attach(slot, agent_tmux_name)
+        running = self._by_tmux(agent_tmux_name)
+        if running is not None and getattr(running, "is_legacy", False):
+            outcome = self._display_transport().attach(
+                slot,
+                agent_tmux_name,
+                server_target=running.legacy_server,
+                session_target=running.legacy_session_id,
+            )
+        else:
+            outcome = self._display_transport().attach(slot, agent_tmux_name)
         if not outcome.ok:
             self._reconcile_failed_attach_target(
                 slot,
@@ -1815,10 +1861,18 @@ class App:
             not steal_focus and not self._double_focus_visual_pending,
             force_border=True,
         )
-        if outcome.fell_back and outcome.reason:
+        if running is not None and getattr(running, "is_legacy", False):
+            self._teardown_scroll_acceleration()
+            self._set_status(
+                "Legacy session opened safely; restart it when convenient",
+                "warn",
+            )
+        elif outcome.fell_back and outcome.reason:
             self._set_status(
                 f"Using nested agent display: {outcome.reason}", "warn")
-        if slot.key == self._agent_workspace().target_slot_key:
+        if (slot.key == self._agent_workspace().target_slot_key
+                and not (running is not None
+                         and getattr(running, "is_legacy", False))):
             self._schedule_scroll_acceleration(agent_tmux_name)
         self._install_tmux_bindings()
         return True
@@ -1859,7 +1913,15 @@ class App:
     def _install_tmux_bindings(self) -> None:
         """Ensure global forwarding and the current Target projection exist."""
         manager = getattr(self, "_tmux_binding_manager", None)
-        if manager is not None and manager.open():
+        opened = manager is not None and manager.open()
+        selection = getattr(self, "_selection_isolation_manager", None)
+        if selection is not None:
+            selection.sync(
+                self._agent_workspace(),
+                enabled=bool(
+                    opened and manager.selection_isolation_available),
+            )
+        if opened:
             if manager.target_toggle_available:
                 self._sync_target_pane_option(force=True)
             elif not getattr(self, "_target_toggle_warning_shown", False):
@@ -2022,6 +2084,9 @@ class App:
             if announce:
                 self._set_status("Pane 2 is not open.", "tip")
             return False
+        selection = getattr(self, "_selection_isolation_manager", None)
+        if selection is not None:
+            selection.release_all()
         remembered_agent = secondary.agent_tmux_name
         sidebar_focused = self._railmux_has_focus
         if not self._display_transport().close_slot(secondary):
@@ -2066,6 +2131,10 @@ class App:
         secondary = workspace.secondary
         old_layout = workspace.layout
         new_layout = next_workspace_layout(old_layout)
+
+        selection = getattr(self, "_selection_isolation_manager", None)
+        if selection is not None:
+            selection.release_all()
 
         if new_layout is WorkspaceLayout.SINGLE:
             self._close_secondary_split()
@@ -2403,10 +2472,27 @@ class App:
 
     def _by_tmux(self, tmux_name: str) -> "_Running | None":
         """Find the running session backed by a given tmux session name."""
-        for r in self._running.values():
+        for r in getattr(self, "_running", {}).values():
             if r.tmux_name == tmux_name:
                 return r
         return None
+
+    def _by_session_id(self, session_id: str) -> "_Running | None":
+        """Prefer the dedicated instance, while still finding legacy-only ids."""
+        matches = [
+            item for item in self._running.values()
+            if item.logical_session_id == session_id
+        ]
+        return next((item for item in matches if not item.is_legacy), None) or (
+            matches[0] if matches else None
+        )
+
+    def _running_session_ids(self) -> set[str]:
+        return {
+            session_id
+            for item in self._running.values()
+            if (session_id := item.logical_session_id) is not None
+        }
 
     def _agent_session_alive(
         self,
@@ -2419,6 +2505,17 @@ class App:
         existence is not proof that the agent survived. In nested mode the
         agent remains in its own session and the session identity is enough.
         """
+        running = self._by_tmux(tmux_name)
+        if running is not None and running.is_legacy:
+            return bool(
+                running.legacy_server is not None
+                and running.legacy_session_id is not None
+                and tmux_server.target_has_session(
+                    running.legacy_server,
+                    running.legacy_session_id,
+                    timeout=0.2,
+                )
+            )
         real_pane = self._display_transport().displayed_real_pane(tmux_name)
         if real_pane is not None:
             if server is not None:
@@ -2473,6 +2570,13 @@ class App:
         """
         slot = slot or self._primary_slot
         existing = self._running.get(key)
+        if existing is not None and existing.is_legacy:
+            self._set_status(
+                "Launch refused: the legacy session could not be revalidated; "
+                "no duplicate was started",
+                "error",
+            )
+            return False
         tmux_name = existing.tmux_name if existing else self._session_name(key)
         # Never adopt an untracked pre-existing tmux session merely because its
         # deterministic name collides.  Resume discovery must validate and
@@ -2572,17 +2676,18 @@ class App:
         # Discover once more before ever running ``codex resume``/``claude
         # --resume`` so a click cannot create a second writer for one session.
         registry = getattr(self, "_running", None)
-        running = registry.get(session_meta.session_id) if registry is not None else None
+        running = self._by_session_id(session_meta.session_id) if registry is not None else None
         if (registry is not None
                 and (running is None
                      or not self._agent_session_alive(running.tmux_name))):
             self._discover_orphans_consistent()
+            self._discover_legacy_running(force=True)
             # Discovery may restore a still-unresolved placeholder under its
             # placeholder key. Promote it synchronously before deciding the
             # real UUID is stopped; waiting for the next poll recreates the
             # exact click-to-duplicate window this guard is meant to close.
             self._resolve_placeholders([session_meta.project])
-            running = self._running.get(session_meta.session_id)
+            running = self._by_session_id(session_meta.session_id)
         if (running is not None
                 and self._agent_session_alive(running.tmux_name)):
             entry = RunningEntry(
@@ -2603,6 +2708,14 @@ class App:
                 slot=slot,
             )
 
+        if running is not None and running.is_legacy:
+            self._set_status(
+                "Resume refused: the legacy tmux identity is unavailable; "
+                "no duplicate was started",
+                "error",
+            )
+            return False
+
         if registry is not None:
             target_path = self._path_key(session_meta.project.real_path)
             ambiguous_live_placeholder = any(
@@ -2611,7 +2724,8 @@ class App:
                 and candidate.placeholder_path is not None
                 and self._path_key(candidate.placeholder_path) == target_path
                 and session_meta.session_id not in candidate.pre_launch_ids
-                and self._agent_session_alive(candidate.tmux_name)
+                and (candidate.is_legacy
+                     or self._agent_session_alive(candidate.tmux_name))
                 for candidate in self._running.values()
             )
             if ambiguous_live_placeholder:
@@ -2790,7 +2904,7 @@ class App:
                     label = r.label if r else entry.tmux_name
                     is_placeholder = r.is_placeholder if r else False
                     # Session metadata only exists once the placeholder resolved.
-                    sid = r.key if (r and not r.is_placeholder) else None
+                    sid = r.logical_session_id if r else None
                     stype = r.session_type if r else "claude"
                     session = (self._find_session_meta(sid, project, stype)
                                if sid else None)
@@ -2809,8 +2923,8 @@ class App:
             self._sessions_pane.set_selected_session(session.session_id)
         running_label = None
         if session is not None:
-            r = self._running.get(session.session_id)
-            if r and tmux_ctl.session_exists(r.tmux_name):
+            r = self._by_session_id(session.session_id)
+            if r and self._agent_session_alive(r.tmux_name):
                 running_label = f"detached as '{r.tmux_name}'"
         modal = SessionInfoModal(session=session, running_label=running_label, on_close=self._close_modal)
         self._show_overlay(modal, width=60, height=40,
@@ -3032,7 +3146,8 @@ class App:
             kind = "preview"
         elif slot.agent_tmux_name is not None:
             running = self._by_tmux(slot.agent_tmux_name)
-            if running is None or running.is_placeholder or running.key != session_id:
+            if (running is None or running.is_placeholder
+                    or running.logical_session_id != session_id):
                 return {}
             kind = "agent"
         else:
@@ -3104,7 +3219,7 @@ class App:
             if running is not None and mode is not None:
                 data["collapsed_secondary"] = {
                     "tmux": running.tmux_name,
-                    "session": running.key,
+                    "session": running.logical_session_id,
                     "mode": mode.key,
                 }
         return data
@@ -3338,13 +3453,15 @@ class App:
         tmux_name = state.get("right_tmux")
         session_id = state.get("right_session")
         running = (
-            self._running.get(session_id)
+            self._by_session_id(session_id)
             if isinstance(session_id, str) else None
         )
         if running is not None:
             tmux_name = running.tmux_name
         if not (isinstance(tmux_name, str)
-                and tmux_ctl.session_exists(tmux_name)):
+                and (self._agent_session_alive(tmux_name)
+                     if running is not None
+                     else tmux_ctl.session_exists(tmux_name))):
             return None
         running = running or self._by_tmux(tmux_name)
         if running is None:
@@ -3432,11 +3549,12 @@ class App:
         self, tmux_name: object, *, already_alive: bool = False,
     ) -> str | None:
         """Return a represented exact agent name safe for preview rollback."""
-        if not (isinstance(tmux_name, str)
-                and (already_alive or tmux_ctl.session_exists(tmux_name))):
+        if not isinstance(tmux_name, str):
             return None
         running = self._by_tmux(tmux_name)
         if running is None:
+            return None
+        if not (already_alive or self._agent_session_alive(tmux_name)):
             return None
         if running.orphan is not None and not self._running_action_valid(running):
             return None
@@ -3756,6 +3874,7 @@ class App:
         projects: dict[Path, Project],
         *,
         allow_missing_codex_metadata: bool = False,
+        probe_live_writer: bool = True,
     ) -> _Running | None:
         """Validate one state-file binding against current tmux and metadata.
 
@@ -3830,10 +3949,13 @@ class App:
                     and self._path_key(meta.project.real_path)
                     != self._path_key(cwd)):
                 return None
-            try:
-                open_ids = tmux_ctl.session_rollout_ids(
-                    tmux_name, self._codex_home_path() / "sessions")
-            except Exception:
+            if probe_live_writer:
+                try:
+                    open_ids = tmux_ctl.session_rollout_ids(
+                        tmux_name, self._codex_home_path() / "sessions")
+                except Exception:
+                    open_ids = None
+            else:
                 open_ids = None
             # An empty set is a transient/permission failure and does not
             # disprove the persisted mapping.  A non-empty set naming other
@@ -3874,6 +3996,8 @@ class App:
         *,
         include_launch_context: bool = False,
     ) -> dict | None:
+        if running.is_legacy:
+            return None
         cwd = (
             running.placeholder_path
             if running.is_placeholder
@@ -3904,6 +4028,8 @@ class App:
 
     def _stamp_running(self, running: _Running) -> bool:
         """Best-effort identity stamp for cross-platform orphan recovery."""
+        if running.is_legacy:
+            return False
         import json
         data = self._running_binding_data(running)
         if data is None:
@@ -3961,6 +4087,19 @@ class App:
     ) -> bool:
         if running is None:
             return False
+        if running.is_legacy:
+            if (identity_token is not None and running.orphan is not None
+                    and identity_token != running.orphan.creation_token):
+                return False
+            return bool(
+                running.legacy_server is not None
+                and running.legacy_session_id is not None
+                and tmux_server.target_has_session(
+                    running.legacy_server,
+                    running.legacy_session_id,
+                    timeout=0.5,
+                )
+            )
         if running.orphan is None:
             return identity_token is None
         if (identity_token is not None
@@ -3990,6 +4129,166 @@ class App:
             return complete, generation
         finally:
             index.end_read()
+
+    def _discover_legacy_running(self, *, force: bool = False) -> int:
+        """Deprecated bridge: merge sessions from tmux's old default server.
+
+        Discovery is deliberately read-only: no marker migration, ownership
+        claim, rename, resize, or process signal is sent to the old server.
+        New Railmux sessions always remain on the dedicated server. Keep this
+        method isolated so the bridge can be deleted with ``legacy_sessions``
+        after the documented upgrade window.
+        """
+        now = time.monotonic()
+        previous = getattr(self, "_legacy_discovery_at", 0.0)
+        if not force and now - previous < 5.0:
+            return 0
+        self._legacy_discovery_at = now
+        target, records, complete = legacy_sessions.discover(timeout=0.25)
+        if not complete:
+            return 0
+
+        project_snapshot = getattr(self, "_project_snapshot", None)
+        if project_snapshot is None:
+            project_snapshot = list_projects(self._claude_home)
+        projects = {self._path_key(p.real_path): p for p in project_snapshot}
+        try:
+            codex_cwds = self._codex_index.all_cwds(refresh=False)
+        except Exception:
+            codex_cwds = {}
+        for cwd, count in codex_cwds.items():
+            projects.setdefault(
+                self._path_key(cwd), self._synthesise_codex_project(cwd, count))
+
+        # Rebuild only the legacy slice. A transient inventory failure returned
+        # above without erasing last-known-good entries; normal exact liveness
+        # polling removes sessions whose immutable identity has truly gone.
+        for key in [key for key, item in self._running.items() if item.is_legacy]:
+            del self._running[key]
+        if target is None:
+            return 0
+        found = 0
+        for record in records:
+            mode = self._modes().for_tmux_name(record.name)
+            if mode is None:
+                continue
+            project = projects.get(self._path_key(record.cwd))
+            if project is None and mode.project_source == ProjectSource.CODEX:
+                project = self._synthesise_codex_project(record.cwd, 0)
+                projects[self._path_key(record.cwd)] = project
+            if project is None:
+                continue
+
+            running: _Running | None = None
+            marker = orphan_marker.decode(record.orphan_marker)
+            if record.orphan_marker and marker is None:
+                # Presence of a corrupt/newer authority marker is a fence, not
+                # permission to fall back to a weaker v1/name heuristic.
+                continue
+            if (marker is not None
+                    and marker.tmux_name == record.name
+                    and marker.tmux_session_id == record.session_id
+                    and marker.mode_key == mode.key):
+                if marker.phase == "resolved" and marker.session_id:
+                    running = self._valid_running_binding(
+                        {
+                            "key": marker.session_id,
+                            "tmux_name": record.name,
+                            "session_type": mode.session_type,
+                            "cwd": str(record.cwd),
+                        },
+                        {record.name: (record.cwd, record.created_at)},
+                        projects,
+                        allow_missing_codex_metadata=True,
+                        probe_live_writer=False,
+                    )
+                if running is None:
+                    running = _Running(
+                        key=f"__new__-legacy-{record.session_id[1:]}",
+                        tmux_name=record.name,
+                        label=f"{project.display_name}/(legacy unresolved)",
+                        project=project,
+                        placeholder_path=record.cwd,
+                        created_at=float(record.created_at),
+                        allow_heuristic_resolution=False,
+                        status="blocked",
+                        session_type=mode.session_type,
+                    )
+            elif marker is not None:
+                # A valid marker for a different immutable object is equally
+                # authoritative: never adopt or act on it as this candidate.
+                continue
+            elif record.binding:
+                try:
+                    import json
+                    binding = json.loads(record.binding)
+                except (ValueError, TypeError):
+                    binding = None
+                running = self._valid_running_binding(
+                    binding,
+                    {record.name: (record.cwd, record.created_at)},
+                    projects,
+                    allow_missing_codex_metadata=True,
+                    probe_live_writer=False,
+                )
+            else:
+                if not record.historical_shape:
+                    continue
+                placeholder = self._placeholder_tmux_key(record.name, mode)
+                if placeholder is None:
+                    truncated = record.name[len(mode.tmux_prefix):]
+                    full_id = (
+                        self._resolve_truncated_codex_id(truncated, record.cwd)
+                        if mode.project_source == ProjectSource.CODEX
+                        else self._resolve_truncated_id(truncated, project)
+                    )
+                    if full_id is not None:
+                        running = self._valid_running_binding(
+                            {
+                                "key": full_id,
+                                "tmux_name": record.name,
+                                "session_type": mode.session_type,
+                                "cwd": str(record.cwd),
+                            },
+                            {record.name: (record.cwd, record.created_at)},
+                            projects,
+                            allow_missing_codex_metadata=True,
+                            probe_live_writer=False,
+                        )
+                else:
+                    running = _Running(
+                        key=f"__new__-legacy-{record.session_id[1:]}",
+                        tmux_name=record.name,
+                        label=f"{project.display_name}/(legacy unresolved)",
+                        project=project,
+                        placeholder_path=record.cwd,
+                        created_at=float(record.created_at),
+                        allow_heuristic_resolution=False,
+                        status="blocked",
+                        session_type=mode.session_type,
+                    )
+            if running is None:
+                continue
+            original_key = running.key
+            running.provider_session_id = running.logical_session_id
+            if running.key in self._running:
+                running.key = (
+                    f"__legacy__-{target.server_pid}-{record.session_id[1:]}"
+                )
+            # The slot/UI handle must remain unique even when an upgraded
+            # instance and its legacy predecessor have the same tmux name.
+            running.tmux_name = (
+                f"{record.name}::legacy:{target.server_pid}:"
+                f"{record.session_id[1:]}"
+            )
+            if running.provider_session_id is None and not original_key.startswith(
+                    "__new__-"):
+                running.provider_session_id = original_key
+            running.legacy_server = target
+            running.legacy_session_id = record.session_id
+            self._running[running.key] = running
+            found += 1
+        return found
 
     def _discover_orphans(
         self,
@@ -4955,6 +5254,9 @@ class App:
             if isinstance(index, BackgroundCodexIndex):
                 index.close(timeout_s=0.2)
             self._teardown_scroll_acceleration()
+            selection = getattr(self, "_selection_isolation_manager", None)
+            if selection is not None:
+                selection.close()
             wheel = getattr(self, "_root_wheel_manager", None)
             if wheel is not None:
                 wheel.close()
@@ -4990,6 +5292,8 @@ class App:
                 self._soft_quit_flag = True
             if not self._soft_quit_flag:
                 for r in list(self._running.values()):
+                    if r.is_legacy:
+                        continue
                     try:
                         tmux_ctl.kill_session(r.tmux_name)
                     except Exception:
@@ -5010,10 +5314,22 @@ class App:
         if not self._soft_quit_flag and self._auto_launched:
             session_name = tmux_ctl.current_session_name()
             if session_name == "railmux":
+                identity = getattr(self, "_restart_identity", None)
+                current_id = tmux_ctl.current_session_id()
+                intent = bool(
+                    identity is not None
+                    and current_id == identity.session_id
+                    and tmux_health.record_clean_exit(
+                        server_pid=identity.server_pid,
+                        session_id=identity.session_id,
+                    )
+                )
                 try:
-                    tmux_ctl.kill_session("railmux")
+                    killed = tmux_ctl.kill_session("railmux")
                 except Exception:
-                    pass
+                    killed = False
+                if intent and not killed:
+                    tmux_health.clear_clean_exit()
 
     def _enter_filter_mode(self) -> None:
         # Borrow the button row (footer index 1) for a filter Edit — both are a
@@ -5071,6 +5387,9 @@ class App:
     def _refresh_impl(self) -> None:
         self._retry_pending_codex_recovery()
         self._scroll_manager.maintain()
+        selection = getattr(self, "_selection_isolation_manager", None)
+        if selection is not None:
+            selection.maintain()
         self._reconcile_focus_from_tmux()
         self._retry_pending_divider_style()
         transport = self._display_transport()
@@ -5157,9 +5476,11 @@ class App:
             refreshed_selection = self._preferred_project(
                 projects, self._selected_project)
             self._set_current_project(refreshed_selection)
+        self._discover_legacy_running()
         # Prune dead tmux sessions (e.g. a provider exited via /quit).
         for key in list(self._running):
-            if not session_is_alive(self._running[key].tmux_name):
+            if (not self._running[key].is_legacy
+                    and not session_is_alive(self._running[key].tmux_name)):
                 del self._running[key]
 
         self._reconcile_display_slots(session_is_alive, pane_is_alive)
@@ -5171,7 +5492,7 @@ class App:
         # stays stuck True, defeating the 3s project-scan cache. Codex
         # resolution must run too or neither ever clears.
         self._resolve_placeholders(projects)
-        running_ids = set(self._running)
+        running_ids = self._running_session_ids()
         if self._selected_project is not None:
             matched = next((p for p in projects if p.encoded_name == self._selected_project.encoded_name), None)
             if matched is not None:
@@ -5309,7 +5630,7 @@ class App:
         two different dots.
         """
         if meta.pending_tool and meta.session_type != "codex":
-            r = self._running.get(meta.session_id)
+            r = self._by_session_id(meta.session_id)
             if r is not None and not r.is_placeholder:
                 if child_probes is not None and r.tmux_name in child_probes:
                     has_child = child_probes[r.tmux_name]
@@ -5379,9 +5700,11 @@ class App:
             session_type = (
                 registered_mode.session_type if registered_mode else r.session_type)
             if session_type == "codex":
-                meta = self._codex_index.get(r.key, refresh=False)
+                meta = self._codex_index.get(
+                    r.logical_session_id or r.key, refresh=False)
             else:
-                meta = self._session_cache.get(r.project, r.key)
+                meta = self._session_cache.get(
+                    r.project, r.logical_session_id or r.key)
             if meta is not None:
                 if meta.title:
                     r.label = f"{meta.project.display_name}/{meta.display_title}"
@@ -5448,6 +5771,7 @@ class App:
                 attention=r.attention,
                 identity_token=(r.orphan.creation_token
                                 if r.orphan is not None else None),
+                legacy=r.is_legacy,
             )
             for r in self._running.values()
             if r.tmux_name.startswith(prefix)
@@ -5468,14 +5792,17 @@ class App:
         session cache, Codex placeholders against the Codex index (already
         walked once this refresh, so served snapshot-only).
         """
-        placeholders = [r for r in self._running.values() if r.is_placeholder]
+        placeholders = [
+            r for r in self._running.values()
+            if r.is_placeholder and not r.is_legacy
+        ]
         if not placeholders:
             return
         # Index visible projects by real_path. A Claude placeholder becomes
         # resolvable once its first real session makes the project visible;
         # Codex New Project can use its in-memory synthetic project earlier.
         by_path = {p.real_path: p for p in projects}
-        claimed = set(self._running)
+        claimed = self._running_session_ids() | set(self._running)
         for r in placeholders:
             # Codex New Project owns an in-memory synthetic project before its
             # first rollout makes that cwd visible in the Codex index. Claude
@@ -5672,7 +5999,7 @@ class App:
         if session is None:
             self._set_status("No session selected.")
             return
-        r = self._running.get(session.session_id)
+        r = self._by_session_id(session.session_id)
         if r is None:
             self._set_status(f"'{session.display_title}' is not running.")
             return
@@ -5719,7 +6046,10 @@ class App:
             label = r.label if r else entry.tmux_name
             # Real session_id (and project) only exist once resolved — needed
             # to also delete the JSONL.
-            session_id = r.key if (r and not r.is_placeholder) else None
+            session_id = (
+                r.logical_session_id
+                if r is not None and not r.is_legacy else None
+            )
             project = r.project if r else None
             if session_id:
                 detail = (
@@ -5767,6 +6097,9 @@ class App:
         same-named file in railmux's cwd (#1)."""
         self._close_modal()
         r = self._by_tmux(tmux_name)
+        if r is not None and r.is_legacy:
+            self._kill_tmux_session(tmux_name, r.label, identity_token)
+            return
         session_type = r.session_type if r else "claude"
         jsonl_path: Path | None = None
         if (session_type != "codex" and session_id
@@ -5802,7 +6135,7 @@ class App:
         against the resolved CODEX_HOME and never touch any Claude path (#1)."""
         # 1. Kill the detached tmux session first (avoid race conditions).
         if tmux_name is None and session_id is not None:
-            r = self._running.get(session_id)
+            r = self._by_session_id(session_id)
             tmux_name = r.tmux_name if r else None
         writer_pids: tuple[int, ...] = ()
         owned = self._by_tmux(tmux_name) if tmux_name is not None else None
@@ -5813,6 +6146,13 @@ class App:
                     "Kill refused: the marked tmux identity changed", "error")
                 return
             exact_pane = self._exact_running_pane(owned)
+        if owned is not None and owned.is_legacy:
+            self._set_status(
+                "Deleting legacy history is disabled; use Kill, then restart "
+                "the session from Railmux",
+                "warn",
+            )
+            return
         if tmux_name and (exact_pane is not None
                           or (owned is None or owned.orphan is None)
                           and tmux_ctl.session_exists(tmux_name)):
@@ -6103,9 +6443,10 @@ class App:
         # auto-close the menu (can happen if focus was on the right pane).
         if self._railmux_pane_id:
             tmux_ctl.select_pane(self._railmux_pane_id)
-        if r.is_placeholder:
-            # Placeholder: no SessionMeta yet, but we can still kill the
-            # running tmux session or switch to it.
+        if r.is_placeholder or r.is_legacy:
+            # Legacy rows retain their exact server identity here; routing
+            # through the provider-session menu could select a same-id session
+            # on the dedicated server instead.
             tmux = r.tmux_name
             label = r.label
             token = r.orphan.creation_token if r.orphan is not None else None
@@ -6125,7 +6466,11 @@ class App:
                                click_outside_to_close=True,
                                fixed_width=True, fixed_height=True)
             return
-        session = self._find_session_meta(r.key, r.project, r.session_type)
+        session_id = r.logical_session_id
+        session = (
+            self._find_session_meta(session_id, r.project, r.session_type)
+            if session_id is not None else None
+        )
         if session is None:
             return
         self._open_session_context_menu(session)
@@ -6136,7 +6481,7 @@ class App:
         if self._railmux_pane_id:
             tmux_ctl.select_pane(self._railmux_pane_id)
         self._sessions_pane.set_selected_session(session.session_id)
-        r = self._running.get(session.session_id)
+        r = self._by_session_id(session.session_id)
         is_alive = r is not None and not r.is_placeholder
         is_starred = session.session_id in self._favorites.get_ids()
         items: list[tuple[str, Callable[[], None]]] = [
@@ -6171,9 +6516,9 @@ class App:
         self._show_rename_modal(modal)
 
     def _do_context_info(self, session: SessionMeta) -> None:
-        r = self._running.get(session.session_id)
+        r = self._by_session_id(session.session_id)
         running_label = None
-        if r and tmux_ctl.session_exists(r.tmux_name):
+        if r and self._agent_session_alive(r.tmux_name):
             running_label = f"detached as '{r.tmux_name}'"
         modal = SessionInfoModal(session=session, running_label=running_label,
                                  on_close=self._close_modal)
@@ -6188,7 +6533,7 @@ class App:
         self._set_status(f"{label} {session.display_title}")
 
     def _do_context_kill(self, session: SessionMeta) -> None:
-        r = self._running.get(session.session_id)
+        r = self._by_session_id(session.session_id)
         if r is not None:
             self._kill_tmux_session(
                 r.tmux_name, session.display_title,
@@ -6232,7 +6577,14 @@ class App:
             return
 
         killed = True
-        if running is not None and running.orphan is not None:
+        if running is not None and running.is_legacy:
+            killed = bool(
+                running.legacy_server is not None
+                and running.legacy_session_id is not None
+                and tmux_server.kill_target_session(
+                    running.legacy_server, running.legacy_session_id)
+            )
+        elif running is not None and running.orphan is not None:
             pane = self._exact_running_pane(running)
             if (pane is None
                     or not orphan_marker.same_live_tmux(running.orphan, pane)):
@@ -6243,11 +6595,21 @@ class App:
         elif tmux_ctl.session_exists(tmux_name):
             killed = tmux_ctl.kill_session(tmux_name)
 
-        still_alive = (
-            self._exact_running_pane(running) is not None
-            if running is not None and running.orphan is not None
-            else tmux_ctl.session_exists(tmux_name)
-        )
+        if running is not None and running.is_legacy:
+            still_alive = self._agent_session_alive(running.tmux_name)
+        else:
+            still_alive = (
+                self._exact_running_pane(running) is not None
+                if running is not None and running.orphan is not None
+                else tmux_ctl.session_exists(tmux_name)
+            )
+        if running is not None and running.is_legacy and not killed:
+            self._set_status(
+                "Kill failed: the legacy tmux identity could not be confirmed; "
+                "the session remains in Running",
+                "error",
+            )
+            return
         if not killed and still_alive:
             self._set_status(
                 "Kill failed: exact tmux session is still live", "error")

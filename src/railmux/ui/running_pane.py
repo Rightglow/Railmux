@@ -36,6 +36,7 @@ class RunningEntry:
     # Immutable launch token carried by callbacks so a stale row cannot act on
     # a different tmux session that later reused the same human-readable name.
     identity_token: str | None = None
+    legacy: bool = False
 
 
 class _RunningRow(ClickableRow):
@@ -49,7 +50,10 @@ class _RunningRow(ClickableRow):
         markup: list = [dot, " "]
         if entry.attention is not None:
             markup.extend([_ATTENTION_MARK, " "])
-        text = urwid.Text(markup + [entry.label], wrap="clip")
+        markup.append(entry.label)
+        if entry.legacy:
+            markup.extend([("legacy", "  legacy · restart recommended")])
+        text = urwid.Text(markup, wrap="clip")
         # Use the dict map when selected so the coloured dot picks up the
         # selected background (a bare "selected" string would leave the dot's
         # own attribute — and thus its background — untouched).

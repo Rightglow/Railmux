@@ -230,3 +230,188 @@ claims and scroll policy without weakening lifecycle safety.
   controlled Railmux close/preview/quit paths always return it home first.
 - Synthetic marker and switch timings are not evidence that Claude or Codex
   feels faster over SSH or that a local terminal painted sooner.
+
+## Latest-state client prototype
+
+`tools/fast_client_probe.py` is a source-tree-only experiment for the remaining
+client-paint question. It opens one ordinary SSH connection, resolves the
+Railmux Target pane (or accepts an exact pane ID), samples `capture-pane` at a
+bounded rate, and paints only changed latest-state snapshots in the local
+terminal. Read-only mode remains the default, so an existing attached Railmux
+client can drive a workload while the two views are compared.
+
+The opt-in `--interactive` path forwards local terminal bytes to the agent with
+`send-keys -H`. It pins the outer session ID, controller pane, and Target pane
+at startup; each input batch revalidates them, then repeats the decisive checks
+and the send in one tmux command queue. A replaced outer session, missing
+controller, changed Target, vanished pane, or non-agent target stops the client
+instead of retargeting input. `Ctrl-]` is consumed locally as an emergency exit,
+while `Ctrl-C` and other bytes reach the agent.
+
+Run this script on the local machine after starting Railmux remotely. For a
+safe first comparison, leave the ordinary Railmux client attached and use the
+default read-only mode:
+
+```bash
+python3 tools/fast_client_probe.py your-server --duration 30 --fps 20
+```
+
+For direct agent input, first leave the managed Railmux session alive with
+`Ctrl-B d` (do not quit Railmux), then run:
+
+```bash
+python3 tools/fast_client_probe.py your-server \
+  --interactive --duration 0 --fps 20
+```
+
+The prototype intentionally issues none of `new-session`, `attach-session`,
+`split-window`, `swap-pane`, `resize-pane`, `kill-*`, or `set-option`. It never
+changes Railmux recovery files or tmux topology. Exiting it terminates only the
+SSH sampler. Interactive mode does mutate the agent application exactly as a
+normal terminal would by delivering the user's bytes; it is not a sandbox for
+commands typed or pasted by the user.
+
+The default run is bounded to 30 seconds at at most 20 samples per second and
+uses no daemon, listening port, or non-standard Python dependency. It is not an
+owner of tmux geometry and does not measure terminal compositor timestamps. A
+smoother view is evidence that bounding local paint work is promising; it does
+not by itself distinguish SSH byte volume, local parsing, and terminal
+rendering costs or establish a production frame protocol.
+
+### Prototype limitations
+
+- Railmux must already be running in the managed outer session. The prototype
+  cannot create or restore it, and quitting Railmux removes the object it needs.
+- It mirrors only the current Target agent pane. It does not render or control
+  the sidebar, switch sessions, change F8/F9 layouts, or run tmux key bindings.
+  If the Target changes, interactive mode exits and must be reconnected.
+- It never resizes the remote pane. Before detaching the ordinary client, set
+  the desired geometry there; the local client window must be at least as large
+  as the captured pane.
+- Keyboard bytes go directly to the agent pane, bypassing tmux client key
+  tables. `Ctrl-C` works in the agent, but tmux prefixes, Railmux function-key
+  bindings, mouse reporting, and native terminal shortcuts are not emulated.
+- Paste is forwarded as raw typed bytes. Multiline paste can submit input and
+  should be treated with the same care as pasting into a normal live agent.
+- Snapshots preserve tmux's visible text and SGR attributes, not a complete
+  terminal event history. OSC clipboard operations, hyperlinks, images,
+  notifications, cursor shape, alternate-screen history, and meaningful local
+  scrollback are outside this prototype.
+- Sampling runs one `capture-pane` plus a small state query per interval. At
+  20 FPS this adds bounded tmux server work and sends a full visible snapshot
+  whenever the screen changes; it is for validation, not a production daemon.
+
+## Full-window PTY prototype
+
+`railmux ssh` is the installable form of the full-window experiment. Instead of
+reconstructing Railmux from individual panes, the internal `remote-server`
+subcommand attaches one real tmux client inside a private PTY. tmux renders
+the complete window, including the sidebar, status line, borders, modals, and
+both agent panes. The helper consumes that VT stream into a headless screen,
+sends one compressed keyframe, then transmits only changed rows and cursor
+state. Raw intermediate tmux output never crosses SSH.
+
+The implementation modules, optional-dependency name, and private protocol are
+still experimental and have no compatibility promise. The user-facing command
+shape is deliberately small: the local command invokes the matching remote
+Railmux command by name and supplies the protocol version itself. Users must
+not invoke `railmux remote-server` directly.
+
+Install the optional dependency and helper entry point in the remote Railmux
+environment after updating the source checkout:
+
+```bash
+python3 -m pip install -e '.[fast-client]'
+```
+
+Install Railmux locally, then connect without supplying a remote executable
+path:
+
+```bash
+railmux ssh your-server
+```
+
+If the default `railmux` tmux session is absent, the server starts Railmux in a
+detached tmux session using the same installed Python environment. A custom
+`--session` is never auto-created. The helper refuses to start if the target
+session already has an attached client, preventing two terminals from
+competing for tmux window geometry. Its PTY starts at the local terminal
+dimensions, so the resulting layout and reflow are the same kind of size
+ownership as an ordinary single tmux client. Later local size changes are sent
+as bounded resize messages and applied to that private PTY with `TIOCSWINSZ`;
+tmux remains the only layout authority.
+
+Every input byte other than `Ctrl-]` goes to the real tmux client. Consequently
+`Ctrl-B d`, prefix navigation, F8/F9, sidebar input, and agent input follow the
+server's actual tmux configuration. `Ctrl-]` is intercepted before SSH and
+terminates only this connection. SSH EOF closes and, if necessary, signals only
+the exact attach-client process created by the helper; it never kills the tmux
+session, a pane, or an agent process. Normal remote exit is classified as
+detach, soft quit, or hard quit from immutable tmux session/controller
+identity; this classification is informational and grants no cleanup
+authority.
+
+The local surface enables button-event tracking and SGR mouse coordinates.
+Click and drag reports are forwarded unchanged to the real tmux client while
+live. A periodic atomic prefetch describes every visible non-controller pane
+and caches its latest 300 physical lines. This geometry generation routes
+sidebar wheel reports directly to Railmux without a speculative request or
+event backlog. Agent-pane vertical wheel input is owned exclusively by the
+local history layer: the first wheel-up paints the hot cache immediately and
+requests up to 2000 lines in the background, while wheel-down at the live
+bottom is consumed instead of also entering tmux copy-mode. Reported clicks
+and drags are consumed without discarding the frozen viewport only when the
+gesture begins inside that history pane. A press that
+begins over another agent or the sidebar first repaints the latest screen, then
+forwards the complete mouse sequence so tmux focus remains authoritative. A
+wheel over another region never changes the old pane's history offset. Short
+same-direction vertical-wheel bursts destined for the sidebar or a modal are
+bounded once per local stdin read; locally handled agent history is not.
+A terminal-native selection override can still bypass mouse reporting before
+the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
+the reliable ordinary-selection option.
+
+Display protocol v5 uses monotonically sequenced, zlib-compressed keyframes and
+row patches. Each update also carries a bounded terminal-mode bitmask. Only
+bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
+the client mirrors transitions and disables both modes before restoring the
+local terminal. Arbitrary remote private modes never become local control
+sequences. A gap or geometry mismatch makes the client request a new keyframe.
+Remote stdout is non-blocking: at most one partially transmitted update must
+finish, while a wholly unsent old update can be replaced by the latest screen.
+The diff base advances only after a complete packet is written, so replacement
+is recalculated from the last successfully sent rows, cursor, and terminal
+modes. Slow SSH output therefore does not stop the helper from draining the
+tmux PTY. This private protocol has no compatibility promise yet.
+
+History is a separate bounded response in that same ordered output stream. The
+server resolves the pane from current tmux geometry, excludes the controller,
+and uses `capture-pane -e` without entering copy-mode or sending keys. Raw tmux
+control sequences are parsed through `pyte`; only reconstructed text and
+allowlisted SGR character styles cross the protocol. OSC and other terminal
+actions are not forwarded. A response contains at most 4096 physical lines
+(the client requests 300 for the hot cache and 2000 for the deep cache). The
+client freezes painting while continuing to ingest live frames, scrolls the
+cached pane viewport locally, and performs a full latest-state repaint on
+bottom, ordinary keyboard input, resize, or `Esc`.
+
+History content and pointer authority have separate lifetimes. A bounded pane
+content snapshot may remain cached, but only the latest accepted visible-route
+generation can intercept mouse input. F8/F9, Help/modal transitions, cross-pane
+clicks, and resize invalidate the prior generation; request identity plus a
+local monotonic epoch rejects late prefetch and deep-history responses. The
+server's geometry snapshot includes tmux's zoom and active-pane fields. When a
+window is zoomed, only its active agent is exposed, or no agent is exposed when
+the controller is active; hidden panes' retained unzoomed geometry is never a
+route. Malformed or incoherent snapshots fail closed. Periodic prefetch is a
+recovery/latency mechanism rather than the correctness authority.
+
+This phase still has no structured Windows input, emulator-native scrollback,
+OSC, image, or hyperlink support. Bracketed-paste and focus-event modes are
+synchronized, but other input-affecting terminal modes remain delegated to
+tmux or unsupported. Local history preserves common SGR colour and character
+styles, but it still has no search, wrapped-line reflow, semantic selection, or
+history beyond its bounded cache. `pyte` remains an experimental compatibility
+dependency; wide characters, uncommon style combinations, terminal modes,
+copy-mode, resize behavior, and sustained Codex/Claude output still require
+real-terminal validation.

@@ -2,23 +2,34 @@
 from __future__ import annotations
 
 import os
+import signal
 import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from railmux import orphan_marker, restart_state, tmux_ctl
+from railmux import (
+    cli,
+    fast_display_server,
+    orphan_marker,
+    restart_state,
+    tmux_ctl,
+    tmux_health,
+    tmux_server,
+)
 from railmux.display_transport import (
     AgentDisplayTransport,
     recover_interrupted_swaps,
 )
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
+from railmux.selection_isolation import SelectionIsolationManager
 from railmux.modes import CODEX_MODE
 from railmux.models import Project
 from railmux.ui.app import App, _Running
@@ -106,6 +117,129 @@ def _script_command(command: str) -> list[str]:
     if sys.platform == "darwin":
         return ["script", "-q", "/dev/null", "sh", "-c", command]
     return ["script", "-qefc", command, "/dev/null"]
+
+
+def test_dedicated_label_routes_fast_server_to_private_tmux(monkeypatch):
+    """Outside-tmux helpers must never fall back to the default socket."""
+    socket_root = Path(tempfile.mkdtemp(prefix="rx-label-", dir="/tmp"))
+    socket_root.chmod(0o700)
+    label = f"rx-isolation-{os.getpid()}"
+    monkeypatch.setenv("TMUX_TMPDIR", str(socket_root))
+    monkeypatch.setenv(tmux_server.SOCKET_LABEL_ENV, label)
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+
+    try:
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "-f", "/dev/null", "new-session", "-d", "-s", "probe",
+                "sleep 60",
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        controller = subprocess.check_output(
+            tmux_server.tmux_argv(
+                "display-message", "-p", "-t", "probe", "#{pane_id}"
+            ),
+            text=True,
+        ).strip()
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "set-window-option", "-t", "probe",
+                "@railmux_controller_pane", controller,
+            ),
+            check=True,
+        )
+        agent = subprocess.check_output(
+            tmux_server.tmux_argv(
+                "split-window", "-d", "-h", "-P", "-F", "#{pane_id}",
+                "-t", "probe", "sleep 60",
+            ),
+            text=True,
+        ).strip()
+        subprocess.run(
+            tmux_server.tmux_argv("select-pane", "-t", agent), check=True
+        )
+
+        target = tmux_server.discover_target()
+        assert target is not None
+        assert Path(target.socket_path).is_relative_to(socket_root)
+        session_id = fast_display_server._validate_unattached_railmux("probe")
+        assert session_id == "$0"
+        assert tmux_server.target_session_id(target, "probe") == session_id
+        assert [pane.pane_id for pane in fast_display_server._list_agent_panes(
+            session_id
+        )] == [agent]
+    finally:
+        subprocess.run(
+            tmux_server.tmux_argv("kill-server"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        shutil.rmtree(socket_root, ignore_errors=True)
+
+
+def test_local_watchdog_escapes_a_frozen_private_tmux(monkeypatch):
+    """A stopped private server must not retain the outer launcher forever."""
+    socket_root = Path(tempfile.mkdtemp(prefix="rx-watchdog-", dir="/tmp"))
+    socket_root.chmod(0o700)
+    label = f"rx-watchdog-{os.getpid()}"
+    monkeypatch.setenv("TMUX_TMPDIR", str(socket_root))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(socket_root))
+    monkeypatch.setenv(tmux_server.SOCKET_LABEL_ENV, label)
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    monkeypatch.setattr(cli, "_LOCAL_WATCHDOG_INTERVAL", 0.1)
+    server_pid = 0
+    freezer = None
+
+    try:
+        subprocess.run(
+            tmux_server.tmux_argv(
+                "-f", "/dev/null", "new-session", "-d", "-s", "probe",
+                "sleep 60",
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        target = tmux_server.discover_target()
+        assert target is not None
+        server_pid = target.server_pid
+        freezer = threading.Timer(
+            0.2, lambda: os.kill(server_pid, signal.SIGSTOP)
+        )
+        freezer.start()
+
+        result = cli._run_tmux_client_with_watchdog(
+            ["sleep", "30"], os.environ.copy(), expected_target=target
+        )
+
+        assert result == 2
+        incident = tmux_health.read_last_incident()
+        assert incident is not None
+        assert incident.reason == "launcher-watchdog-timeout"
+        assert incident.consecutive_failures == 3
+    finally:
+        if freezer is not None:
+            freezer.cancel()
+            freezer.join(timeout=1.0)
+        if server_pid > 0:
+            try:
+                os.kill(server_pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+        subprocess.run(
+            tmux_server.tmux_argv("kill-server"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=2.0,
+        )
+        shutil.rmtree(socket_root, ignore_errors=True)
 
 
 def test_real_swap_preserves_sidebar_focus(isolated_tmux):
@@ -1053,6 +1187,72 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     assert tmux_ctl.read_root_right_click_binding() == original_right_click
     assert tmux_ctl.show_window_user_option(
         owner_pane, tmux_ctl.RAILMUX_CONTROLLER_OPTION) is None
+
+
+def test_real_selection_isolation_freezes_only_sibling_agent(
+        isolated_tmux, monkeypatch, tmp_path):
+    """Copy-mode selection stills its sibling without pausing the sidebar."""
+    if tmux_ctl.tmux_version() < (3, 0):
+        pytest.skip("pane-local options and configurable hooks need tmux 3.0")
+    display_session, sidebar, _socket_path = isolated_tmux
+    subprocess.run(
+        ["tmux", "set-environment", "-g", "PYTHONPATH",
+         str(Path(__file__).parents[1] / "src")],
+        check=True,
+    )
+    monkeypatch.setattr(
+        "railmux.tmux_binding_manager.restart_state.runtime_state_dir",
+        lambda: tmp_path,
+    )
+    primary = subprocess.check_output(
+        [
+            "tmux", "split-window", "-d", "-h", "-t", sidebar,
+            "-P", "-F", "#{pane_id}", "sleep 60",
+        ],
+        text=True,
+    ).strip()
+    secondary = subprocess.check_output(
+        [
+            "tmux", "split-window", "-d", "-h", "-t", primary,
+            "-P", "-F", "#{pane_id}", "sleep 60",
+        ],
+        text=True,
+    ).strip()
+    workspace = AgentWorkspace()
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    workspace.primary.pane_id = primary
+    workspace.secondary.pane_id = secondary
+    bindings = SharedTmuxBindingManager("selection-server", sidebar)
+    isolation = SelectionIsolationManager(sidebar)
+
+    assert bindings.open()
+    assert bindings.selection_isolation_available
+    isolation.sync(workspace, enabled=True)
+    subprocess.run(["tmux", "copy-mode", "-t", primary], check=True)
+    key = f"{sidebar}:primary"
+
+    assert _wait_until(
+        lambda: (
+            (state := tmux_ctl.selection_pane_state(secondary)) is not None
+            and state.in_mode
+            and state.frozen_by == key
+        )
+    )
+    sidebar_state = tmux_ctl.selection_pane_state(sidebar)
+    assert sidebar_state is not None and not sidebar_state.in_mode
+
+    subprocess.run(
+        ["tmux", "send-keys", "-X", "-t", primary, "cancel"], check=True)
+    assert _wait_until(
+        lambda: (
+            (state := tmux_ctl.selection_pane_state(secondary)) is not None
+            and not state.in_mode
+            and state.frozen_by is None
+        )
+    )
+
+    isolation.close()
+    bindings.close()
 
 
 def test_real_tmux_swap_recovery_direct_kill_and_fallback(isolated_tmux):

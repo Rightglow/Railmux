@@ -5,6 +5,53 @@ It is intentionally separate from the user-facing README. Read it before
 changing providers, mode switching, outer tmux panes, previews, or restore
 state.
 
+## Railmux owns a dedicated tmux server
+
+Every production launcher and remote display helper addresses the non-default
+`railmux` tmux socket explicitly. Starting Railmux from a foreign tmux client
+nests into that dedicated server after removing the inherited `TMUX` and
+`TMUX_PANE` values only from the replacement process. The internal
+`--inside-tmux` entry point fails closed unless its current Unix socket is the
+same socket resolved through the dedicated `-L` label; a matching basename is
+not proof of identity.
+
+Once that boundary is validated, internal bare `tmux` commands deliberately
+inherit `TMUX` and therefore remain scoped to the dedicated server. Commands
+that run outside tmux, including every `railmux remote-server` query and its PTY
+attach, must use the explicit socket argv helper. Startup swap recovery is
+temporarily scoped to the already-proven dedicated socket before
+`new-session -A`; it must never inspect or mutate the caller's/default server.
+Tests use a randomized non-default socket and may kill only that exact private
+server. Socket migration never edits provider rollouts or session files.
+
+Upgrade compatibility is deliberately asymmetric. New sessions are created
+only on the dedicated server, while pre-isolation sessions on tmux's `default`
+server are inventoried read-only and rendered in the same Running sidebar.
+Their internal identity includes the legacy server socket/PID and immutable
+tmux session ID, so equal provider IDs and equal human-readable tmux names can
+coexist without routing actions to each other. Cross-server display always uses
+a nested `attach-session -f ignore-size`; it must first return any swap-owned
+dedicated pane home. Automatic teardown never kills a legacy session. An
+explicit user Kill may do so only after revalidating both pinned identities.
+This is a deprecated upgrade bridge, not a second supported storage model.
+Remove `legacy_sessions.py`, the `_Running` legacy fields, and their routing
+branches together after a documented compatibility window and after supported
+installations no longer report default-server candidates through `doctor`.
+
+The ordinary launcher retains a thin parent outside the attached tmux client,
+and the SSH display server is already outside its private attach client. Each
+performs one low-frequency, identity-pinned health probe and requires three
+consecutive failures before declaring the dedicated server unresponsive. A
+terminal failure stops only the owned client, restores saved terminal modes,
+and records a bounded incident in the private runtime directory. It must never
+kill/restart tmux, apport, or provider processes automatically. `railmux doctor`
+reports current dedicated-server reachability and the privacy-safe last incident
+without exposing socket paths or tmux/session identities. Intentional hard quit
+is distinguished from an abrupt server disappearance by a private, exact
+server-PID/session-ID sentinel that is consumed once and expires after 30
+seconds. This sentinel is diagnostic evidence only; it never authorizes session
+mutation or recovery.
+
 ## Modes are registered providers, not a boolean
 
 `railmux.modes.ModeRegistry` is the ordered source of shared mode metadata.
@@ -403,6 +450,21 @@ forwarded, matching tmux's stock left-click routing and allowing an unfocused
 sidebar to receive its context-menu click. Other windows replay the exact prior
 right-click command. Teardown restores it only while Railmux's marker still
 owns the binding, so a user configuration reload remains newer authority.
+
+The same shared lease owns one indexed `pane-mode-changed` hook on tmux 3.0+.
+In a dual-agent layout, entering copy-mode through ordinary mouse selection or
+`Ctrl-B [` freezes only the sibling agent pane's display by putting it in
+copy-mode; the provider process and PTY continue and buffered output appears
+when selection ends. The sidebar is never a freeze target. Pane-local markers
+carry an exact controller-and-slot selection key, the sibling pane ID, and the
+key that owns an automatic freeze. Hook recursion is ignored, a pane already in
+user-controlled copy-mode is never claimed, and cleanup cancels only a freeze
+whose exact marker is still owned. Nested transport projects the same key onto
+both its visible outer attach pane and inner provider pane; swap transport
+projects only the physically visible real pane. Layout changes and teardown
+release markers before moving panes, while periodic reconciliation heals a
+missed hook after interruption. tmux 2.7-2.9 keeps its existing selection
+behavior because configurable hooks and pane-local options are unavailable.
 
 tmux routes wheel events by pointer location rather than keyboard focus. Each
 sidebar pane therefore consumes buttons 4/5 at its outer widget boundary and

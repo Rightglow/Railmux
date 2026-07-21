@@ -112,6 +112,8 @@ def app(tmp_path, monkeypatch):
         restart_state, "legacy_state_path", lambda: tmp_path / "legacy.json")
     monkeypatch.setattr(
         App, "_discover_orphans", lambda self, state=None, **kwargs: True)
+    monkeypatch.setattr(
+        App, "_discover_legacy_running", lambda self, **kwargs: 0)
     a = App(
         claude_home=ch,
         config=Config(codex_home=str(tmp_path / ".codex")),

@@ -112,7 +112,8 @@ _SELECTED_MAP = {None: "selected", "dim": "selected",
                  "status_idle": "status_idle_sel",
                  "status_busy": "status_busy_sel",
                  "status_blocked": "status_blocked_sel",
-                 "attention": "attention_sel"}
+                 "attention": "attention_sel",
+                 "legacy": "legacy_sel"}
 # Focus highlight (deep-grass bg). Status dots need their own remap so the coloured
 # ● inherits the focus background instead of leaving a black gap; everything
 # else (title, star, meta) collapses to the plain "focus" attribute.
@@ -121,7 +122,8 @@ _FOCUS_REMAP = {None: "focus", "live": "focus", "dim": "focus",
                 "status_idle": "status_idle_focus",
                 "status_busy": "status_busy_focus",
                 "status_blocked": "status_blocked_focus",
-                "attention": "attention_focus"}
+                "attention": "attention_focus",
+                "legacy": "legacy_focus"}
 
 
 class _SessionRow(ClickableRow):

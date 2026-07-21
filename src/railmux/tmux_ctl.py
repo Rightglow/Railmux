@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -46,6 +48,17 @@ class PaneIdentity:
     dead: bool
     width: int
     height: int
+
+
+@dataclass(frozen=True)
+class SelectionPaneState:
+    """Copy-mode and Railmux selection markers for one tmux pane."""
+
+    pane_id: str
+    in_mode: bool
+    selection_key: str | None
+    peer_pane_id: str | None
+    frozen_by: str | None
 
 
 @dataclass(frozen=True)
@@ -1112,6 +1125,179 @@ def list_window_user_options(names: tuple[str, ...]) -> list[tuple[str, ...]] | 
     return rows
 
 
+def set_pane_user_option(target_pane: str, name: str,
+                         value: str | None) -> bool:
+    """Set a pane-local user option (available in tmux 3.0 and newer)."""
+    if tmux_version() < (3, 0):
+        return False
+    args = ["tmux", "set-option", "-p", "-t", target_pane]
+    if value is None:
+        args.extend(["-u", name])
+    else:
+        args.extend([name, value])
+    try:
+        subprocess.check_call(
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def unset_pane_user_option_if_value(target_pane: str, name: str,
+                                    expected: str) -> bool:
+    """Unset a pane option only when Railmux still owns its exact value."""
+    try:
+        current = subprocess.check_output(
+            ["tmux", "show-options", "-pv", "-t", target_pane, name],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return False
+    if current != expected:
+        return False
+    return set_pane_user_option(target_pane, name, None)
+
+
+def selection_pane_state(pane_id: str) -> SelectionPaneState | None:
+    """Read one pane's selection state with a single tmux query."""
+    fmt = (
+        "#{pane_id}\t#{pane_in_mode}\t"
+        f"#{{{RAILMUX_SELECTION_KEY_OPTION}}}\t"
+        f"#{{{RAILMUX_SELECTION_PEER_OPTION}}}\t"
+        f"#{{{RAILMUX_SELECTION_FROZEN_OPTION}}}"
+    )
+    try:
+        raw = subprocess.check_output(
+            ["tmux", "display-message", "-p", "-t", pane_id, fmt],
+            stderr=subprocess.DEVNULL,
+        ).decode().rstrip("\n")
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return None
+    return _parse_selection_pane_state(raw)
+
+
+def list_selection_pane_states() -> tuple[SelectionPaneState, ...] | None:
+    """Read selection state for every pane using one tmux process."""
+    fmt = (
+        "#{pane_id}\t#{pane_in_mode}\t"
+        f"#{{{RAILMUX_SELECTION_KEY_OPTION}}}\t"
+        f"#{{{RAILMUX_SELECTION_PEER_OPTION}}}\t"
+        f"#{{{RAILMUX_SELECTION_FROZEN_OPTION}}}"
+    )
+    try:
+        text = subprocess.check_output(
+            ["tmux", "list-panes", "-a", "-F", fmt],
+            stderr=subprocess.DEVNULL,
+        ).decode().rstrip("\n")
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return None
+    rows: list[SelectionPaneState] = []
+    for line in text.splitlines():
+        row = _parse_selection_pane_state(line)
+        if row is None:
+            return None
+        rows.append(row)
+    return tuple(rows)
+
+
+def cleanup_stale_selection_markers(live_panes: frozenset[str]) -> None:
+    """Release markers whose exact Railmux controller pane is gone."""
+    if tmux_version() < (3, 0):
+        return
+    states = list_selection_pane_states()
+    if states is None:
+        return
+    for state in states:
+        if (state.frozen_by is not None
+                and _SELECTION_KEY_RE.fullmatch(state.frozen_by)
+                and state.frozen_by.split(":", 1)[0] not in live_panes):
+            release_selection_peer(state.pane_id, state.frozen_by)
+        key = state.selection_key
+        if (key is None or not _SELECTION_KEY_RE.fullmatch(key)
+                or key.split(":", 1)[0] in live_panes):
+            continue
+        unset_pane_user_option_if_value(
+            state.pane_id, RAILMUX_SELECTION_KEY_OPTION, key)
+        if state.peer_pane_id is not None:
+            unset_pane_user_option_if_value(
+                state.pane_id, RAILMUX_SELECTION_PEER_OPTION,
+                state.peer_pane_id)
+
+
+def _parse_selection_pane_state(raw: str) -> SelectionPaneState | None:
+    fields = raw.split("\t")
+    if len(fields) != 5 or not fields[0].startswith("%"):
+        return None
+    if fields[1] not in {"0", "1"}:
+        return None
+    return SelectionPaneState(
+        pane_id=fields[0],
+        in_mode=fields[1] == "1",
+        selection_key=fields[2] or None,
+        peer_pane_id=fields[3] or None,
+        frozen_by=fields[4] or None,
+    )
+
+
+_PANE_ID_RE = re.compile(r"^%\d+$")
+_SELECTION_KEY_RE = re.compile(r"^%\d+:(?:primary|secondary)$")
+
+
+def freeze_selection_peer(peer_pane_id: str, selection_key: str) -> bool:
+    """Freeze a sibling's display unless it is already user-controlled."""
+    if (not _PANE_ID_RE.fullmatch(peer_pane_id)
+            or not _SELECTION_KEY_RE.fullmatch(selection_key)):
+        return False
+    condition = (
+        "#{&&:#{==:#{pane_in_mode},0},"
+        "#{||:"
+        f"#{{==:#{{{RAILMUX_SELECTION_FROZEN_OPTION}}},}},"
+        f"#{{==:#{{{RAILMUX_SELECTION_FROZEN_OPTION}}},{selection_key}}}"
+        "}}"
+    )
+    action = (
+        f"set-option -p -t {peer_pane_id} "
+        f"{RAILMUX_SELECTION_FROZEN_OPTION} '{selection_key}' ; "
+        f"copy-mode -t {peer_pane_id}"
+    )
+    try:
+        subprocess.check_call(
+            ["tmux", "if-shell", "-F", "-t", peer_pane_id,
+             condition, action],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def release_selection_peer(peer_pane_id: str, selection_key: str) -> bool:
+    """Resume only a sibling frozen by this exact Railmux selection."""
+    if (not _PANE_ID_RE.fullmatch(peer_pane_id)
+            or not _SELECTION_KEY_RE.fullmatch(selection_key)):
+        return False
+    condition = (
+        f"#{{==:#{{{RAILMUX_SELECTION_FROZEN_OPTION}}},{selection_key}}}"
+    )
+    action = (
+        f"if-shell -F -t {peer_pane_id} '#{{pane_in_mode}}' "
+        f"'send-keys -X -t {peer_pane_id} cancel' '' ; "
+        f"set-option -p -u -t {peer_pane_id} "
+        f"{RAILMUX_SELECTION_FROZEN_OPTION}"
+    )
+    try:
+        subprocess.check_call(
+            ["tmux", "if-shell", "-F", "-t", peer_pane_id,
+             condition, action],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def wait_window_user_option(target_window: str, name: str, value: str,
                             timeout: float = 1.0) -> bool:
     """Wait until a tmux window user option reaches *value*."""
@@ -1147,6 +1333,104 @@ _PREFIX_TARGET_KEY = "Tab"
 _PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
 RAILMUX_CONTROLLER_OPTION = "@railmux_controller_pane"
 RAILMUX_TARGET_OPTION = "@railmux_target_pane"
+RAILMUX_SELECTION_KEY_OPTION = "@railmux_selection_key"
+RAILMUX_SELECTION_PEER_OPTION = "@railmux_selection_peer"
+RAILMUX_SELECTION_FROZEN_OPTION = "@railmux_selection_frozen_by"
+_SELECTION_HOOK_MARKER = "railmux-selection-hook-v1"
+
+
+def prepare_selection_mode_hook() -> int | None:
+    """Return a free pane-mode hook index without disturbing user hooks."""
+    if tmux_version() < (3, 0):
+        return None
+    try:
+        text = subprocess.check_output(
+            ["tmux", "show-hooks", "-g", "pane-mode-changed"],
+            stderr=subprocess.DEVNULL,
+        ).decode()
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return None
+    used = {
+        int(match.group(1))
+        for match in re.finditer(r"^pane-mode-changed\[(\d+)\]", text, re.M)
+    }
+    return next((index for index in range(9000, 9100) if index not in used), None)
+
+
+_HOOK_READ_FAILED = object()
+
+
+def _read_selection_mode_hook(index: int) -> str | None | object:
+    name = f"pane-mode-changed[{index}]"
+    try:
+        text = subprocess.check_output(
+            ["tmux", "show-hooks", "-g", name],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return _HOOK_READ_FAILED
+    return None if text == name or not text else text
+
+
+def selection_mode_hook_is_absent_or_owned(index: int, token: str) -> bool:
+    hook = _read_selection_mode_hook(index)
+    if hook is _HOOK_READ_FAILED:
+        return False
+    return hook is None or (
+        isinstance(hook, str)
+        and _SELECTION_HOOK_MARKER in hook and token in hook)
+
+
+def selection_mode_hook_owned_by(index: int, token: str) -> bool:
+    hook = _read_selection_mode_hook(index)
+    return bool(
+        isinstance(hook, str)
+        and _SELECTION_HOOK_MARKER in hook and token in hook)
+
+
+def set_selection_mode_hook(index: int, token: str) -> bool:
+    """Install the guarded hook that reconciles Railmux-marked panes."""
+    helper = (
+        f"{shlex.quote(sys.executable)} -m railmux.selection_isolation "
+        f"--pane #{{pane_id}} "
+        f"--lease-token {_SELECTION_HOOK_MARKER}-{token}"
+    )
+    predicate = (
+        "#{||:"
+        f"#{{!=:#{{{RAILMUX_SELECTION_KEY_OPTION}}},}},"
+        f"#{{!=:#{{{RAILMUX_SELECTION_FROZEN_OPTION}}},}}"
+        "}"
+    )
+    escaped_helper = helper.replace("\\", "\\\\").replace('"', '\\"')
+    command = (
+        f"if-shell -F '{predicate}' "
+        f"'run-shell -b \"{escaped_helper}\"' ''"
+    )
+    try:
+        subprocess.check_call(
+            ["tmux", "set-hook", "-g", f"pane-mode-changed[{index}]",
+             command],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def restore_selection_mode_hook(index: int, token: str) -> bool:
+    """Remove only the exact global hook owned by this shared lease."""
+    if not selection_mode_hook_owned_by(index, token):
+        return False
+    try:
+        subprocess.check_call(
+            ["tmux", "set-hook", "-gu", f"pane-mode-changed[{index}]"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
 def _read_key_binding(table: str, key: str) -> str | None:

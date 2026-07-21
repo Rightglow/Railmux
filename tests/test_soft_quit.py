@@ -12,7 +12,7 @@ import pytest
 import urwid
 
 from railmux.models import Project, SessionMeta
-from railmux import orphan_marker, restart_state, tmux_ctl
+from railmux import orphan_marker, restart_state, tmux_ctl, tmux_server
 from railmux.modes import CLAUDE_MODE, CODEX_MODE
 from railmux.restart_state import OuterTmuxIdentity
 from railmux.ui.app import App, _Running
@@ -44,6 +44,12 @@ def _isolate_tmux_identity_stamps(monkeypatch, tmp_path):
     monkeypatch.setattr(
         restart_state, "cleanup_stale_instances", lambda *_args, **_kwargs: 0,
     )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_health.record_clean_exit",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_health.clear_clean_exit", lambda: None)
 
 def _project(name: str = "test-proj", claude_dir: Path | None = None) -> Project:
     return Project(
@@ -474,6 +480,7 @@ def test_restore_workspace_rebuilds_both_slots_target_and_agent_focus(
     app = _minimal_app()
     workspace = app._agent_workspace()
     transport = MagicMock()
+    transport.displayed_real_pane.return_value = None
     app._display_transport_manager = transport
     app._agent_region_size = MagicMock(return_value=(200, 40))
     app._layout_fits = MagicMock(return_value=True)
@@ -528,6 +535,7 @@ def test_restore_workspace_keeps_dual_layout_when_secondary_content_fails(
     app = _minimal_app()
     workspace = app._agent_workspace()
     transport = MagicMock()
+    transport.displayed_real_pane.return_value = None
     app._display_transport_manager = transport
     app._agent_region_size = MagicMock(return_value=(200, 40))
     app._layout_fits = MagicMock(return_value=True)
@@ -578,6 +586,7 @@ def test_restore_workspace_geometry_fallback_remembers_validated_secondary(
     app = _minimal_app()
     workspace = app._agent_workspace()
     transport = MagicMock()
+    transport.displayed_real_pane.return_value = None
     app._display_transport_manager = transport
     app._agent_region_size = MagicMock(return_value=(70, 20))
     app._layout_fits = MagicMock(return_value=False)
@@ -1927,6 +1936,51 @@ def test_teardown_phases_are_idempotent():
     tmux.kill_session.assert_any_call("cc-abc123")
     tmux.kill_session.assert_any_call("railmux")
 
+
+def test_teardown_hard_quit_publishes_exact_clean_exit_intent(monkeypatch):
+    app = _minimal_app()
+    app._soft_quit_flag = False
+    app._auto_launched = True
+    app._scroll_manager = MagicMock()
+    app._running = {}
+    record = MagicMock(return_value=True)
+    clear = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_health.record_clean_exit", record)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_health.clear_clean_exit", clear)
+
+    with patch("railmux.ui.app.tmux_ctl") as tmux:
+        tmux.current_session_name.return_value = "railmux"
+        tmux.current_session_id.return_value = "$1"
+        tmux.kill_session.return_value = True
+        app._teardown_tmux()
+
+    record.assert_called_once_with(server_pid=123, session_id="$1")
+    clear.assert_not_called()
+
+
+def test_teardown_clears_clean_exit_intent_when_outer_kill_fails(monkeypatch):
+    app = _minimal_app()
+    app._soft_quit_flag = False
+    app._auto_launched = True
+    app._scroll_manager = MagicMock()
+    app._running = {}
+    record = MagicMock(return_value=True)
+    clear = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_health.record_clean_exit", record)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_health.clear_clean_exit", clear)
+
+    with patch("railmux.ui.app.tmux_ctl") as tmux:
+        tmux.current_session_name.return_value = "railmux"
+        tmux.current_session_id.return_value = "$1"
+        tmux.kill_session.return_value = False
+        app._teardown_tmux()
+
+    clear.assert_called_once_with()
+
 def test_teardown_soft_quit_skips_session_kill():
     """With _soft_quit_flag set, cc-* and outer tmux sessions are left alive."""
     app = _minimal_app()
@@ -1963,6 +2017,28 @@ def test_teardown_hard_quit_kills_sessions():
         app._teardown_tmux()
 
     tmux.kill_session.assert_any_call("cc-abc123")
+
+
+def test_teardown_hard_quit_preserves_legacy_server_sessions():
+    """Only an explicit per-row Kill may mutate a legacy server."""
+    app = _minimal_app()
+    app._soft_quit_flag = False
+    app._right_pane_id = None
+    app._auto_launched = False
+    app._scroll_manager = MagicMock()
+    target = tmux_server.TmuxServerTarget("/tmp/default", 44)
+    app._running = {
+        "current": _Running("current", "cc-current", "current"),
+        "legacy": _Running(
+            "legacy", "cc-old::legacy:44:7", "old",
+            legacy_server=target, legacy_session_id="$7",
+        ),
+    }
+
+    with patch("railmux.ui.app.tmux_ctl") as tmux:
+        app._teardown_tmux()
+
+    tmux.kill_session.assert_called_once_with("cc-current")
 
 
 def test_teardown_failed_swap_return_degrades_to_soft_quit():

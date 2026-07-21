@@ -21,6 +21,8 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(
         app_mod.App, "_discover_orphans",
         lambda self, state=None, **kwargs: True)
+    monkeypatch.setattr(
+        app_mod.App, "_discover_legacy_running", lambda self, **kwargs: 0)
     monkeypatch.setattr(restart_state, "capture_outer_identity", lambda: None)
     monkeypatch.setattr(
         app_mod.App, "_portable_state_path",

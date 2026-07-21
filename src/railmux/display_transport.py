@@ -14,7 +14,7 @@ import sys
 import uuid
 from dataclasses import asdict, dataclass
 
-from railmux import tmux_ctl
+from railmux import tmux_ctl, tmux_server
 from railmux.ui.workspace import (
     AgentSlot,
     AgentWorkspace,
@@ -181,7 +181,12 @@ class NestedDisplayTransport:
     """The compatibility transport: a nested tmux attach client."""
 
     def attach(
-        self, slot: AgentSlot, agent_tmux_name: str,
+        self,
+        slot: AgentSlot,
+        agent_tmux_name: str,
+        *,
+        server_target: tmux_server.TmuxServerTarget | None = None,
+        session_target: str | None = None,
     ) -> AttachOutcome:
         if (slot.pane_id is not None
                 and slot.transport_kind == DisplayTransportKind.NESTED
@@ -202,11 +207,25 @@ class NestedDisplayTransport:
             created = True
 
         assert slot.pane_id is not None
-        tmux_ctl.fit_session_to_pane(agent_tmux_name, slot.pane_id)
-        command = (
-            f"TMUX= exec tmux attach-session -t "
-            f"{shlex.quote(agent_tmux_name)}"
-        )
+        if server_target is None:
+            tmux_ctl.fit_session_to_pane(agent_tmux_name, slot.pane_id)
+            argv = ["tmux", "attach-session", "-t", agent_tmux_name]
+        else:
+            if not tmux_server.target_has_session(
+                    server_target, session_target or ""):
+                return AttachOutcome(
+                    False, DisplayTransportKind.NESTED,
+                    "legacy tmux session identity changed",
+                )
+            # Cross-server displays can never use swap-pane. ``ignore-size``
+            # also prevents this compatibility client from changing the old
+            # session's window dimensions or layout.
+            argv = tmux_server.target_argv(
+                server_target,
+                "attach-session", "-f", "ignore-size", "-t",
+                session_target or "",
+            )
+        command = "TMUX= exec " + " ".join(shlex.quote(arg) for arg in argv)
         if not tmux_ctl.respawn_pane(slot.pane_id, command):
             if created:
                 tmux_ctl.kill_pane(slot.pane_id)
@@ -393,7 +412,27 @@ class AgentDisplayTransport:
                     return "agent pane is owned by another swap transaction"
         return None
 
-    def attach(self, slot: AgentSlot, agent_tmux_name: str) -> AttachOutcome:
+    def attach(
+        self,
+        slot: AgentSlot,
+        agent_tmux_name: str,
+        *,
+        server_target: tmux_server.TmuxServerTarget | None = None,
+        session_target: str | None = None,
+    ) -> AttachOutcome:
+        if server_target is not None:
+            if slot.swap_state is not None and not self.return_home(slot):
+                return AttachOutcome(
+                    False,
+                    DisplayTransportKind.NESTED,
+                    "could not safely return the displayed agent home",
+                )
+            return self.nested.attach(
+                slot,
+                agent_tmux_name,
+                server_target=server_target,
+                session_target=session_target,
+            )
         capable, reason = self.swap_capable
         if not capable:
             outcome = self.nested.attach(slot, agent_tmux_name)

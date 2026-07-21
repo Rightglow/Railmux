@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from railmux import tmux_ctl
+from railmux import tmux_server
 from railmux import display_transport as transport_mod
 from railmux.display_transport import (
     AgentDisplayTransport,
@@ -293,6 +294,56 @@ def test_old_tmux_falls_back_nested(rig, monkeypatch):
     outcome = manager.attach(workspace.primary, "agent-a")
     assert outcome.ok and outcome.fell_back
     assert outcome.kind == DisplayTransportKind.NESTED
+
+
+def test_legacy_target_always_uses_nested_attach_and_ignore_size(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    target = tmux_server.TmuxServerTarget("/tmp/legacy socket", 91)
+    monkeypatch.setattr(
+        transport_mod.tmux_server, "target_has_session",
+        lambda candidate, session: candidate == target and session == "$9",
+    )
+
+    outcome = manager.attach(
+        workspace.primary,
+        "agent-a::legacy:91:9",
+        server_target=target,
+        session_target="$9",
+    )
+
+    assert outcome.ok
+    assert outcome.kind == DisplayTransportKind.NESTED
+    assert not fake.swap_calls
+    command = fake.respawned[-1][1]
+    assert "tmux -S '/tmp/legacy socket' attach-session -f ignore-size -t '$9'" == command.removeprefix("TMUX= exec ")
+    assert "agent-a::legacy" not in command
+
+
+def test_switching_from_swap_to_legacy_returns_real_agent_home_first(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    target = tmux_server.TmuxServerTarget("/tmp/default", 91)
+    monkeypatch.setattr(
+        transport_mod.tmux_server, "target_has_session",
+        lambda _target, session: session == "$9",
+    )
+
+    outcome = manager.attach(
+        workspace.primary,
+        "agent-a::legacy:91:9",
+        server_target=target,
+        session_target="$9",
+    )
+
+    assert outcome.ok
+    assert fake.panes["%2"].window_id == "@2"
+    assert fake.panes["%2"].pane_pid == 202
+    assert workspace.primary.swap_state is None
+    assert workspace.primary.transport_kind is DisplayTransportKind.NESTED
 
 
 def test_marker_failure_never_moves_real_pane(rig):

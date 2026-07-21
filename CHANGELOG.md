@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add low-frequency, identity-pinned tmux watchdogs outside both the ordinary
+  attach client and experimental SSH attach client. Three consecutive failures
+  restore the terminal, stop only the owned client, and persist a privacy-safe
+  incident for `railmux doctor`; tmux, apport, provider processes, and rollout
+  files are never killed or modified automatically. Both observers use a
+  short-lived, exact, one-shot clean-exit marker to distinguish intentional
+  hard quit from an abrupt tmux disappearance.
+- Add an experimental `railmux ssh HOST` latest-state display transport with
+  compressed row patches, dynamic resize, native tmux keyboard and SGR mouse
+  forwarding, a periodically refreshed 300-line pane-history hot cache with a
+  2000-line background fill, safe SGR colour preservation, synchronized
+  bracketed-paste/focus-event modes, safe local `Ctrl-]` disconnect, automatic
+  startup of the default remote Railmux session, and
+  detach/soft-quit/hard-quit classification. Its internal `railmux
+  remote-server` entry point and protocol remain private.
+
+### Fixed
+
+- Isolate all Railmux workspaces and `railmux ssh` server-side tmux commands on
+  a dedicated non-default socket, including launches from an outer tmux. The
+  internal entry point now validates the full Unix socket identity, startup
+  recovery is explicitly scoped to that server, fast-display locks include the
+  socket identity, and inherited foreign `TMUX` metadata cannot route Railmux
+  commands into the user's default server.
+- Keep pre-isolation Railmux sessions from tmux's historical default server in
+  the same Running sidebar after upgrade. They are discovered read-only,
+  labelled with a restart recommendation, displayed through an identity-pinned
+  nested client with `ignore-size`, preserved by automatic/hard-exit cleanup,
+  and killed only after an explicit user action revalidates the old server PID
+  and immutable tmux session ID.
+- Route sidebar wheel events directly to Railmux instead of batching them
+  behind a rejected pane-history request, keep agent scrolling exclusively in
+  the local history layer, and prevent reported clicks or drags from discarding
+  a visible history viewport.
+- Make experimental SSH history routing zoom-aware and generation-gated, so
+  F8/F9, Help, modal transitions, resize, and late history responses cannot
+  target hidden/stale pane rectangles. Cross-pane/sidebar clicks now repaint
+  and forward normally, wheels cannot move a non-hovered history pane, and
+  short remote-only wheel bursts are bounded without changing ordinary
+  Railmux tmux bindings.
+- Keep text selection stable when the other agent pane is producing frequent
+  output. Entering tmux copy-mode by mouse or `Ctrl-B [` now freezes only the
+  sibling agent pane's display until selection ends; its process and PTY output
+  continue normally, and the sidebar is never frozen.
+
 ## [0.2.0] - 2026-07-20
 
 ### Changed
