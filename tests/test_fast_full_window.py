@@ -1995,6 +1995,16 @@ def test_server_terminal_model_repeats_character_with_current_style():
     assert [screen.buffer[0][column].fg for column in range(5)] == ["red"] * 5
 
 
+def test_server_terminal_model_ignores_private_device_status_queries():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(8, 2)
+
+    terminal.ByteStream(screen).feed(b"before\033[?6nafter")
+
+    assert "".join(screen.display).replace(" ", "").startswith("beforeafter")
+
+
 def test_server_history_renderer_uses_extended_terminal_sequences():
     pyte = pytest.importorskip("pyte")
     rendered = fast_display_server._render_history_line(

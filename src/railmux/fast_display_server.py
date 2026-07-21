@@ -165,6 +165,12 @@ class _ExtendedScreenMixin:
         if self._last_graphic_character:
             self.draw(self._last_graphic_character * max(1, count or 1))
 
+    def report_device_status(self, mode: int, **kwargs: bool) -> None:
+        """Ignore private DSR queries that pyte 0.8.2 cannot dispatch."""
+        if kwargs.get("private"):
+            return
+        super().report_device_status(mode)
+
 
 @lru_cache(maxsize=4)
 def _build_extended_pyte(pyte: object) -> object:

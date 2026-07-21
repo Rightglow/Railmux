@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implements `CSI S`, `CSI T`, and `CSI b` for both live frames and styled
   history; a real isolated tmux PTY regression compares the reconstructed
   pane with `capture-pane` after the previously dropped scroll operation.
+- Accept and safely ignore private device-status queries emitted by tmux on
+  macOS, avoiding a pyte 0.8.2 dispatch error before the first screen frame.
 - Isolate all Railmux workspaces and `railmux ssh` server-side tmux commands on
   a dedicated non-default socket, including launches from an outer tmux. The
   internal entry point now validates the full Unix socket identity, startup

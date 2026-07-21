@@ -206,10 +206,15 @@ def test_real_tmux_parameterized_scroll_matches_headless_screen():
         assert [row.rstrip() for row in screen.display[:len(captured)]] == captured
 
         stock_screen = pyte.Screen(20, 8)
-        pyte.ByteStream(stock_screen).feed(bytes(raw))
-        assert [
-            row.rstrip() for row in stock_screen.display[:len(captured)]
-        ] != captured
+        try:
+            pyte.ByteStream(stock_screen).feed(bytes(raw))
+        except TypeError:
+            stock_display = None
+        else:
+            stock_display = [
+                row.rstrip() for row in stock_screen.display[:len(captured)]
+            ]
+        assert stock_display != captured
     finally:
         if slave_fd >= 0:
             os.close(slave_fd)
@@ -279,7 +284,9 @@ def test_dedicated_label_routes_fast_server_to_private_tmux(monkeypatch):
 
         target = tmux_server.discover_target()
         assert target is not None
-        assert Path(target.socket_path).is_relative_to(socket_root)
+        assert Path(target.socket_path).resolve().is_relative_to(
+            socket_root.resolve()
+        )
         session_id = fast_display_server._validate_unattached_railmux("probe")
         assert session_id == "$0"
         assert tmux_server.target_session_id(target, "probe") == session_id
