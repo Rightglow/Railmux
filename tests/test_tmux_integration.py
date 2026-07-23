@@ -1989,8 +1989,10 @@ def test_real_tmux_status_pane_range_selects_and_keeps_zoom(
         if b"\x1b[?1006h" in painted:
             click = f"\x1b[<0;2;{client_height}M".encode()
         else:
-            assert client_height < 223
-            click = b"\x1b[M" + bytes((32, 32 + 2, 32 + client_height))
+            # tmux's legacy parser keeps coordinates zero-based after removing
+            # the 32-byte protocol offset (unlike SGR, which it decrements).
+            assert client_height <= 224
+            click = b"\x1b[M" + bytes((32, 32 + 1, 32 + client_height - 1))
         os.write(master_fd, click)
         assert _wait_until(
             lambda: tmux_ctl.active_pane_id(owner_pane) == owner_pane)
