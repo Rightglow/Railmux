@@ -538,11 +538,13 @@ class LayoutSaveModal(urwid.WidgetWrap):
         on_always: Callable[[], None],
         on_this_time: Callable[[], None],
         on_no: Callable[[], None],
+        on_never: Callable[[], None],
         on_back: Callable[[], None],
     ) -> None:
         self._on_always = on_always
         self._on_this_time = on_this_time
         self._on_no = on_no
+        self._on_never = on_never
         self._on_back = on_back
         self._title = urwid.Text("Keep this layout?", align="center")
         self._description = urwid.Text(
@@ -551,10 +553,11 @@ class LayoutSaveModal(urwid.WidgetWrap):
             align="center",
         )
         self._actions = _action_legend([
-            ("a", "always keep the latest layout"),
-            ("t", "this time (apply on the next launch)"),
-            ("n / ↵", "do not save it"),
-            ("Esc", "back to quit choices"),
+            ("a", "always"),
+            ("t", "next launch once"),
+            ("n / ↵", "skip this time"),
+            ("v", "never"),
+            ("Esc", "back"),
         ], align="center", wrap="space")
         body_rows = [
             _Selectable(self._title),
@@ -593,6 +596,9 @@ class LayoutSaveModal(urwid.WidgetWrap):
             return None
         if key in ("n", "N", "enter"):
             self._on_no()
+            return None
+        if key in ("v", "V"):
+            self._on_never()
             return None
         if key == "esc":
             self._on_back()
@@ -653,7 +659,7 @@ class OptionsModal(urwid.WidgetWrap):
     _POLICY_LABELS = (
         ("always", "Always"),
         ("ask", "Ask every time"),
-        ("never", "No"),
+        ("never", "Never"),
     )
 
     def __init__(
@@ -661,18 +667,22 @@ class OptionsModal(urwid.WidgetWrap):
         *,
         layout_policy: str,
         yolo_policy: str,
+        update_policy: str,
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
+        on_update_policy: Callable[[str], bool],
         on_close: Callable[[], None],
     ) -> None:
         self._on_close = on_close
         self._policies = {
             "layout": layout_policy,
             "yolo": yolo_policy,
+            "update": update_policy,
         }
         self._callbacks = {
             "layout": on_layout_policy,
             "yolo": on_yolo_policy,
+            "update": on_update_policy,
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
         rows: list[urwid.Widget] = [
@@ -708,6 +718,22 @@ class OptionsModal(urwid.WidgetWrap):
         ))
         rows.extend([
             urwid.Divider(),
+            urwid.Text(("title", "Railmux updates")),
+            urwid.Text(
+                "Checks PyPI once when the outer Railmux launcher starts. "
+                "Offline or failed checks never prevent startup."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "update",
+            {
+                "always": "install newer Railmux releases automatically",
+                "ask": "ask before installing each available update",
+                "never": "do not check PyPI for Railmux updates",
+            },
+        ))
+        rows.extend([
+            urwid.Divider(),
             urwid.Text(
                 ("dim", "Settings are saved in "
                  "~/.config/railmux/config.toml")
@@ -726,7 +752,7 @@ class OptionsModal(urwid.WidgetWrap):
             urwid.Divider(),
             _action_legend([
                 ("↑↓", "navigate"),
-                ("↵ / Space", "apply"),
+                ("↵ / Space", "apply; selected closes"),
                 ("o / Esc", "close"),
             ], align="center", wrap="space"),
         ])
@@ -752,6 +778,7 @@ class OptionsModal(urwid.WidgetWrap):
 
     def _select(self, group: str, policy: str) -> None:
         if policy == self._policies[group]:
+            self._on_close()
             return
         if not self._callbacks[group](policy):
             return
@@ -781,17 +808,19 @@ class OptionsModal(urwid.WidgetWrap):
 
 
 class YoloConfirmModal(urwid.WidgetWrap):
-    """First-time Codex prompt with persistent, process, and safe-off choices."""
+    """Codex prompt with persistent and current-run on/off choices."""
 
     def __init__(
         self,
         on_always: Callable[[], None],
         on_this_time: Callable[[], None],
         on_no: Callable[[], None],
+        on_never: Callable[[], None],
     ) -> None:
         self._on_always = on_always
         self._on_this_time = on_this_time
         self._on_no = on_no
+        self._on_never = on_never
         rows = [
             urwid.Text("Enable Codex auto-run (YOLO)?", align="center"),
             urwid.Divider(),
@@ -810,6 +839,7 @@ class YoloConfirmModal(urwid.WidgetWrap):
                 ("a", "always enable"),
                 ("t", "this Railmux run only"),
                 ("n / ↵ / Esc", "keep off for this Railmux run"),
+                ("v", "never ask; keep off"),
             ], align="center", wrap="space"),
         ])
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
@@ -829,6 +859,9 @@ class YoloConfirmModal(urwid.WidgetWrap):
             return None
         if key in ("n", "N", "esc", "enter"):
             self._on_no()
+            return None
+        if key in ("v", "V"):
+            self._on_never()
             return None
         if key in ("up", "down", "page up", "page down", "home", "end"):
             inner_cols = max(1, size[0] - 2)

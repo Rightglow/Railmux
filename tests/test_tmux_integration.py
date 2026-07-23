@@ -1332,6 +1332,35 @@ def test_real_tmux_single_sidebar_focus_clears_stale_target_format(isolated_tmux
         ).strip() == "fg=colour240"
 
 
+def test_real_tmux_agent_focus_heals_external_gray_border_drift(isolated_tmux):
+    display_session, _sidebar_pane, _socket_path = isolated_tmux
+    primary = subprocess.check_output(
+        [
+            "tmux", "split-window", "-d", "-h", "-t", display_session,
+            "-P", "-F", "#{pane_id}", "sleep 60",
+        ],
+        text=True,
+    ).strip()
+    subprocess.run(["tmux", "select-pane", "-t", primary], check=True)
+
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._workspace.primary.pane_id = primary
+    app._railmux_has_focus = False
+    app._divider_active = (
+        True, WorkspaceLayout.SIDE_BY_SIDE, None)
+    app._last_border_verify_at = 0.0
+    app._sync_border_indicators = lambda _arrows: True
+
+    assert tmux_ctl.set_window_border_styles(
+        "fg=colour240", "fg=colour240")
+    app._retry_pending_divider_style()
+
+    assert tmux_ctl.window_border_styles() == (
+        True, ("fg=colour240", "fg=#5faf00"))
+
+
 def test_real_side_by_side_focus_draws_inward_arrows_and_restores(
     isolated_tmux,
 ):

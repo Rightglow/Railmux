@@ -938,7 +938,9 @@ class TerminalSurface:
         self.stream.flush()
         self.active = True
 
-    def _reconcile_terminal_modes(self, requested: TerminalMode) -> None:
+    def _reconcile_terminal_modes(
+        self, requested: TerminalMode,
+    ) -> TerminalMode:
         """Mirror only input-affecting modes explicitly carried by protocol v7."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
@@ -955,6 +957,7 @@ class TerminalSurface:
             self.stream.write(b"".join(controls))
             self.stream.flush()
         self.terminal_modes = requested
+        return enabled
 
     @staticmethod
     def _cursor_is_covered(
@@ -1035,9 +1038,10 @@ class TerminalSurface:
         self,
         screen: AppliedScreen,
         overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...] = (),
-    ) -> None:
+    ) -> bool:
+        """Paint a screen and report whether focus reporting was just enabled."""
         self.start()
-        self._reconcile_terminal_modes(screen.terminal_modes)
+        enabled_modes = self._reconcile_terminal_modes(screen.terminal_modes)
         projection_top, visible_height = self._projection(screen.height)
         rendered = [b"\033[?7l"]
         if screen.clear:
@@ -1070,6 +1074,7 @@ class TerminalSurface:
         )
         self.stream.write(b"".join(rendered))
         self.stream.flush()
+        return bool(enabled_modes & TerminalMode.FOCUS_EVENTS)
 
     def paint_overlays(
         self,
@@ -1325,11 +1330,8 @@ def _stop_unstarted_remote(process: subprocess.Popen) -> None:
 
 
 def _local_upgrade_argv(version: str) -> list[str]:
-    argv = [sys.executable, "-m", "pip", "install"]
-    if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
-        argv.append("--user")
-    argv.extend(("--upgrade", f"railmux=={version}"))
-    return argv
+    from railmux.self_update import upgrade_argv
+    return upgrade_argv(version)
 
 
 def _upgrade_local_and_restart(version: str, raw_args: Sequence[str]) -> NoReturn:
@@ -1593,13 +1595,12 @@ def prepare_remote_process(
         )
         if remote_is_newer:
             protocol_note = (
-                f"SSH protocol v{hello.protocol}"
-                if hello.protocol != PROTOCOL_VERSION
-                else f"compatible SSH protocol v{PROTOCOL_VERSION}"
+                f" and requires SSH protocol v{hello.protocol}"
+                if hello.protocol != PROTOCOL_VERSION else ""
             )
             if _confirm(
                 f"Remote Railmux {hello.version} is newer than local "
-                f"{__version__} and uses {protocol_note}. Upgrade local "
+                f"{__version__}{protocol_note}. Upgrade local "
                 f"Railmux to {hello.version}?"
             ):
                 _stop_unstarted_remote(process)
@@ -1940,7 +1941,16 @@ def run(args: argparse.Namespace) -> int:
                             if update.kind is UpdateKind.KEYFRAME:
                                 awaiting_keyframe = False
                             latest_screen = applied
-                            surface.paint(applied, history.overlays())
+                            focus_reporting_started = surface.paint(
+                                applied, history.overlays()
+                            )
+                            if focus_reporting_started:
+                                # Enabling DECSET 1004 does not require a
+                                # terminal to report its already-focused state.
+                                # On SSH reconnect that can leave tmux and the
+                                # active agent believing the client is still
+                                # unfocused until the user changes windows.
+                                send_protocol_frame(encode_input(b"\033[I"))
                             frames += 1
                             painted_rows += len(applied.changed_rows)
                         if saw_screen_update and route_refresh_needed:

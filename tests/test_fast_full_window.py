@@ -449,9 +449,9 @@ def test_mode_only_patch_reconciles_terminal_modes_once_and_restores_them():
 
     stream = io.BytesIO()
     surface = TerminalSurface(stream)
-    surface.paint(first)
-    surface.paint(applied)
-    surface.paint(applied)
+    assert surface.paint(first) is False
+    assert surface.paint(applied) is True
+    assert surface.paint(applied) is False
     surface.close()
 
     rendered = stream.getvalue()
@@ -1594,6 +1594,7 @@ def test_newer_compatible_remote_prompts_for_local_upgrade_but_can_continue(
 
     assert selected is process
     assert "Upgrade local Railmux to 999.0?" in questions[0]
+    assert "protocol" not in questions[0].lower()
     assert process.stdin.getvalue() == REMOTE_START
     assert "continuing with local Railmux" in capsys.readouterr().err
 
@@ -1671,6 +1672,7 @@ def test_released_021_client_can_offer_upgrade_to_remote_022(monkeypatch):
     assert process.terminated
     assert "Remote Railmux 0.2.2 is newer than local 0.2.1" in questions[0]
     assert "Upgrade local Railmux to 0.2.2?" in questions[0]
+    assert "requires SSH protocol v7" in questions[0]
 
 
 def test_newer_protocol_with_non_newer_package_cannot_downgrade_local(

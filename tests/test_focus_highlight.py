@@ -528,6 +528,29 @@ def test_refresh_retry_heals_border_options_that_drift_after_success(
         True, WorkspaceLayout.SIDE_BY_SIDE, None)
 
 
+def test_refresh_retry_repairs_stale_style_cache_from_reconciled_focus(
+        monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._workspace.primary.pane_id = "%2"
+    app._railmux_has_focus = False
+    # A reconnect briefly painted sidebar focus, then tmux returned input to
+    # P1 without the old process updating its cached style state.
+    app._divider_active = (
+        False, WorkspaceLayout.SIDE_BY_SIDE, "%2")
+    app._sync_border_indicators = MagicMock(return_value=True)
+    set_border = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_border_styles", set_border)
+
+    app._retry_pending_divider_style()
+
+    set_border.assert_called_once_with("fg=colour240", "fg=#5faf00")
+    assert app._divider_active == (
+        True, WorkspaceLayout.SIDE_BY_SIDE, None)
+
+
 def test_refresh_border_verification_is_throttled(monkeypatch):
     app = App.__new__(App)
     app._workspace = AgentWorkspace()

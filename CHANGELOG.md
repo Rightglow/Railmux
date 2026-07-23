@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Check PyPI once before a normal outer Railmux launch and offer
+  **Always**, **This time**, **No**, or **Never** when a newer stable release
+  exists.
+  The persistent **Railmux updates** option uses **Always**,
+  **Ask every time**, or **Never** in the shared `config.toml`; offline checks,
+  failed installs, non-interactive launches, and editable source installs
+  cannot prevent startup or overwrite source work.
+
+### Changed
+
+- Keep compatible `railmux ssh` upgrade prompts focused on the local and remote
+  package versions; mention the SSH protocol only when the newer remote
+  actually requires a different protocol.
+- Let `Enter`, `Space`, or a click on an already-selected Options value confirm
+  and close the screen instead of appearing to do nothing.
+- Give the layout-retention and Codex auto-run prompts the same complete
+  lifetime choice: one-time acceptance, persistent acceptance, one-time
+  rejection, or persistent rejection.
+
+### Fixed
+
+- Reconcile focused-pane border cache state with tmux before verifying its
+  colours, and restore a Focus-In event when `railmux ssh` re-enables terminal
+  focus reporting after reconnect. Together these prevent an active agent pane
+  and its input UI from remaining incorrectly gray.
+
 ## [0.2.6] - 2026-07-23
 
 ### Fixed

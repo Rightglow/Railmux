@@ -130,9 +130,11 @@ def test_modal_action_legends_use_high_contrast_attribute(tmp_path):
             running_count=1,
         ),
         RenameModal("old title", lambda _title: None, lambda: None),
-        YoloConfirmModal(lambda: None, lambda: None, lambda: None),
-        LayoutSaveModal(
+        YoloConfirmModal(
             lambda: None, lambda: None, lambda: None, lambda: None),
+        LayoutSaveModal(
+            lambda: None, lambda: None, lambda: None, lambda: None,
+            lambda: None),
         SessionInfoModal(None, None, lambda: None),
         RunningInfoModal(
             "agent", "cx-agent", None, None, False, lambda: None),
@@ -179,7 +181,7 @@ def test_quit_confirm_warns_when_ui_is_shared_by_multiple_clients():
 
 def test_layout_save_height_tracks_wrapped_description_and_actions():
     modal = LayoutSaveModal(
-        lambda: None, lambda: None, lambda: None, lambda: None)
+        lambda: None, lambda: None, lambda: None, lambda: None, lambda: None)
 
     wide = modal.preferred_height(60)
     narrow = modal.preferred_height(22)
@@ -187,22 +189,24 @@ def test_layout_save_height_tracks_wrapped_description_and_actions():
     assert narrow > wide
     text = " ".join(
         _rendered_text(modal, size=(22, narrow)).replace("│", " ").split())
-    assert "always keep the latest layout" in text
-    assert "this time (apply on the next launch)" in text
-    assert "back to quit choices" in text
+    assert "always" in text
+    assert "next launch once" in text
+    assert "never" in text
+    assert "back" in text
 
 
 def test_layout_save_actions_remain_visible_when_body_height_is_clamped():
     modal = LayoutSaveModal(
-        lambda: None, lambda: None, lambda: None, lambda: None)
+        lambda: None, lambda: None, lambda: None, lambda: None, lambda: None)
 
     text = " ".join(
         _rendered_text(modal, size=(32, 10)).replace("│", " ").split())
 
-    assert "always keep the latest layout" in text
-    assert "this time (apply on the next launch)" in text
-    assert "do not save it" in text
-    assert "back to quit choices" in text
+    assert "always" in text
+    assert "next launch once" in text
+    assert "skip this time" in text
+    assert "never" in text
+    assert "back" in text
 
 
 def test_options_support_keyboard_mouse_and_failed_save():
@@ -210,8 +214,10 @@ def test_options_support_keyboard_mouse_and_failed_save():
     modal = OptionsModal(
         layout_policy="ask",
         yolo_policy="never",
+        update_policy="ask",
         on_layout_policy=lambda value: changes.append(("layout", value)) or True,
         on_yolo_policy=lambda value: value != "always",
+        on_update_policy=lambda value: changes.append(("update", value)) or True,
         on_close=lambda: changes.append(("close", "")),
     )
 
@@ -225,6 +231,14 @@ def test_options_support_keyboard_mouse_and_failed_save():
         (60,), "mouse press", 1, 2, 0, True)
     assert modal._policies["yolo"] == "never"
 
+    update_never = modal._option_rows["update"][2]
+    assert update_never.keypress((60,), "enter") is None
+    assert modal._policies["update"] == "never"
+    assert changes[-1] == ("update", "never")
+
+    assert update_never.keypress((60,), " ") is None
+    assert changes[-1] == ("close", "")
+
     assert modal.keypress((60, 24), "o") is None
     assert changes[-1] == ("close", "")
 
@@ -233,18 +247,22 @@ def test_options_render_current_policies_and_action_legend():
     modal = OptionsModal(
         layout_policy="always",
         yolo_policy="ask",
+        update_policy="never",
         on_layout_policy=lambda _value: True,
         on_yolo_policy=lambda _value: True,
+        on_update_policy=lambda _value: True,
         on_close=lambda: None,
     )
 
-    text = _rendered_text(modal, size=(70, 28))
+    text = _rendered_text(modal, size=(70, 40))
 
     assert "Layout retention" in text
     assert "Codex auto-run (YOLO)" in text
+    assert "Railmux updates" in text
     assert "[x] Always" in text
     assert "[x] Ask every time" in text
-    assert "Space" in text and "close" in text
+    assert "[x] Never" in text
+    assert "Space" in text and "selected closes" in text
 
 
 def test_options_keyboard_starts_on_current_layout_choice():
@@ -252,8 +270,10 @@ def test_options_keyboard_starts_on_current_layout_choice():
     modal = OptionsModal(
         layout_policy="ask",
         yolo_policy="never",
+        update_policy="ask",
         on_layout_policy=lambda value: changes.append(value) or True,
         on_yolo_policy=lambda _value: True,
+        on_update_policy=lambda _value: True,
         on_close=lambda: None,
     )
 

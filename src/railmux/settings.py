@@ -169,6 +169,17 @@ class Settings:
             return False
         return self._update_section("codex", {"auto_run": policy})
 
+    # -- Package updates -------------------------------------------------
+    @property
+    def update_policy(self) -> str:
+        policy = self._get("updates", "auto_update")
+        return policy if policy in OPTION_POLICIES else "ask"
+
+    def set_update_policy(self, policy: str) -> bool:
+        if policy not in OPTION_POLICIES:
+            return False
+        return self._update_section("updates", {"auto_update": policy})
+
     # -- Saved outer-workspace geometry ---------------------------------
     @property
     def layout_save_policy(self) -> str:

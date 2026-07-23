@@ -48,6 +48,17 @@ def test_no_keeps_yolo_off_for_run_and_preserves_ask_policy(
     assert app._codex_yolo_prompt_handled is True
 
 
+def test_never_keeps_yolo_off_and_persists(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    app._maybe_prompt_codex_yolo()
+    app._show_overlay.call_args[0][0]._on_never()
+
+    assert app._settings.codex_yolo_policy == "never"
+    assert Settings().codex_yolo_policy == "never"
+    assert app._codex_yolo_enabled() is False
+    assert app._codex_yolo_prompt_handled is True
+
+
 def test_not_shown_again_once_prompted(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     app._settings.set_codex_yolo_policy("never")
@@ -78,11 +89,16 @@ def test_enter_keeps_yolo_off():
     always = MagicMock()
     this_time = MagicMock()
     no = MagicMock()
-    modal = YoloConfirmModal(always, this_time, no)
+    never = MagicMock()
+    modal = YoloConfirmModal(always, this_time, no, never)
     assert modal.keypress((80,), "enter") is None
     always.assert_not_called()
     this_time.assert_not_called()
     no.assert_called_once_with()
+    never.assert_not_called()
+
+    assert modal.keypress((80,), "v") is None
+    never.assert_called_once_with()
 
 
 def test_failed_persistence_does_not_enable_yolo(tmp_path, monkeypatch):
@@ -99,5 +115,23 @@ def test_failed_persistence_does_not_enable_yolo(tmp_path, monkeypatch):
     app._close_modal.assert_called_once_with()
     app._set_status.assert_called_once_with(
         "Could not save Codex auto-run choice; settings unchanged.",
+        "error",
+    )
+
+
+def test_failed_never_persistence_stays_safe_for_current_run(
+    tmp_path, monkeypatch,
+):
+    app = _app(tmp_path, monkeypatch)
+    app._settings.set_codex_yolo_policy = MagicMock(return_value=False)
+
+    app._maybe_prompt_codex_yolo()
+    app._show_overlay.call_args[0][0]._on_never()
+
+    assert app._codex_yolo_enabled() is False
+    assert app._codex_yolo_prompt_handled is True
+    app._set_status.assert_called_once_with(
+        "Could not save the Never Codex auto-run choice; "
+        "keeping it off for this Railmux run.",
         "error",
     )

@@ -84,6 +84,19 @@ def test_options_yolo_policy_changes_only_future_launches(tmp_path, monkeypatch)
     assert app._codex_yolo_prompt_handled is False
 
 
+def test_options_update_policy_persists(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+
+    modal._option_rows["update"][0].keypress((60,), "enter")
+    assert app._settings.update_policy == "always"
+
+    modal._option_rows["update"][2].keypress((60,), "enter")
+    assert app._settings.update_policy == "never"
+
+
 def test_options_failed_write_keeps_modal_and_app_state(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     app._settings.set_layout_save_policy = MagicMock(return_value=False)

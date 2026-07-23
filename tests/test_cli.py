@@ -18,6 +18,9 @@ from railmux.tmux_server import TmuxServerTarget
 def tmux_preflight_succeeds(monkeypatch):
     """CLI behaviour tests must not depend on the host's tmux installation."""
     monkeypatch.setattr("railmux.cli.ensure_tmux_available", lambda: True)
+    monkeypatch.setattr(
+        "railmux.self_update.maybe_upgrade_before_launch", lambda *_args: None
+    )
     target = TmuxServerTarget("/tmp/tmux-test/railmux", 123)
     monkeypatch.setattr("railmux.cli.tmux_server.discover_target", lambda: target)
     monkeypatch.setattr(
@@ -196,6 +199,30 @@ def test_foreign_tmux_launches_dedicated_server_with_clean_environment(
     # detached from the foreign tmux identity.
     assert os.environ["TMUX"] == "/tmp/tmux-user/default,456,0"
     assert os.environ["TMUX_PANE"] == "%9"
+
+
+def test_outer_launcher_checks_for_update_once(monkeypatch):
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda: None
+    )
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.is_current_server", lambda _target: False
+    )
+    update = MagicMock()
+    monkeypatch.setattr(
+        "railmux.self_update.maybe_upgrade_before_launch", update
+    )
+    monkeypatch.setattr(
+        "railmux.cli._run_tmux_client_with_watchdog",
+        MagicMock(return_value=0),
+    )
+
+    assert main(["--project", "/work"]) == 0
+
+    assert update.call_count == 1
+    raw_args, settings = update.call_args.args
+    assert raw_args == ["--project", "/work"]
+    assert settings.update_policy == "ask"
 
 
 def test_prelaunch_recovery_is_scoped_to_the_dedicated_server(monkeypatch):

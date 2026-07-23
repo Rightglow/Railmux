@@ -179,6 +179,49 @@ def test_this_time_exit_choice_saves_one_shot_profile():
     app._commit_exit.assert_called_once_with(soft=True)
 
 
+def test_never_exit_choice_persists_and_discards_saved_profile():
+    app = _app()
+    app._layout_geometry_user_owned = True
+    app._layout_profile = LayoutProfile("once", "single", 250)
+    current = LayoutProfile("always", "single", 300)
+    app._capture_layout_profile = MagicMock(return_value=current)
+    app._settings.set_layout_save_policy.return_value = True
+    app._show_preferred_height_modal = MagicMock()
+    app._commit_exit = MagicMock()
+
+    app._request_exit(soft=True)
+
+    modal = app._show_preferred_height_modal.call_args.args[0]
+    modal._on_never()
+    app._settings.set_layout_save_policy.assert_called_once_with("never")
+    assert app._layout_profile is None
+    app._commit_exit.assert_called_once_with(soft=True)
+
+
+def test_failed_never_exit_choice_still_exits_without_discarding_profile():
+    app = _app()
+    app._layout_geometry_user_owned = True
+    saved = LayoutProfile("once", "single", 250)
+    app._layout_profile = saved
+    app._capture_layout_profile = MagicMock(
+        return_value=LayoutProfile("always", "single", 300)
+    )
+    app._settings.set_layout_save_policy.return_value = False
+    app._show_preferred_height_modal = MagicMock()
+    app._commit_exit = MagicMock()
+
+    app._request_exit(soft=False)
+
+    app._show_preferred_height_modal.call_args.args[0]._on_never()
+    assert app._layout_profile == saved
+    app._set_status.assert_called_once_with(
+        "Could not save the Never layout preference; "
+        "skipping this time only.",
+        "error",
+    )
+    app._commit_exit.assert_called_once_with(soft=False)
+
+
 def test_never_layout_policy_skips_exit_prompt():
     app = _app()
     app._layout_geometry_user_owned = True

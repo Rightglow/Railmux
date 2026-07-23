@@ -146,18 +146,20 @@ the bottom Running section; Projects and Sessions keep the same heights.
 After an explicit layout change (`F8` or `[` / `]`), quitting offers to keep
 the current pane proportions: **Always** keeps the latest custom layout,
 **This time** restores it on the next launch only, and **No** leaves it
-unsaved. Proportions, rather than cell counts or tmux pane identities, are
-stored, so a later terminal may have a different size. If a saved split cannot
-fit, Railmux uses safe responsive defaults for that run without overwriting the
-saved profile. The first Codex auto-run prompt uses the same lifetime language:
-**Always**, **This Railmux run**, or **No**.
+unsaved for this exit; **Never** also disables future layout prompts.
+Proportions, rather than cell counts or tmux pane identities, are stored, so a
+later terminal may have a different size. If a saved split cannot fit, Railmux
+uses safe responsive defaults for that run without overwriting the saved
+profile. The first Codex auto-run prompt uses the corresponding choices:
+**Always**, **This Railmux run**, **No**, or **Never**.
 
 Press `o`, or select **More → Options**, to change persistent behavior without
-editing TOML. Both **Layout retention** and **Codex auto-run** support
-**Always**, **Ask every time**, and **No**. Use arrow keys plus `Enter`/`Space`,
-or click a choice with the mouse. `Esc` or `o` closes Options. Layout changes do
-not resize the current workspace; Codex auto-run changes affect new launches,
-not agents that are already running.
+editing TOML. **Layout retention**, **Codex auto-run**, and **Railmux updates**
+support **Always**, **Ask every time**, and **Never**. Use arrow keys plus
+`Enter`/`Space`, or click a choice with the mouse. Activating the already
+selected choice confirms and closes the screen; `Esc` or `o` also closes it.
+Layout changes do not resize the current workspace; Codex auto-run changes
+affect new launches, not agents that are already running.
 
 ### Dual-agent layouts
 
@@ -310,6 +312,10 @@ auto_run = "ask"
 # Save custom pane proportions: "always", "ask", or "never"
 layout_retention = "ask"
 
+[updates]
+# PyPI update checks at normal Railmux startup: "always", "ask", or "never"
+auto_update = "ask"
+
 [projects]
 # Show projects with no resumable sessions (default: false)
 show_empty_projects = false
@@ -332,6 +338,15 @@ screen update the same values; Options preserves comments, formatting, order,
 and unknown keys. A one-run Codex choice is kept only in memory. A `This time`
 layout profile is stored here until it is successfully applied on the next
 launch, then removed.
+
+When the default `auto_update = "ask"` finds a newer stable PyPI release,
+Railmux offers **Always**, **This time**, **No**, or **Never** before opening
+the TUI.
+**Always** installs this and future releases automatically, **This time**
+updates only now, **No** skips only this launch, and **Never** disables future
+checks. Update checks time out quickly and never prevent offline startup;
+failed installs continue with the installed version and print a manual
+command. Editable source installations are reported but never overwritten.
 
 ## Diagnostics
 

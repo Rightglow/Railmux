@@ -229,6 +229,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not args.inside_tmux and not on_dedicated_server:
+        # Check exactly once in the user-facing outer launcher. The
+        # ``--inside-tmux`` child must never repeat the network check or prompt.
+        from railmux.self_update import maybe_upgrade_before_launch
+        from railmux.settings import Settings
+        maybe_upgrade_before_launch(raw_args, Settings())
+
         # A swap transaction survives a killed Railmux Python process in tmux
         # metadata. Repair it before ``new-session -A``: otherwise that command
         # may attach to a stranded display window and never start App. Route the

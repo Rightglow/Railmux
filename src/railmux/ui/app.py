@@ -1089,10 +1089,22 @@ class App:
         """Heal failed writes and externally drifted tmux border options."""
         if not hasattr(self, "_divider_active"):
             return
+        workspace = self._agent_workspace()
+        active = not getattr(self, "_railmux_has_focus", True)
+        desired_state = (
+            active,
+            workspace.layout,
+            None if active else workspace.target.pane_id,
+        )
         state = getattr(self, "_divider_active", None)
-        if state is None:
-            self._set_divider_active(
-                not getattr(self, "_railmux_has_focus", True))
+        if state != desired_state:
+            # The focus reconciliation immediately before this method treats
+            # tmux's active pane as authoritative. Repair the style cache too:
+            # a reconnect can change pane focus and window options in separate
+            # frames, leaving either one stale.
+            self._set_divider_active(active, force=True)
+            # A successful write just established the desired styles; a failed
+            # one leaves ``None`` and will retry on the next refresh.
             return
 
         # tmux options can be restored or overwritten independently of the
@@ -3832,11 +3844,24 @@ class App:
                 f"Codex auto-run: {self._policy_label(policy)}.")
             return True
 
+        def set_update(policy: str) -> bool:
+            if not self._settings.set_update_policy(policy):
+                self._set_status(
+                    "Could not save Railmux update option; setting unchanged.",
+                    "error",
+                )
+                return False
+            self._set_status(
+                f"Railmux updates: {self._policy_label(policy)}.")
+            return True
+
         modal = OptionsModal(
             layout_policy=self._settings.layout_save_policy,
             yolo_policy=self._settings.codex_yolo_policy,
+            update_policy=self._settings.update_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
+            on_update_policy=set_update,
             on_close=self._close_options_modal,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
@@ -3995,6 +4020,17 @@ class App:
         def no() -> None:
             self._commit_exit(soft=soft)
 
+        def never() -> None:
+            if not self._settings.set_layout_save_policy("never"):
+                self._set_status(
+                    "Could not save the Never layout preference; "
+                    "skipping this time only.",
+                    "error",
+                )
+            else:
+                self._layout_profile = None
+            self._commit_exit(soft=soft)
+
         def back() -> None:
             self._close_modal()
             self._open_quit_confirm()
@@ -4003,6 +4039,7 @@ class App:
             on_always=lambda: save("always"),
             on_this_time=lambda: save("once"),
             on_no=no,
+            on_never=never,
             on_back=back,
         )
         self._show_preferred_height_modal(modal, width=56)
@@ -5896,11 +5933,26 @@ class App:
             self._set_status(
                 "Codex auto-run remains off for this Railmux run.")
 
+        def _never() -> None:
+            saved = self._settings.set_codex_yolo_policy("never")
+            self._codex_yolo_runtime = False
+            self._codex_yolo_prompt_handled = True
+            self._close_modal()
+            if not saved:
+                self._set_status(
+                    "Could not save the Never Codex auto-run choice; "
+                    "keeping it off for this Railmux run.",
+                    "error",
+                )
+                return
+            self._set_status("Codex auto-run disabled permanently.")
+
         from railmux.ui.modals import YoloConfirmModal
         modal = YoloConfirmModal(
             on_always=_always,
             on_this_time=_this_time,
             on_no=_no,
+            on_never=_never,
         )
         self._show_overlay(modal, width=60, height=45)
 

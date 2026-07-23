@@ -17,6 +17,7 @@ def settings(tmp_path, monkeypatch):
 def test_defaults_when_no_file(settings):
     store, _path = settings
     assert store.codex_yolo_policy == "ask"
+    assert store.update_policy == "ask"
     assert store.layout_profile is None
     assert store.layout_save_policy == "ask"
 
@@ -43,6 +44,25 @@ def test_codex_yolo_policy_round_trips(settings, policy):
     assert store.set_codex_yolo_policy(policy)
     assert store.codex_yolo_policy == policy
     assert Settings().codex_yolo_policy == policy
+
+
+@pytest.mark.parametrize("policy", ["always", "ask", "never"])
+def test_update_policy_round_trips(settings, policy):
+    store, path = settings
+
+    assert store.set_update_policy(policy)
+    assert store.update_policy == policy
+    assert Settings().update_policy == policy
+    data = tomlkit.parse(path.read_text()).unwrap()
+    assert data["updates"]["auto_update"] == policy
+
+
+def test_update_policy_rejects_unknown_value(settings):
+    store, path = settings
+
+    assert not store.set_update_policy("sometimes")
+    assert store.update_policy == "ask"
+    assert not path.exists()
 
 
 def test_malformed_config_is_never_overwritten(tmp_path, monkeypatch):
