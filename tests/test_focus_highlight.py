@@ -501,6 +501,50 @@ def test_refresh_retry_heals_arrow_and_green_border_partial_update(monkeypatch):
         True, WorkspaceLayout.SIDE_BY_SIDE, None)
 
 
+def test_refresh_retry_heals_border_options_that_drift_after_success(
+        monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._railmux_has_focus = False
+    app._divider_active = (
+        True, WorkspaceLayout.SIDE_BY_SIDE, None)
+    app._last_border_verify_at = 0.0
+    app._sync_border_indicators = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.time.monotonic", lambda: 10.0)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.window_border_styles",
+        lambda: (True, ("fg=colour240", "fg=colour240")),
+    )
+    set_border = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_border_styles", set_border)
+
+    app._retry_pending_divider_style()
+
+    set_border.assert_called_once_with("fg=colour240", "fg=#5faf00")
+    assert app._divider_active == (
+        True, WorkspaceLayout.SIDE_BY_SIDE, None)
+
+
+def test_refresh_border_verification_is_throttled(monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._divider_active = (
+        True, WorkspaceLayout.SIDE_BY_SIDE, None)
+    app._last_border_verify_at = 9.0
+    monkeypatch.setattr(
+        "railmux.ui.app.time.monotonic", lambda: 10.0)
+    read_border = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.window_border_styles", read_border)
+
+    app._retry_pending_divider_style()
+
+    read_border.assert_not_called()
+
+
 def test_resize_event_checks_workspace_but_ordinary_input_does_not():
     app = _paste_app()
     app._check_terminal_size = MagicMock()

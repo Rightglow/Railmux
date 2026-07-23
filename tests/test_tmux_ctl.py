@@ -828,6 +828,24 @@ def test_window_border_style_updates_both_segments_in_one_tmux_call():
     ]
 
 
+def test_window_border_styles_reads_effective_pair_in_one_query():
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         _mock_check_output("fg=gray\tfg=green\n") as output:
+        assert tmux_ctl.window_border_styles() == (
+            True, ("fg=gray", "fg=green"))
+
+    assert output.call_args.args[0] == [
+        "tmux", "display-message", "-p",
+        "#{pane-border-style}\t#{pane-active-border-style}",
+    ]
+
+
+def test_window_border_styles_rejects_an_incomplete_response():
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         _mock_check_output("fg=gray\n"):
+        assert tmux_ctl.window_border_styles() == (False, None)
+
+
 def test_local_window_option_distinguishes_inheritance_from_failure():
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output(""):

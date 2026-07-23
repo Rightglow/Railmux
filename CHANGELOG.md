@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Make the focused agent's green tmux border self-heal when a detach, reattach,
+  or independent option restore leaves the real border styles out of sync with
+  Railmux's cached focus state.
 - Keep compact status-bar page clicks working on tmux 3.7 and newer. User
   status ranges intentionally have no implicit mouse pane target; the managed
   binding now evaluates in the current client/window context and selects only
@@ -18,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make the cross-platform real-tmux click test wait for the client-specific
   status range to paint and drive its PTY without relying on BSD `script(1)` or
   one negotiated mouse encoding.
+- Gate PyPI publication on the reusable full test workflow, including the
+  Python 3.9–3.13 matrix and real tmux integration tests on Linux and macOS.
 
 ## [0.2.5] - 2026-07-23
 

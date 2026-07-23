@@ -733,6 +733,7 @@ class App:
         self._divider_active: (
             tuple[bool, WorkspaceLayout, str | None] | None
         ) = None
+        self._last_border_verify_at: float = 0.0
         self._border_indicators_original_known = False
         self._border_indicators_original = None
         self._border_indicators_arrows = False
@@ -1085,11 +1086,35 @@ class App:
         self._divider_active = state if applied and indicators_applied else None
 
     def _retry_pending_divider_style(self) -> None:
-        """Heal a partial tmux border update on the next normal refresh."""
-        if (hasattr(self, "_divider_active")
-                and self._divider_active is None):
+        """Heal failed writes and externally drifted tmux border options."""
+        if not hasattr(self, "_divider_active"):
+            return
+        state = getattr(self, "_divider_active", None)
+        if state is None:
             self._set_divider_active(
                 not getattr(self, "_railmux_has_focus", True))
+            return
+
+        # tmux options can be restored or overwritten independently of the
+        # active-pane/Target state (for example while clients detach and
+        # reattach). The in-memory cache alone cannot detect that drift. Check
+        # the effective pair at a low cadence and repaint only on mismatch.
+        now = time.monotonic()
+        if now - getattr(self, "_last_border_verify_at", 0.0) < 2.0:
+            return
+        self._last_border_verify_at = now
+        active, layout, _target_pane = state
+        gray = "fg=colour240"
+        green = f"fg={_GRASS_GREEN}"
+        if not active:
+            expected = (gray, gray)
+        elif layout is WorkspaceLayout.SINGLE:
+            expected = (green, green)
+        else:
+            expected = (gray, green)
+        ok, actual = tmux_ctl.window_border_styles()
+        if ok and actual != expected:
+            self._set_divider_active(active, force=True)
 
     def _set_railmux_focus(self, active: bool, *, force_border: bool = False) -> None:
         """Synchronize urwid focus maps and the tmux center divider."""

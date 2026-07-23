@@ -943,6 +943,29 @@ def set_window_border_styles(inactive: str, active: str) -> bool:
         return False
 
 
+def window_border_styles() -> tuple[bool, tuple[str, str] | None]:
+    """Return the effective inactive and active border styles in one query."""
+    if not in_tmux():
+        return False, None
+    try:
+        value = subprocess.check_output(
+            [
+                "tmux", "display-message", "-p",
+                "#{pane-border-style}\t#{pane-active-border-style}",
+            ],
+            stderr=subprocess.DEVNULL,
+        ).decode().rstrip("\n")
+        inactive, active = value.split("\t", 1)
+        return True, (inactive, active)
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        UnicodeError,
+        ValueError,
+    ):
+        return False, None
+
+
 def set_window_border_style(value: str) -> bool:
     """Paint active and inactive border segments with one continuous colour."""
     return set_window_border_styles(value, value)
