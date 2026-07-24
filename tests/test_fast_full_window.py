@@ -68,6 +68,7 @@ from railmux.fast_display_client import (
     parse_remote_hello,
     prepare_remote_process,
     remote_install_help,
+    screen_input_may_change_routes,
     split_local_escape,
 )
 
@@ -484,6 +485,35 @@ def test_status_row_click_bypasses_stale_local_pointer_capture():
     assert action.refresh_routes is True
     assert view._local_pointer_capture is False
     assert view.visible_routes == ()
+
+
+def test_status_row_wheels_forward_without_cancelling_agent_history():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%9",
+        x=30,
+        y=0,
+        width=50,
+        height=3,
+        lines=(b"old", b"one", b"two", b"three"),
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+    view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+
+    vertical = SgrMouseEvent(b"vertical", 64, 2, 24, True)
+    horizontal = SgrMouseEvent(b"horizontal", 66, 2, 24, True)
+
+    assert view.pointer_event(
+        vertical, "%9", status_row=24
+    ) == HistoryAction(forwarded_input=vertical.raw)
+    assert view.pointer_event(
+        horizontal, "%9", status_row=24
+    ) == HistoryAction(forwarded_input=horizontal.raw)
+    assert view.active is True
+    assert view.visible_routes == (route,)
 
 
 def test_resize_notifies_private_tmux_client_process_group(monkeypatch):
@@ -1242,6 +1272,49 @@ def test_history_stops_extending_after_a_short_deep_response():
         assert action.protocol_frame == b""
 
 
+def test_lost_deep_history_request_retries_after_a_bounded_timeout():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    prefetch_id, _limit = decode_history_prefetch(prefetch.data)
+    cached = HistorySnapshot(
+        prefetch_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        (b"oldest", b"older", b"one", b"two", b"newest"),
+    )
+    view.accept_prefetch(HistoryBatch(prefetch_id, (cached,)))
+    wheel_up = SgrMouseEvent(b"up", 64, 40, 2, True)
+
+    first = view.wheel(wheel_up, now=2.0)
+    first_request = decode_history_request(
+        InputFrameDecoder().feed(first.protocol_frame)[0].data
+    )
+    assert view.wheel(wheel_up, now=3.0).protocol_frame == b""
+
+    retry = view.wheel(
+        wheel_up,
+        now=2.0 + fast_display_client._HISTORY_DEEP_TIMEOUT,
+    )
+    retry_request = decode_history_request(
+        InputFrameDecoder().feed(retry.protocol_frame)[0].data
+    )
+
+    assert retry_request[0] != first_request[0]
+    assert view.accept(HistorySnapshot(
+        first_request[0],
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        (b"late", *cached.lines),
+    )) == HistoryAction()
+    assert retry_request[0] in view._deep_pending
+
+
 def test_deep_history_response_without_anchor_does_not_jump_viewport():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
@@ -1504,6 +1577,53 @@ def test_only_bounded_layout_and_modal_keys_invalidate_live_routes():
     assert input_may_change_routes(b"\r", routes_visible=False)
     assert not input_may_change_routes(b"ordinary input", routes_visible=True)
     assert not input_may_change_routes(b"\r", routes_visible=True)
+    assert input_may_change_routes(
+        b"\x1b[B", routes_visible=True, cursor_in_agent=False
+    )
+    assert input_may_change_routes(
+        b"\x02", routes_visible=True, cursor_in_agent=True
+    )
+    assert not input_may_change_routes(
+        b"\x1b[B", routes_visible=True, cursor_in_agent=True
+    )
+    assert not input_may_change_routes(
+        b"\x1b[I", routes_visible=True, cursor_in_agent=False
+    )
+    assert not input_may_change_routes(
+        b"\x1b[O", routes_visible=True, cursor_in_agent=False
+    )
+
+
+def test_screen_input_route_detection_distinguishes_sidebar_and_agent_cursor():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    view.accept_prefetch(HistoryBatch(request_id, (
+        HistorySnapshot(
+            request_id,
+            "%8",
+            x=30,
+            y=0,
+            width=50,
+            height=4,
+            lines=(b"old", b"one", b"two", b"new"),
+        ),
+    )))
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=80, height=4))
+        )[0],
+        os.terminal_size((80, 4)),
+    )
+    assert screen is not None
+    sidebar = fast_display_client.replace(screen, cursor_x=5, cursor_y=1)
+    agent = fast_display_client.replace(screen, cursor_x=40, cursor_y=1)
+
+    assert screen_input_may_change_routes(b"\x1b[B", view, sidebar)
+    assert not screen_input_may_change_routes(b"\x1b[B", view, agent)
+    assert screen_input_may_change_routes(b"\x02", view, agent)
+    assert not screen_input_may_change_routes(b"\x1b[I", view, sidebar)
+    assert not screen_input_may_change_routes(b"\x1b[O", view, sidebar)
 
 
 def test_full_window_ssh_command_uses_railmux_remote_subcommand_and_protocol():

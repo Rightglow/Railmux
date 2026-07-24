@@ -73,6 +73,7 @@ _HISTORY_PAGE_LINES = 2000
 _HISTORY_LOAD_AHEAD_LINES = 120
 _HISTORY_PREFETCH_INTERVAL = 3.0
 _HISTORY_PREFETCH_TIMEOUT = 6.0
+_HISTORY_DEEP_TIMEOUT = 10.0
 _HISTORY_CONTENT_PANES = 8
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
@@ -520,6 +521,7 @@ class _PendingHistory:
     epoch: int
     pane_id: str
     target_lines: int
+    requested_at: float
 
 
 class LocalHistoryView:
@@ -707,7 +709,7 @@ class LocalHistoryView:
         target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
         if loaded_limit >= target_lines:
             return HistoryAction(
-                protocol_frame=self._extend_history(viewport),
+                protocol_frame=self._extend_history(viewport, now=now),
                 render_history=True,
             )
         request_id = self._allocate_request_id()
@@ -715,6 +717,7 @@ class LocalHistoryView:
             self.route_epoch,
             route.pane_id,
             target_lines,
+            time.monotonic() if now is None else now,
         )
         return HistoryAction(
             protocol_frame=encode_history_request(
@@ -723,10 +726,25 @@ class LocalHistoryView:
             render_history=True,
         )
 
-    def _extend_history(self, viewport: _HistoryViewport) -> bytes:
+    def _extend_history(
+        self,
+        viewport: _HistoryViewport,
+        *,
+        now: float | None = None,
+    ) -> bytes:
         """Request the next cumulative page when a viewport nears its top."""
         snapshot = viewport.snapshot
         assert snapshot.pane_id is not None
+        requested_at = time.monotonic() if now is None else now
+        self._deep_pending = {
+            request_id: pending
+            for request_id, pending in self._deep_pending.items()
+            if (
+                pending.pane_id != snapshot.pane_id
+                or requested_at - pending.requested_at
+                < _HISTORY_DEEP_TIMEOUT
+            )
+        }
         if (
             viewport.exhausted
             or viewport.loaded_limit >= self.history_limit
@@ -749,6 +767,7 @@ class LocalHistoryView:
             self.route_epoch,
             snapshot.pane_id,
             target_lines,
+            requested_at,
         )
         return encode_history_request(
             request_id,
@@ -839,7 +858,8 @@ class LocalHistoryView:
                 return HistoryAction(restore_live=True)
             return HistoryAction(
                 protocol_frame=(
-                    self._extend_history(viewport) if direction > 0 else b""
+                    self._extend_history(viewport, now=now)
+                    if direction > 0 else b""
                 ),
                 render_history=True,
             )
@@ -866,7 +886,11 @@ class LocalHistoryView:
             # release or a stale pane route briefly overlaps the bottom row.
             # A press can switch compact pages, so invalidate route geometry
             # immediately; the next prefetch repopulates the new visible pane.
-            changes_page = event.pressed and not event.button & 32
+            changes_page = (
+                event.pressed
+                and not event.button & 32
+                and not event.button & 64
+            )
             restore_live = self.invalidate_routes() if changes_page else False
             return HistoryAction(
                 forwarded_input=event.raw,
@@ -1103,11 +1127,41 @@ def coalesce_forwarded_wheel(
     return action
 
 
-def input_may_change_routes(data: bytes, *, routes_visible: bool) -> bool:
+def input_may_change_routes(
+    data: bytes,
+    *,
+    routes_visible: bool,
+    cursor_in_agent: bool = True,
+) -> bool:
     """Recognize bounded Railmux layout/modal keys without taxing agent typing."""
+    if data in (b"\x1b[I", b"\x1b[O"):
+        return False
+    if b"\x02" in data:
+        return True
     if b"\x1b[19~" in data or b"\x1b[20~" in data or data == b"?":
         return True
+    if routes_visible and not cursor_in_agent:
+        return True
     return not routes_visible and data in (b"\x1b", b"\r", b"\n")
+
+
+def screen_input_may_change_routes(
+    data: bytes,
+    history: LocalHistoryView,
+    screen: AppliedScreen | None,
+) -> bool:
+    """Fail closed when keyboard input originates outside an agent route."""
+    cursor_in_agent = (
+        screen is not None
+        and history.pane_id_at_position(
+            screen.cursor_x, screen.cursor_y
+        ) is not None
+    )
+    return input_may_change_routes(
+        data,
+        routes_visible=bool(history.visible_routes),
+        cursor_in_agent=cursor_in_agent,
+    )
 
 
 def split_local_escape(data: bytes) -> tuple[bytes, bool]:
@@ -2341,8 +2395,8 @@ def run(args: argparse.Namespace) -> int:
             return
         if not part:
             return
-        may_change_routes = input_may_change_routes(
-            part, routes_visible=bool(history.visible_routes)
+        may_change_routes = screen_input_may_change_routes(
+            part, history, latest_screen,
         )
         if history.active or history.pending:
             if part == b"\x1b":
