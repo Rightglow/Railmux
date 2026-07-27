@@ -1,0 +1,4 @@
+Benefit: wheel scrolling now reads the local history overlay, so it stays smooth
+without a network round-trip or a full-pane redraw.
+Test: send one wheel-up event and assert the overlay scrolls by the expected row
+count while zero bytes are forwarded upstream.

@@ -8,6 +8,7 @@ build/
 *.pyc
 web/public/generated/*
 !web/public/generated/railmux-demo.cast
+!web/public/generated/railmux-workflow-demo.cast
 !web/public/generated/railmux-mobile-demo.cast
 !web/public/generated/dual-agent-workspace.png
 web/test-results/

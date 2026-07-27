@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   player, and regenerates the recording during every Pages build.
 - Add a second source-authentic 46×26 recording for the small-screen product
   section, recorded through Railmux's real compact layout and page controls.
+- Add a dedicated 76×30 guided sidebar recording with durable keyboard labels,
+  a cell-aligned mouse pointer, and a reviewed real Claude response captured
+  without provider session persistence.
 - Let `+` and `-` expand and collapse the Button Bar's secondary action row
   directly from the keyboard.
 - Show a one-time local info message when an SSH history viewport reaches the
@@ -38,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replace the product site's illustrative hero and feature mockups with real
   desktop and mobile terminal captures, surface recorded keyboard actions in
   the guided workflow, and clarify the remote-to-local fast SSH data flow.
+- Give the hero, sidebar evidence, guided workflow, and mobile recording
+  distinct jobs instead of replaying the desktop sequence in multiple places.
 
 ### Fixed
 
@@ -46,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user's original binding in unrelated tmux windows.
 - Leave one trailing cell after right-aligned status text so info, warning,
   error, and tip messages do not visually touch the terminal edge.
+- Remove build-host names, private tmux labels, and truncated temporary paths
+  from generated website casts while rejecting incomplete scripted recordings.
 
 ## [0.2.12] - 2026-07-27
 

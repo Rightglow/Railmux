@@ -18,11 +18,14 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   const desktopDemo = page.locator('[data-demo="desktop-recording"]');
   await expect(desktopDemo.locator(".ap-player")).toBeVisible();
   await expect(page.locator("h1")).toContainText("Keep every");
-  await expect(page.getByText("ACTUAL RAILMUX SESSION")).toBeVisible();
+  await expect(page.getByText("REAL AGENT RESPONSE · ISOLATED RAILMUX")).toBeVisible();
   await page.waitForTimeout(1_000);
-  await desktopDemo.locator(".ap-overlay-start").evaluate(
-    (element) => { (element as HTMLElement).style.display = "none"; },
-  );
+  const startOverlay = desktopDemo.locator(".ap-overlay-start");
+  if (await startOverlay.count()) {
+    await startOverlay.evaluate(
+      (element) => { (element as HTMLElement).style.display = "none"; },
+    );
+  }
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -39,6 +42,26 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   await page.goto(".");
   await page.screenshot({
     path: join(outputDir, "social-card.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+  expect(pageErrors).toEqual([]);
+});
+
+test("show a native sidebar evidence frame", async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(".");
+  const evidence = page.locator('[data-demo="sidebar-evidence"]');
+  await evidence.scrollIntoViewIfNeeded();
+  await expect(evidence.locator(".ap-player")).toBeVisible();
+  const legend = page.locator(".sidebar-evidence-legend");
+  await expect(legend.getByText("NEW PROJECT", { exact: true })).toBeVisible();
+  await expect(legend.getByText("NEW SESSION", { exact: true })).toBeVisible();
+  await expect(legend.getByText("RUNNING", { exact: true })).toBeVisible();
+  await page.locator(".feature-showcase-sidebar").screenshot({
+    path: join(outputDir, "sidebar-workspace.png"),
     animations: "disabled",
     scale: "css",
   });
@@ -81,7 +104,7 @@ test("capture deterministic compact preview", async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test("play the guided real-terminal recording with input overlay", async ({ page }) => {
+test("play the guided recording with durable mouse and key cues", async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -89,8 +112,22 @@ test("play the guided real-terminal recording with input overlay", async ({ page
   const player = page.locator('[data-demo="workflow-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
-  await page.waitForTimeout(3_000);
-  await expect(player.locator(".ap-overlay-keystrokes")).toBeVisible();
+  const pointer = player.getByTestId("terminal-pointer");
+  await expect(pointer).toBeVisible({ timeout: 5_000 });
+  await expect(player.getByTestId("terminal-input-hud")).toContainText(
+    "New session",
+  );
+  await player.screenshot({
+    path: join(outputDir, "mouse-cue-workspace.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+  await expect(
+    player.locator('[data-input-kind="key"]'),
+  ).toBeVisible({ timeout: 7_000 });
+  await expect(player.getByTestId("terminal-input-hud")).toContainText(
+    "Back to the sidebar",
+  );
   await player.screenshot({
     path: join(outputDir, "recorded-workspace.png"),
     animations: "disabled",

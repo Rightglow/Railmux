@@ -69,14 +69,15 @@ export default function Home() {
           </div>
           <div className="hero-demo">
             <div className="capture-meta">
-              <span><i /> ACTUAL RAILMUX SESSION</span>
-              <small>isolated fixture · no provider credentials</small>
+              <span><i /> REAL AGENT RESPONSE · ISOLATED RAILMUX</span>
+              <small>captured once · replayed without provider credentials</small>
             </div>
             <TerminalRecording
               className="hero-terminal-recording"
-              poster="npt:9"
+              poster="npt:8"
+              startAt={7.4}
+              autoPlay
               controls
-              keystrokeOverlay
               dataDemo="desktop-recording"
             />
           </div>
@@ -124,18 +125,30 @@ export default function Home() {
               </div>
             </article>
             <article className="feature-showcase feature-showcase-sidebar">
-              <div className="feature-sidebar-crop">
-                <img
-                  src={`${import.meta.env.BASE_URL}generated/dual-agent-workspace.png`}
-                  alt="Railmux Projects, Sessions, and Running sidebar"
+              <div
+                className="feature-sidebar-evidence"
+                role="img"
+                aria-label="Railmux sidebar showing New project, New session, and a running agent"
+              >
+                <TerminalRecording
+                  source="railmux-workflow-demo.cast"
+                  className="sidebar-evidence-recording"
+                  poster="npt:5.2"
+                  controls={false}
+                  dataDemo="sidebar-evidence"
                 />
+                <div className="sidebar-evidence-legend" aria-hidden="true">
+                  <span>NEW PROJECT</span>
+                  <span>NEW SESSION</span>
+                  <span>RUNNING</span>
+                </div>
               </div>
               <div className="feature-showcase-copy">
                 <span>02 / FIND ANYTHING</span>
                 <h3>A sidebar that knows your work.</h3>
                 <p>
-                  Browse projects, filter history, star important sessions,
-                  preview stopped work, and jump to anything already running.
+                  Start a project or session from pinned actions, browse
+                  history, and return to anything already running.
                 </p>
               </div>
             </article>
@@ -171,33 +184,36 @@ export default function Home() {
                 <article>
                   <span>01</span>
                   <h3>Browse</h3>
-                  <p>Move through projects and sessions from one sidebar.</p>
-                  <kbd>↑ ↓</kbd>
+                  <p>See projects, history, and everything already running.</p>
+                  <kbd>MOUSE</kbd>
                 </article>
                 <article>
                   <span>02</span>
                   <h3>Open</h3>
-                  <p>Launch a session, then add a second live agent pane.</p>
-                  <div><kbd>n</kbd><kbd>F8</kbd></div>
+                  <p>Launch a new agent without leaving the workspace.</p>
+                  <div><kbd>MOUSE</kbd><kbd>NEW SESSION</kbd></div>
                 </article>
                 <article>
                   <span>03</span>
                   <h3>Keep moving</h3>
-                  <p>Choose the Target or return to Railmux without stopping work.</p>
-                  <div><kbd>C-b →</kbd><kbd>C-b Tab</kbd></div>
+                  <p>Return to the sidebar, then reopen the running agent.</p>
+                  <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
                 </article>
               </div>
               <div className="workflow-player">
                 <div className="capture-meta capture-meta-dark">
-                  <span><i /> RECORDED INPUT</span>
-                  <small>keys appear during playback</small>
+                  <span><i /> GUIDED REAL TERMINAL</span>
+                  <small>mouse and key cues stay visible during each action</small>
                 </div>
                 <TerminalRecording
+                  source="railmux-workflow-demo.cast"
                   className="workflow-terminal-recording"
-                  poster="npt:1.5"
+                  poster="npt:0.6"
                   controls
                   playWhenVisible
-                  keystrokeOverlay
+                  inputHud
+                  cueCols={76}
+                  cueRows={30}
                   dataDemo="workflow-recording"
                 />
               </div>
@@ -284,7 +300,6 @@ export default function Home() {
               controls={false}
               loop
               playWhenVisible
-              keystrokeOverlay
               dataDemo="mobile-recording"
             />
           </div>
