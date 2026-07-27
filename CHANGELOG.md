@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-07-27
+
+### Changed
+
+- Let deep `railmux ssh` history pages tolerate a small number of changing
+  agent status rows while retaining strict pane, geometry, generation, and
+  unique-anchor checks against unrelated or ambiguous content.
+- Start a missing remote Railmux session for `railmux ssh` without the older
+  tmux copy-mode scroll coalescer; the fast client's local history layer remains
+  the sole owner of agent wheel input. Ordinary `ssh` followed by `railmux` is
+  unchanged.
+- Make the wheel smoke verifier discover both `site-packages` and Debian-style
+  `dist-packages`, including pip's `local/` prefix layout.
+
+### Fixed
+
+- Retry a deep history page on a later upward wheel gesture when its response
+  was lost under display backpressure, while rejecting any late response from
+  the expired request.
+- Invalidate stale agent history routes immediately when keyboard navigation
+  in the Railmux sidebar or the default tmux prefix can switch the displayed
+  session, without adding work to ordinary agent input or terminal focus
+  reports.
+- Forward vertical and horizontal wheel events on the compact status row
+  without cancelling frozen agent history viewports; genuine status-row
+  clicks continue to change pages normally.
+
 ## [0.2.12.dev202607270] - 2026-07-27
 
 ### Changed
@@ -790,7 +817,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.12.dev202607270...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12
 [0.2.12.dev202607270]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12.dev202607270
 [0.2.11]: https://github.com/Rightglow/Railmux/compare/v0.2.10...v0.2.11
 [0.2.11.dev202607240]: https://github.com/Rightglow/Railmux/compare/v0.2.10...v0.2.11.dev202607240
