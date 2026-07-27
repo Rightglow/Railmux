@@ -1,5 +1,6 @@
 import CopyCommand from "./components/CopyCommand";
 import { CompactDemo, DesktopDemo } from "./components/ProductDemo";
+import TerminalRecording from "./components/TerminalRecording";
 
 const features = [
   {
@@ -114,6 +115,23 @@ export default function Home() {
               Railmux turns scattered agent work into one visible, durable
               workspace.
             </p>
+          </div>
+        </section>
+
+        <section className="recording-section">
+          <div className="section-wrap recording-grid">
+            <div className="recording-copy">
+              <p className="section-kicker section-kicker-light">
+                REAL TERMINAL CAPTURE
+              </p>
+              <h2>Watch the actual tmux UI.</h2>
+              <p>
+                Rebuilt automatically from this checkout in an isolated home
+                directory, using synthetic session history and no provider
+                credentials.
+              </p>
+            </div>
+            <TerminalRecording />
           </div>
         </section>
 

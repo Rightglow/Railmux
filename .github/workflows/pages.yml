@@ -5,10 +5,16 @@ on:
     branches: [main]
     paths:
       - "web/**"
+      - "src/railmux/**"
+      - "tools/record_web_demo.py"
+      - "pyproject.toml"
       - ".github/workflows/pages.yml"
   pull_request:
     paths:
       - "web/**"
+      - "src/railmux/**"
+      - "tools/record_web_demo.py"
+      - "pyproject.toml"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -32,8 +38,18 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install Railmux demo dependencies
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          python -m pip install -e .
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - run: npm run record-demo
       - run: npm run typecheck
       - run: npm run screenshots
       - run: npm run build:site

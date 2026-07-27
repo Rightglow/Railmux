@@ -7,10 +7,12 @@
     "build:site": "vite build",
     "dev": "vite",
     "preview": "vite preview",
+    "record-demo": "python ../tools/record_web_demo.py",
     "screenshots": "playwright test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "asciinema-player": "^3.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   },

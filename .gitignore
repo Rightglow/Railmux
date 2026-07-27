@@ -6,6 +6,7 @@ dist/
 build/
 .pytest_cache/
 *.pyc
-web/public/generated/
+web/public/generated/*
+!web/public/generated/railmux-demo.cast
 web/test-results/
 web/playwright-report/

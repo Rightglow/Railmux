@@ -12,6 +12,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a responsive product website for Railmux, including deterministic
   desktop and compact-workspace previews, automated browser screenshots, and a
   GitHub Pages deployment workflow.
+- Add a credential-free website recorder that launches the real Railmux UI in
+  an isolated tmux server, publishes its asciicast through an embedded terminal
+  player, and regenerates the recording during every Pages build.
+- Let `+` and `-` expand and collapse the Button Bar's secondary action row
+  directly from the keyboard.
+- Show a one-time local info message when an SSH history viewport reaches the
+  complete session history or its configured local line limit.
+
+### Changed
+
+- Refresh the terminal UI hierarchy with right-aligned sidebar and project
+  counts, stable uppercase section labels, and responsive neutral shortcut
+  controls in the clickable Button Bar.
+- Flatten the sidebar to horizontal section rules without decorative vertical
+  rails, tighten session-title spacing, and use smaller status glyphs without
+  changing their lifecycle colours or meanings.
+- Raise the default local `railmux ssh` history cap from 5000 to 10000 lines;
+  explicit `[ssh].history_lines` and CLI overrides remain unchanged.
+- Keep the product-site terminal previews aligned with the real flat sidebar,
+  shared tmux dividers, Hint Bar, Button Bar, status bar, compact controls,
+  Running section, and history default.
+
+### Fixed
+
+- Suppress tmux's default right-click menu over Railmux agent panes while
+  retaining context-menu forwarding in the mouse-aware sidebar and preserving
+  the user's original binding in unrelated tmux windows.
+- Leave one trailing cell after right-aligned status text so info, warning,
+  error, and tip messages do not visually touch the terminal edge.
 
 ## [0.2.12] - 2026-07-27
 

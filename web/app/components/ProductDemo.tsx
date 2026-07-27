@@ -4,6 +4,10 @@ const sessions = [
   { name: "Review layout policy", meta: "Claude · 8m" },
   { name: "Add mobile controls", meta: "Codex · 21m" },
 ];
+const running = [
+  { name: "railmux / Polish SSH history", active: true },
+  { name: "compiler-lab / Review parser", active: false },
+];
 
 function TrafficLights() {
   return (
@@ -15,21 +19,9 @@ function TrafficLights() {
   );
 }
 
-function AgentPane({
-  label,
-  provider,
-  active,
-}: {
-  label: string;
-  provider: string;
-  active?: boolean;
-}) {
+function AgentPane({ active }: { active?: boolean }) {
   return (
     <div className={`agent-pane ${active ? "agent-pane-active" : ""}`}>
-      <div className="agent-heading">
-        <span>{label}</span>
-        <span className="agent-provider">{provider}</span>
-      </div>
       <div className="agent-copy">
         {active ? (
           <>
@@ -76,19 +68,15 @@ export function DesktopDemo() {
       </div>
       <div className="desktop-workspace">
         <aside className="demo-sidebar">
-          <div className="sidebar-brand">
-            <span className="rail-mark">R</span>
-            <span>RAILMUX</span>
-            <span className="version-pill">0.2.12</span>
-          </div>
           <div className="sidebar-section">
-            <div className="sidebar-label">PROJECTS</div>
+            <div className="sidebar-label">
+              <span>PROJECTS</span><i /><small>3</small>
+            </div>
             {projects.map((project, index) => (
               <div
                 className={`sidebar-row ${index === 0 ? "sidebar-row-selected" : ""}`}
                 key={project}
               >
-                <span className="folder-icon">◆</span>
                 <span>{project}</span>
                 <small>{index === 0 ? "3" : "1"}</small>
               </div>
@@ -96,7 +84,7 @@ export function DesktopDemo() {
           </div>
           <div className="sidebar-section sidebar-sessions">
             <div className="sidebar-label">
-              SESSIONS <span>3</span>
+              <span>SESSIONS (railmux)</span><i /><small>3</small>
             </div>
             {sessions.map((session) => (
               <div
@@ -111,21 +99,40 @@ export function DesktopDemo() {
               </div>
             ))}
           </div>
+          <div className="sidebar-section sidebar-running">
+            <div className="sidebar-label">
+              <span>RUNNING</span><i /><small>2</small>
+            </div>
+            {running.map((session) => (
+              <div className="session-row" key={session.name}>
+                <span className={`status-dot ${session.active ? "status-dot-live" : ""}`} />
+                <span>{session.name}</span>
+              </div>
+            ))}
+          </div>
           <div className="sidebar-footer">
-            <span>?</span> Help
-            <span>q</span> Quit
-            <span>•••</span> More
+            <div className="sidebar-hints">
+              <span>↑↓ move · Tab pane · C-b Tab Target</span>
+              <span>↵ open · n new · / filter · i info</span>
+            </div>
+            <div className="sidebar-buttons">
+              <span className="sidebar-control"><b>?</b> Help</span>
+              <span className="sidebar-control"><b>q</b> Quit</span>
+              <span className="sidebar-control"><b>C-b d</b> Detach</span>
+              <span className="sidebar-control"><b>+</b> More</span>
+            </div>
           </div>
         </aside>
         <main className="agent-grid">
-          <AgentPane label="AGENT 1" provider="CODEX" active />
-          <AgentPane label="AGENT 2" provider="CLAUDE" />
+          <AgentPane active />
+          <AgentPane />
         </main>
       </div>
       <div className="terminal-status">
-        <span className="status-mode">CODEX</span>
-        <span>◧ Agent 1</span>
-        <span className="status-tip">F8 layout · F9 fullscreen · Ctrl-B Tab sidebar</span>
+        <span>Railmux · Codex · ◧</span>
+        <span className="status-tip">
+          Sidebar actions target the last-focused pane in two-pane layouts&nbsp;
+        </span>
       </div>
     </div>
   );
@@ -136,11 +143,6 @@ export function CompactDemo() {
     <div className="phone-frame" data-demo="compact">
       <div className="phone-speaker" />
       <div className="terminal-window compact-window">
-        <div className="compact-topline">
-          <span className="rail-mark">R</span>
-          <span>railmux</span>
-          <span className="compact-network">ssh</span>
-        </div>
         <div className="compact-agent">
           <p className="terminal-muted">❯ Continue from the desktop session</p>
           <p>
@@ -150,7 +152,7 @@ export function CompactDemo() {
           <p className="terminal-success">✓ Connection restored</p>
           <div className="compact-code">
             <span>railmux ssh devbox</span>
-            <span className="terminal-muted">history: 5,000 lines</span>
+            <span className="terminal-muted">history: 10,000 lines</span>
           </div>
           <p className="terminal-prompt">
             <span>›</span> Message Codex
@@ -161,7 +163,8 @@ export function CompactDemo() {
           <span>[R]</span>
           <span className="compact-current">[1]</span>
           <span>[2]</span>
-          <small>CODEX · ◧</small>
+          <span>Cx</span>
+          <small>Soft Quit keeps agents running…&nbsp;</small>
         </div>
       </div>
     </div>
