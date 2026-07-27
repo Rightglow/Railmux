@@ -230,6 +230,15 @@ def test_mode_binding_is_not_duplicated_in_hint_bar():
         assert "m Mode" not in hint_text_for(context).split("\n", 1)[0]
 
 
+def test_more_and_less_buttons_have_direct_sidebar_shortcuts():
+    for context in (CTX_PROJECTS, CTX_SESSIONS, CTX_RUNNING):
+        assert action_for("+", context) == "_expand_button_bar"
+        assert action_for("-", context) == "_collapse_button_bar"
+        line = hint_text_for(context).split("\n", 1)[0]
+        assert "+ More" not in line
+        assert "- Less" not in line
+
+
 def test_options_binding_is_global_but_not_duplicated_in_hint_bar():
     assert action_for("o", CTX_PROJECTS) == "_open_options_modal"
     assert callable(getattr(App, "_open_options_modal"))

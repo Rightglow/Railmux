@@ -86,7 +86,7 @@ the same terminal write. Periodic prefetch may refresh routing and bounded
 cache content but must not move an existing viewport. Deep history begins with
 2000 physical lines and requests cumulative 2000-line expansions only as the
 viewport approaches the oldest loaded content. Expansion stops at the local
-`[ssh].history_lines`/CLI cap (default 5000, bounded to 2000-20000) or when the
+`[ssh].history_lines`/CLI cap (default 10000, bounded to 2000-20000) or when the
 server returns fewer lines than requested. This setting is local-only and is
 not an in-TUI Options authority. A deep response may replace its previous
 snapshot only when the visible multi-line anchor has one exact match, so both
@@ -205,20 +205,24 @@ a next-launch-only layout profile is removed from the same TOML file only after
 successful application.
 
 The three lists use horizontal labelled rules instead of independent boxes, so
-adjacent section borders do not consume duplicate terminal rows. There are no
-duplicate per-section vertical borders: one shared rail on each side spans the
-whole sidebar. Transient growth of the bottom Button Bar is charged to the Running
-section rather than recomputing every weighted section, so More/​Less cannot
-move Projects or Sessions. A one-line filter temporarily removes that charge.
-The focused section owns green upper and lower horizontal rules
-plus the matching height segments on both rails. Green corner glyphs join the
-rails to each horizontal boundary so the focus outline closes without ordinary
-vertical glyphs appearing to overrun the pane. When the next section's title row
-doubles as that lower boundary, only the line and corners turn green and the next
-title remains neutral. All other title rows and the final bottom rule use the
-same subdued inactive gray. Neutral `┌┐` / `└┘` outer corners and `├┤` internal
-junctions keep those rules joined to both rails when no section owns the
-boundary. Weighted section heights are
+adjacent section borders do not consume duplicate terminal rows. The sidebar is
+deliberately flat: it has no decorative outer vertical rails, leaving the outer
+tmux divider as the one structural vertical boundary. Stable section names are
+uppercase; live item counts occupy a fixed right-hand slot, using
+`visible/total` while filtered. Project-session counts likewise occupy a fixed
+right-hand column so changing counts do not shift or truncate the project name.
+Transient growth of the bottom Button Bar is charged to the Running section
+rather than recomputing every weighted section, so More/​Less cannot move
+Projects or Sessions. The Button Bar renders full actions as neutral filled
+shortcut controls plus labels, collapses to filled single-key controls at
+narrower widths, and keeps its mouse hit regions aligned with the visible
+representation. `+` and `-` expand and collapse the second row without
+requiring a pointer. A one-line filter temporarily removes that charge.
+
+The focused section owns green upper and lower horizontal rules. When the next
+section's title row doubles as that lower boundary, only the rule turns green
+and the next title remains neutral. All other title rows and the final bottom
+rule use the same subdued inactive gray. Weighted section heights are
 deterministic for a given terminal size and must not change when focus moves.
 The stable section name remains visible when dynamic title detail is truncated.
 Wheel input over any title rule or the bottom rule is routed by pointer position
@@ -613,11 +617,13 @@ Dead owners and interrupted installs are repaired by the next instance under a
 non-blocking, server-keyed runtime lock.
 
 `MouseDown3Pane` shares that controller-scoped transaction. Inside a Railmux
-window, a mouse-aware pane is selected by pointer location before the event is
-forwarded, matching tmux's stock left-click routing and allowing an unfocused
-sidebar to receive its context-menu click. Other windows replay the exact prior
-right-click command. Teardown restores it only while Railmux's marker still
-owns the binding, so a user configuration reload remains newer authority.
+window, the mouse-aware controller pane is selected by pointer location before
+the event is forwarded, matching tmux's stock left-click routing and allowing
+an unfocused sidebar to receive its context-menu click. The same wrapper
+consumes right-click over sibling agent panes instead of flashing tmux's
+unrelated stock pane menu. Other windows replay the exact prior right-click
+command. Teardown restores it only while Railmux's marker still owns the
+binding, so a user configuration reload remains newer authority.
 
 The same shared lease owns one indexed `pane-mode-changed` hook on tmux 3.0+.
 In a dual-agent layout, entering copy-mode through ordinary mouse selection or

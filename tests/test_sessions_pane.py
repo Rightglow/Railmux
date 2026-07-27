@@ -472,7 +472,7 @@ def test_status_dot_idle():
     dot = _STATUS_DOTS["idle"]
     assert isinstance(dot, tuple)
     assert dot[0] == "status_idle"
-    assert dot[1] == "●"
+    assert dot[1] == "•"
 
 
 def test_status_dot_busy():
@@ -502,7 +502,7 @@ def test_running_session_row_renders_status_dot():
         proj, [s], running_ids={s.session_id}, favorite_ids=set())
     row = [w for w in pane._walker if isinstance(w, _SessionRow)][0]
     title = row._wrapped_widget.base_widget.contents[0][0]
-    assert title.text.startswith("●")
+    assert title.text.startswith("•")
     assert title.attrib[0][0] == "status_busy"
 
 
@@ -517,7 +517,7 @@ def test_stopped_session_row_uses_neutral_hollow_marker():
     row = _SessionRow(s, is_running=False)
     title = row._wrapped_widget.base_widget.contents[0][0]
 
-    assert title.text.startswith("○")
+    assert title.text.startswith("◦")
     assert title.attrib[0] == ("dim", 1)
 
 
@@ -609,7 +609,7 @@ def test_live_attention_keeps_status_dot_and_adds_separate_badge():
     row = _SessionRow(session, is_running=True)
     title = row._wrapped_widget.base_widget.contents[0][0]
 
-    assert title.text.startswith("● ! ")
+    assert title.text.startswith("• ! ")
     assert title.attrib[0][0] == "status_idle"
     assert any(attr == "attention" for attr, _length in title.attrib)
 
@@ -625,7 +625,7 @@ def test_stopped_attention_keeps_neutral_liveness_marker():
     row = _SessionRow(session, is_running=False)
     title = row._wrapped_widget.base_widget.contents[0][0]
 
-    assert title.text.startswith("○ ! ")
+    assert title.text.startswith("◦ ! ")
     assert title.attrib[0] == ("dim", 1)
 
 
@@ -639,7 +639,7 @@ def test_attention_badge_survives_narrow_row_clipping():
 
     canvas = _SessionRow(session, is_running=True).render((5,), focus=False)
 
-    assert canvas.text[0].decode().startswith("● !")
+    assert canvas.text[0].decode().startswith("• !")
 
 
 # ── attribute maps ──────────────────────────────────────────────────────

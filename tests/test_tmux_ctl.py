@@ -532,7 +532,8 @@ def test_root_right_click_selects_pointer_pane_only_in_railmux_window():
     assert any("railmux-right-click-forward-v1-owner123" in arg
                for arg in argv)
     assert any(tmux_ctl.RAILMUX_CONTROLLER_OPTION in arg for arg in argv)
-    assert "select-pane -t = ; send-keys -M" in argv
+    assert any("select-pane -t = ; send-keys -M" in arg for arg in argv)
+    assert 'run-shell "true"' in argv[-2]
     assert argv[-1] == "display-menu original"
 
 

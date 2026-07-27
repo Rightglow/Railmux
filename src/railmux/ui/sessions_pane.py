@@ -102,8 +102,8 @@ def _live_state(session: SessionMeta) -> str:
     return "running"
 
 
-_STATUS_DOTS = {"idle": ("status_idle", "●"), "busy": ("status_busy", "●"),
-                "blocked": ("status_blocked", "●")}
+_STATUS_DOTS = {"idle": ("status_idle", "•"), "busy": ("status_busy", "•"),
+                "blocked": ("status_blocked", "•")}
 _ATTENTION_MARK = ("attention", "!")
 # When a row is active in the right pane (or targeted by a context menu), map
 # status-dot attributes to variants with the selected background.
@@ -115,7 +115,7 @@ _SELECTED_MAP = {None: "selected", "dim": "selected",
                  "attention": "attention_sel",
                  "legacy": "legacy_sel"}
 # Focus highlight (deep-grass bg). Status dots need their own remap so the coloured
-# ● inherits the focus background instead of leaving a black gap; everything
+# • inherits the focus background instead of leaving a black gap; everything
 # else (title, star, meta) collapses to the plain "focus" attribute.
 _FOCUS_REMAP = {None: "focus", "live": "focus", "dim": "focus",
                 "session_meta": "session_meta_focus",
@@ -135,7 +135,7 @@ class _SessionRow(ClickableRow):
                  on_right_click: "Callable[[], None] | None" = None) -> None:
         self.session = session
         # Two-line layout:
-        #   [●] [★] Title
+        #   [•] [!] [★] Title
         #   <relative time/live state> · <message count> · <token count>
         # Status dot stays in a fixed leftmost column so the status column
         # aligns across rows; the star sits next to the title it marks.
@@ -143,15 +143,13 @@ class _SessionRow(ClickableRow):
         # Lifecycle status is meaningful only while a tmux session is live.
         # Historical rows use one neutral hollow marker rather than preserving
         # a stale idle/busy/blocked state from their final saved event.
-        dot = (_STATUS_DOTS.get(session.status, ("dim", "○"))
-               if is_running else ("dim", "○"))
+        dot = (_STATUS_DOTS.get(session.status, ("dim", "◦"))
+               if is_running else ("dim", "◦"))
         title_markup.append(dot)
         title_markup.append(" ")
         if session.attention is not None:
             title_markup.append(_ATTENTION_MARK)
             title_markup.append(" ")
-        else:
-            title_markup.append("  ")
         if is_favorite:
             # Plain text (no colour) so the star simply inherits the row's
             # highlight background instead of leaving an un-highlighted gap.
@@ -244,6 +242,13 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     def section_title(self) -> str:
         suffix = " [filtered]" if self._filter else ""
         return self._section_title + suffix
+
+    @property
+    def section_count(self) -> str:
+        total = len(self._sessions)
+        if not self._filter:
+            return str(total)
+        return f"{len(self._visible_sessions())}/{total}"
 
     def _set_section_title(self, title: str) -> None:
         self._section_title = title

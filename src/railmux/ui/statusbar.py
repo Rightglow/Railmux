@@ -186,20 +186,20 @@ class ButtonBar(urwid.WidgetWrap):
             tiny, callback = callback_spec
             capitalized = desc[0].upper() + desc[1:]
             self._primary_specs.append(
-                (f"{key} {capitalized}", capitalized, tiny, callback))
-        self._primary_specs.append(("More", "More", "+", self._toggle_more))
+                (key, capitalized, tiny, callback))
+        self._primary_specs.append(("+", "More", "+", self._toggle_more))
         self._secondary_specs: list[
             tuple[str, str, str, Callable[[], None]]
         ] = []
         if self._on_mode_toggle is not None:
             self._secondary_specs.append(
-                ("m Mode", "Mode", "M", self._on_mode_toggle))
+                ("m", "Mode", "M", self._on_mode_toggle))
         if self._on_layout is not None:
             self._secondary_specs.append(
-                ("F8 Layout", "Layout", "L", self._on_layout))
+                ("F8", "Layout", "L", self._on_layout))
         if self._on_options is not None:
             self._secondary_specs.append(
-                ("o Options", "Options", "O", self._on_options))
+                ("o", "Options", "O", self._on_options))
         self._hit_areas: list[
             tuple[int, int, int, int, Callable[[], None]]
         ] = []
@@ -225,8 +225,8 @@ class ButtonBar(urwid.WidgetWrap):
         maxcol: int,
     ) -> tuple[str, list[str]]:
         variants = {
-            "full": [spec[0] for spec in specs],
-            "compact": [spec[1] for spec in specs],
+            "full": [f"{spec[0]} {spec[1]}" for spec in specs],
+            "compact": [spec[2] for spec in specs],
             "tiny": [spec[2] for spec in specs],
         }
         for tier in ("full", "compact"):
@@ -256,7 +256,6 @@ class ButtonBar(urwid.WidgetWrap):
     ) -> list:
         gap = " "
         tier = self._layout_tiers[row]
-        label_idx = {"full": 0, "compact": 1, "tiny": 2}[tier]
         markup: list = []
         col: int = 0
         for local_index, spec in enumerate(specs):
@@ -264,18 +263,29 @@ class ButtonBar(urwid.WidgetWrap):
                 markup.append(gap)
                 col += len(gap)
             index = index_offset + local_index
-            label = spec[label_idx]
+            key, description, tiny, callback = spec
             if row == 0 and local_index == len(specs) - 1:
-                label = {
-                    "full": "Less" if self._expanded else "More",
-                    "compact": "Less" if self._expanded else "More",
-                    "tiny": "-" if self._expanded else "+",
-                }[tier]
+                description = "Less" if self._expanded else "More"
+                key = "-" if self._expanded else "+"
+                tiny = "-" if self._expanded else "+"
+            label = {
+                "full": f"{key} {description}",
+                "compact": tiny,
+                "tiny": tiny,
+            }[tier]
+            label_width = urwid.calc_width(label, 0, len(label))
             self._hit_areas.append(
-                (row, col, col + len(label), index, spec[3]))
-            attr = "btn_pressed" if index == self._pressed_index else "btn"
-            markup.append((attr, label))
-            col += len(label)
+                (row, col, col + label_width, index, callback))
+            if index == self._pressed_index:
+                markup.append(("btn_pressed", label))
+            elif tier == "full":
+                markup.extend([
+                    ("btn_key", key),
+                    ("btn_label", f" {description}"),
+                ])
+            else:
+                markup.append(("btn_key", tiny))
+            col += label_width
         return markup
 
     def _rebuild(self) -> None:
@@ -291,7 +301,13 @@ class ButtonBar(urwid.WidgetWrap):
         self._pile.contents = contents
 
     def _toggle_more(self) -> None:
-        self._expanded = not self._expanded
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        expanded = bool(expanded)
+        if expanded == self._expanded:
+            return
+        self._expanded = expanded
         self._rebuild()
         self._invalidate()
         if self._on_expanded_change is not None:

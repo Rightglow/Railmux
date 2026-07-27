@@ -15,7 +15,7 @@ from railmux.ui._widgets import (
     restore_focus,
 )
 # Reuse the status-dot glyphs and the focus/selected attribute maps so the
-# coloured ● blends into highlighted rows the same way it does in the Sessions
+# coloured • blends into highlighted rows the same way it does in the Sessions
 # pane (extra keys like "dim" are harmless here).
 from railmux.ui.sessions_pane import (
     _ATTENTION_MARK,
@@ -46,7 +46,7 @@ class _RunningRow(ClickableRow):
                  on_double_click: "Callable[[], None] | None" = None,
                  on_right_click: "Callable[[], None] | None" = None) -> None:
         self.entry = entry
-        dot = _STATUS_DOTS.get(entry.status, ("dim", "○"))
+        dot = _STATUS_DOTS.get(entry.status, ("dim", "◦"))
         markup: list = [dot, " "]
         if entry.attention is not None:
             markup.extend([_ATTENTION_MARK, " "])
@@ -111,6 +111,18 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     def section_title(self) -> str:
         suffix = " [filtered]" if self._filter else ""
         return self._section_title + suffix
+
+    @property
+    def sidebar_title(self) -> str:
+        """Stable unified-sidebar title; its count owns a separate column."""
+        return "Running [filtered]" if self._filter else "Running"
+
+    @property
+    def section_count(self) -> str:
+        total = len(self._entries)
+        if not self._filter:
+            return str(total)
+        return f"{len(self._visible_entries())}/{total}"
 
     def _set_section_title(self, title: str) -> None:
         self._section_title = title

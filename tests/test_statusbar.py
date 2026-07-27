@@ -396,13 +396,18 @@ def test_buttonbar_lists_help_quit_detach():
 
 
 def test_buttonbar_button_format():
-    """Each button is rendered with key + capitalized desc, underlined."""
+    """Each full button uses a filled shortcut plus its action label."""
     bar = ButtonBar(on_help=lambda: None, on_quit=lambda: None, on_detach=lambda: None)
     canvas = bar.render((60,), False)
     text = "".join(t.decode() for t in canvas.text)
     assert "? Help" in text
     assert "q Quit" in text
     assert "C-b d Detach" in text
+    attrs = {
+        attr for attr, _charset, _text in next(iter(canvas.content()))
+    }
+    assert {"btn_key", "btn_label"} <= attrs
+    assert "btn_bracket" not in attrs
 
 
 def test_buttonbar_mouse_click_hits_button():
@@ -428,8 +433,12 @@ def test_buttonbar_mouse_click_miss_does_nothing():
         on_quit=lambda: calls.append("quit"),
         on_detach=lambda: calls.append("detach"),
     )
-    # Click in the gap between ? help and q quit — gap is 1 column at pos 6.
-    bar.mouse_event((60,), "mouse press", 1, 6, 0, False)
+    # Click the one-column gap between the first two visible buttons.
+    first = bar._hit_areas[0]
+    second = bar._hit_areas[1]
+    gap_col = first[2]
+    assert gap_col < second[1]
+    bar.mouse_event((60,), "mouse press", 1, gap_col, 0, False)
     assert calls == []
 
 
@@ -448,10 +457,11 @@ def test_buttonbar_uses_responsive_labels_without_losing_actions():
     )
 
     expected = {
+        12: ("?", "Q", "D", "+"),
         20: ("?", "Q", "D", "+"),
-        24: ("Help", "Quit", "Detach", "More"),
-        32: ("Help", "Quit", "Detach", "More"),
-        36: ("? Help", "q Quit", "C-b d Detach", "More"),
+        24: ("?", "Q", "D", "+"),
+        36: ("? Help", "q Quit", "C-b d Detach", "+ More"),
+        44: ("? Help", "q Quit", "C-b d Detach", "+ More"),
     }
     for width, labels in expected.items():
         text = "".join(
@@ -500,6 +510,21 @@ def test_buttonbar_more_expands_mode_and_layout_then_less_collapses():
     assert bar.rows((60,)) == 1
     assert bar.extra_rows == 0
     assert expansion == [True, False]
+
+
+def test_plus_and_minus_expand_and_collapse_the_app_button_bar(app):
+    app._on_input("+")
+
+    assert app._button_bar.extra_rows == 1
+    assert app._sidebar._bottom_row_debt == 1
+
+    # Repeating either directional action is deliberately idempotent.
+    app._on_input("+")
+    assert app._button_bar.extra_rows == 1
+
+    app._on_input("-")
+    assert app._button_bar.extra_rows == 0
+    assert app._sidebar._bottom_row_debt == 0
 
 
 def test_buttonbar_compact_hit_areas_match_visible_actions():

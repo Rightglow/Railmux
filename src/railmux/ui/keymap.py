@@ -75,6 +75,10 @@ BINDINGS: list[Binding] = [
             contexts=_ALL_CTX, show_in_hint=False),
     Binding(("o", "O"), "o", "Options", "_open_options_modal",
             contexts=_ALL_CTX, show_in_hint=False),
+    Binding(("+",), "+", "More", "_expand_button_bar",
+            contexts=_ALL_CTX, show_in_hint=False),
+    Binding(("-",), "-", "Less", "_collapse_button_bar",
+            contexts=_ALL_CTX, show_in_hint=False),
     # All three — opens a shell in the active project's directory.
     Binding(("t", "T"), "t", "term", "_open_terminal_for_active_project",
             contexts=_ALL_CTX),

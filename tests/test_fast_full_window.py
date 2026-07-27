@@ -947,6 +947,22 @@ def test_local_history_sidebar_click_invalidates_agent_routes():
     ) == HistoryAction()
 
 
+def test_local_history_forwards_sidebar_right_click_gesture_unchanged():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    view.accept_prefetch(HistoryBatch(request_id, (
+        HistorySnapshot(
+            request_id, "%8", 30, 0, 40, 2, (b"old", b"one", b"two")
+        ),
+    )))
+    press = SgrMouseEvent(b"right-press", 2, 5, 2, True)
+    release = SgrMouseEvent(b"right-release", 2, 5, 2, False)
+
+    assert view.pointer_event(press).forwarded_input == b"right-press"
+    assert view.pointer_event(release).forwarded_input == b"right-release"
+
+
 def test_local_history_captures_an_in_pane_pointer_gesture_until_release():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
@@ -1272,6 +1288,78 @@ def test_history_stops_extending_after_a_short_deep_response():
     for _ in range(20):
         action = view.wheel(wheel_up)
         assert action.protocol_frame == b""
+
+
+def test_history_top_info_appears_once_and_rearms_after_scrolling_down():
+    view = LocalHistoryView(history_limit=20000)
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    prefetch_id, _limit = decode_history_prefetch(prefetch.data)
+    cached = HistorySnapshot(
+        prefetch_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        tuple(f"line-{index}".encode() for index in range(10)),
+    )
+    view.accept_prefetch(HistoryBatch(prefetch_id, (cached,)))
+    wheel_up = SgrMouseEvent(b"up", 64, 40, 2, True)
+    request = view.wheel(wheel_up)
+    request_id = decode_history_request(
+        InputFrameDecoder().feed(request.protocol_frame)[0].data
+    )[0]
+    view.accept(HistorySnapshot(
+        request_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        (b"older-a", b"older-b", *cached.lines),
+    ))
+
+    messages = [
+        action.info_message
+        for action in (view.wheel(wheel_up) for _ in range(20))
+        if action.info_message
+    ]
+
+    assert messages == ["History top · complete session history loaded"]
+    assert view.wheel(wheel_up).info_message is None
+
+    wheel_down = SgrMouseEvent(b"down", 65, 40, 2, True)
+    view.wheel(wheel_down)
+    assert view.wheel(wheel_up).info_message == (
+        "History top · complete session history loaded"
+    )
+
+
+def test_history_top_info_names_the_configured_limit_when_it_is_reached():
+    view = LocalHistoryView(history_limit=2000)
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    prefetch_id, _limit = decode_history_prefetch(prefetch.data)
+    snapshot = HistorySnapshot(
+        prefetch_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        tuple(f"line-{index}".encode() for index in range(2000)),
+    )
+    view.accept_prefetch(HistoryBatch(prefetch_id, (snapshot,)))
+    wheel_up = SgrMouseEvent(b"up", 64, 40, 2, True)
+
+    message = None
+    for index in range(1000):
+        message = view.wheel(
+            wheel_up, now=1.0 + index * 0.02
+        ).info_message
+        if message:
+            break
+
+    assert message == "History top · 2,000-line local limit"
 
 
 def test_lost_deep_history_request_retries_after_a_bounded_timeout():

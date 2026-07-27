@@ -21,9 +21,17 @@ class _ProjectRow(ClickableRow):
                  on_click: "Callable[[], None] | None" = None,
                  on_double_click: "Callable[[], None] | None" = None) -> None:
         self.project = project
-        label = f"{project.display_name} [{project.session_count}]"
+        # Keep the count in a fixed right-hand column.  An inline ``[12]``
+        # makes project names jitter as counts change and becomes difficult to
+        # scan once names have different lengths.
+        count = str(project.session_count)
+        label = urwid.Columns([
+            urwid.Text(f"  {project.display_name}", wrap="ellipsis"),
+            ("fixed", max(3, len(count) + 1),
+             urwid.Text(f"{count} ", align="right", wrap="clip")),
+        ], dividechars=0)
         attr = "selected" if selected else None
-        super().__init__(urwid.AttrMap(urwid.Text(label), attr, focus_map="focus"),
+        super().__init__(urwid.AttrMap(label, attr, focus_map="focus"),
                          on_click, on_double_click,
                          click_key=project.encoded_name,
                          immediate_click=True)
@@ -92,15 +100,13 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         return 2 if self._boxed else 0
 
     def _build_rows(self, projects: list[Project]) -> list:
-        needle = self._filter.lower()
         sel = self._selected_encoded_name
         rows = [
             _ProjectRow(p, selected=(p.encoded_name == sel),
                         on_click=lambda p=p: self._on_select(p),
                         on_double_click=(lambda p=p: self._on_double_click(p))
                                         if self._on_double_click else None)
-            for p in projects
-            if fuzzy_match(needle, str(p.real_path))
+            for p in self._visible_projects(projects)
         ]
         if not rows:
             text = (
@@ -113,6 +119,17 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
             )
             rows = [urwid.Text(text, align="center")]
         return rows
+
+    def _visible_projects(
+        self, projects: list[Project] | None = None,
+    ) -> list[Project]:
+        needle = self._filter.lower()
+        return [
+            project for project in (
+                self._all_projects if projects is None else projects
+            )
+            if fuzzy_match(needle, str(project.real_path))
+        ]
 
     def set_provider_label(self, label: str) -> None:
         """Update provider-specific empty text, including empty-to-empty switches."""
@@ -149,6 +166,13 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     def section_title(self) -> str:
         """Expose otherwise-hidden restored filter state in the pane chrome."""
         return "Projects [filtered]" if self._filter else "Projects"
+
+    @property
+    def section_count(self) -> str:
+        total = len(self._all_projects)
+        if not self._filter:
+            return str(total)
+        return f"{len(self._visible_projects())}/{total}"
 
     def _refresh_rows(self) -> None:
         # Remember the currently-focused row's identity (project encoded_name).

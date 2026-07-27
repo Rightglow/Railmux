@@ -283,9 +283,9 @@ class HelpModal(urwid.WidgetWrap):
         """Colour legend with palette markup so dots render in status colours."""
         return [
             urwid.Text([
-                ("status_idle", "●"), " idle · ",
-                ("status_busy", "●"), " busy · ",
-                ("status_blocked", "●"), " blocked (waiting for input)",
+                ("status_idle", "•"), " idle · ",
+                ("status_busy", "•"), " busy · ",
+                ("status_blocked", "•"), " blocked (waiting for input)",
             ]),
             urwid.Text("★ = starred (pinned to top of session list)"),
         ]

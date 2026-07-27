@@ -66,7 +66,7 @@ def test_escapes_hash_and_percent_inside_style(monkeypatch):
 
     argv = _status_right_call(run)
     assert argv[:5] == ["tmux", "set-option", "-t", "railmux", "status-right"]
-    assert argv[5] == "#[fg=colour231]50%% done ##{x} ##[bold] /a##b#[default]"
+    assert argv[5] == "#[fg=colour231]50%% done ##{x} ##[bold] /a##b#[default] "
 
 
 def test_forces_status_redraw(monkeypatch):
@@ -89,15 +89,15 @@ def test_level_styles_differ(monkeypatch):
     app = _status_app()
 
     app._render_status_to_tmux("boom", "error")
-    assert _payload(run) == "#[fg=colour231,bold]boom#[default]"
+    assert _payload(run) == "#[fg=colour231,bold]boom#[default] "
 
     run.reset_mock()
     app._render_status_to_tmux("careful", "warn")
-    assert _payload(run) == "#[fg=colour220,bold]careful#[default]"
+    assert _payload(run) == "#[fg=colour220,bold]careful#[default] "
 
     run.reset_mock()
     app._render_status_to_tmux("hint", "tip")
-    assert _payload(run) == "#[fg=colour0]hint#[default]"
+    assert _payload(run) == "#[fg=colour0]hint#[default] "
 
 
 def test_unknown_level_is_unstyled(monkeypatch):
@@ -107,7 +107,7 @@ def test_unknown_level_is_unstyled(monkeypatch):
 
     _status_app()._render_status_to_tmux("plain #x", "bogus")
 
-    assert _payload(run) == "plain ##x"
+    assert _payload(run) == "plain ##x "
 
 
 def test_noop_when_disabled(monkeypatch):
@@ -183,7 +183,7 @@ def test_error_bar_not_repainted_while_staying_in_error(monkeypatch):
     run.reset_mock()
     app._render_status_to_tmux("ERROR: two", "error")
     assert _style_calls(run, "status-style") == []  # no re-paint
-    assert _payload(run) == "#[fg=colour231,bold]ERROR: two#[default]"
+    assert _payload(run) == "#[fg=colour231,bold]ERROR: two#[default] "
 
 
 def test_apply_bar_sets_normal_and_error_styles(monkeypatch):

@@ -44,11 +44,21 @@ def _sidebar():
         lambda *_a, **_k: None, boxed=False)
     running.set_running([RunningEntry("cx-one", "project/agent")])
     pile = StableWeightedPile([
-        ("weight", 2, SidebarSection(projects, lambda: "Projects")),
-        ("weight", 4, SidebarSection(
-            sessions, lambda: sessions.section_title)),
         ("weight", 2, SidebarSection(
-            running, lambda: running.section_title)),
+            projects,
+            lambda: projects.section_title,
+            lambda: projects.section_count,
+        )),
+        ("weight", 4, SidebarSection(
+            sessions,
+            lambda: sessions.section_title,
+            lambda: sessions.section_count,
+        )),
+        ("weight", 2, SidebarSection(
+            running,
+            lambda: running.sidebar_title,
+            lambda: running.section_count,
+        )),
     ])
     frame = UnifiedSidebarFrame(pile, (projects, sessions, running))
     return frame, pile, (projects, sessions, running)
@@ -100,14 +110,51 @@ def test_narrow_shared_frame_keeps_every_stable_section_name_visible():
 
     text = b"\n".join(frame.render((24, 16), focus=True).text).decode()
 
-    assert "Projects" in text
-    assert "Sessions" in text
-    assert "Running" in text
-    assert "Sessions (" in text
+    assert "PROJECTS" in text
+    assert "SESSIONS" in text
+    assert "RUNNING" in text
+    assert "SESSIONS (" in text
+    assert " 1 ─" in text
     assert "…" in text
-    assert all(line[0] in "│┌└├" and line[-1] in "│┐┘┤"
+    assert all(urwid.calc_width(line, 0, len(line)) == 24
                for line in text.splitlines())
-    assert all("│" not in line[1:-1] for line in text.splitlines())
+    assert not any(char in text for char in "│┌┐└┘├┤")
+
+
+def test_filtered_section_count_shows_visible_over_total():
+    frame, _pile, (projects, sessions, running) = _sidebar()
+    projects.set_filter("no-match")
+    sessions.set_filter("no-match")
+    running.set_filter("no-match")
+
+    text = b"\n".join(frame.render((32, 18), focus=True).text).decode()
+
+    assert text.count("0/1") == 3
+    assert "PROJECTS [filtered]" in text
+    assert "SESSIONS (a-project" in text
+    assert "[filtered]" in text
+    assert "RUNNING [filtered]" in text
+
+
+def test_flat_sidebar_forwards_right_click_to_the_visible_session_row():
+    frame, pile, (_projects, sessions, _running) = _sidebar()
+    calls: list[str] = []
+    session_row = next(
+        row for row in sessions._walker
+        if hasattr(row, "session")
+    )
+    session_row._on_right_click = lambda: calls.append("context")
+    size = (32, 18)
+    project_rows = pile.get_item_rows((size[0], size[1] - 1), True)[0]
+    # Sessions spends its title, New row, and divider before the first item.
+    session_item_row = project_rows + 3
+
+    handled = frame.mouse_event(
+        size, "mouse press", 3, 5, session_item_row, True
+    )
+
+    assert handled is True
+    assert calls == ["context"]
 
 
 def test_section_headers_expose_distinct_focus_chrome():
@@ -120,8 +167,8 @@ def test_section_headers_expose_distinct_focus_chrome():
     assert _inner_row_attrs(projects_canvas, 0) == {"pane_focus"}
     assert _inner_row_attrs(projects_canvas, inner_rows[0]) == {
         "pane", "pane_focus"}
-    assert "─ Projects " in _row_text(projects_canvas, 0)
-    assert "─ Sessions " in _row_text(projects_canvas, inner_rows[0])
+    assert "─ PROJECTS " in _row_text(projects_canvas, 0)
+    assert "─ SESSIONS " in _row_text(projects_canvas, inner_rows[0])
     assert "pane_focus" not in _inner_row_attrs(
         projects_canvas, size[1] - 1)
     assert "pane_focus" not in _inner_row_attrs(projects_canvas, 1)
@@ -136,8 +183,8 @@ def test_section_headers_expose_distinct_focus_chrome():
         sessions_canvas, sessions_header) == {"pane_focus"}
     assert _inner_row_attrs(sessions_canvas, running_header) == {
         "pane", "pane_focus"}
-    assert "─ Sessions " in _row_text(sessions_canvas, sessions_header)
-    assert "─ Running " in _row_text(sessions_canvas, running_header)
+    assert "─ SESSIONS " in _row_text(sessions_canvas, sessions_header)
+    assert "─ RUNNING " in _row_text(sessions_canvas, running_header)
     assert "pane_focus" not in _inner_row_attrs(
         sessions_canvas, size[1] - 1)
 
@@ -149,50 +196,44 @@ def test_section_headers_expose_distinct_focus_chrome():
         running_canvas, running_header) == {"pane_focus"}
     assert _inner_row_attrs(
         running_canvas, size[1] - 1) == {"pane_focus"}
-    assert "─ Running " in _row_text(running_canvas, running_header)
+    assert "─ RUNNING " in _row_text(running_canvas, running_header)
     assert set(_row_text(running_canvas, size[1] - 1)[1:-1]) == {"─"}
 
 
-def test_both_vertical_rails_follow_the_focused_section_span():
+def test_flat_sidebar_focus_uses_only_the_selected_horizontal_boundaries():
     frame, pile, _panes = _sidebar()
     size = (32, 18)
-    rows = pile.get_item_rows((30, 17), True)
-    expected_spans = (
-        range(0, rows[0] + 1),
-        range(rows[0], rows[0] + rows[1] + 1),
-        range(rows[0] + rows[1], size[1]),
-    )
+    rows = pile.get_item_rows((32, 17), True)
+    headers = (0, rows[0], rows[0] + rows[1])
 
-    for focus_position, span in enumerate(expected_spans):
+    for focus_position in range(3):
         pile.focus_position = focus_position
         canvas = frame.render(size, focus=True)
-        for column in (0, size[0] - 1):
-            assert {
-                row for row in range(size[1])
-                if _column_attr(canvas, row, column) == "pane_focus"
-            } == set(span)
-        start, end = span.start, span.stop - 1
-        assert _row_text(canvas, start)[0] == "┌"
-        assert _row_text(canvas, start)[-1] == "┐"
-        assert _row_text(canvas, end)[0] == "└"
-        assert _row_text(canvas, end)[-1] == "┘"
-        if end - start > 1:
-            assert _row_text(canvas, start + 1)[0] == "│"
-            assert _row_text(canvas, start + 1)[-1] == "│"
+        upper = headers[focus_position]
+        lower = (
+            headers[focus_position + 1]
+            if focus_position < 2 else size[1] - 1
+        )
+        assert "pane_focus" in _row_attrs(canvas, upper)
+        assert "pane_focus" in _row_attrs(canvas, lower)
+        assert all(
+            "pane_focus" not in _row_attrs(canvas, row)
+            for row in range(upper + 1, lower)
+        )
+        assert _row_text(canvas, upper).startswith("─ ")
+        assert _row_text(canvas, upper).endswith("─")
+        assert _row_text(canvas, lower).startswith("─")
+        assert _row_text(canvas, lower).endswith("─")
 
     canvas = frame.render(size, focus=False)
-    for column in (0, size[0] - 1):
-        assert {
-            _column_attr(canvas, row, column) for row in range(size[1])
-        } == {"pane"}
-    assert _row_text(canvas, 0)[0] == "┌"
-    assert _row_text(canvas, 0)[-1] == "┐"
-    assert _row_text(canvas, size[1] - 1)[0] == "└"
-    assert _row_text(canvas, size[1] - 1)[-1] == "┘"
-    for boundary in (rows[0], rows[0] + rows[1]):
-        assert _row_text(canvas, boundary)[0] == "├"
-        assert _row_text(canvas, boundary)[-1] == "┤"
-    assert _row_text(canvas, 1)[0] == _row_text(canvas, 1)[-1] == "│"
+    assert all(
+        "pane_focus" not in _row_attrs(canvas, row)
+        for row in range(size[1])
+    )
+    assert not any(
+        char in b"\n".join(canvas.text).decode()
+        for char in "│┌┐└┘├┤"
+    )
 
 
 def test_agent_focus_uses_the_title_rule_colour_on_the_bottom_rule():
@@ -213,7 +254,7 @@ def test_unfocused_sidebar_retains_titles_but_subdues_pinned_dividers():
     headers = (0, rows[0], rows[0] + rows[1])
     for header in headers:
         assert _inner_row_attrs(canvas, header) == {"pane"}
-        assert _row_text(canvas, header)[1:].startswith("─ ")
+        assert _row_text(canvas, header).startswith("─ ")
         assert "━" not in _row_text(canvas, header)
 
     # Projects and Sessions each pin a New row directly below their title.

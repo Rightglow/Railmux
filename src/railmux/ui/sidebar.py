@@ -26,9 +26,11 @@ class SidebarSection(urwid.WidgetWrap):
         self,
         pane: ScrollableSidebarPane,
         title: Callable[[], str],
+        count: Callable[[], str] | None = None,
     ) -> None:
         self.pane = pane
         self._title = title
+        self._count = count
         self._previous_section_focused = False
         self._header = urwid.Text("")
         self._pile = urwid.Pile([
@@ -47,28 +49,43 @@ class SidebarSection(urwid.WidgetWrap):
 
     def render(self, size, focus: bool = False):
         maxcol = size[0]
-        title = _truncate_title(self._title(), max(1, maxcol - 4))
-        used = urwid.str_util.calc_width("─ " + title + " ", 0,
-                                         len("─ " + title + " "))
-        fill = max(0, maxcol - used)
+        raw_title = self._title()
+        stable, separator, detail = raw_title.partition(" ")
+        display_title = stable.upper() + separator + detail
+        count = self._count() if self._count is not None else ""
+        count = str(count).strip()
+
         prefix = "─ "
-        suffix = " " + "─" * fill
+        count_segment = f" {count} " if count else ""
+        end = "─"
+        fixed = prefix + " " + count_segment + end
+        fixed_width = urwid.calc_width(fixed, 0, len(fixed))
+        title = _truncate_title(
+            display_title, max(1, maxcol - fixed_width))
+        base = prefix + title + " " + count_segment + end
+        used = urwid.calc_width(base, 0, len(base))
+        middle = " " + "─" * max(0, maxcol - used)
+        header = prefix + title + middle + count_segment + end
+
         if focus:
-            self._header.set_text(("pane_focus", prefix + title + suffix))
+            self._header.set_text(("pane_focus", header))
         elif self._previous_section_focused:
             # This row closes the selected section while introducing the next:
             # keep the boundary green without colouring the next title as if it
             # also owned keyboard focus.
-            self._header.set_text([
+            markup: list = [
                 ("pane_focus", prefix),
                 ("pane", title),
-                ("pane_focus", suffix),
-            ])
+                ("pane_focus", middle),
+            ]
+            if count_segment:
+                markup.append(("pane", count_segment))
+            markup.append(("pane_focus", end))
+            self._header.set_text(markup)
         else:
             # At rest, title and rule share one neutral tone so the three
             # section boundaries read as one consistent hierarchy.
-            self._header.set_text(
-                ("pane", prefix + title + suffix))
+            self._header.set_text(("pane", header))
         return super().render(size, focus)
 
 
@@ -124,65 +141,8 @@ class StableWeightedPile(urwid.Pile):
         return widths, tuple(heights), sizes
 
 
-class _SidebarRail(urwid.Widget):
-    """Full-height outer rail with a focus-coloured section segment."""
-
-    _sizing = frozenset((urwid.Sizing.BOX,))
-
-    def __init__(self, sidebar: urwid.Pile, *, left: bool) -> None:
-        super().__init__()
-        self.sidebar = sidebar
-        self._left = left
-        self._selected: int | None = None
-
-    def set_selected(self, selected: int | None) -> None:
-        if self._selected == selected:
-            return
-        self._selected = selected
-        self._invalidate()
-
-    def render(self, size, focus: bool = False):
-        maxcol, maxrow = size
-        content_rows = max(0, maxrow - 1)
-        rows = self.sidebar.get_item_rows((max(1, maxcol), content_rows), focus)
-
-        start = end = -1
-        if self._selected is not None and rows:
-            start = sum(rows[:self._selected])
-            end = (
-                sum(rows[:self._selected + 1])
-                if self._selected < len(rows) - 1
-                else maxrow - 1
-            )
-        internal_boundaries = {
-            sum(rows[:index]) for index in range(1, len(rows))
-        }
-
-        markup: list = []
-        for row in range(maxrow):
-            if row:
-                markup.append("\n")
-            attr = "pane_focus" if start <= row <= end else "pane"
-            if row == start == end:
-                char = "├" if self._left else "┤"
-            elif row == start:
-                char = "┌" if self._left else "┐"
-            elif row == end:
-                char = "└" if self._left else "┘"
-            elif row == 0:
-                char = "┌" if self._left else "┐"
-            elif row == maxrow - 1:
-                char = "└" if self._left else "┘"
-            elif row in internal_boundaries:
-                char = "├" if self._left else "┤"
-            else:
-                char = "│"
-            markup.append((attr, char))
-        return urwid.Text(markup, wrap="clip").render((maxcol,))
-
-
 class UnifiedSidebarFrame(urwid.WidgetWrap):
-    """Shared horizontal chrome with pointer-local wheel routing."""
+    """Flat horizontal chrome with pointer-local wheel routing."""
 
     def __init__(
         self,
@@ -199,20 +159,10 @@ class UnifiedSidebarFrame(urwid.WidgetWrap):
             ("pack", self._bottom),
         ])
         self._layout.focus_position = 0
-        self._left_rail = _SidebarRail(sidebar, left=True)
-        self._right_rail = _SidebarRail(sidebar, left=False)
-        self._columns = urwid.Columns([
-            ("fixed", 1, self._left_rail),
-            self._layout,
-            ("fixed", 1, self._right_rail),
-        ], dividechars=0)
-        self._columns.focus_position = 1
-        super().__init__(self._columns)
+        super().__init__(self._layout)
 
     def render(self, size, focus: bool = False):
         selected = self.sidebar.focus_position if focus else None
-        self._left_rail.set_selected(selected)
-        self._right_rail.set_selected(selected)
         sections = [widget for widget, _options in self.sidebar.contents]
         for index, section in enumerate(sections):
             if isinstance(section, SidebarSection):
@@ -229,7 +179,7 @@ class UnifiedSidebarFrame(urwid.WidgetWrap):
     def mouse_event(self, size, event, button, col, row, focus):
         if event == "mouse press" and button in (4, 5) and len(size) >= 2:
             maxcol, maxrow = size[:2]
-            inner_cols = maxcol - 2
+            inner_cols = maxcol
             inner_rows = maxrow - 1
             if inner_cols <= 0 or inner_rows <= 0:
                 return True
@@ -256,7 +206,7 @@ class UnifiedSidebarFrame(urwid.WidgetWrap):
             pane = self.panes[section]
             pane.mouse_event(
                 (inner_cols, pane_rows), event, button,
-                min(max(col - 1, 0), inner_cols - 1), 0,
+                min(max(col, 0), inner_cols - 1), 0,
                 focus and self.sidebar.focus_position == section,
             )
             return True

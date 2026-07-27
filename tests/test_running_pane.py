@@ -309,7 +309,7 @@ def test_running_row_attention_is_separate_from_idle_dot():
         tmux_name="cc-x", label="test", status="idle", attention=attention))
     text = row._wrapped_widget.base_widget
 
-    assert text.text.startswith("● ! test")
+    assert text.text.startswith("• ! test")
     assert text.attrib[0][0] == "status_idle"
     assert any(attr == "attention" for attr, _length in text.attrib)
 

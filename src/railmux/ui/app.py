@@ -135,14 +135,17 @@ PALETTE = [
     ("session_meta_focus", "light gray", "dark green", "", "#b8b8b8", _DEEP_GRASS_GREEN),
     ("session_meta_sel", "light gray", "dark gray", "", "#b0b0b0", _SLATE),
     ("modal_key", "yellow,bold", "", "bold", f"{_STATUS_YELLOW},bold", "default"),
-    # ButtonBar — bright bold + underline reads as a clickable control.
-    ("btn", "white,bold,underline", ""),
+    # ButtonBar — neutral filled controls stay distinct from the green tmux
+    # status line while the shortcut itself remains visually prominent.
+    ("btn_key", "white,bold", "dark gray", "bold",
+     "#ffffff,bold", "#303634"),
+    ("btn_label", "light gray", "dark gray", "", _BODY, "#303634"),
     ("btn_pressed", "white,bold", "dark green", "bold", "#ffffff,bold", _DEEP_GRASS_GREEN),
     # A live tmux session is structural state, not lifecycle status. Its grass-
     # green title is independent from the idle/busy/blocked status-dot colour.
     ("live", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),
     ("current_path", "yellow,bold", ""),
-    # Status dots — the ● glyph carries its own palette attribute so it keeps
+    # Status dots — the • glyph carries its own palette attribute so it keeps
     # its colour on any row background. Each status has three background
     # variants so it blends into normal / focused (deep grass) / selected (slate)
     # rows. The foreground itself never changes with row focus, so red/yellow/
@@ -814,23 +817,25 @@ class App:
             self._set_status(
                 "ERROR: tmux not found on PATH — railmux cannot run without tmux")
 
-        # Three horizontal title rules replace the stacked boxes inside one
-        # shared pair of vertical rails. The focused section owns a closed green
-        # outline. Sessions receives half the available height because each
-        # session consumes two display rows; stable weight rounding prevents a
-        # one-row jump when keyboard focus moves between sections.
+        # Three horizontal title rules replace stacked boxes without spending
+        # two extra columns on decorative side rails. Sessions receives half
+        # the available height because each session consumes two display rows;
+        # stable weight rounding prevents a one-row jump when focus moves.
         self._sidebar = StableWeightedPile([
             ("weight", 2, SidebarSection(
                 self._projects_pane,
                 lambda: self._projects_pane.section_title,
+                lambda: self._projects_pane.section_count,
             )),
             ("weight", 4, SidebarSection(
                 self._sessions_pane,
                 lambda: self._sessions_pane.section_title,
+                lambda: self._sessions_pane.section_count,
             )),
             ("weight", 2, SidebarSection(
                 self._running_pane,
-                lambda: self._running_pane.section_title,
+                lambda: self._running_pane.sidebar_title,
+                lambda: self._running_pane.section_count,
             )),
         ])
         sidebar_frame = UnifiedSidebarFrame(
@@ -6312,6 +6317,12 @@ class App:
             getattr(self, action)()
             return
 
+    def _expand_button_bar(self) -> None:
+        self._button_bar.set_expanded(True)
+
+    def _collapse_button_bar(self) -> None:
+        self._button_bar.set_expanded(False)
+
     def _maybe_prompt_codex_yolo(self) -> None:
         """Ask once per chosen lifetime whether Codex may bypass safeguards."""
         # getattr: keep bare ``App.__new__`` unit tests (no loop/settings) safe.
@@ -8588,7 +8599,7 @@ class App:
             self._tmux_error_bar = want_error
         safe = text.replace("#", "##").replace("%", "%%")
         style = _TMUX_LEVEL_STYLE.get(level, "")
-        payload = f"{style}{safe}#[default]" if style else safe
+        payload = f"{style}{safe}#[default] " if style else safe + " "
         try:
             import subprocess as _sp
             _sp.run(

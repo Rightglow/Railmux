@@ -1921,19 +1921,25 @@ def prepare_root_right_click_binding() -> RootRightClickBindingBackup | None:
 def set_root_right_click_forwarding(
     backup: RootRightClickBindingBackup, token: str,
 ) -> bool:
-    """Select and forward right-click only inside a Railmux window.
+    """Forward sidebar right-click and suppress tmux menus over agent panes.
 
     tmux's stock left-click binding selects the pane under the pointer before
     forwarding the mouse event.  Right-click normally opens tmux's own menu,
-    and merely unbinding it leaves an unfocused Railmux sidebar unable to
-    receive the event.  This wrapper gives Railmux the same select-and-forward
-    behavior while replaying the exact prior binding in every other window.
+    and merely unbinding it leaves an unfocused Railmux sidebar unable to receive
+    the event. This wrapper gives the mouse-aware controller pane the same
+    select-and-forward behavior, consumes the gesture over sibling agent panes,
+    and replays the exact prior binding in every other window.
     """
     marker = f"{_ROOT_RIGHT_CLICK_MARKER}-{token}"
-    condition = (
-        "#{&&:#{mouse_any_flag},"
+    railmux_window = (
+        "#{&&:"
         "#{!=:#{@railmux_controller_pane},},"
         f"#{{==:{marker},{marker}}}}}"
+    )
+    railmux_action = (
+        'if-shell -F -t = "#{mouse_any_flag}" '
+        '{ select-pane -t = ; send-keys -M } '
+        '{ run-shell "true" }'
     )
     original = backup.get(_ROOT_RIGHT_CLICK_KEY)
     try:
@@ -1945,8 +1951,8 @@ def set_root_right_click_forwarding(
             [
                 "tmux", "bind-key",
                 "-T", "root", _ROOT_RIGHT_CLICK_KEY,
-                "if-shell", "-F", "-t", "=", condition,
-                "select-pane -t = ; send-keys -M",
+                "if-shell", "-F", "-t", "=", railmux_window,
+                railmux_action,
                 fallback,
             ],
             stdout=subprocess.DEVNULL,

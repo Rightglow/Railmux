@@ -94,7 +94,8 @@ def test_pane_focus_colours_chrome_without_leaking_into_body_rows():
                        in list(canvas.content())[3]]
     body_segments = [attr for attr, _charset, _text
                      in list(canvas.content())[4]]
-    assert cursor_segments == ["pane_focus", "focus", "pane_focus"]
+    assert cursor_segments[0] == cursor_segments[-1] == "pane_focus"
+    assert set(cursor_segments[1:-1]) == {"focus"}
     assert body_segments == ["pane_focus", "body", "pane_focus"]
 
 

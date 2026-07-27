@@ -74,6 +74,7 @@ _HISTORY_LOAD_AHEAD_LINES = 120
 _HISTORY_PREFETCH_INTERVAL = 3.0
 _HISTORY_PREFETCH_TIMEOUT = 6.0
 _HISTORY_DEEP_TIMEOUT = 10.0
+_HISTORY_INFO_SECONDS = 2.0
 _HISTORY_CONTENT_PANES = 8
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
@@ -504,6 +505,7 @@ class HistoryAction:
     render_history: bool = False
     restore_live: bool = False
     refresh_routes: bool = False
+    info_message: str | None = None
 
 
 @dataclass
@@ -514,6 +516,7 @@ class _HistoryViewport:
     offset: int
     loaded_limit: int
     exhausted: bool = False
+    top_notified: bool = False
 
 
 @dataclass(frozen=True)
@@ -853,15 +856,37 @@ class LocalHistoryView:
                     viewport.offset + direction * scroll_lines,
                 ),
             )
+            if direction < 0:
+                viewport.top_notified = False
             if viewport.offset == 0:
                 self.cancel_pane(route.pane_id)
                 return HistoryAction(restore_live=True)
+            protocol_frame = (
+                self._extend_history(viewport, now=now)
+                if direction > 0 else b""
+            )
+            info_message = None
+            at_loaded_top = viewport.offset == maximum
+            cannot_extend = (
+                viewport.exhausted
+                or viewport.loaded_limit >= self.history_limit
+            )
+            if (
+                direction > 0
+                and at_loaded_top
+                and cannot_extend
+                and not viewport.top_notified
+            ):
+                viewport.top_notified = True
+                info_message = (
+                    "History top · complete session history loaded"
+                    if viewport.exhausted
+                    else f"History top · {self.history_limit:,}-line local limit"
+                )
             return HistoryAction(
-                protocol_frame=(
-                    self._extend_history(viewport, now=now)
-                    if direction > 0 else b""
-                ),
+                protocol_frame=protocol_frame,
                 render_history=True,
+                info_message=info_message,
             )
         # Once a pointer is known to be over an agent pane, the local history
         # layer exclusively owns vertical wheel input. This avoids also
@@ -2332,6 +2357,7 @@ def run(args: argparse.Namespace) -> int:
     awaiting_keyframe = False
     latest_screen: AppliedScreen | None = None
     route_refresh_needed = False
+    history_info_until: float | None = None
 
     def send_protocol_frame(frame: bytes) -> None:
         nonlocal remote_closed
@@ -2344,7 +2370,7 @@ def run(args: argparse.Namespace) -> int:
             remote_closed = True
 
     def apply_history_action(action: HistoryAction) -> None:
-        nonlocal route_refresh_needed
+        nonlocal route_refresh_needed, history_info_until
         overlays = history.overlays()
         if action.restore_live and latest_screen is not None:
             surface.paint(full_repaint(latest_screen), overlays)
@@ -2356,6 +2382,9 @@ def run(args: argparse.Namespace) -> int:
             send_protocol_frame(encode_input(action.forwarded_input))
         if action.refresh_routes:
             route_refresh_needed = True
+        if action.info_message:
+            surface.show_local_status(action.info_message)
+            history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
 
     def handle_terminal_part(
         part: bytes | SgrMouseEvent,
@@ -2549,6 +2578,16 @@ def run(args: argparse.Namespace) -> int:
                 if not local_exit:
                     for part in terminal_input.flush_pending():
                         handle_terminal_part(part, set())
+                if (
+                    history_info_until is not None
+                    and time.monotonic() >= history_info_until
+                ):
+                    if latest_screen is not None:
+                        surface.paint(
+                            full_repaint(latest_screen),
+                            history.overlays(),
+                        )
+                    history_info_until = None
                 if local_exit:
                     break
                 connection_ended = remote_closed or (
@@ -2589,6 +2628,7 @@ def run(args: argparse.Namespace) -> int:
                         model = ScreenModel()
                         terminal_input = TerminalInputDecoder()
                         history = LocalHistoryView(history_limit)
+                        history_info_until = None
                         remote_closed = False
                         awaiting_keyframe = False
                         route_refresh_needed = False

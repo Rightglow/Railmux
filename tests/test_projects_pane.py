@@ -25,8 +25,12 @@ def _project(name: str = "test-proj", session_count: int = 3) -> Project:
 def test_project_row_label():
     p = _project("my-project", session_count=5)
     row = _ProjectRow(p)
+    rendered = row.render((24,), focus=False).text[0].decode()
+
     assert "my-project" in str(row.project.display_name)
     assert row.project.session_count == 5
+    assert rendered.startswith("  my-project")
+    assert rendered.rstrip().endswith("5")
 
 
 def test_project_row_stores_project():

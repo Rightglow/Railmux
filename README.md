@@ -267,7 +267,7 @@ context-menu Preview action follows the single-click/`␣` rule.
 
 ## Status indicators
 
-Each running session shows a coloured ● reflecting its current state:
+Each running session shows a coloured • reflecting its current state:
 
 - **Green** — idle (assistant last responded normally)
 - **Yellow** — busy (assistant is processing)
@@ -276,11 +276,11 @@ Each running session shows a coloured ● reflecting its current state:
 An independent magenta **!** marks an outcome that still needs attention, such
 as an abort or provider error. It does not replace the activity dot: a live
 session can be idle and still show `!`, while a stopped historical session keeps
-its neutral `○` marker alongside the badge. Session Info and Running Info show
+its neutral `◦` marker alongside the badge. Session Info and Running Info show
 the available details.
 
 A grass-green title identifies a live tmux session independently of its status;
-stopped sessions use a neutral hollow ○. The same grass green is used for the
+stopped sessions use a neutral hollow ◦. The same grass green is used for the
 focused pane chrome and tmux status bar. The current cursor uses a deeper green
 background, while the session displayed in the agent pane remains marked in
 neutral slate after keyboard focus moves away.
@@ -342,8 +342,8 @@ poll_interval_ms = 1000
 agent_transport = "swap" # or "nested"
 
 [ssh]
-# Local railmux ssh history cap (default: 5000; range: 2000-20000)
-history_lines = 5000
+# Local railmux ssh history cap (default: 10000; range: 2000-20000)
+history_lines = 10000
 ```
 
 Most users should leave `agent_transport` unchanged. Railmux automatically uses
@@ -524,7 +524,7 @@ is on by default. The client refreshes a 300-line hot cache for each agent pane;
 wheel-up displays it immediately and loads the first 2000 lines in the
 background. When scrolling approaches the oldest loaded content, Railmux
 fetches another 2000-line cumulative page until it reaches the local history
-cap. The default cap is 5000 lines; set `history_lines` under `[ssh]` in
+cap. The default cap is 10000 lines; set `history_lines` under `[ssh]` in
 `~/.config/railmux/config.toml`, or override it for one connection:
 
 ```bash
@@ -533,7 +533,9 @@ railmux ssh --history-lines 10000 your-server
 
 The supported range is 2000-20000. Higher limits consume more local memory and
 make deep background captures more expensive, but do not change the remote
-tmux history limit.
+tmux history limit. On the first wheel gesture that reaches the complete
+history or the configured local cap, the client shows a one-time local
+`History top` message; scrolling down rearms that notification.
 
 Agent-pane wheel events are then handled only locally, while sidebar scrolling
 continues to reach Railmux normally. Scroll to the bottom or press `Esc` to

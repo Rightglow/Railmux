@@ -10,7 +10,7 @@ def test_load_with_no_file_uses_defaults(tmp_path):
     assert cfg.poll_interval_ms == 1000
     assert cfg.agent_transport == "swap"
     assert cfg.show_empty_projects is False
-    assert cfg.ssh_history_lines == 5000
+    assert cfg.ssh_history_lines == 10000
 
 
 def test_load_partial_overrides(tmp_path):
