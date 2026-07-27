@@ -6,3 +6,6 @@ dist/
 build/
 .pytest_cache/
 *.pyc
+web/public/generated/
+web/test-results/
+web/playwright-report/

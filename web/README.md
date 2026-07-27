@@ -1,87 +1,37 @@
-# Welcome to React Router!
+# Railmux website
 
-A modern, production-ready template for building full-stack React applications using React Router.
+The product site is a static Vite + React application deployed at
+<https://rightglow.github.io/Railmux/>.
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
-
-## Features
-
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
-
-## Getting Started
-
-### Installation
-
-Install the dependencies:
+## Local development
 
 ```bash
-npm install
-```
-
-### Development
-
-Start the development server with HMR:
-
-```bash
+npm ci
 npm run dev
 ```
 
-Your application will be available at `http://localhost:5173`.
+The app uses `/Railmux/` as its Vite base path to match the GitHub Pages
+project site.
 
-## Building for Production
-
-Create a production build:
+## Verification
 
 ```bash
+npm run typecheck
 npm run build
 ```
 
-## Deployment
-
-### Docker Deployment
-
-To build and run using Docker:
+The website workflow also creates deterministic product screenshots:
 
 ```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
+npx playwright install chromium
+npm run screenshots
 ```
 
-The containerized application can be deployed to any platform that supports Docker, including:
+Generated PNG files live under `public/generated/` and are intentionally
+ignored by Git. The Pages workflow regenerates them before every deployment,
+then includes them in the static artifact. The visible terminal mock is HTML
+and CSS rather than a claim that a real provider session was recorded.
 
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
+Real Claude Code or Codex recordings should use an isolated environment and a
+manually triggered, reviewable workflow. They must never be added to ordinary
+pull-request CI with provider credentials.

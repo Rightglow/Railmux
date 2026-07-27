@@ -53,7 +53,8 @@ dev = [
 railmux = "railmux.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Rightglow/Railmux"
+Homepage = "https://rightglow.github.io/Railmux/"
+Documentation = "https://rightglow.github.io/Railmux/"
 Repository = "https://github.com/Rightglow/Railmux"
 Issues = "https://github.com/Rightglow/Railmux/issues"
 

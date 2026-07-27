@@ -12,6 +12,10 @@ Railmux lives in the left pane of a tmux window; the right pane shows the active
 agent. Each session runs in its own detached tmux session, so switching never
 interrupts in-progress responses or tool calls.
 
+**[Product website](https://rightglow.github.io/Railmux/)** ·
+**[Releases](https://github.com/Rightglow/Railmux/releases)** ·
+**[PyPI](https://pypi.org/project/railmux/)**
+
 - **Claude Code mode** — reads `~/.claude/projects/*`, lists sessions by project, resume with `claude --resume`
 - **Codex mode** — reads `~/.codex/sessions/*`, same sidebar workflow for Codex sessions
 - Press `m` to cycle through the available modes

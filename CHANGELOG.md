@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a responsive product website for Railmux, including deterministic
+  desktop and compact-workspace previews, automated browser screenshots, and a
+  GitHub Pages deployment workflow.
+
 ## [0.2.12] - 2026-07-27
 
 ### Changed
