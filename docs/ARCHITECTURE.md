@@ -95,6 +95,11 @@ server retains the newest suffix if styled history reaches the protocol byte
 budget; a byte-bound truncation is an effective end, never a helper failure.
 Input or bottom restores only the routed pane; layout uncertainty, resize,
 sidebar input, and `Esc` fail closed by removing every incompatible overlay.
+When the display helper creates the default Railmux session, it explicitly
+disables the older remote tmux copy-mode coalescer because this local history
+layer owns agent wheel input. Ordinary `ssh` followed by `railmux` retains the
+copy-mode coalescer, and attaching to an existing Railmux session never changes
+that session's setting.
 
 The SSH compatibility handshake precedes every tmux lookup, session creation,
 lock, PTY allocation, or attach. The remote reports a bounded package version,

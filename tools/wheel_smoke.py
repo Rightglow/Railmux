@@ -28,6 +28,34 @@ def _run(argv: list[str], *, cwd: Path, env: dict[str, str]) -> str:
     return result.stdout
 
 
+def _installed_paths(prefix: Path) -> tuple[Path, Path]:
+    """Locate the wheel's import root and console script under a pip prefix."""
+    package_roots = sorted({
+        path
+        for leaf in ("site-packages", "dist-packages")
+        for path in prefix.rglob(leaf)
+        if path.is_dir() and (path / "railmux").is_dir()
+    })
+    scripts = sorted(
+        path
+        for executable in ("railmux", "railmux.exe")
+        for path in prefix.rglob(executable)
+        if (
+            path.is_file()
+            and path.parent.name.lower() in {"bin", "scripts"}
+        )
+    )
+    if len(package_roots) != 1:
+        raise RuntimeError(
+            "isolated wheel install did not create one Railmux package root"
+        )
+    if len(scripts) != 1:
+        raise RuntimeError(
+            "isolated wheel install did not create one Railmux console script"
+        )
+    return package_roots[0], scripts[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("wheel", type=Path)
@@ -39,8 +67,6 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="railmux-wheel-smoke-") as raw:
         root = Path(raw)
         prefix = root / "install"
-        bindir = prefix / ("Scripts" if os.name == "nt" else "bin")
-        railmux = bindir / ("railmux.exe" if os.name == "nt" else "railmux")
         env = dict(os.environ)
         env["HOME"] = str(root / "home")
         env["XDG_CONFIG_HOME"] = str(root / "config")
@@ -64,9 +90,7 @@ def main() -> int:
             cwd=root,
             env=env,
         )
-        site_packages = next(prefix.glob("lib/python*/site-packages"), None)
-        if site_packages is None:
-            raise RuntimeError("isolated wheel install created no site-packages")
+        site_packages, railmux = _installed_paths(prefix)
         # Dependencies come from the already-validated dev/CI environment; the
         # isolated prefix is first so Railmux itself cannot resolve to the
         # editable source checkout.

@@ -363,7 +363,13 @@ def _ensure_railmux_session(session: str, timeout: float = 15.0) -> str:
         )
 
     railmux_command = shlex.join(
-        [sys.executable, "-m", "railmux", "--inside-tmux"]
+        [
+            sys.executable,
+            "-m",
+            "railmux",
+            "--inside-tmux",
+            "--no-scroll-coalescing",
+        ]
     )
     try:
         result = subprocess.run(

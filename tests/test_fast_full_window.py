@@ -3,9 +3,11 @@ from __future__ import annotations
 import inspect
 import io
 import os
+import shlex
 import signal
 import struct
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from unittest.mock import MagicMock
@@ -3003,7 +3005,24 @@ def test_server_starts_default_railmux_with_current_python(monkeypatch):
     assert calls[0][0][:7] == [
         "tmux", "-L", "railmux", "new-session", "-d", "-s", "railmux",
     ]
-    assert "-m railmux --inside-tmux" in calls[0][0][-1]
+    assert shlex.split(calls[0][0][-1]) == [
+        sys.executable,
+        "-m",
+        "railmux",
+        "--inside-tmux",
+        "--no-scroll-coalescing",
+    ]
+
+
+def test_server_does_not_change_an_existing_railmux_scroll_policy(monkeypatch):
+    monkeypatch.setattr(
+        fast_display_server, "_try_session_id", lambda _session: "$7"
+    )
+    run = MagicMock(side_effect=AssertionError("existing session was restarted"))
+    monkeypatch.setattr(subprocess, "run", run)
+
+    assert fast_display_server._ensure_railmux_session("railmux") == "$7"
+    run.assert_not_called()
 
 
 def test_display_lock_is_scoped_by_socket_and_session(monkeypatch, tmp_path):
