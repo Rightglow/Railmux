@@ -1,35 +1,5 @@
 import CopyCommand from "./components/CopyCommand";
-import { CompactDemo, DesktopDemo } from "./components/ProductDemo";
 import TerminalRecording from "./components/TerminalRecording";
-
-const features = [
-  {
-    number: "01",
-    title: "Every session stays alive",
-    copy: "Switch projects or agents without interrupting a response. Railmux keeps each coding session in its own tmux-backed workspace.",
-  },
-  {
-    number: "02",
-    title: "Two agents, one workspace",
-    copy: "Place Codex and Claude Code side by side or stacked. Focus, target, and resize panes without losing either agent.",
-  },
-  {
-    number: "03",
-    title: "A sidebar that knows your work",
-    copy: "Browse projects, filter history, star important sessions, and jump directly to anything already running.",
-  },
-  {
-    number: "04",
-    title: "Designed to recover",
-    copy: "Soft restart restores your workspace while watchdog diagnostics report failures without killing provider sessions.",
-  },
-];
-
-const workflow = [
-  ["Browse", "Projects and session history from both supported agents appear in one keyboard- and mouse-friendly sidebar."],
-  ["Open", "Enter resumes a session. Space previews it. A second agent slot is ready whenever you need parallel work."],
-  ["Keep moving", "Detach, reconnect, resize, or switch terminals. The work stays on the machine where it started."],
-];
 
 export default function Home() {
   return (
@@ -41,8 +11,8 @@ export default function Home() {
         </a>
         <nav aria-label="Main navigation">
           <a href="#features">Features</a>
-          <a href="#ssh">SSH</a>
           <a href="#workflow">Workflow</a>
+          <a href="#ssh">SSH</a>
           <a href="https://github.com/Rightglow/Railmux">GitHub</a>
         </nav>
         <a className="nav-install" href="#install">
@@ -98,7 +68,17 @@ export default function Home() {
             </div>
           </div>
           <div className="hero-demo">
-            <DesktopDemo />
+            <div className="capture-meta">
+              <span><i /> ACTUAL RAILMUX SESSION</span>
+              <small>isolated fixture · no provider credentials</small>
+            </div>
+            <TerminalRecording
+              className="hero-terminal-recording"
+              poster="npt:9"
+              controls
+              keystrokeOverlay
+              dataDemo="desktop-recording"
+            />
           </div>
         </section>
 
@@ -118,42 +98,110 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="recording-section">
-          <div className="section-wrap recording-grid">
-            <div className="recording-copy">
-              <p className="section-kicker section-kicker-light">
-                REAL TERMINAL CAPTURE
-              </p>
-              <h2>Watch the actual tmux UI.</h2>
-              <p>
-                Rebuilt automatically from this checkout in an isolated home
-                directory, using synthetic session history and no provider
-                credentials.
-              </p>
-            </div>
-            <TerminalRecording />
-          </div>
-        </section>
-
         <section className="features section-wrap" id="features">
           <div className="section-heading">
             <p className="section-kicker">WHAT IT DOES</p>
             <h2>Stay in flow.</h2>
             <p>Everything important remains visible. Everything running remains alive.</p>
           </div>
-          <div className="feature-grid">
-            {features.map((feature) => (
-              <article className="feature-card" key={feature.number}>
-                <span>{feature.number}</span>
-                <div className="feature-glyph" aria-hidden="true">
-                  <i />
-                  <i />
-                  <i />
-                </div>
-                <h3>{feature.title}</h3>
-                <p>{feature.copy}</p>
+          <div className="feature-evidence">
+            <article className="feature-showcase feature-showcase-agents">
+              <div className="feature-showcase-copy">
+                <span>01 / PARALLEL WORK</span>
+                <h3>Two agents, one workspace.</h3>
+                <p>
+                  Put two live sessions side by side or stack them. Railmux
+                  keeps the Target explicit, so sidebar actions always land in
+                  the pane you intended.
+                </p>
+              </div>
+              <div className="feature-real-shot">
+                <img
+                  src={`${import.meta.env.BASE_URL}generated/dual-agent-workspace.png`}
+                  alt="A real Railmux terminal with two agent panes"
+                />
+                <small>REAL CAPTURE · SIDE-BY-SIDE LAYOUT</small>
+              </div>
+            </article>
+            <article className="feature-showcase feature-showcase-sidebar">
+              <div className="feature-sidebar-crop">
+                <img
+                  src={`${import.meta.env.BASE_URL}generated/dual-agent-workspace.png`}
+                  alt="Railmux Projects, Sessions, and Running sidebar"
+                />
+              </div>
+              <div className="feature-showcase-copy">
+                <span>02 / FIND ANYTHING</span>
+                <h3>A sidebar that knows your work.</h3>
+                <p>
+                  Browse projects, filter history, star important sessions,
+                  preview stopped work, and jump to anything already running.
+                </p>
+              </div>
+            </article>
+            <div className="feature-support-grid">
+              <article>
+                <span>03 / PERSISTENCE</span>
+                <h3>Every session stays alive.</h3>
+                <p>
+                  Switch projects, detach, or close the Railmux view without
+                  interrupting the agents doing the work.
+                </p>
               </article>
-            ))}
+              <article>
+                <span>04 / RECOVERY</span>
+                <h3>Designed to recover.</h3>
+                <p>
+                  Soft restart restores the workspace while watchdog
+                  diagnostics report failures without taking agents down.
+                </p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section className="workflow" id="workflow">
+          <div className="section-wrap">
+            <div className="section-heading workflow-heading">
+              <p className="section-kicker section-kicker-light">ONE LOOP</p>
+              <h2>Browse. Open. Keep moving.</h2>
+            </div>
+            <div className="workflow-demo-grid">
+              <div className="workflow-steps">
+                <article>
+                  <span>01</span>
+                  <h3>Browse</h3>
+                  <p>Move through projects and sessions from one sidebar.</p>
+                  <kbd>↑ ↓</kbd>
+                </article>
+                <article>
+                  <span>02</span>
+                  <h3>Open</h3>
+                  <p>Launch a session, then add a second live agent pane.</p>
+                  <div><kbd>n</kbd><kbd>F8</kbd></div>
+                </article>
+                <article>
+                  <span>03</span>
+                  <h3>Keep moving</h3>
+                  <p>Choose the Target or return to Railmux without stopping work.</p>
+                  <div><kbd>C-b →</kbd><kbd>C-b Tab</kbd></div>
+                </article>
+              </div>
+              <div className="workflow-player">
+                <div className="capture-meta capture-meta-dark">
+                  <span><i /> RECORDED INPUT</span>
+                  <small>keys appear during playback</small>
+                </div>
+                <TerminalRecording
+                  className="workflow-terminal-recording"
+                  poster="npt:1.5"
+                  controls
+                  playWhenVisible
+                  keystrokeOverlay
+                  dataDemo="workflow-recording"
+                />
+              </div>
+            </div>
           </div>
         </section>
 
@@ -181,26 +229,25 @@ export default function Home() {
               <CopyCommand command="railmux ssh your-server" />
             </div>
             <div className="ssh-visual" aria-hidden="true">
-              <div className="packet packet-one">
-                <span>FRAME 1842</span>
-                <i>superseded</i>
+              <div className="ssh-node ssh-node-remote">
+                <span>REMOTE SERVER</span>
+                <strong>tmux + Railmux</strong>
+                <small>agents keep running here</small>
               </div>
-              <div className="packet packet-two">
-                <span>FRAME 1843</span>
-                <i>superseded</i>
+              <div className="ssh-flow ssh-flow-live">
+                <i />
+                <span>LATEST VISIBLE STATE</span>
+                <small>superseded redraws are not painted</small>
               </div>
-              <div className="packet packet-live">
-                <span>LATEST STATE</span>
-                <b>12 changed rows</b>
-                <small>2.1 KiB compressed</small>
-              </div>
-              <div className="connection-line"><i /></div>
-              <div className="remote-screen">
+              <div className="ssh-node ssh-node-local">
                 <span>LOCAL TERMINAL</span>
-                <div />
-                <div />
-                <div />
-                <small>paint newest state</small>
+                <strong>fast renderer</strong>
+                <small>paint only what matters now</small>
+              </div>
+              <div className="ssh-flow ssh-flow-history">
+                <i />
+                <span>HISTORY ON DEMAND</span>
+                <small>up to 20,000 lines in a local cache</small>
               </div>
             </div>
           </div>
@@ -225,24 +272,21 @@ export default function Home() {
               <span>[2] Agent two</span>
             </div>
           </div>
-          <CompactDemo />
-        </section>
-
-        <section className="workflow" id="workflow">
-          <div className="section-wrap">
-            <div className="section-heading workflow-heading">
-              <p className="section-kicker section-kicker-light">ONE LOOP</p>
-              <h2>Browse. Open. Keep moving.</h2>
+          <div className="phone-frame" data-demo="compact-recording">
+            <div className="phone-speaker" />
+            <div className="mobile-capture-label">
+              REAL 46×26 TERMINAL
             </div>
-            <div className="workflow-steps">
-              {workflow.map(([title, copy], index) => (
-                <article key={title}>
-                  <span>0{index + 1}</span>
-                  <h3>{title}</h3>
-                  <p>{copy}</p>
-                </article>
-              ))}
-            </div>
+            <TerminalRecording
+              source="railmux-mobile-demo.cast"
+              className="mobile-terminal-recording"
+              poster="npt:3.5"
+              controls={false}
+              loop
+              playWhenVisible
+              keystrokeOverlay
+              dataDemo="mobile-recording"
+            />
           </div>
         </section>
 

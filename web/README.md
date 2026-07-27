@@ -29,11 +29,17 @@ npm run record-demo
 ```
 
 The command needs `tmux` and the Railmux checkout but no Claude Code or Codex
-login. It produces `public/generated/railmux-demo.cast`, which the website
-plays directly as text through asciinema-player. The recorder launches Railmux
-through its normal CLI, opens a local demo-agent pane, and removes the private
-tmux server when it finishes. It never reads the user's normal HOME or provider
-configuration.
+login. It produces two source-authentic recordings:
+
+- `public/generated/railmux-demo.cast` records the full desktop workspace,
+  including a second live agent pane and the keyboard actions that opened it.
+- `public/generated/railmux-mobile-demo.cast` records Railmux's real 46×26
+  compact layout and page controls for the small-screen section.
+
+The website plays both casts directly as text through asciinema-player. The
+recorder launches Railmux through its normal CLI, opens isolated local
+demo-agent panes, and removes the private tmux server when it finishes. It
+never reads the user's normal HOME or provider configuration.
 The random temporary root is replaced by an equal-width stable demo path in
 the cast, keeping generated output reviewable without changing terminal cell
 positions.
@@ -45,9 +51,11 @@ npx playwright install chromium
 npm run screenshots
 ```
 
-Generated PNG files (including a playback smoke screenshot) live under
-`public/generated/` and are intentionally ignored by Git. The Pages workflow
-regenerates the real terminal cast and the screenshots before every deployment,
-then includes them in the static artifact. The large hero workspace remains a
-responsive HTML/CSS product illustration; the “Real terminal capture” section
-is the source-authentic recording.
+The browser pass generates a high-resolution dual-agent evidence image from
+the real desktop cast, plus compact, playback, and social-card smoke
+screenshots. The dual-agent image is committed for local builds; transient
+verification images remain ignored. The Pages workflow regenerates both casts
+and every screenshot before deployment, then includes them in the static
+artifact. The hero, guided workflow, feature evidence, and compact phone frame
+therefore all come from the real Railmux/tmux UI rather than a hand-drawn
+terminal mockup.

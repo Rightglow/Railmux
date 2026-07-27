@@ -4,6 +4,8 @@ import { test, expect } from "@playwright/test";
 
 const outputDir = join(process.cwd(), "public", "generated");
 
+test.use({ deviceScaleFactor: 2 });
+
 test.beforeAll(async () => {
   await mkdir(outputDir, { recursive: true });
 });
@@ -13,40 +15,24 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
-  const desktopDemo = page.locator('[data-demo="desktop"]');
-  await expect(desktopDemo).toBeVisible();
+  const desktopDemo = page.locator('[data-demo="desktop-recording"]');
+  await expect(desktopDemo.locator(".ap-player")).toBeVisible();
   await expect(page.locator("h1")).toContainText("Keep every");
-  await expect(desktopDemo.locator(".agent-heading")).toHaveCount(0);
-  await expect(desktopDemo.locator(".sidebar-hints")).toContainText(
-    "C-b Tab Target",
+  await expect(page.getByText("ACTUAL RAILMUX SESSION")).toBeVisible();
+  await page.waitForTimeout(1_000);
+  await desktopDemo.locator(".ap-overlay-start").evaluate(
+    (element) => { (element as HTMLElement).style.display = "none"; },
   );
-  await expect(desktopDemo.locator(".sidebar-buttons")).toContainText(
-    "C-b d Detach",
-  );
-  await expect(desktopDemo.locator(".terminal-status")).toContainText(
-    "Railmux · Codex · ◧",
-  );
-  expect(
-    await desktopDemo.locator(".terminal-status").evaluate(
-      (element) => getComputedStyle(element).backgroundColor,
-    ),
-  ).toBe("rgb(95, 175, 0)");
-  expect(
-    await desktopDemo.locator(".agent-pane-active").evaluate((element) => {
-      const style = getComputedStyle(element);
-      return [style.borderTopWidth, style.borderBottomWidth, style.borderLeftWidth];
-    }),
-  ).toEqual(["0px", "0px", "0px"]);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
 
-  await desktopDemo.screenshot({
-    path: join(outputDir, "desktop-workspace.png"),
+  await desktopDemo.locator(".ap-term").screenshot({
+    path: join(outputDir, "dual-agent-workspace.png"),
     animations: "disabled",
-    scale: "css",
+    scale: "device",
   });
 
   await page.setViewportSize({ width: 1200, height: 630 });
@@ -64,11 +50,15 @@ test("capture deterministic compact preview", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 760, height: 900 });
   await page.goto(".");
-  const compactDemo = page.locator('[data-demo="compact"]');
+  const compactDemo = page.locator('[data-demo="compact-recording"]');
   await compactDemo.scrollIntoViewIfNeeded();
   await expect(compactDemo).toBeVisible();
+  await expect(
+    compactDemo.locator('[data-demo="mobile-recording"] .ap-player'),
+  ).toBeVisible();
+  await page.waitForTimeout(2_000);
   await compactDemo.screenshot({
-    path: join(outputDir, "compact-workspace.png"),
+    path: join(outputDir, "mobile-workspace.png"),
     animations: "disabled",
     scale: "css",
   });
@@ -80,7 +70,9 @@ test("capture deterministic compact preview", async ({ page }) => {
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(".");
-  await expect(page.locator('[data-demo="desktop"]')).toBeVisible();
+  await expect(
+    page.locator('[data-demo="desktop-recording"] .ap-player'),
+  ).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -89,15 +81,16 @@ test("capture deterministic compact preview", async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test("play the isolated real-terminal recording", async ({ page }) => {
+test("play the guided real-terminal recording with input overlay", async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
-  const player = page.locator(".terminal-recording-player");
+  const player = page.locator('[data-demo="workflow-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
-  await page.waitForTimeout(4_000);
+  await page.waitForTimeout(3_000);
+  await expect(player.locator(".ap-overlay-keystrokes")).toBeVisible();
   await player.screenshot({
     path: join(outputDir, "recorded-workspace.png"),
     animations: "disabled",

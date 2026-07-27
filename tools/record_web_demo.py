@@ -7,6 +7,7 @@ agent executable.  It never reads the caller's provider configuration or
 credentials.  The resulting cast is suitable for the website's terminal
 player and can also be replayed with any asciicast-compatible tool.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -14,6 +15,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import shutil
 import struct
@@ -22,14 +24,27 @@ import sys
 import tempfile
 import termios
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = ROOT / "web" / "public" / "generated" / "railmux-demo.cast"
-WIDTH = 128
-HEIGHT = 38
-RECORD_SECONDS = 10.5
+GENERATED = ROOT / "web" / "public" / "generated"
+DEFAULT_DESKTOP_OUTPUT = GENERATED / "railmux-demo.cast"
+DEFAULT_MOBILE_OUTPUT = GENERATED / "railmux-mobile-demo.cast"
+
+
+@dataclass(frozen=True)
+class RecordingProfile:
+    name: str
+    width: int
+    height: int
+    duration: float
+
+
+DESKTOP = RecordingProfile("desktop", 210, 42, 13.0)
+MOBILE = RecordingProfile("mobile", 46, 26, 9.0)
+TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 
 
 def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
@@ -81,31 +96,41 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
         (
             "railmux",
             (
-                ("11111111-1111-4111-8111-111111111111",
-                 "Polish SSH history",
-                 "The local history overlay now skips superseded frames."),
-                ("22222222-2222-4222-8222-222222222222",
-                 "Review layout policy",
-                 "Compact mode changes visibility, not running sessions."),
-                ("33333333-3333-4333-8333-333333333333",
-                 "Add mobile controls",
-                 "The status bar exposes Railmux, Agent 1, and Agent 2."),
+                (
+                    "11111111-1111-4111-8111-111111111111",
+                    "Polish SSH history",
+                    "The local history overlay now skips superseded frames.",
+                ),
+                (
+                    "22222222-2222-4222-8222-222222222222",
+                    "Review layout policy",
+                    "Compact mode changes visibility, not running sessions.",
+                ),
+                (
+                    "33333333-3333-4333-8333-333333333333",
+                    "Add mobile controls",
+                    "The status bar exposes Railmux, Agent 1, and Agent 2.",
+                ),
             ),
         ),
         (
             "compiler-lab",
             (
-                ("44444444-4444-4444-8444-444444444444",
-                 "Review parser",
-                 "The parser tests pass in the isolated workspace."),
+                (
+                    "44444444-4444-4444-8444-444444444444",
+                    "Review parser",
+                    "The parser tests pass in the isolated workspace.",
+                ),
             ),
         ),
         (
             "infra-tools",
             (
-                ("55555555-5555-4555-8555-555555555555",
-                 "Check deployment",
-                 "The deployment plan is ready for review."),
+                (
+                    "55555555-5555-4555-8555-555555555555",
+                    "Check deployment",
+                    "The deployment plan is ready for review.",
+                ),
             ),
         ),
     )
@@ -184,10 +209,19 @@ while True:
     return claude_home, env
 
 
-def _event(timestamp: float, data: bytes) -> str:
+def _event(timestamp: float, kind: str, data: bytes) -> str:
     return json.dumps(
-        [round(timestamp, 6), "o", data.decode("utf-8", errors="replace")],
+        [round(timestamp, 6), kind, data.decode("utf-8", errors="replace")],
         ensure_ascii=False,
+    )
+
+
+def _sanitize_fixture_path(chunk: bytes, stable_path: bytes) -> bytes:
+    """Replace full or terminal-truncated temporary fixture paths cell-for-cell."""
+
+    return TEMP_FIXTURE_PATTERN.sub(
+        lambda match: stable_path[: len(match.group(0))],
+        chunk,
     )
 
 
@@ -218,20 +252,34 @@ def _railmux_python(env: dict[str, str]) -> str:
     )
 
 
-def _record(output: Path) -> None:
+def _client_name(label: str, env: dict[str, str]) -> str | None:
+    try:
+        names = subprocess.check_output(
+            ["tmux", "-L", label, "list-clients", "-F", "#{client_name}"],
+            env=env,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).splitlines()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return names[0] if names else None
+
+
+def _record(output: Path, profile: RecordingProfile) -> None:
     if shutil.which("tmux") is None:
         raise RuntimeError("tmux is required to record the Railmux demo")
 
     with tempfile.TemporaryDirectory(prefix="railmux-web-demo-", dir="/tmp") as raw:
         fixture_root = Path(raw)
         claude_home, env = _create_fixture(fixture_root)
+        env["RAILMUX_TMUX_LABEL"] += f"-{profile.name}"
         python = _railmux_python(env)
         label = env["RAILMUX_TMUX_LABEL"]
         master, slave = pty.openpty()
         fcntl.ioctl(
             slave,
             termios.TIOCSWINSZ,
-            struct.pack("HHHH", HEIGHT, WIDTH, 0, 0),
+            struct.pack("HHHH", profile.height, profile.width, 0, 0),
         )
         process = subprocess.Popen(
             [
@@ -251,12 +299,12 @@ def _record(output: Path) -> None:
 
         header = {
             "version": 2,
-            "width": WIDTH,
-            "height": HEIGHT,
+            "width": profile.width,
+            "height": profile.height,
             "timestamp": 1785146400,
-            "duration": RECORD_SECONDS,
-            "command": "railmux (isolated website demo)",
-            "title": "Railmux — real tmux UI, credential-free demo",
+            "duration": profile.duration,
+            "command": f"railmux (isolated {profile.name} website demo)",
+            "title": (f"Railmux — real {profile.name} tmux UI, credential-free demo"),
             "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"},
         }
         events: list[str] = []
@@ -268,20 +316,92 @@ def _record(output: Path) -> None:
         started = time.monotonic()
         sent: set[str] = set()
 
+        def record_input(payload: bytes) -> None:
+            events.append(
+                _event(
+                    time.monotonic() - started,
+                    "i",
+                    payload,
+                )
+            )
+
         def send_once(name: str, at: float, payload: bytes) -> None:
             if name not in sent and time.monotonic() - started >= at:
+                record_input(payload)
                 os.write(master, payload)
                 sent.add(name)
 
+        def send_client_keys(
+            name: str,
+            at: float,
+            keys: tuple[str, ...],
+            display_bytes: bytes,
+        ) -> None:
+            if name in sent or time.monotonic() - started < at:
+                return
+            client = _client_name(label, env)
+            if client is None:
+                return
+            for key in keys:
+                result = subprocess.run(
+                    [
+                        "tmux",
+                        "-L",
+                        label,
+                        "send-keys",
+                        "-K",
+                        "-c",
+                        client,
+                        key,
+                    ],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                if result.returncode:
+                    return
+            record_input(display_bytes)
+            sent.add(name)
+
         try:
-            while time.monotonic() - started < RECORD_SECONDS:
+            while time.monotonic() - started < profile.duration:
                 elapsed = time.monotonic() - started
-                # Launch a real right-hand tmux pane through Railmux, return to
-                # the sidebar, then briefly show the real Help surface.
-                send_once("launch", 2.4, b"n")
-                send_once("sidebar", 5.0, b"\x02\t")
-                send_once("help", 6.3, b"?")
-                send_once("close-help", 8.4, b"\x1b")
+                if profile is DESKTOP:
+                    # Build a real two-agent workspace. Function/navigation keys
+                    # go through the attached tmux client's key tables so the
+                    # recording exercises the same global bindings as a user.
+                    send_once("launch-primary", 2.2, b"n")
+                    send_client_keys("split", 4.6, ("F8",), b"\x1b[19~")
+                    send_client_keys(
+                        "target-secondary",
+                        5.4,
+                        ("C-b", "Right"),
+                        b"\x02\x1b[C",
+                    )
+                    send_client_keys(
+                        "return-sidebar",
+                        6.1,
+                        ("C-b", "Tab"),
+                        b"\x02\t",
+                    )
+                    send_once("launch-secondary", 6.8, b"n")
+                else:
+                    # Real compact projection: open Agent 1, return to Railmux,
+                    # then jump back to the live agent through compact routing.
+                    send_once("launch-primary", 2.2, b"n")
+                    send_client_keys(
+                        "mobile-sidebar",
+                        4.8,
+                        ("C-b", "Tab"),
+                        b"\x02\t",
+                    )
+                    send_client_keys(
+                        "mobile-agent",
+                        6.5,
+                        ("C-b", "Tab"),
+                        b"\x02\t",
+                    )
 
                 readable, _, _ = select.select([master], [], [], 0.05)
                 if readable:
@@ -292,11 +412,12 @@ def _record(output: Path) -> None:
                     if not chunk:
                         break
                     # The UI legitimately shows an absolute project path in a
-                    # transient status message. Keep the recording reproducible
-                    # without changing terminal cell positions.
-                    chunk = chunk.replace(fixture_path, stable_fixture_path)
+                    # transient status message. A narrow terminal may truncate
+                    # that path before the temporary suffix ends, so sanitize
+                    # every visible prefix while preserving its cell width.
+                    chunk = _sanitize_fixture_path(chunk, stable_fixture_path)
                     raw_output.extend(chunk)
-                    events.append(_event(elapsed, chunk))
+                    events.append(_event(elapsed, "o", chunk))
                 if process.poll() is not None:
                     break
         finally:
@@ -324,10 +445,7 @@ def _record(output: Path) -> None:
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
-            json.dumps(header, ensure_ascii=False)
-            + "\n"
-            + "\n".join(events)
-            + "\n",
+            json.dumps(header, ensure_ascii=False) + "\n" + "\n".join(events) + "\n",
             encoding="utf-8",
         )
 
@@ -335,18 +453,26 @@ def _record(output: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--output",
+        "--desktop-output",
         type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"asciicast output path (default: {DEFAULT_OUTPUT})",
+        default=DEFAULT_DESKTOP_OUTPUT,
+        help=f"desktop asciicast path (default: {DEFAULT_DESKTOP_OUTPUT})",
+    )
+    parser.add_argument(
+        "--mobile-output",
+        type=Path,
+        default=DEFAULT_MOBILE_OUTPUT,
+        help=f"mobile asciicast path (default: {DEFAULT_MOBILE_OUTPUT})",
     )
     args = parser.parse_args(argv)
     try:
-        _record(args.output.resolve())
+        _record(args.desktop_output.resolve(), DESKTOP)
+        _record(args.mobile_output.resolve(), MOBILE)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"record_web_demo.py: error: {exc}", file=sys.stderr)
         return 1
-    print(f"recorded isolated Railmux demo: {args.output.resolve()}")
+    print(f"recorded desktop Railmux demo: {args.desktop_output.resolve()}")
+    print(f"recorded mobile Railmux demo: {args.mobile_output.resolve()}")
     return 0
 
 

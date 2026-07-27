@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a credential-free website recorder that launches the real Railmux UI in
   an isolated tmux server, publishes its asciicast through an embedded terminal
   player, and regenerates the recording during every Pages build.
+- Add a second source-authentic 46×26 recording for the small-screen product
+  section, recorded through Railmux's real compact layout and page controls.
 - Let `+` and `-` expand and collapse the Button Bar's secondary action row
   directly from the keyboard.
 - Show a one-time local info message when an SSH history viewport reaches the
@@ -33,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep the product-site terminal previews aligned with the real flat sidebar,
   shared tmux dividers, Hint Bar, Button Bar, status bar, compact controls,
   Running section, and history default.
+- Replace the product site's illustrative hero and feature mockups with real
+  desktop and mobile terminal captures, surface recorded keyboard actions in
+  the guided workflow, and clarify the remote-to-local fast SSH data flow.
 
 ### Fixed
 
