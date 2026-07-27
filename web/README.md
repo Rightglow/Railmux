@@ -34,8 +34,9 @@ login. It produces three source-authentic recordings:
 - `public/generated/railmux-demo.cast` records the full desktop workspace,
   including a second live agent pane and two reviewed real-agent runs.
 - `public/generated/railmux-workflow-demo.cast` records a focused 160×38
-  wide-layout sidebar workflow. Semantic input events drive the website's
-  durable key HUD and cell-aligned mouse pointer.
+  wide-layout history workflow: single-click preview, Enter resume, return to
+  the sidebar, and click the running conversation. Semantic input events drive
+  the website's durable key HUD and cell-aligned mouse pointer.
 - `public/generated/railmux-mobile-demo.cast` records Railmux's real 46×26
   compact layout and page controls for the small-screen section.
 

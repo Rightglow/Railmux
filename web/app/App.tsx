@@ -134,7 +134,7 @@ export default function Home() {
                   <TerminalRecording
                     source="railmux-workflow-demo.cast"
                     className="sidebar-evidence-recording"
-                    poster="npt:5.8"
+                    poster="npt:7.8"
                     controls={false}
                     dataDemo="sidebar-evidence"
                   />
@@ -185,15 +185,21 @@ export default function Home() {
               <div className="workflow-steps">
                 <article>
                   <span>01</span>
-                  <h3>Browse</h3>
-                  <p>See projects, history, and everything already running.</p>
-                  <kbd>MOUSE</kbd>
+                  <h3>Preview</h3>
+                  <p>
+                    Single-click a stopped session to inspect its transcript
+                    without starting it.
+                  </p>
+                  <kbd>CLICK</kbd>
                 </article>
                 <article>
                   <span>02</span>
-                  <h3>Open</h3>
-                  <p>Launch a new agent without leaving the workspace.</p>
-                  <div><kbd>N</kbd><kbd>NEW SESSION</kbd></div>
+                  <h3>Resume</h3>
+                  <p>
+                    Press Enter after preview—or double-click—to continue the
+                    conversation.
+                  </p>
+                  <div><kbd>ENTER</kbd><kbd>DOUBLE-CLICK</kbd></div>
                 </article>
                 <article>
                   <span>03</span>

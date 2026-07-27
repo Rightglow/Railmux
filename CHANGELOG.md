@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   section, recorded through Railmux's real compact layout and page controls.
 - Add a dedicated 160×38 guided desktop workflow with durable keyboard labels,
   a cell-aligned mouse pointer, and two audited real Claude Code source-analysis
-  runs captured without provider session persistence. Compact projection
-  appears only in the phone demo.
+  runs captured without provider session persistence. It demonstrates
+  single-click history preview, Enter resume, and return through Running;
+  compact projection appears only in the phone demo.
 - Let `+` and `-` expand and collapse the Button Bar's secondary action row
   directly from the keyboard.
 - Show a one-time local info message when an SSH history viewport reaches the

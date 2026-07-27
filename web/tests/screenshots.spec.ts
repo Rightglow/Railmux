@@ -139,22 +139,37 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
   const hud = player.getByTestId("terminal-input-hud");
+  const pointer = player.getByTestId("terminal-pointer");
+  await expect(pointer).toBeVisible({
+    timeout: 5_000,
+  });
+  await expect(hud).toContainText("Preview stopped session");
+  await expect(player.locator(".ap-term")).toContainText(
+    "Read-only history preview",
+  );
+  await expect(player.locator(".ap-term")).toContainText(
+    "(no running Claude Code sessions)",
+  );
+  await player.screenshot({
+    path: join(outputDir, "preview-workspace.png"),
+    animations: "disabled",
+    scale: "css",
+  });
   await expect(player.locator('[data-input-kind="key"]')).toBeVisible({
     timeout: 5_000,
   });
-  await expect(hud).toContainText("New session");
-  await expect(hud).toContainText("N");
+  await expect(hud).toContainText("Resume this conversation");
+  await expect(hud).toContainText("Enter");
   await expect(player.locator(".ap-term")).toContainText(
     "Trace SSH wheel ownership",
   );
-  await expect(hud).toContainText("Back to the sidebar", { timeout: 7_000 });
+  await expect(hud).toContainText("Back to the sidebar", { timeout: 8_000 });
   await expect(player.locator(".ap-term")).toContainText("PROJECTS");
   await player.screenshot({
     path: join(outputDir, "recorded-workspace.png"),
     animations: "disabled",
     scale: "css",
   });
-  const pointer = player.getByTestId("terminal-pointer");
   await expect(pointer).toBeVisible({ timeout: 5_000 });
   await expect(player.getByTestId("terminal-input-hud")).toContainText(
     "Running session",

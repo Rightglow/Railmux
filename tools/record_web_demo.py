@@ -48,7 +48,7 @@ class RecordingProfile:
 
 
 DESKTOP = RecordingProfile("desktop", 210, 42, 13.0)
-WORKFLOW = RecordingProfile("workflow", 160, 38, 13.0)
+WORKFLOW = RecordingProfile("workflow", 160, 38, 14.0)
 MOBILE = RecordingProfile("mobile", 46, 26, 9.0)
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
@@ -506,7 +506,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "launch-secondary",
             },
             WORKFLOW.name: {
-                "launch-primary",
+                "preview-session",
+                "resume-session",
                 "return-sidebar",
                 "reopen-agent",
             },
@@ -525,6 +526,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     break
 
                 real_response_visible = b"sanitized transcript replay" in raw_output
+                preview_visible = b"Read-only history preview" in raw_output
                 running_sidebar_visible = b"railmux/(new)" in raw_output
                 if profile is DESKTOP:
                     # Build a real two-agent workspace. Function/navigation keys
@@ -565,30 +567,42 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "key|N|Open the second agent",
                         )
                 elif profile is WORKFLOW:
-                    # The guided cast makes interaction explicit while the hero
-                    # remains a quiet result-focused proof.
-                    send_once(
-                        "launch-primary",
+                    # Preview a stopped transcript without launching it, resume
+                    # that exact conversation, then return through Running.
+                    cue_once(
+                        "preview-session-cue",
                         0.8,
-                        b"n",
-                        "key|N|New session",
+                        "mouse|10|13|Preview stopped session",
                     )
-                    if real_response_visible:
-                        send_client_keys(
+                    send_once(
+                        "preview-session",
+                        1.4,
+                        b"\x1b[<0;10;13M\x1b[<0;10;13m",
+                        None,
+                    )
+                    if preview_visible:
+                        send_once(
+                            "resume-session",
+                            3.2,
+                            b"\r",
+                            "key|Enter|Resume this conversation",
+                        )
+                    if "resume-session" in sent and real_response_visible:
+                        send_once(
                             "return-sidebar",
-                            5.0,
-                            ("C-b", "Tab"),
+                            7.0,
+                            b"\x02\t",
                             "key|C-b Tab|Back to the sidebar",
                         )
-                    if "return-sidebar" in sent and running_sidebar_visible:
+                    if "return-sidebar" in sent and b"RUNNING" in raw_output.upper():
                         cue_once(
                             "reopen-agent-cue",
-                            6.5,
+                            8.2,
                             "mouse|10|26|Running session",
                         )
                         send_once(
                             "reopen-agent",
-                            7.1,
+                            8.8,
                             b"\x1b[<0;10;26M\x1b[<0;10;26m",
                             None,
                         )
