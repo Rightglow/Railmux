@@ -69,8 +69,8 @@ export default function Home() {
           </div>
           <div className="hero-demo">
             <div className="capture-meta">
-              <span><i /> REAL AGENT RESPONSE · ISOLATED RAILMUX</span>
-              <small>captured once · replayed without provider credentials</small>
+              <span><i /> REAL CLAUDE CODE RUNS · ISOLATED RAILMUX</span>
+              <small>captured 2026-07-27 · sanitized transcript replay</small>
             </div>
             <TerminalRecording
               className="hero-terminal-recording"
@@ -130,13 +130,15 @@ export default function Home() {
                 role="img"
                 aria-label="Railmux sidebar showing New project, New session, and a running agent"
               >
-                <TerminalRecording
-                  source="railmux-workflow-demo.cast"
-                  className="sidebar-evidence-recording"
-                  poster="npt:5.2"
-                  controls={false}
-                  dataDemo="sidebar-evidence"
-                />
+                <div className="sidebar-evidence-viewport">
+                  <TerminalRecording
+                    source="railmux-workflow-demo.cast"
+                    className="sidebar-evidence-recording"
+                    poster="npt:5.8"
+                    controls={false}
+                    dataDemo="sidebar-evidence"
+                  />
+                </div>
                 <div className="sidebar-evidence-legend" aria-hidden="true">
                   <span>NEW PROJECT</span>
                   <span>NEW SESSION</span>
@@ -191,7 +193,7 @@ export default function Home() {
                   <span>02</span>
                   <h3>Open</h3>
                   <p>Launch a new agent without leaving the workspace.</p>
-                  <div><kbd>MOUSE</kbd><kbd>NEW SESSION</kbd></div>
+                  <div><kbd>N</kbd><kbd>NEW SESSION</kbd></div>
                 </article>
                 <article>
                   <span>03</span>
@@ -203,7 +205,7 @@ export default function Home() {
               <div className="workflow-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> GUIDED REAL TERMINAL</span>
-                  <small>mouse and key cues stay visible during each action</small>
+                  <small>wide desktop layout · mouse and key cues stay visible</small>
                 </div>
                 <TerminalRecording
                   source="railmux-workflow-demo.cast"
@@ -212,8 +214,8 @@ export default function Home() {
                   controls
                   playWhenVisible
                   inputHud
-                  cueCols={76}
-                  cueRows={30}
+                  cueCols={160}
+                  cueRows={38}
                   dataDemo="workflow-recording"
                 />
               </div>

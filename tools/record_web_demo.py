@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import pty
@@ -32,7 +33,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "web" / "public" / "generated"
-REAL_AGENT_RESPONSE = ROOT / "web" / "demo" / "real-agent-response.txt"
+REAL_AGENT_RUNS = ROOT / "web" / "demo" / "real-agent-runs.json"
 DEFAULT_DESKTOP_OUTPUT = GENERATED / "railmux-demo.cast"
 DEFAULT_WORKFLOW_OUTPUT = GENERATED / "railmux-workflow-demo.cast"
 DEFAULT_MOBILE_OUTPUT = GENERATED / "railmux-mobile-demo.cast"
@@ -47,7 +48,7 @@ class RecordingProfile:
 
 
 DESKTOP = RecordingProfile("desktop", 210, 42, 13.0)
-WORKFLOW = RecordingProfile("workflow", 76, 30, 12.0)
+WORKFLOW = RecordingProfile("workflow", 160, 38, 13.0)
 MOBILE = RecordingProfile("mobile", 46, 26, 9.0)
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
@@ -59,6 +60,14 @@ PASSTHROUGH_ENV = (
     "TERMINFO",
     "TERMINFO_DIRS",
     "TZ",
+)
+FORBIDDEN_TRANSCRIPT_FRAGMENTS = (
+    b"/home/",
+    b"/Users/",
+    b"ANTHROPIC_API_KEY",
+    b"OPENAI_API_KEY",
+    b"sk-ant-",
+    b"ghp_",
 )
 
 
@@ -87,6 +96,31 @@ def _session_records(title: str, response: str) -> list[dict[str, object]]:
             },
         },
     ]
+
+
+def _load_agent_runs() -> tuple[dict[str, object], str]:
+    raw = REAL_AGENT_RUNS.read_bytes()
+    leaked = [
+        fragment for fragment in FORBIDDEN_TRANSCRIPT_FRAGMENTS if fragment in raw
+    ]
+    if leaked:
+        raise RuntimeError(
+            f"public agent capture contains private-looking data: {REAL_AGENT_RUNS}"
+        )
+    digest = hashlib.sha256(raw).hexdigest()
+    data = json.loads(raw)
+    runs = data.get("runs")
+    if not isinstance(runs, list) or len(runs) < 2:
+        raise RuntimeError(f"expected two public agent runs: {REAL_AGENT_RUNS}")
+    for run in runs:
+        if not isinstance(run, dict):
+            raise RuntimeError(f"invalid public agent run: {REAL_AGENT_RUNS}")
+        for field in ("agent", "title", "prompt", "files", "response"):
+            if not run.get(field):
+                raise RuntimeError(
+                    f"public agent run is missing {field}: {REAL_AGENT_RUNS}"
+                )
+    return data, digest
 
 
 def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
@@ -170,28 +204,75 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
             fixed_mtime = 1_785_000_000 - project_index * 100 - session_index
             os.utime(session_path, (fixed_mtime, fixed_mtime))
 
-    real_response = REAL_AGENT_RESPONSE.read_text(encoding="utf-8").strip()
-    if not real_response:
-        raise RuntimeError(f"empty public agent response: {REAL_AGENT_RESPONSE}")
-    response_literal = json.dumps(real_response + "\n", ensure_ascii=False)
+    agent_capture, transcript_digest = _load_agent_runs()
+    runs_json_literal = repr(json.dumps(agent_capture["runs"], ensure_ascii=False))
+    counter_literal = repr(str(root / "agent-invocations"))
+    captured_at_literal = repr(str(agent_capture["captured_at"]))
+    digest_literal = repr(transcript_digest[:12])
 
     demo_agent = bin_dir / "demo-agent"
-    demo_agent.write_text(
-        f"""#!/usr/bin/env python3
+    demo_agent_source = """#!/usr/bin/env python3
+import fcntl
+import json
+import shutil
 import sys
+import textwrap
 import time
 
+RUNS = json.loads(__RUNS_JSON__)
+COUNTER = __COUNTER__
+CAPTURED_AT = __CAPTURED_AT__
+TRANSCRIPT_DIGEST = __TRANSCRIPT_DIGEST__
+
+
+def emit(text="", delay=0.0):
+    sys.stdout.write(text + "\\r\\n")
+    sys.stdout.flush()
+    if delay:
+        time.sleep(delay)
+
+
+with open(COUNTER, "a+", encoding="utf-8") as handle:
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    handle.seek(0)
+    value = handle.read().strip()
+    invocation = int(value) if value else 0
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(invocation + 1))
+    handle.flush()
+
+run = RUNS[invocation % len(RUNS)]
+columns = shutil.get_terminal_size((88, 24)).columns
+wrap_width = max(32, columns - 4)
+
 sys.stdout.write("\\033[2J\\033[H")
-sys.stdout.write("\\033[38;5;244m• Claude · isolated public demo\\033[0m\\r\\n\\r\\n")
-sys.stdout.write("\\033[48;5;52m\\033[38;5;210m- forward_wheel(event)\\033[0m\\r\\n")
-sys.stdout.write("\\033[48;5;22m\\033[38;5;157m+ history.scroll(event.rows)\\033[0m\\r\\n\\r\\n")
-sys.stdout.write({response_literal}.replace("\\n", "\\r\\n"))
-sys.stdout.write("\\r\\n\\033[38;5;70m✓ focused test proposed\\033[0m\\r\\n\\r\\n")
-sys.stdout.write("\\033[38;5;244m› Real response replayed; provider session was not persisted.\\033[0m\\r\\n")
-sys.stdout.flush()
+emit("\\033[38;5;244m╭─ " + run["agent"] + " · captured " + CAPTURED_AT + "\\033[0m", 0.08)
+for line in textwrap.wrap(run["prompt"], wrap_width - 2):
+    emit("\\033[38;5;252m│ " + line + "\\033[0m", 0.025)
+emit("\\033[38;5;244m╰─ read-only source analysis\\033[0m", 0.08)
+emit()
+for path in run["files"]:
+    emit("\\033[38;5;244m• Read " + path + "\\033[0m", 0.07)
+emit()
+emit("\\033[38;5;118m" + run["title"] + "\\033[0m", 0.08)
+for paragraph in run["response"].splitlines():
+    for line in textwrap.wrap(paragraph, wrap_width):
+        emit(line, 0.018)
+emit()
+emit("\\033[38;5;70m✓ Read-only analysis complete · transcript " + TRANSCRIPT_DIGEST + "\\033[0m")
+emit("\\033[38;5;244m› Captured once; sanitized transcript replay; no provider session persisted.\\033[0m")
 while True:
     time.sleep(1)
-""",
+"""
+    demo_agent_source = (
+        demo_agent_source.replace("__RUNS_JSON__", runs_json_literal)
+        .replace("__COUNTER__", counter_literal)
+        .replace("__CAPTURED_AT__", captured_at_literal)
+        .replace("__TRANSCRIPT_DIGEST__", digest_literal)
+    )
+    demo_agent.write_text(
+        demo_agent_source,
         encoding="utf-8",
     )
     demo_agent.chmod(0o700)
@@ -341,6 +422,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             "duration": profile.duration,
             "command": f"railmux (isolated {profile.name} website demo)",
             "title": (f"Railmux — real {profile.name} tmux UI, credential-free demo"),
+            "transcript_sha256": _load_agent_runs()[1],
             "env": {"SHELL": "/bin/bash", "TERM": "xterm-256color"},
         }
         events: list[str] = []
@@ -442,7 +524,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 if ready_at is not None and elapsed() >= profile.duration:
                     break
 
-                real_response_visible = b"Real response replayed" in raw_output
+                real_response_visible = b"sanitized transcript replay" in raw_output
                 running_sidebar_visible = b"railmux/(new)" in raw_output
                 if profile is DESKTOP:
                     # Build a real two-agent workspace. Function/navigation keys
@@ -485,16 +567,11 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 elif profile is WORKFLOW:
                     # The guided cast makes interaction explicit while the hero
                     # remains a quiet result-focused proof.
-                    cue_once(
-                        "launch-primary-cue",
-                        0.8,
-                        "mouse|8|8|New session",
-                    )
                     send_once(
                         "launch-primary",
-                        1.4,
-                        b"\x1b[<0;8;8M\x1b[<0;8;8m",
-                        None,
+                        0.8,
+                        b"n",
+                        "key|N|New session",
                     )
                     if real_response_visible:
                         send_client_keys(
@@ -507,12 +584,12 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         cue_once(
                             "reopen-agent-cue",
                             6.5,
-                            "mouse|10|24|Running session",
+                            "mouse|10|26|Running session",
                         )
                         send_once(
                             "reopen-agent",
                             7.1,
-                            b"\x1b[<0;10;24M\x1b[<0;10;24m",
+                            b"\x1b[<0;10;26M\x1b[<0;10;26m",
                             None,
                         )
                 else:

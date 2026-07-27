@@ -5,6 +5,10 @@ from __future__ import annotations
 import socket
 
 from tools import record_web_demo
+from railmux.ui.workspace import (
+    WorkspacePresentation,
+    presentation_for_geometry,
+)
 
 
 def test_public_output_scrubs_machine_specific_values_without_resizing() -> None:
@@ -50,6 +54,42 @@ def test_fixture_environment_excludes_provider_credentials(
     assert env["XDG_CONFIG_HOME"] == str(tmp_path / "home" / ".config")
 
     demo_agent = (tmp_path / "bin" / "demo-agent").read_text(encoding="utf-8")
-    assert "focused test proposed" in demo_agent
-    assert "focused test passed" not in demo_agent
-    assert "provider session was not persisted" in demo_agent
+    assert "read-only source analysis" in demo_agent
+    assert "sanitized transcript replay" in demo_agent
+    assert "no provider session persisted" in demo_agent
+    assert "ANTHROPIC_API_KEY" not in demo_agent
+    assert "OPENAI_API_KEY" not in demo_agent
+
+
+def test_only_mobile_demo_uses_compact_presentation() -> None:
+    for profile in (record_web_demo.DESKTOP, record_web_demo.WORKFLOW):
+        assert (
+            presentation_for_geometry(
+                WorkspacePresentation.WIDE,
+                profile.width,
+                profile.height,
+            )
+            is WorkspacePresentation.WIDE
+        )
+    assert (
+        presentation_for_geometry(
+            WorkspacePresentation.WIDE,
+            record_web_demo.MOBILE.width,
+            record_web_demo.MOBILE.height,
+        )
+        is WorkspacePresentation.COMPACT
+    )
+
+
+def test_cast_profiles_include_auditable_agent_transcript() -> None:
+    capture, digest = record_web_demo._load_agent_runs()
+
+    assert capture["source_commit"].startswith("f53145d")
+    assert capture["capture_method"].startswith("Claude Code")
+    assert len(capture["runs"]) == 2
+    assert len(digest) == 64
+    raw = record_web_demo.REAL_AGENT_RUNS.read_bytes()
+    assert all(
+        fragment not in raw
+        for fragment in record_web_demo.FORBIDDEN_TRANSCRIPT_FRAGMENTS
+    )

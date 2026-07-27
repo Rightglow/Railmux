@@ -1,0 +1,27 @@
+{
+  "captured_at": "2026-07-27",
+  "source_commit": "f53145d16f1ca87c82eb122a5481c7c0c06cd95f",
+  "capture_method": "Claude Code print mode with no session persistence and read-only tools",
+  "runs": [
+    {
+      "agent": "Claude Code",
+      "title": "Trace SSH wheel ownership",
+      "prompt": "In railmux ssh, explain how a mouse-wheel event over an agent pane is served from the fast client's local history overlay rather than forwarded upstream. Point to the exact implementation symbols and one existing focused test that directly asserts empty forwarded_input. Then suggest one small additional assertion.",
+      "files": [
+        "src/railmux/fast_display_client.py",
+        "tests/test_fast_full_window.py"
+      ],
+      "response": "railmux ssh — agent-pane wheel served locally, not forwarded upstream:\n\n1. handle_terminal_part gets the SgrMouseEvent and dispatches to LocalHistoryView.wheel.\n2. wheel() resolves the pane via _route_at; a hit on an agent viewport scrolls _HistoryViewport.offset and returns HistoryAction with render_history=True and forwarded_input=b\"\" — no upstream input.\n3. apply_history_action only sends upstream when action.forwarded_input is set; empty means nothing reaches tmux. The overlay is painted client-side via surface.paint_overlays.\n4. This is a fast-client history overlay over bounded snapshots, not tmux copy-mode; the implementation notes stock tmux WheelUpPane would enter copy-mode, which is deliberately avoided.\n\nFocused test: tests/test_fast_full_window.py::test_local_history_routes_sidebar_immediately_and_owns_agent_wheel asserts agent_action.forwarded_input == b\"\".\n\nSuggested addition: assert agent_action.render_history is True, proving the overlay rendered rather than merely dropping the event."
+    },
+    {
+      "agent": "Claude Code",
+      "title": "Verify responsive layout gates",
+      "prompt": "Explain why a 76x30 Railmux terminal uses the compact single-page projection while a 160x38 terminal remains in the ordinary wide sidebar-plus-agent layout. Cite the exact responsive-layout symbols and one existing focused test. Suggest one website-recorder assertion that prevents a desktop demo from accidentally using compact mode.",
+      "files": [
+        "src/railmux/ui/workspace.py",
+        "tests/test_agent_workspace.py"
+      ],
+      "response": "presentation_for_geometry() selects the projection from geometry with hysteresis.\n\nFrom WorkspacePresentation.WIDE it enters COMPACT when either dimension is cramped: width < COMPACT_ENTER_WIDTH (80) or height < COMPACT_ENTER_HEIGHT (24).\n\n76x30: width 76 < 80, so it returns COMPACT even though 30 rows clear the height gate.\n160x38: 160 ≥ 80 and 38 ≥ 24, so it stays WIDE with sidebar plus agent. COMPACT_EXIT_WIDTH/HEIGHT (84/26) only applies once already compact.\n\nExisting focused test: tests/test_agent_workspace.py::test_compact_presentation_uses_two_dimensional_hysteresis pins both width and height behavior.\n\nRecorder guard: pass each non-mobile profile through presentation_for_geometry and assert WorkspacePresentation.WIDE."
+    }
+  ]
+}

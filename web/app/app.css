@@ -603,10 +603,20 @@ code {
   background: #090d0f;
 }
 
-.sidebar-evidence-recording {
-  width: min(100%, 720px);
+.sidebar-evidence-viewport {
+  width: min(100%, 760px);
+  overflow: hidden;
+  border: 1px solid rgba(242, 240, 233, 0.16);
   border-radius: 3px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
+}
+
+.sidebar-evidence-recording {
+  width: 160%;
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .sidebar-evidence-recording .ap-term,

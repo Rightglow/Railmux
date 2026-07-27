@@ -32,10 +32,10 @@ The command needs `tmux` and the Railmux checkout but no Claude Code or Codex
 login. It produces three source-authentic recordings:
 
 - `public/generated/railmux-demo.cast` records the full desktop workspace,
-  including a second live agent pane and a reviewed real-agent response.
-- `public/generated/railmux-workflow-demo.cast` records a focused 76×30
-  sidebar workflow. Semantic input events drive the website's durable key HUD
-  and cell-aligned mouse pointer.
+  including a second live agent pane and two reviewed real-agent runs.
+- `public/generated/railmux-workflow-demo.cast` records a focused 160×38
+  wide-layout sidebar workflow. Semantic input events drive the website's
+  durable key HUD and cell-aligned mouse pointer.
 - `public/generated/railmux-mobile-demo.cast` records Railmux's real 46×26
   compact layout and page controls for the small-screen section.
 
@@ -43,13 +43,20 @@ The website plays all three casts directly as text through asciinema-player. The
 recorder launches Railmux through its normal CLI, opens isolated local
 demo-agent panes, and removes the private tmux server when it finishes. It
 never reads the user's normal HOME or provider configuration.
-The public text in `demo/real-agent-response.txt` was generated once with the
-user's existing Claude authorization in `--no-session-persistence` mode,
-reviewed for private paths and identifiers, and committed as plain text. CI
-only replays that fixture; it never receives or invokes provider credentials.
+The two public source-analysis runs in `demo/real-agent-runs.json` were captured
+once with the user's existing Claude authorization in
+`--no-session-persistence` mode. Each run records its real prompt, inspected
+repository-relative files, answer, capture date, and source commit. The
+recorder embeds a SHA-256 provenance value, rejects credential-like fragments,
+and replays the sanitized transcripts with deterministic pacing. CI never
+receives or invokes provider credentials.
 Every full or terminal-truncated temporary root is replaced cell-for-cell by a
 stable public demo path, keeping generated output reviewable without changing
 terminal positions.
+
+The desktop and workflow profiles are also checked against Railmux's real
+responsive-layout function: both must remain `WIDE`, while only the 46×26
+mobile profile may use the `COMPACT` projection.
 
 The workflow then creates deterministic product screenshots:
 

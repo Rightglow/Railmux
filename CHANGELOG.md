@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   player, and regenerates the recording during every Pages build.
 - Add a second source-authentic 46×26 recording for the small-screen product
   section, recorded through Railmux's real compact layout and page controls.
-- Add a dedicated 76×30 guided sidebar recording with durable keyboard labels,
-  a cell-aligned mouse pointer, and a reviewed real Claude response captured
-  without provider session persistence.
+- Add a dedicated 160×38 guided desktop workflow with durable keyboard labels,
+  a cell-aligned mouse pointer, and two audited real Claude Code source-analysis
+  runs captured without provider session persistence. Compact projection
+  appears only in the phone demo.
 - Let `+` and `-` expand and collapse the Button Bar's secondary action row
   directly from the keyboard.
 - Show a one-time local info message when an SSH history viewport reaches the
@@ -53,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error, and tip messages do not visually touch the terminal edge.
 - Remove build-host names, private tmux labels, and truncated temporary paths
   from generated website casts while rejecting incomplete scripted recordings.
+- Reject credential-like transcript content and test the real responsive
+  presentation policy so a desktop website recording cannot silently regress
+  to compact mode.
 
 ## [0.2.12] - 2026-07-27
 
