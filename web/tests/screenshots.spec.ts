@@ -49,6 +49,9 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[0].cast).toContain('[2.4');
   expect(headers[1].cast).toContain("Claude Code v2.1.220");
   expect(headers[1].cast).toContain("OpenAI Codex (v0.145.0)");
+  expect(headers[2].cast).toContain("Preview stopped session");
+  expect(headers[2].cast).toContain("Read-only history preview");
+  expect(headers[2].cast).toContain("(no running Claude Code sessions)");
   expect(headers[3].cast).toContain("mouse|2|38|Open [R] sidebar");
   expect(headers[3].cast).toContain("mouse|5|38|Open [1] agent");
 });
@@ -297,12 +300,6 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
     timeout: 5_000,
   });
   await expect(hud).toContainText("Preview stopped session");
-  await expect(player.locator(".ap-term")).toContainText(
-    "Read-only history preview",
-  );
-  await expect(player.locator(".ap-term")).toContainText(
-    "(no running Claude Code sessions)",
-  );
   await player.screenshot({
     path: join(outputDir, "preview-workspace.png"),
     animations: "disabled",
