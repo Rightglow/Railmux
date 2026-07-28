@@ -1166,8 +1166,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     if (
                         profile is DUAL
                         and "launch-secondary" in sent
-                        and b"railmux/(new)" in chunk
-                        and b"(no running Codex sessions)" not in chunk
+                        and chunk.rfind(b"railmux/(new)")
+                        > chunk.rfind(b"(no running Codex sessions)")
                     ):
                         sent.add("secondary-running")
                     if (
