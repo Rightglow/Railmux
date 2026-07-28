@@ -82,8 +82,6 @@ def main() -> int:
                 "install",
                 "--prefix",
                 str(prefix),
-                "--no-index",
-                "--no-deps",
                 "--force-reinstall",
                 str(wheel),
             ],
@@ -91,9 +89,9 @@ def main() -> int:
             env=env,
         )
         site_packages, railmux = _installed_paths(prefix)
-        # Dependencies come from the already-validated dev/CI environment; the
-        # isolated prefix is first so Railmux itself cannot resolve to the
-        # editable source checkout.
+        # The wheel and its declared dependencies live under the isolated
+        # prefix. Put that prefix first so Railmux itself cannot resolve to an
+        # editable source checkout or inherit undeclared CI dependencies.
         env["PYTHONPATH"] = str(site_packages)
         imported = json.loads(_run(
             [

@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suppress the redundant raw protocol-mismatch error after version handling.
 - Isolate teardown tests from the developer's real tmux server and remove
   temporary implementation details from website and context-menu assertions.
+- Install declared runtime dependencies inside the wheel-smoke prefix, so the
+  final publish gate validates the release artifact without relying on packages
+  inherited from an earlier test job.
 
 ## [0.2.14] - 2026-07-28
 
