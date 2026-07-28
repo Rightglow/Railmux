@@ -52,8 +52,14 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[2].cast).toContain("Preview stopped session");
   expect(headers[2].cast).toContain("Read-only history preview");
   expect(headers[2].cast).toContain("(no running Claude Code sessions)");
+  expect(headers[2].cast).toContain("Start another running session");
+  expect(headers[2].cast).toContain("Verify responsive layout gates");
+  expect(headers[2].cast).toContain("Switch to Polish SSH history");
   expect(headers[3].cast).toContain("mouse|2|38|Open [R] sidebar");
   expect(headers[3].cast).toContain("mouse|5|38|Open [1] agent");
+  expect(headers[5].cast).toContain("Soft quit — keep agents running");
+  expect(headers[5].cast).toContain("Skip layout save and finish soft quit");
+  expect(headers[5].cast).toContain("Keeping 1 agent session running.");
 });
 
 test("capture deterministic desktop and social previews", async ({ page }) => {
@@ -281,7 +287,9 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
     animations: "disabled",
     scale: "css",
   });
-  await expect(hud).toContainText("nothing was stopped", { timeout: 7_000 });
+  await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
+  await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
+  await expect(hud).toContainText("finish soft quit", { timeout: 5_000 });
   expect(pageErrors).toEqual([]);
 });
 
@@ -320,9 +328,23 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
     animations: "disabled",
     scale: "css",
   });
+  await expect(hud).toContainText("Start another running session", {
+    timeout: 5_000,
+  });
+  await expect(player.locator(".ap-term")).toContainText(
+    "Verify responsive layout gates",
+    { timeout: 5_000 },
+  );
+  await expect(hud).toContainText("See both running sessions", {
+    timeout: 6_000,
+  });
   await expect(pointer).toBeVisible({ timeout: 5_000 });
   await expect(player.getByTestId("terminal-input-hud")).toContainText(
-    "Running session",
+    "Switch to Polish SSH history",
+  );
+  await expect(player.locator(".ap-term")).toContainText(
+    "local history overlay now skips superseded frames",
+    { timeout: 5_000 },
   );
   await player.screenshot({
     path: join(outputDir, "mouse-cue-workspace.png"),

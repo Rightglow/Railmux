@@ -38,8 +38,9 @@ login. It produces six source-authentic recordings:
   including Claude Code and Codex in separate live agent panes.
 - `public/generated/railmux-workflow-demo.cast` records a focused 160×38
   wide-layout history workflow: single-click preview, Enter resume, return to
-  the sidebar, and click the running conversation. Semantic input events drive
-  the website's durable key HUD and cell-aligned mouse pointer.
+  the sidebar, start a second conversation, and click the other running
+  conversation to switch the agent pane. Semantic input events drive the
+  website's durable key HUD and cell-aligned mouse pointer.
 - `public/generated/railmux-mobile-demo.cast` records Railmux's real compact
   layout and page controls at a representative 46×38 portrait-phone geometry.
   The narrow width selects compact projection; the separate reported 105×21
@@ -48,8 +49,8 @@ login. It produces six source-authentic recordings:
   directory browser and built-in Help view without creating a project or
   launching an agent.
 - `public/generated/railmux-controls-demo.cast` records More, provider Mode,
-  F8 Layout, and the real Quit/Soft Quit confirmation. It cancels the popup and
-  never issues a quit action.
+  F8 Layout, and the real Quit/Soft Quit confirmation. It completes a soft quit
+  in the isolated workspace and leaves the recorded agent session running.
 
 The website plays all six casts directly as text through asciinema-player. The
 recorder launches Railmux through its normal CLI, opens isolated local

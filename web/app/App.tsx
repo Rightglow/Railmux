@@ -266,7 +266,10 @@ export default function Home() {
                 <article>
                   <span>03</span>
                   <h3>Keep moving</h3>
-                  <p>Return to the sidebar, then reopen the running agent.</p>
+                  <p>
+                    Keep two sessions running, then click the other one to
+                    switch the agent pane instantly.
+                  </p>
                   <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
                 </article>
               </div>
@@ -323,12 +326,12 @@ export default function Home() {
               <div className="lifecycle-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
-                  <small>the recorded quit is cancelled; no agent is stopped</small>
+                  <small>the recording soft-quits; its agent stays alive</small>
                 </div>
                 <TerminalRecording
                   source="railmux-controls-demo.cast"
                   className="controls-terminal-recording"
-                  poster="npt:9.5"
+                  poster="npt:10.6"
                   controls={false}
                   loop
                   playWhenVisible

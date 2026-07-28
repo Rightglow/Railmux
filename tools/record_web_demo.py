@@ -51,12 +51,12 @@ class RecordingProfile:
 
 DESKTOP = RecordingProfile("desktop", 180, 38, 10.0)
 DUAL = RecordingProfile("dual", 210, 42, 13.0)
-WORKFLOW = RecordingProfile("workflow", 160, 38, 15.0)
+WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # A representative portrait phone geometry. Compact mode is selected by the
 # narrow width; the separately documented 105x21 Termux report was landscape.
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
 TOUR = RecordingProfile("tour", 160, 38, 10.0)
-CONTROLS = RecordingProfile("controls", 180, 38, 15.0)
+CONTROLS = RecordingProfile("controls", 180, 38, 19.0)
 STARTUP_HOLD_SECONDS = 2.4
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
@@ -804,7 +804,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "preview-session",
                 "resume-session",
                 "return-sidebar",
-                "reopen-agent",
+                "launch-second",
+                "return-sidebar-again",
+                "switch-running-agent",
             },
             MOBILE.name: {
                 "launch-primary",
@@ -823,7 +825,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "switch-codex",
                 "cycle-layout",
                 "open-quit",
-                "cancel-quit",
+                "soft-quit",
+                "finish-soft-quit",
             },
         }[profile.name]
 
@@ -896,7 +899,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                 elif profile is WORKFLOW:
                     # Preview a stopped transcript without launching it, resume
-                    # that exact conversation, then return through Running.
+                    # that exact conversation, start a visibly different
+                    # second conversation, then use Running to switch back.
                     cue_once(
                         "preview-session-cue",
                         0.8,
@@ -918,20 +922,40 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     if "resume-session" in sent and real_response_visible:
                         send_once(
                             "return-sidebar",
-                            8.0,
+                            7.4,
                             b"\x02\t",
                             "key|C-b Tab|Back to the sidebar",
                         )
                     if "return-sidebar" in sent and b"RUNNING" in raw_output.upper():
+                        send_once(
+                            "launch-second",
+                            8.5,
+                            b"n",
+                            "key|N|Start another running session",
+                        )
+                    if (
+                        "launch-second" in sent
+                        and b"Verify responsive layout gates" in raw_output
+                    ):
+                        send_once(
+                            "return-sidebar-again",
+                            12.2,
+                            b"\x02\t",
+                            "key|C-b Tab|See both running sessions",
+                        )
+                    if (
+                        "return-sidebar-again" in sent
+                        and b"RUNNING" in raw_output.upper()
+                    ):
                         cue_once(
-                            "reopen-agent-cue",
-                            9.3,
-                            "mouse|10|26|Running session",
+                            "switch-running-agent-cue",
+                            13.7,
+                            "mouse|10|27|Switch to Polish SSH history",
                         )
                         send_once(
-                            "reopen-agent",
-                            9.9,
-                            b"\x1b[<0;10;26M\x1b[<0;10;26m",
+                            "switch-running-agent",
+                            14.3,
+                            b"\x1b[<0;10;27M\x1b[<0;10;27m",
                             None,
                         )
                 elif profile is MOBILE:
@@ -991,7 +1015,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 else:
                     # One bounded control story: keep a Claude session alive,
                     # expose More, switch the sidebar to Codex, cycle layout,
-                    # then show and cancel the real quit confirmation.
+                    # then show the real quit confirmation and complete a soft
+                    # quit, preserving the isolated agent session.
                     send_once(
                         "launch-primary",
                         0.8,
@@ -1038,10 +1063,17 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                     if "open-quit" in sent and b"Quit railmux?" in raw_output:
                         send_once(
-                            "cancel-quit",
+                            "soft-quit",
                             12.0,
+                            b"s",
+                            "key|S|Soft quit — keep agents running",
+                        )
+                    if "soft-quit" in sent and b"Keep this layout?" in raw_output:
+                        send_once(
+                            "finish-soft-quit",
+                            14.2,
                             b"n",
-                            "key|N|Cancel — nothing was stopped",
+                            "key|N|Skip layout save and finish soft quit",
                         )
 
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -1135,6 +1167,13 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 f"Railmux {profile.name} demo missed required milestones"
                 + (f" ({', '.join(missing_actions)})" if missing_actions else "")
                 + (f": {tail}" if tail else "")
+            )
+        if (
+            profile is CONTROLS
+            and b"Keeping 1 agent session running." not in raw_output
+        ):
+            raise RuntimeError(
+                "Railmux controls demo did not reach the soft-quit exit state"
             )
         if (
             profile in (DUAL, CONTROLS)
