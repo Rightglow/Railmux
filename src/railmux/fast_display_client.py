@@ -37,6 +37,7 @@ from railmux.config import (
     load_config,
 )
 from railmux.fast_display_protocol import (
+    ClaudeHistoryPolicyResult,
     DISPLAY_MAGIC,
     HistoryBatch,
     HistorySnapshot,
@@ -53,6 +54,7 @@ from railmux.fast_display_protocol import (
     encode_history_prefetch,
     encode_history_request,
     encode_heartbeat,
+    encode_claude_history_policy,
     encode_input,
     encode_keyframe_request,
     encode_resize,
@@ -72,6 +74,7 @@ _HISTORY_INITIAL_LINES = 2000
 _HISTORY_PAGE_LINES = 2000
 _HISTORY_LOAD_AHEAD_LINES = 120
 _HISTORY_PREFETCH_INTERVAL = 3.0
+_CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_PREFETCH_TIMEOUT = 6.0
 _HISTORY_DEEP_TIMEOUT = 10.0
 _HISTORY_INFO_SECONDS = 2.0
@@ -499,6 +502,15 @@ class TerminalInputDecoder:
         return [data]
 
 
+def claude_history_save_timed_out(
+    started_at: float | None, now: float,
+) -> bool:
+    return (
+        started_at is not None
+        and now - started_at >= _CLAUDE_HISTORY_SAVE_TIMEOUT
+    )
+
+
 @dataclass(frozen=True)
 class HistoryAction:
     protocol_frame: bytes = b""
@@ -507,6 +519,7 @@ class HistoryAction:
     restore_live: bool = False
     refresh_routes: bool = False
     info_message: str | None = None
+    claude_history_prompt: bytes = b""
 
 
 @dataclass
@@ -570,9 +583,10 @@ class LocalHistoryView:
             self._next_request_id = 1
         return request_id
 
-    def begin_prefetch(self, now: float) -> bytes:
+    def begin_prefetch(self, now: float, *, force: bool = False) -> bytes:
         if (
-            self.prefetch_pending_id is not None
+            not force
+            and self.prefetch_pending_id is not None
             and now - self.prefetch_started < _HISTORY_PREFETCH_TIMEOUT
         ):
             return b""
@@ -870,6 +884,9 @@ class LocalHistoryView:
                 return HistoryAction()
             return HistoryAction(forwarded_input=event.raw)
         assert route.pane_id is not None
+        if direction > 0 and route.history_choice_required:
+            self._reset_wheel_gesture()
+            return HistoryAction(claude_history_prompt=event.raw)
         viewport = self.viewports.get(route.pane_id)
         if viewport is not None:
             scroll_lines = self._wheel_scroll_lines(
@@ -1374,6 +1391,51 @@ class TerminalSurface:
             )
         )
         self.stream.flush()
+
+    def _claude_history_prompt_geometry(self) -> tuple[int, int, int]:
+        size = self.physical_size or os.terminal_size((80, 24))
+        width = min(52, max(38, size.columns - 2))
+        left = max(1, (size.columns - width) // 2 + 1)
+        top = max(1, (size.lines - 5) // 2 + 1)
+        return left, top, width
+
+    def show_claude_history_prompt(self) -> None:
+        """Draw a local-only choice dialog over the mirrored screen."""
+        self.start()
+        left, top, width = self._claude_history_prompt_geometry()
+        inner = width - 2
+
+        def middle(text: str) -> str:
+            return f"│{text[:inner].ljust(inner)}│"
+
+        title = " Claude Code history "
+        rows = (
+            f"┌{title}{'─' * (inner - len(title))}┐",
+            middle(" [L] Local transcript — smooth"),
+            middle(" [C] Claude native — clickable"),
+            middle(" [Esc] Decide later"),
+            f"└{'─' * inner}┘",
+        )
+        rendered = [b"\033[0m"]
+        for offset, row in enumerate(rows):
+            rendered.append(
+                f"\033[{top + offset};{left}H{row}\033[?25l".encode("utf-8")
+            )
+        self.stream.write(b"".join(rendered))
+        self.stream.flush()
+
+    def claude_history_prompt_choice(
+        self, event: SgrMouseEvent,
+    ) -> str | None:
+        """Resolve a press inside the local Claude-history dialog."""
+        left, top, width = self._claude_history_prompt_geometry()
+        if not event.pressed or not left <= event.x < left + width:
+            return None
+        if event.y == top + 1:
+            return "local"
+        if event.y == top + 2:
+            return "native"
+        return None
 
     def _reconcile_terminal_modes(
         self, requested: TerminalMode,
@@ -2398,6 +2460,10 @@ def run(args: argparse.Namespace) -> int:
     latest_screen: AppliedScreen | None = None
     route_refresh_needed = False
     history_info_until: float | None = None
+    claude_history_prompt_input: bytes | None = None
+    claude_history_pending_choice: tuple[str, bytes] | None = None
+    claude_history_pending_since: float | None = None
+    claude_history_prompt_mouse_button: int | None = None
 
     def send_protocol_frame(frame: bytes) -> None:
         nonlocal remote_closed
@@ -2410,7 +2476,8 @@ def run(args: argparse.Namespace) -> int:
             remote_closed = True
 
     def apply_history_action(action: HistoryAction) -> None:
-        nonlocal route_refresh_needed, history_info_until
+        nonlocal route_refresh_needed
+        nonlocal history_info_until, claude_history_prompt_input
         overlays = history.overlays()
         if action.restore_live and latest_screen is not None:
             surface.paint(full_repaint(latest_screen), overlays)
@@ -2425,12 +2492,76 @@ def run(args: argparse.Namespace) -> int:
         if action.info_message:
             surface.show_local_status(action.info_message)
             history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
+        if action.claude_history_prompt:
+            claude_history_prompt_input = action.claude_history_prompt
+            surface.show_claude_history_prompt()
+            history_info_until = None
 
     def handle_terminal_part(
         part: bytes | SgrMouseEvent,
         forwarded_wheels: set[int],
     ) -> None:
         nonlocal route_refresh_needed
+        nonlocal claude_history_prompt_input, claude_history_pending_choice
+        nonlocal claude_history_pending_since
+        nonlocal claude_history_prompt_mouse_button
+        nonlocal history_info_until
+        if claude_history_prompt_input is not None:
+            if isinstance(part, SgrMouseEvent):
+                selected = surface.claude_history_prompt_choice(part)
+                if selected is None:
+                    return
+                claude_history_prompt_mouse_button = part.button & 3
+                choice = b"l" if selected == "local" else b"c"
+            else:
+                choice = part.lower()
+            if choice in (b"l", b"c", b"n", b"\x1b"):
+                pending_wheel = claude_history_prompt_input
+                claude_history_prompt_input = None
+                if latest_screen is not None:
+                    surface.paint(
+                        full_repaint(latest_screen), history.overlays()
+                    )
+                if choice == b"l":
+                    claude_history_pending_choice = ("local", pending_wheel)
+                    claude_history_pending_since = time.monotonic()
+                    send_protocol_frame(
+                        encode_claude_history_policy("local")
+                    )
+                    surface.show_local_status(
+                        "Saving smooth local Claude history…"
+                    )
+                elif choice in (b"c", b"n"):
+                    claude_history_pending_choice = ("native", pending_wheel)
+                    claude_history_pending_since = time.monotonic()
+                    send_protocol_frame(
+                        encode_claude_history_policy("native")
+                    )
+                    surface.show_local_status(
+                        "Saving Claude native history…"
+                    )
+                return
+            surface.show_claude_history_prompt()
+            return
+        if isinstance(part, SgrMouseEvent) and (
+            claude_history_prompt_mouse_button is not None
+        ):
+            suppress = (
+                not part.pressed
+                and part.button & 3 == claude_history_prompt_mouse_button
+            )
+            claude_history_prompt_mouse_button = None
+            if suppress:
+                return
+        if (
+            claude_history_pending_choice is not None
+            and isinstance(part, SgrMouseEvent)
+            and part.wheel_direction != 0
+        ):
+            # The helper normally acknowledges in the next ordered packet.
+            # Do not reopen the ask route or forward a second wheel while that
+            # one persistent choice is still being confirmed.
+            return
         if isinstance(part, SgrMouseEvent):
             displayed_height = (
                 latest_screen.height
@@ -2520,6 +2651,17 @@ def run(args: argparse.Namespace) -> int:
                                 full_repaint(latest_screen),
                                 history.overlays(),
                             )
+                            if claude_history_prompt_input is not None:
+                                surface.show_claude_history_prompt()
+                            elif claude_history_pending_choice is not None:
+                                label = (
+                                    "smooth local"
+                                    if claude_history_pending_choice[0] == "local"
+                                    else "Claude native"
+                                )
+                                surface.show_local_status(
+                                    f"Saving {label} history…"
+                                )
                     elif not _terminal_size_is_usable(observed_size):
                         raise ProbeError(
                             "resized terminal reports "
@@ -2538,11 +2680,15 @@ def run(args: argparse.Namespace) -> int:
                                 full_repaint(latest_screen),
                                 history.overlays(),
                             )
+                            if claude_history_prompt_input is not None:
+                                surface.show_claude_history_prompt()
                     else:
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if history.active and latest_screen is not None:
                             surface.paint(full_repaint(latest_screen))
+                        if claude_history_prompt_input is not None:
+                            surface.show_claude_history_prompt()
                         history.clear_cache()
                         route_refresh_needed = True
                         send_protocol_frame(encode_resize(
@@ -2568,6 +2714,44 @@ def run(args: argparse.Namespace) -> int:
                             if isinstance(message, HistorySnapshot):
                                 apply_history_action(history.accept(message))
                                 continue
+                            if isinstance(message, ClaudeHistoryPolicyResult):
+                                pending = claude_history_pending_choice
+                                if pending is None or pending[0] != message.policy:
+                                    continue
+                                claude_history_pending_choice = None
+                                claude_history_pending_since = None
+                                if not message.saved:
+                                    surface.show_local_status(
+                                        "Could not save Claude history choice; "
+                                        "setting remains Ask"
+                                    )
+                                    history_info_until = (
+                                        time.monotonic()
+                                        + _HISTORY_INFO_SECONDS
+                                    )
+                                    continue
+                                prefetch = history.begin_prefetch(
+                                    time.monotonic(), force=True
+                                )
+                                if prefetch:
+                                    send_protocol_frame(prefetch)
+                                route_refresh_needed = False
+                                if message.policy == "local":
+                                    surface.show_local_status(
+                                        "Smooth local Claude history enabled; "
+                                        "scroll again"
+                                    )
+                                else:
+                                    send_protocol_frame(
+                                        encode_input(pending[1])
+                                    )
+                                    surface.show_local_status(
+                                        "Claude native clickable history enabled"
+                                    )
+                                history_info_until = (
+                                    time.monotonic() + _HISTORY_INFO_SECONDS
+                                )
+                                continue
                             update = message
                             applied = model.apply(update, current_size)
                             if applied is None:
@@ -2584,6 +2768,8 @@ def run(args: argparse.Namespace) -> int:
                             focus_reporting_started = surface.paint(
                                 applied, history.overlays()
                             )
+                            if claude_history_prompt_input is not None:
+                                surface.show_claude_history_prompt()
                             if focus_reporting_started:
                                 # Enabling DECSET 1004 does not require a
                                 # terminal to report its already-focused state.
@@ -2628,6 +2814,23 @@ def run(args: argparse.Namespace) -> int:
                             history.overlays(),
                         )
                     history_info_until = None
+                now = time.monotonic()
+                if (
+                    claude_history_pending_choice is not None
+                    and claude_history_save_timed_out(
+                        claude_history_pending_since, now
+                    )
+                ):
+                    claude_history_pending_choice = None
+                    claude_history_pending_since = None
+                    prefetch = history.begin_prefetch(now, force=True)
+                    if prefetch:
+                        send_protocol_frame(prefetch)
+                    surface.show_local_status(
+                        "Claude history save confirmation timed out; "
+                        "refreshing remote policy"
+                    )
+                    history_info_until = now + _HISTORY_INFO_SECONDS
                 if local_exit:
                     break
                 connection_ended = remote_closed or (
@@ -2669,6 +2872,12 @@ def run(args: argparse.Namespace) -> int:
                         terminal_input = TerminalInputDecoder()
                         history = LocalHistoryView(history_limit)
                         history_info_until = None
+                        claude_history_prompt_input = None
+                        claude_history_pending_choice = None
+                        claude_history_pending_since = None
+                        # Mouse press/release is one local terminal gesture.
+                        # Preserve a consumed press across remote reconnect so
+                        # its release cannot leak into the replacement PTY.
                         remote_closed = False
                         awaiting_keyframe = False
                         route_refresh_needed = False

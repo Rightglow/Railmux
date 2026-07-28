@@ -97,6 +97,31 @@ def test_options_update_policy_persists(tmp_path, monkeypatch):
     assert app._settings.update_policy == "never"
 
 
+def test_options_claude_history_policy_persists(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+    modal._option_rows["claude_history"][0].keypress((60,), "enter")
+    assert app._settings.claude_history_policy == "local"
+    modal._option_rows["claude_history"][2].keypress((60,), "enter")
+    assert app._settings.claude_history_policy == "native"
+
+
+def test_options_failed_claude_history_write_keeps_selected_policy(
+    tmp_path, monkeypatch,
+):
+    app = _app(tmp_path, monkeypatch)
+    app._settings.set_claude_history_policy = MagicMock(return_value=False)
+
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+    modal._option_rows["claude_history"][0].keypress((60,), "enter")
+
+    assert modal._policies["claude_history"] == "ask"
+    assert app._set_status.call_args.args[1] == "error"
+
+
 def test_options_failed_write_keeps_modal_and_app_state(tmp_path, monkeypatch):
     app = _app(tmp_path, monkeypatch)
     app._settings.set_layout_save_policy = MagicMock(return_value=False)

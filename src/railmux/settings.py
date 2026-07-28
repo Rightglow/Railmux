@@ -20,6 +20,7 @@ from railmux.config import default_config_path
 
 
 OPTION_POLICIES = frozenset({"always", "ask", "never"})
+CLAUDE_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
 
 
 def _config_path() -> Path:
@@ -179,6 +180,26 @@ class Settings:
         if policy not in OPTION_POLICIES:
             return False
         return self._update_section("updates", {"auto_update": policy})
+
+    # -- Fast SSH Claude history ----------------------------------------
+    @property
+    def claude_history_policy(self) -> str:
+        # The fast-display helper is a separate process and may persist the
+        # first-scroll choice while the TUI is already running. Reload so a
+        # later Options visit reflects that confirmed remote write.
+        self._load()
+        policy = self._get("ssh", "claude_history")
+        return (
+            policy
+            if isinstance(policy, str)
+            and policy in CLAUDE_HISTORY_POLICIES
+            else "ask"
+        )
+
+    def set_claude_history_policy(self, policy: str) -> bool:
+        if policy not in CLAUDE_HISTORY_POLICIES:
+            return False
+        return self._update_section("ssh", {"claude_history": policy})
 
     # -- Saved outer-workspace geometry ---------------------------------
     @property

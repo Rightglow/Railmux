@@ -161,7 +161,9 @@ profile. The first Codex auto-run prompt uses the corresponding choices:
 
 Press `o`, or select **More → Options**, to change persistent behavior without
 editing TOML. **Layout retention**, **Codex auto-run**, and **Railmux updates**
-support **Always**, **Ask every time**, and **Never**. Use arrow keys plus
+support **Always**, **Ask every time**, and **Never**. Claude history over
+`railmux ssh` supports **Local transcript**, **Ask on first scroll**, and
+**Claude native**. Use arrow keys plus
 `Enter`/`Space`, or click a choice with the mouse. Activating the already
 selected choice confirms and closes the screen; `Esc` or `o` also closes it.
 Layout changes do not resize the current workspace; Codex auto-run changes
@@ -344,6 +346,8 @@ agent_transport = "swap" # or "nested"
 [ssh]
 # Local railmux ssh history cap (default: 10000; range: 2000-20000)
 history_lines = 10000
+# Claude Code wheel history: "ask", "local", or "native"
+claude_history = "ask"
 ```
 
 Most users should leave `agent_transport` unchanged. Railmux automatically uses
@@ -354,9 +358,11 @@ This is Railmux's only user settings file. Manual edits and the in-app Options
 screen update the same values that Options exposes; Options preserves comments,
 formatting, order, and unknown keys. The local-only `ssh.history_lines` setting
 is intentionally file/command-line controlled because the remote TUI cannot
-configure the machine that initiated `railmux ssh`. A one-run Codex choice is
-kept only in memory. A `This time` layout profile is stored here until it is
-successfully applied on the next launch, then removed.
+configure the machine that initiated `railmux ssh`. By contrast,
+`ssh.claude_history` belongs to the remote workspace and is exposed in that
+workspace's Options screen. A one-run Codex choice is kept only in memory. A
+`This time` layout profile is stored here until it is successfully applied on
+the next launch, then removed.
 
 When the default `auto_update = "ask"` finds a newer stable PyPI release,
 Railmux offers **Always**, **This time**, **No**, or **Never** before opening
@@ -538,9 +544,13 @@ history or the configured local cap, the client shows a one-time local
 `History top` message; scrolling down rearms that notification.
 
 Agent panes with tmux scrollback are handled locally. Claude Code normally uses
-an alternate screen with no tmux history, so Railmux instead renders the exact
-managed session's read-only JSONL transcript into the same cached local
-overlay; wheel input does not open Claude Code's provider-managed history UI.
+an alternate screen with no tmux history. On the first upward scroll in a
+managed Claude pane, the default `claude_history = "ask"` shows a local dialog:
+choose **Local transcript** for Railmux's smooth cached, read-only JSONL
+overlay, or **Claude native** for Claude Code's clickable but redraw-heavier
+history UI. The choice is saved in the remote workspace's
+`~/.config/railmux/config.toml` and can be changed later under
+**More → Options → Claude history in railmux ssh**. Press `Esc` to decide later.
 Unrelated mouse-aware terminal applications keep their native wheel behavior.
 Sidebar scrolling continues to reach Railmux normally. Scroll to the bottom or
 press `Esc` to

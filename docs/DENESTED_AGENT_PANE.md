@@ -365,10 +365,14 @@ control sequences are parsed through `pyte`; only reconstructed text and
 allowlisted SGR character styles cross the protocol. OSC and other terminal
 actions are not forwarded. A managed Claude Code pane in its alternate screen
 has no tmux scrollback, so Railmux stamps its exact same-user JSONL locator and
-renders a bounded, cached, read-only transcript suffix behind the live
-viewport. This capability is explicit on the wire: an unrelated mouse-aware
-TUI retains application-level wheel input, while transcript-backed wheel input
-never opens Claude Code's provider-managed history view. Protocol v10 also
+advertises transcript availability separately from whether it is used. The
+remote `ssh.claude_history` setting chooses a bounded, cached, read-only
+transcript suffix behind the live viewport or Claude Code's native clickable
+history; the default asks locally on the first upward scroll and persists the
+answer only after a helper acknowledgement. This capability is explicit on the
+wire: an unrelated mouse-aware TUI retains application-level wheel input, while
+locally transcript-backed wheel input never opens Claude Code's
+provider-managed history view. Protocol v10 also
 reports whether older rows remain, instead of inferring exhaustion from a
 short compressed page. Protocol v10 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from

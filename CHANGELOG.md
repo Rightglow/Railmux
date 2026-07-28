@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcript overlay when the provider's alternate screen has no tmux
   scrollback. Generic mouse-aware terminal applications retain their native
   wheel handling.
+- Add a persistent Claude history preference to Options and the shared config.
+  The default first upward scroll asks between Railmux's smooth local
+  transcript and Claude Code's native clickable history.
 - Add explicit SSH history capabilities for transcript-backed panes and
   remaining older rows, with a private protocol v10 upgrade boundary.
 - Validate exact same-user Claude transcript locators without following final
@@ -34,12 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Keep `railmux ssh` wheel input local for managed Claude Code sessions instead
-  of opening Claude Code's laggier provider-managed history view and showing
-  its `Ctrl+End … Bottom` prompt.
+- Let `railmux ssh` keep managed Claude Code wheel input in its smooth local
+  transcript by choice instead of unconditionally opening the provider's
+  laggier history view and showing its `Ctrl+End … Bottom` prompt.
 - Preserve stable cumulative history suffixes as the client expands from its
   hot cache toward the configured limit, and report completion explicitly
   rather than treating every short page as exhausted.
+- Bound remote history-preference confirmation waits, preserve another pane's
+  frozen history while policy routes refresh, and suppress both halves of a
+  locally handled dialog click across reconnect.
 
 ## [0.2.13] - 2026-07-28
 

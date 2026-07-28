@@ -101,6 +101,18 @@ layer owns agent wheel input. Ordinary `ssh` followed by `railmux` retains the
 copy-mode coalescer, and attaching to an existing Railmux session never changes
 that session's setting.
 
+Managed Claude Code panes may advertise a verified transcript source without
+using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,
+or `native`: `ask` makes the first upward wheel gesture open a local-only
+keyboard/mouse dialog, `local` renders the bounded read-only transcript into
+the ordinary history overlay, and `native` forwards wheel input to Claude Code.
+The client sends a policy mutation only after an explicit choice and waits for
+the helper's persisted-success response before changing wheel ownership. The
+wait is bounded; on timeout the client refreshes the authoritative remote
+policy without clearing another pane's frozen viewport. The dialog, paired
+mouse press/release suppression, and save status never enter tmux or alter
+another attached client.
+
 The SSH compatibility handshake precedes every tmux lookup, session creation,
 lock, PTY allocation, or attach. The remote reports a bounded package version,
 private protocol version, SSH-extra readiness, and tmux availability, then

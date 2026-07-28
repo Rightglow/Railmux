@@ -57,10 +57,13 @@ from railmux.fast_display_protocol import (
     UpdateKind,
     decode_history_prefetch,
     decode_history_request,
+    decode_claude_history_policy,
+    encode_claude_history_policy_result,
     encode_history_batch,
     encode_history_snapshot,
     encode_update,
 )
+from railmux.settings import Settings
 
 
 class DisplayServerError(RuntimeError):
@@ -257,6 +260,7 @@ class _PaneGeometry:
     alternate_on: bool = False
     transcript_source: str | None = None
     transcript_backed: bool = False
+    claude_history_policy: str = "ask"
 
 
 @dataclass(frozen=True)
@@ -675,6 +679,7 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return ()
+    claude_history_policy = Settings().claude_history_policy
     rows: list[tuple[bool, bool, _PaneGeometry]] = []
     seen: set[str] = set()
     for raw_row in output.splitlines():
@@ -742,6 +747,11 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
                 history_server=history_server,
                 history_pane_id=history_pane_id,
             )
+        if transcript_backed and transcript_marker is not None:
+            opened = tmux_server.open_transcript_source(transcript_marker)
+            transcript_backed = opened is not None
+            if opened is not None:
+                os.close(opened[1])
         rows.append((
             fields[2] == "1",
             fields[3] == "1",
@@ -758,6 +768,7 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
                 alternate_on=fields[11] == "1",
                 transcript_source=transcript_marker,
                 transcript_backed=transcript_backed,
+                claude_history_policy=claude_history_policy,
             ),
         ))
     if not rows or len({zoomed for zoomed, _active, _pane in rows}) != 1:
@@ -951,6 +962,7 @@ def _capture_pane_history(
     transcript_entry = None
     if (
         pane.transcript_backed
+        and pane.claude_history_policy == "local"
         and pane.alternate_on
         and pane.history_size == 0
         and pane.transcript_source
@@ -1004,6 +1016,11 @@ def _capture_pane_history(
         lines=lines,
         mouse_forwardable=pane.mouse_forwardable,
         transcript_backed=transcript_used,
+        transcript_available=pane.transcript_backed,
+        history_choice_required=(
+            pane.transcript_backed
+            and pane.claude_history_policy == "ask"
+        ),
         more_available=(
             budget_truncated
             or (
@@ -1587,11 +1604,16 @@ def _serve_attached(
             pending_packet = None
             pending_state = None
 
-    def queue_control_packet(packet: bytes) -> None:
+    def queue_control_packet(packet: bytes, *, priority: bool = False) -> None:
         if len(control_packets) >= 4:
-            return
+            if not priority:
+                return
+            control_packets.pop()
         discard_unsent_update()
-        control_packets.append(packet)
+        if priority:
+            control_packets.appendleft(packet)
+        else:
+            control_packets.append(packet)
 
     def activate_control_packet() -> None:
         nonlocal pending_packet, pending_offset, pending_state
@@ -1737,6 +1759,19 @@ def _serve_attached(
                                 pyte, session_id, request_id, max_lines
                             )
                             queue_control_packet(encode_history_batch(batch))
+                        continue
+                    if message.kind is InputKind.SET_CLAUDE_HISTORY:
+                        try:
+                            policy = decode_claude_history_policy(message.data)
+                        except ValueError:
+                            continue
+                        saved = Settings().set_claude_history_policy(policy)
+                        queue_control_packet(
+                            encode_claude_history_policy_result(
+                                policy, saved=saved
+                            ),
+                            priority=True,
+                        )
                         continue
                     view = memoryview(message.data)
                     while view:

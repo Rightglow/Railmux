@@ -17,6 +17,7 @@ class ConfigError(ValueError):
 SSH_HISTORY_MIN_LINES = 2000
 SSH_HISTORY_MAX_LINES = 20000
 SSH_HISTORY_DEFAULT_LINES = 10000
+SSH_CLAUDE_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class Config:
     agent_transport: str = "swap"
     show_empty_projects: bool = False
     ssh_history_lines: int = SSH_HISTORY_DEFAULT_LINES
+    ssh_claude_history: str = "ask"
 
     def resolved_codex_home(self) -> Path:
         """The one resolved ``CODEX_HOME`` directory.
@@ -109,6 +111,14 @@ def load_config(config_path: Path | None = None) -> Config:
             "ssh.history_lines must be an integer between "
             f"{SSH_HISTORY_MIN_LINES} and {SSH_HISTORY_MAX_LINES}"
         )
+    claude_history = ssh.get("claude_history", "ask")
+    if (
+        not isinstance(claude_history, str)
+        or claude_history not in SSH_CLAUDE_HISTORY_POLICIES
+    ):
+        raise ConfigError(
+            'ssh.claude_history must be "ask", "local", or "native"'
+        )
 
     return Config(
         claude_binary=_string(
@@ -119,4 +129,5 @@ def load_config(config_path: Path | None = None) -> Config:
         agent_transport=agent_transport,
         show_empty_projects=projects.get("show_empty_projects") is True,
         ssh_history_lines=history_lines,
+        ssh_claude_history=claude_history,
     )

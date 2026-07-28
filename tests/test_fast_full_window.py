@@ -9,12 +9,13 @@ import struct
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from unittest.mock import MagicMock
 
 import pytest
 
 from railmux.fast_display_protocol import (
+    ClaudeHistoryPolicyResult,
     DISPLAY_MAGIC,
     HistoryBatch,
     HistorySnapshot,
@@ -33,10 +34,13 @@ from railmux.fast_display_protocol import (
     UpdateKind,
     decode_history_prefetch,
     decode_history_request,
+    decode_claude_history_policy,
     encode_history_batch,
     encode_history_prefetch,
     encode_history_request,
     encode_history_snapshot,
+    encode_claude_history_policy,
+    encode_claude_history_policy_result,
     encode_heartbeat,
     encode_update,
 )
@@ -143,12 +147,20 @@ def test_v10_unified_decoder_round_trips_history_capabilities():
         height=2,
         lines=(b"old-1", b"old-2", b"visible-1", b"visible-2"),
         mouse_forwardable=True,
-        transcript_backed=True,
         more_available=True,
+        transcript_available=True,
+        history_choice_required=True,
+    )
+    local_snapshot = replace(
+        snapshot,
+        request_id=8,
+        transcript_backed=True,
+        history_choice_required=False,
     )
     packet = b"".join((
         encode_update(_keyframe()),
         encode_history_snapshot(snapshot),
+        encode_history_snapshot(local_snapshot),
         encode_update(_keyframe(sequence=2)),
     ))
     decoder = ServerMessageDecoder()
@@ -156,7 +168,9 @@ def test_v10_unified_decoder_round_trips_history_capabilities():
     assert decoder.feed(packet[:11]) == []
     messages = decoder.feed(packet[11:])
 
-    assert messages == [_keyframe(), snapshot, _keyframe(sequence=2)]
+    assert messages == [
+        _keyframe(), snapshot, local_snapshot, _keyframe(sequence=2),
+    ]
 
 
 def test_v10_history_snapshot_round_trips_the_maximum_line_count():
@@ -196,6 +210,62 @@ def test_history_request_round_trip_validates_pointer_and_line_limit():
     ) == (1, 80, 24, 20000)
     with pytest.raises(ValueError):
         encode_history_request(1, 80, 24, 20001)
+
+
+def test_claude_history_policy_input_round_trip_is_bounded():
+    decoder = InputFrameDecoder()
+    encoded = encode_claude_history_policy("local")
+    message = decoder.feed(encoded)[0]
+
+    assert message.kind is InputKind.SET_CLAUDE_HISTORY
+    assert decode_claude_history_policy(message.data) == "local"
+    assert decoder.feed(encoded[:-1] + b"\x03") == []
+    with pytest.raises(ValueError):
+        encode_claude_history_policy("ask")
+    with pytest.raises(ValueError):
+        decode_claude_history_policy(b"\x03")
+
+
+def test_claude_history_policy_result_round_trips_save_outcome():
+    decoder = ServerMessageDecoder()
+
+    assert decoder.feed(
+        encode_claude_history_policy_result("native", saved=True)
+    ) == [ClaudeHistoryPolicyResult("native", True)]
+    assert decoder.feed(
+        encode_claude_history_policy_result("local", saved=False)
+    ) == [ClaudeHistoryPolicyResult("local", False)]
+    with pytest.raises(ValueError):
+        encode_claude_history_policy_result("ask", saved=True)
+    with pytest.raises(ValueError):
+        encode_claude_history_policy_result("local", saved=1)
+
+
+def test_history_choice_capability_requires_available_non_backed_transcript():
+    with pytest.raises(ValueError, match="history capabilities"):
+        encode_history_snapshot(HistorySnapshot(
+            1,
+            "%8",
+            0,
+            0,
+            10,
+            2,
+            (b"", b""),
+            history_choice_required=True,
+        ))
+    with pytest.raises(ValueError, match="history capabilities"):
+        encode_history_snapshot(HistorySnapshot(
+            1,
+            "%8",
+            0,
+            0,
+            10,
+            2,
+            (b"", b""),
+            transcript_backed=True,
+            transcript_available=True,
+            history_choice_required=True,
+        ))
 
 
 def test_v10_history_prefetch_batch_round_trip_is_atomic_and_bounded():
@@ -894,6 +964,74 @@ def test_local_history_never_forwards_transcript_backed_claude_wheel():
 
     assert action.forwarded_input == b""
     assert action.info_message == "Local session transcript is not available yet"
+
+
+def test_local_history_prompts_before_first_available_claude_scroll():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        30,
+        0,
+        40,
+        3,
+        (b"", b"", b""),
+        mouse_forwardable=True,
+        transcript_available=True,
+        history_choice_required=True,
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    action = view.wheel(SgrMouseEvent(b"first-up", 64, 40, 2, True))
+
+    assert action.claude_history_prompt == b"first-up"
+    assert action.forwarded_input == b""
+
+
+def test_forced_policy_prefetch_preserves_other_pane_history_position():
+    view = LocalHistoryView()
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    left = HistorySnapshot(
+        first_id, "%7", 0, 0, 30, 2, (b"old", b"live-a", b"live-b"),
+    )
+    claude = HistorySnapshot(
+        first_id,
+        "%8",
+        31,
+        0,
+        30,
+        2,
+        (b"", b""),
+        mouse_forwardable=True,
+        transcript_available=True,
+        history_choice_required=True,
+    )
+    view.accept_prefetch(HistoryBatch(first_id, (left, claude)))
+    view.wheel(SgrMouseEvent(b"left-up", 64, 10, 1, True))
+    assert view.viewports["%7"].offset == 1
+
+    forced = InputFrameDecoder().feed(
+        view.begin_prefetch(1.1, force=True)
+    )[0]
+    forced_id, _limit = decode_history_prefetch(forced.data)
+    view.accept_prefetch(HistoryBatch(
+        forced_id,
+        (
+            replace(left, request_id=forced_id),
+            replace(
+                claude,
+                request_id=forced_id,
+                history_choice_required=False,
+                transcript_backed=True,
+                lines=(b"cc-old", b"cc-live-a", b"cc-live-b"),
+            ),
+        ),
+    ))
+
+    assert view.viewports["%7"].offset == 1
 
 
 def test_local_history_requests_deep_page_when_hot_viewport_fills_prefetch():
@@ -2274,6 +2412,40 @@ def test_local_reconnect_status_is_bounded_to_terminal_bottom_row():
     assert b"\033[?1049h" in painted
     assert b"\033[4;1H\033[2Kretry -secre" in painted
     assert b"is-long" not in painted
+
+
+def test_claude_history_prompt_is_local_bounded_and_mouse_selectable():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.set_physical_size(os.terminal_size((40, 12)))
+
+    surface.show_claude_history_prompt()
+
+    painted = output.getvalue()
+    assert b"Claude Code history" in painted
+    assert b"Local transcript" in painted
+    assert b"Claude native" in painted
+    assert surface.claude_history_prompt_choice(
+        SgrMouseEvent(b"", 0, 20, 5, True)
+    ) == "local"
+    assert surface.claude_history_prompt_choice(
+        SgrMouseEvent(b"", 0, 20, 6, True)
+    ) == "native"
+    assert surface.claude_history_prompt_choice(
+        SgrMouseEvent(b"", 0, 20, 7, True)
+    ) is None
+
+
+def test_claude_history_save_confirmation_has_a_bounded_wait():
+    timeout = fast_display_client._CLAUDE_HISTORY_SAVE_TIMEOUT
+
+    assert not fast_display_client.claude_history_save_timed_out(None, 100.0)
+    assert not fast_display_client.claude_history_save_timed_out(
+        100.0, 100.0 + timeout - 0.001
+    )
+    assert fast_display_client.claude_history_save_timed_out(
+        100.0, 100.0 + timeout
+    )
 
 
 class _PreflightProcess:
@@ -3660,6 +3832,7 @@ def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
         alternate_on=True,
         transcript_source="exact-marker",
         transcript_backed=True,
+        claude_history_policy="local",
     )
     transcript_rows = tuple(
         f"transcript-{index}".encode() for index in range(500)
@@ -3695,6 +3868,51 @@ def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
     assert hot.lines[-2:] == (b"live-a", b"live-b")
 
 
+@pytest.mark.parametrize(
+    ("policy", "choice_required"),
+    [("ask", True), ("native", False)],
+)
+def test_server_waits_for_local_choice_before_rendering_claude_transcript(
+    monkeypatch, policy, choice_required,
+):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        20,
+        2,
+        mouse_forwardable=True,
+        alternate_on=True,
+        transcript_source="exact-marker",
+        transcript_backed=True,
+        claude_history_policy=policy,
+    )
+    transcript_rows = MagicMock()
+    monkeypatch.setattr(
+        fast_display_server, "_transcript_rows", transcript_rows
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"live-a\nlive-b\n",
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_line",
+        lambda _pyte, line, _width: line,
+    )
+
+    snapshot = fast_display_server._capture_pane_history(
+        object(), pane, 1, 300
+    )
+
+    assert snapshot is not None
+    assert snapshot.transcript_available
+    assert snapshot.history_choice_required is choice_required
+    assert not snapshot.transcript_backed
+    transcript_rows.assert_not_called()
+
+
 def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
     monkeypatch,
 ):
@@ -3708,6 +3926,7 @@ def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
         alternate_on=True,
         transcript_source="unreadable-marker",
         transcript_backed=True,
+        claude_history_policy="local",
     )
     monkeypatch.setattr(
         subprocess,

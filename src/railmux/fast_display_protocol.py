@@ -33,10 +33,14 @@ _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
 _HISTORY_MOUSE_FORWARDABLE = 1 << 0
 _HISTORY_TRANSCRIPT_BACKED = 1 << 1
 _HISTORY_MORE_AVAILABLE = 1 << 2
+_HISTORY_TRANSCRIPT_AVAILABLE = 1 << 3
+_HISTORY_CHOICE_REQUIRED = 1 << 4
 _KNOWN_HISTORY_CAPABILITIES = (
     _HISTORY_MOUSE_FORWARDABLE
     | _HISTORY_TRANSCRIPT_BACKED
     | _HISTORY_MORE_AVAILABLE
+    | _HISTORY_TRANSCRIPT_AVAILABLE
+    | _HISTORY_CHOICE_REQUIRED
 )
 
 
@@ -49,6 +53,7 @@ class OutputKind(IntEnum):
     SCREEN = 1
     HISTORY = 2
     HISTORY_BATCH = 3
+    CLAUDE_HISTORY_POLICY = 4
 
 
 class InputKind(IntEnum):
@@ -58,6 +63,7 @@ class InputKind(IntEnum):
     REQUEST_HISTORY = 4
     PREFETCH_HISTORY = 5
     HEARTBEAT = 6
+    SET_CLAUDE_HISTORY = 7
 
 
 class TerminalMode(IntFlag):
@@ -108,6 +114,8 @@ class HistorySnapshot:
     mouse_forwardable: bool = False
     transcript_backed: bool = False
     more_available: bool = False
+    transcript_available: bool = False
+    history_choice_required: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,6 +124,14 @@ class HistoryBatch:
 
     request_id: int
     snapshots: tuple[HistorySnapshot, ...] = ()
+
+
+@dataclass(frozen=True)
+class ClaudeHistoryPolicyResult:
+    """Confirmation that the remote helper persisted a history preference."""
+
+    policy: str
+    saved: bool
 
 
 @dataclass(frozen=True)
@@ -188,11 +204,32 @@ def _pack_history_lines(lines: tuple[bytes, ...]) -> bytes:
 
 
 def _history_capabilities(snapshot: HistorySnapshot) -> int:
-    return (
+    capabilities = (
         (_HISTORY_MOUSE_FORWARDABLE if snapshot.mouse_forwardable else 0)
         | (_HISTORY_TRANSCRIPT_BACKED if snapshot.transcript_backed else 0)
         | (_HISTORY_MORE_AVAILABLE if snapshot.more_available else 0)
+        | (
+            _HISTORY_TRANSCRIPT_AVAILABLE
+            if snapshot.transcript_available else 0
+        )
+        | (_HISTORY_CHOICE_REQUIRED if snapshot.history_choice_required else 0)
     )
+    _validate_history_capabilities(capabilities)
+    return capabilities
+
+
+def _validate_history_capabilities(capabilities: int) -> None:
+    transcript_available = bool(
+        capabilities & _HISTORY_TRANSCRIPT_AVAILABLE
+    )
+    transcript_backed = bool(capabilities & _HISTORY_TRANSCRIPT_BACKED)
+    choice_required = bool(capabilities & _HISTORY_CHOICE_REQUIRED)
+    if (
+        capabilities & ~_KNOWN_HISTORY_CAPABILITIES
+        or (transcript_backed or choice_required) and not transcript_available
+        or transcript_backed and choice_required
+    ):
+        raise ValueError("invalid history capabilities")
 
 
 def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
@@ -208,6 +245,8 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
             snapshot.mouse_forwardable,
             snapshot.transcript_backed,
             snapshot.more_available,
+            snapshot.transcript_available,
+            snapshot.history_choice_required,
         )):
             raise ValueError("a rejected history response must be empty")
         pane_number = 0
@@ -288,6 +327,18 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
 
 
+def encode_claude_history_policy_result(policy: str, *, saved: bool) -> bytes:
+    values = {"local": 1, "native": 2}
+    if policy not in values or not isinstance(saved, bool):
+        raise ValueError("invalid Claude history policy")
+    payload = bytes((
+        int(OutputKind.CLAUDE_HISTORY_POLICY),
+        values[policy],
+        int(saved),
+    ))
+    return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
 def _decompress_rows(data: bytes, expected_size: int) -> bytes:
     if not 0 <= expected_size <= MAX_SCREEN_BYTES:
         raise ValueError("invalid decompressed screen size")
@@ -364,9 +415,19 @@ class ServerMessageDecoder:
 
     def feed(
         self, data: bytes,
-    ) -> list[ScreenUpdate | HistorySnapshot | HistoryBatch]:
+    ) -> list[
+        ScreenUpdate
+        | HistorySnapshot
+        | HistoryBatch
+        | ClaudeHistoryPolicyResult
+    ]:
         self._buffer.extend(data)
-        messages: list[ScreenUpdate | HistorySnapshot | HistoryBatch] = []
+        messages: list[
+            ScreenUpdate
+            | HistorySnapshot
+            | HistoryBatch
+            | ClaudeHistoryPolicyResult
+        ] = []
         header_size = len(DISPLAY_MAGIC) + LENGTH_BYTES
         while True:
             marker = self._buffer.find(DISPLAY_MAGIC)
@@ -408,8 +469,7 @@ class ServerMessageDecoder:
                     ) = (
                         _HISTORY_METADATA.unpack(body[:_HISTORY_METADATA.size])
                     )
-                    if raw_capabilities & ~_KNOWN_HISTORY_CAPABILITIES:
-                        raise ValueError("invalid history capabilities")
+                    _validate_history_capabilities(raw_capabilities)
                     raw_lines = _decompress_rows(
                         body[_HISTORY_METADATA.size:], raw_size
                     )
@@ -450,6 +510,12 @@ class ServerMessageDecoder:
                         more_available=bool(
                             raw_capabilities & _HISTORY_MORE_AVAILABLE
                         ),
+                        transcript_available=bool(
+                            raw_capabilities & _HISTORY_TRANSCRIPT_AVAILABLE
+                        ),
+                        history_choice_required=bool(
+                            raw_capabilities & _HISTORY_CHOICE_REQUIRED
+                        ),
                     ))
                     continue
                 if output_kind is OutputKind.HISTORY_BATCH:
@@ -485,8 +551,7 @@ class ServerMessageDecoder:
                         offset += _HISTORY_PANE_METADATA.size
                         if pane_number == 0 or pane_number in seen:
                             raise ValueError("invalid history pane identity")
-                        if raw_capabilities & ~_KNOWN_HISTORY_CAPABILITIES:
-                            raise ValueError("invalid history capabilities")
+                        _validate_history_capabilities(raw_capabilities)
                         seen.add(pane_number)
                         if not 1 <= width <= MAX_WIDTH or not 1 <= height <= MAX_HEIGHT:
                             raise ValueError("invalid history geometry")
@@ -512,10 +577,24 @@ class ServerMessageDecoder:
                             more_available=bool(
                                 raw_capabilities & _HISTORY_MORE_AVAILABLE
                             ),
+                            transcript_available=bool(
+                                raw_capabilities & _HISTORY_TRANSCRIPT_AVAILABLE
+                            ),
+                            history_choice_required=bool(
+                                raw_capabilities & _HISTORY_CHOICE_REQUIRED
+                            ),
                         ))
                     if offset != len(raw):
                         raise ValueError("trailing history batch data")
                     messages.append(HistoryBatch(request_id, tuple(snapshots)))
+                    continue
+                if output_kind is OutputKind.CLAUDE_HISTORY_POLICY:
+                    if len(body) != 2 or body[1] not in (0, 1):
+                        raise ValueError("invalid Claude history result")
+                    messages.append(ClaudeHistoryPolicyResult(
+                        policy=decode_claude_history_policy(body[:1]),
+                        saved=bool(body[1]),
+                    ))
                     continue
                 if len(body) < _UPDATE_METADATA.size:
                     raise ValueError("truncated screen metadata")
@@ -599,6 +678,22 @@ def encode_keyframe_request() -> bytes:
 
 def encode_heartbeat() -> bytes:
     return _encode_input_message(InputKind.HEARTBEAT, b"")
+
+
+def encode_claude_history_policy(policy: str) -> bytes:
+    values = {"local": 1, "native": 2}
+    if policy not in values:
+        raise ValueError("invalid Claude history policy")
+    return _encode_input_message(
+        InputKind.SET_CLAUDE_HISTORY, bytes((values[policy],))
+    )
+
+
+def decode_claude_history_policy(data: bytes) -> str:
+    values = {1: "local", 2: "native"}
+    if len(data) != 1 or data[0] not in values:
+        raise ValueError("invalid Claude history policy")
+    return values[data[0]]
 
 
 def encode_history_request(
@@ -689,6 +784,10 @@ class InputFrameDecoder:
                 or (kind is InputKind.RESIZE and len(message_data) != 4)
                 or (kind is InputKind.REQUEST_KEYFRAME and message_data)
                 or (kind is InputKind.HEARTBEAT and message_data)
+                or (
+                    kind is InputKind.SET_CLAUDE_HISTORY
+                    and message_data not in (b"\x01", b"\x02")
+                )
                 or (
                     kind is InputKind.REQUEST_HISTORY
                     and len(message_data) != _HISTORY_REQUEST.size

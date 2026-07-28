@@ -668,9 +668,11 @@ class OptionsModal(urwid.WidgetWrap):
         layout_policy: str,
         yolo_policy: str,
         update_policy: str,
+        claude_history_policy: str,
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
+        on_claude_history_policy: Callable[[str], bool],
         on_close: Callable[[], None],
     ) -> None:
         self._on_close = on_close
@@ -678,11 +680,13 @@ class OptionsModal(urwid.WidgetWrap):
             "layout": layout_policy,
             "yolo": yolo_policy,
             "update": update_policy,
+            "claude_history": claude_history_policy,
         }
         self._callbacks = {
             "layout": on_layout_policy,
             "yolo": on_yolo_policy,
             "update": on_update_policy,
+            "claude_history": on_claude_history_policy,
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
         rows: list[urwid.Widget] = [
@@ -734,6 +738,27 @@ class OptionsModal(urwid.WidgetWrap):
         ))
         rows.extend([
             urwid.Divider(),
+            urwid.Text(("title", "Claude history in railmux ssh")),
+            urwid.Text(
+                "Choose smooth read-only local transcript scrolling or "
+                "Claude Code's native clickable history."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "claude_history",
+            {
+                "local": "smooth local history managed by Railmux",
+                "ask": "ask on the first upward scroll",
+                "native": "Claude Code history; clickable but may redraw slowly",
+            },
+            labels=(
+                ("local", "Local transcript"),
+                ("ask", "Ask on first scroll"),
+                ("native", "Claude native"),
+            ),
+        ))
+        rows.extend([
+            urwid.Divider(),
             urwid.Text(
                 ("dim", "Settings are saved in "
                  "~/.config/railmux/config.toml")
@@ -762,7 +787,11 @@ class OptionsModal(urwid.WidgetWrap):
         self._sync_rows()
 
     def _build_group(
-        self, group: str, details: dict[str, str],
+        self,
+        group: str,
+        details: dict[str, str],
+        *,
+        labels: tuple[tuple[str, str], ...] | None = None,
     ) -> list[_OptionRow]:
         option_rows = [
             _OptionRow(
@@ -771,7 +800,7 @@ class OptionsModal(urwid.WidgetWrap):
                 details[value],
                 lambda selected, group=group: self._select(group, selected),
             )
-            for value, label in self._POLICY_LABELS
+            for value, label in (labels or self._POLICY_LABELS)
         ]
         self._option_rows[group] = option_rows
         return option_rows

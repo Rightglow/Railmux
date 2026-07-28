@@ -4265,13 +4265,25 @@ class App:
                 f"Railmux updates: {self._policy_label(policy)}.")
             return True
 
+        def set_claude_history(policy: str) -> bool:
+            if not self._settings.set_claude_history_policy(policy):
+                self._set_status(
+                    "Could not save Claude history option; setting unchanged.",
+                    "error",
+                )
+                return False
+            self._set_status(f"Claude SSH history: {policy}.")
+            return True
+
         modal = OptionsModal(
             layout_policy=self._settings.layout_save_policy,
             yolo_policy=self._settings.codex_yolo_policy,
             update_policy=self._settings.update_policy,
+            claude_history_policy=self._settings.claude_history_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
+            on_claude_history_policy=set_claude_history,
             on_close=self._close_options_modal,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
