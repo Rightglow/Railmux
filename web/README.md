@@ -39,9 +39,10 @@ login. It produces five source-authentic recordings:
   wide-layout history workflow: single-click preview, Enter resume, return to
   the sidebar, and click the running conversation. Semantic input events drive
   the website's durable key HUD and cell-aligned mouse pointer.
-- `public/generated/railmux-mobile-demo.cast` records Railmux's real 105×21
-  compact layout and page controls, matching a reported Termux landscape
-  geometry. The short height—not the width—selects compact projection.
+- `public/generated/railmux-mobile-demo.cast` records Railmux's real compact
+  layout and page controls at a representative 46×38 portrait-phone geometry.
+  The narrow width selects compact projection; the separate reported 105×21
+  Termux geometry is landscape.
 - `public/generated/railmux-tour-demo.cast` records the real New Project
   directory browser and built-in Help view without creating a project or
   launching an agent.
@@ -65,7 +66,7 @@ terminal positions.
 
 The desktop, dual-agent, workflow, and tour profiles are also checked against
 Railmux's real responsive-layout function: all must remain `WIDE`, while only
-the 105×21 mobile profile may use the `COMPACT` projection.
+the 46×38 portrait mobile profile may use the `COMPACT` projection.
 
 The workflow then creates deterministic product screenshots:
 

@@ -111,7 +111,7 @@ def test_compressed_keyframe_crosses_standalone_client_decoder_in_parts():
     assert update.terminal_modes is TerminalMode.NONE
 
 
-def test_v8_wire_round_trips_allowlisted_terminal_modes_and_rejects_unknown():
+def test_v9_wire_round_trips_allowlisted_terminal_modes_and_rejects_unknown():
     modes = TerminalMode.BRACKETED_PASTE | TerminalMode.FOCUS_EVENTS
     update = ClientScreenUpdateDecoder().feed(
         encode_update(_keyframe(terminal_modes=modes))
@@ -127,13 +127,13 @@ def test_v8_wire_round_trips_allowlisted_terminal_modes_and_rejects_unknown():
     assert ClientScreenUpdateDecoder().feed(malformed) == []
 
 
-def test_v8_decoder_does_not_accept_a_v7_packet_prefix():
-    old_packet = b"RMUXD7\x00" + struct.pack(">I", 32) + bytes(32)
+def test_v9_decoder_does_not_accept_a_v8_packet_prefix():
+    old_packet = b"RMUXD8\x00" + struct.pack(">I", 32) + bytes(32)
 
     assert ClientScreenUpdateDecoder().feed(old_packet) == []
 
 
-def test_v8_unified_decoder_round_trips_history_between_screen_updates():
+def test_v9_unified_decoder_round_trips_history_between_screen_updates():
     snapshot = HistorySnapshot(
         request_id=7,
         pane_id="%42",
@@ -142,6 +142,7 @@ def test_v8_unified_decoder_round_trips_history_between_screen_updates():
         width=50,
         height=2,
         lines=(b"old-1", b"old-2", b"visible-1", b"visible-2"),
+        mouse_forwardable=True,
     )
     packet = b"".join((
         encode_update(_keyframe()),
@@ -156,7 +157,7 @@ def test_v8_unified_decoder_round_trips_history_between_screen_updates():
     assert messages == [_keyframe(), snapshot, _keyframe(sequence=2)]
 
 
-def test_v8_history_snapshot_round_trips_the_maximum_line_count():
+def test_v9_history_snapshot_round_trips_the_maximum_line_count():
     snapshot = HistorySnapshot(
         request_id=8,
         pane_id="%42",
@@ -195,7 +196,7 @@ def test_history_request_round_trip_validates_pointer_and_line_limit():
         encode_history_request(1, 80, 24, 20001)
 
 
-def test_v8_history_prefetch_batch_round_trip_is_atomic_and_bounded():
+def test_v9_history_prefetch_batch_round_trip_is_atomic_and_bounded():
     decoder = InputFrameDecoder()
     request = decoder.feed(encode_history_prefetch(17, 300))[0]
     assert request.kind is InputKind.PREFETCH_HISTORY
@@ -203,7 +204,9 @@ def test_v8_history_prefetch_batch_round_trip_is_atomic_and_bounded():
 
     snapshots = (
         HistorySnapshot(17, "%8", 31, 0, 49, 2, (b"a", b"b", b"c")),
-        HistorySnapshot(17, "%9", 31, 3, 49, 2, (b"d", b"e", b"f")),
+        HistorySnapshot(
+            17, "%9", 31, 3, 49, 2, (b"d", b"e", b"f"), True
+        ),
     )
     batch = HistoryBatch(17, snapshots)
 
@@ -843,6 +846,45 @@ def test_local_history_routes_sidebar_immediately_and_owns_agent_wheel():
     agent_action = view.wheel(SgrMouseEvent(agent_down, 65, 40, 1, True))
     assert agent_action.forwarded_input == b""
     assert agent_action.protocol_frame == b""
+
+
+def test_local_history_forwards_empty_mouse_aware_agent_history():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        30,
+        0,
+        40,
+        3,
+        (b"", b"", b""),
+        mouse_forwardable=True,
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    wheel_up = SgrMouseEvent(b"cc-up", 64, 40, 2, True)
+    wheel_down = SgrMouseEvent(b"cc-down", 65, 40, 2, True)
+
+    assert view.wheel(wheel_up) == HistoryAction(forwarded_input=b"cc-up")
+    assert view.wheel(wheel_down) == HistoryAction(forwarded_input=b"cc-down")
+
+
+def test_local_history_keeps_empty_plain_agent_wheel_from_tmux_copy_mode():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id, "%8", 30, 0, 40, 3, (b"", b"", b"")
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    wheel_up = SgrMouseEvent(b"shell-up", 64, 40, 2, True)
+    wheel_down = SgrMouseEvent(b"shell-down", 65, 40, 2, True)
+
+    assert view.wheel(wheel_up) == HistoryAction()
+    assert view.wheel(wheel_down) == HistoryAction()
 
 
 def test_local_history_never_leaks_wheel_to_tmux_before_routes_are_ready():
@@ -2277,7 +2319,7 @@ def test_busy_legacy_attach_can_be_replaced_once_with_consent(monkeypatch):
             for call in built.call_args_list] == [False, True]
 
 
-def test_transient_v8_attach_contention_retries_without_takeover(monkeypatch):
+def test_transient_current_attach_contention_retries_without_takeover(monkeypatch):
     original = _PreflightProcess()
     retry = _PreflightProcess()
     args = parse_client_args(["server"])
@@ -3005,7 +3047,7 @@ def test_remote_server_busy_status_is_machine_readable(monkeypatch):
     assert output.getvalue() == REMOTE_ATTACH_BUSY
 
 
-def test_v8_attach_lock_is_released_before_display_lifetime(monkeypatch):
+def test_current_attach_lock_is_released_before_display_lifetime(monkeypatch):
     events = []
     monkeypatch.setattr(
         fast_display_server, "_ensure_railmux_session", lambda _session: "$4")
@@ -3371,32 +3413,34 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4\t0\t1\t%1\t0\t0\t30\t20\t\n"
-            "$4\t0\t0\t%8\t31\t0\t49\t20\t\n"
+            "$4\t0\t1\t%1\t0\t0\t30\t20\t0\t\n"
+            "$4\t0\t0\t%8\t31\t0\t49\t20\t1\t\n"
         ),
     )
 
     assert fast_display_server._pane_at_pointer("$4", 5, 5) is None
     pane = fast_display_server._pane_at_pointer("$4", 40, 5)
-    assert pane == fast_display_server._PaneGeometry("%8", 31, 0, 49, 20)
+    assert pane == fast_display_server._PaneGeometry(
+        "%8", 31, 0, 49, 20, mouse_forwardable=True
+    )
 
 
 @pytest.mark.parametrize(
     ("rows", "expected"),
     [
         (
-            "$4\t1\t1\t%1\t0\t0\t80\t24\t\n"
-            "$4\t1\t0\t%8\t31\t0\t49\t20\t\n",
+            "$4\t1\t1\t%1\t0\t0\t80\t24\t0\t\n"
+            "$4\t1\t0\t%8\t31\t0\t49\t20\t0\t\n",
             (),
         ),
         (
-            "$4\t1\t0\t%1\t0\t0\t30\t20\t\n"
-            "$4\t1\t1\t%8\t0\t0\t80\t24\t\n",
+            "$4\t1\t0\t%1\t0\t0\t30\t20\t0\t\n"
+            "$4\t1\t1\t%8\t0\t0\t80\t24\t0\t\n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4\t1\t1\t%1\t0\t0\t80\t24\t\n"
-            "$4\t0\t0\t%8\t31\t0\t49\t20\t\n",
+            "$4\t1\t1\t%1\t0\t0\t80\t24\t0\t\n"
+            "$4\t0\t0\t%8\t31\t0\t49\t20\t0\t\n",
             (),
         ),
     ],
@@ -3423,8 +3467,8 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            '$4\t0\t1\t%1\t0\t0\t30\t20\t\n'
-            '$4\t0\t0\t%8\t31\t0\t49\t20\t{"source":1}\n'
+            '$4\t0\t1\t%1\t0\t0\t30\t20\t0\t\n'
+            '$4\t0\t0\t%8\t31\t0\t49\t20\t1\t{"source":1}\n'
         ),
     )
     monkeypatch.setattr(
@@ -3442,12 +3486,14 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
 
     assert fast_display_server._list_agent_panes("$4") == (
         fast_display_server._PaneGeometry(
-            "%8", 31, 0, 49, 20, target, "%2"),
+            "%8", 31, 0, 49, 20, target, "%2", True),
     )
 
 
 def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
-    pane = fast_display_server._PaneGeometry("%8", 31, 0, 49, 2)
+    pane = fast_display_server._PaneGeometry(
+        "%8", 31, 0, 49, 2, mouse_forwardable=True
+    )
     monkeypatch.setattr(
         fast_display_server, "_pane_at_pointer", lambda *args: pane
     )
@@ -3464,6 +3510,7 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
     )
 
     assert snapshot.pane_id == "%8"
+    assert snapshot.mouse_forwardable is True
     assert b"old" in snapshot.lines[0]
     assert b"red" in snapshot.lines[1]
     assert b";31;" in snapshot.lines[1]

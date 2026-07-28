@@ -1,4 +1,4 @@
-"""Private v8 framing for the coalesced full-window SSH display."""
+"""Private v9 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD8\x00"
-INPUT_MAGIC = b"RMUXK8\x00"
-PROTOCOL_VERSION = 8
+DISPLAY_MAGIC = b"RMUXD9\x00"
+INPUT_MAGIC = b"RMUXK9\x00"
+PROTOCOL_VERSION = 9
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
 REMOTE_START = b"RAILMUX-START/1\n"
@@ -25,10 +25,10 @@ MAX_HISTORY_LINES = 20000
 MAX_PREFETCH_HISTORY_LINES = 300
 MAX_HISTORY_PANES = 8
 _UPDATE_METADATA = struct.Struct(">BIHHHHBHI")
-_HISTORY_METADATA = struct.Struct(">IIHHHHI")
+_HISTORY_METADATA = struct.Struct(">IIHHHHBI")
 _HISTORY_REQUEST = struct.Struct(">IHHH")
 _HISTORY_BATCH_METADATA = struct.Struct(">II")
-_HISTORY_PANE_METADATA = struct.Struct(">IHHHH")
+_HISTORY_PANE_METADATA = struct.Struct(">IHHHHB")
 _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
 
 
@@ -97,6 +97,7 @@ class HistorySnapshot:
     width: int = 0
     height: int = 0
     lines: tuple[bytes, ...] = ()
+    mouse_forwardable: bool = False
 
 
 @dataclass(frozen=True)
@@ -180,7 +181,14 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
     if not 0 <= snapshot.request_id <= 0xFFFFFFFF:
         raise ValueError("invalid history request identity")
     if snapshot.pane_id is None:
-        if any((snapshot.x, snapshot.y, snapshot.width, snapshot.height, snapshot.lines)):
+        if any((
+            snapshot.x,
+            snapshot.y,
+            snapshot.width,
+            snapshot.height,
+            snapshot.lines,
+            snapshot.mouse_forwardable,
+        )):
             raise ValueError("a rejected history response must be empty")
         pane_number = 0
     else:
@@ -204,6 +212,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
         snapshot.y,
         snapshot.width,
         snapshot.height,
+        int(snapshot.mouse_forwardable),
         len(raw_lines),
     )
     payload = bytes((int(OutputKind.HISTORY),)) + metadata + compressed
@@ -244,6 +253,7 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             snapshot.y,
             snapshot.width,
             snapshot.height,
+            int(snapshot.mouse_forwardable),
         )
         total += len(pane_metadata) + len(packed_lines)
         if total > MAX_SCREEN_BYTES:
@@ -366,15 +376,33 @@ class ServerMessageDecoder:
                 if output_kind is OutputKind.HISTORY:
                     if len(body) < _HISTORY_METADATA.size:
                         raise ValueError("truncated history metadata")
-                    request_id, pane_number, x, y, width, height, raw_size = (
+                    (
+                        request_id,
+                        pane_number,
+                        x,
+                        y,
+                        width,
+                        height,
+                        raw_mouse_forwardable,
+                        raw_size,
+                    ) = (
                         _HISTORY_METADATA.unpack(body[:_HISTORY_METADATA.size])
                     )
+                    if raw_mouse_forwardable not in (0, 1):
+                        raise ValueError("invalid history mouse capability")
                     raw_lines = _decompress_rows(
                         body[_HISTORY_METADATA.size:], raw_size
                     )
                     lines = _unpack_history_lines(raw_lines)
                     if pane_number == 0:
-                        if any((x, y, width, height, lines)):
+                        if any((
+                            x,
+                            y,
+                            width,
+                            height,
+                            lines,
+                            raw_mouse_forwardable,
+                        )):
                             raise ValueError("invalid rejected history response")
                         pane_id = None
                     else:
@@ -393,6 +421,7 @@ class ServerMessageDecoder:
                         width=width,
                         height=height,
                         lines=lines,
+                        mouse_forwardable=bool(raw_mouse_forwardable),
                     ))
                     continue
                 if output_kind is OutputKind.HISTORY_BATCH:
@@ -415,12 +444,21 @@ class ServerMessageDecoder:
                     for _ in range(pane_count):
                         if len(raw) - offset < _HISTORY_PANE_METADATA.size:
                             raise ValueError("truncated history pane metadata")
-                        pane_number, x, y, width, height = _HISTORY_PANE_METADATA.unpack(
+                        (
+                            pane_number,
+                            x,
+                            y,
+                            width,
+                            height,
+                            raw_mouse_forwardable,
+                        ) = _HISTORY_PANE_METADATA.unpack(
                             raw[offset:offset + _HISTORY_PANE_METADATA.size]
                         )
                         offset += _HISTORY_PANE_METADATA.size
                         if pane_number == 0 or pane_number in seen:
                             raise ValueError("invalid history pane identity")
+                        if raw_mouse_forwardable not in (0, 1):
+                            raise ValueError("invalid history mouse capability")
                         seen.add(pane_number)
                         if not 1 <= width <= MAX_WIDTH or not 1 <= height <= MAX_HEIGHT:
                             raise ValueError("invalid history geometry")
@@ -437,6 +475,7 @@ class ServerMessageDecoder:
                             width=width,
                             height=height,
                             lines=lines,
+                            mouse_forwardable=bool(raw_mouse_forwardable),
                         ))
                     if offset != len(raw):
                         raise ValueError("trailing history batch data")
@@ -486,7 +525,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v8 history response messages."""
+    """Compatibility view which ignores v9 history response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()

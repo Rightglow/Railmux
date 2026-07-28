@@ -35,10 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Advance the private SSH display protocol to v9 so history snapshots can
+  advertise whether an empty pane safely accepts application-level wheel
+  input.
 - Rework the deterministic agent pane around Claude Code's native
-  prompt/response/input structure, switch the compact demo to a reported
-  105×21 Termux geometry, and loop control-free recordings after a held final
-  frame.
+  prompt/response/input structure, switch the compact demo to a representative
+  46×38 portrait-phone geometry, and loop control-free recordings after a held
+  final frame.
 - Refresh the terminal UI hierarchy with right-aligned sidebar and project
   counts, stable uppercase section labels, and responsive neutral shortcut
   controls in the clickable Button Bar.
@@ -58,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Forward wheel input to a mouse-aware agent such as Claude Code when its
+  alternate screen has no tmux scrollback, while retaining Railmux's local,
+  copy-mode-safe history path for ordinary agent panes.
+- Clear every synthetic Claude input row before repainting it so the website
+  recording shows one separator above and below the bare prompt instead of
+  stale horizontal-rule fragments on the input line.
 - Suppress tmux's default right-click menu over Railmux agent panes while
   retaining context-menu forwarding in the mouse-aware sidebar and preserving
   the user's original binding in unrelated tmux windows.

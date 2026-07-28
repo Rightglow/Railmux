@@ -577,7 +577,7 @@ restarts tmux or a system crash collector; provider rollout files are untouched.
 The SSH client also sends a private heartbeat. If a network outage leaves SSH
 half-open, the remote helper expires its own 45-second lease and detaches only
 the exact private tmux client it created; the Railmux session, panes, and agents
-stay alive. Protocol-v8 helpers use only a short attach mutex, so another
+stay alive. Current helpers use only a short attach mutex, so another
 current client can connect during that cleanup. If an older helper still owns
 the historical lifetime lock, reconnecting presents an explicit replacement
 prompt. Approving it may detach every terminal attached to that managed

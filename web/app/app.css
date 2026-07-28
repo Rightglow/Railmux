@@ -1001,8 +1001,8 @@ code {
 .compact-section {
   min-height: 820px;
   display: grid;
-  grid-template-columns: 0.8fr 1.2fr;
-  gap: 7vw;
+  grid-template-columns: 1fr 1fr;
+  gap: 10vw;
   align-items: center;
   padding-top: 120px;
   padding-bottom: 120px;
@@ -1035,7 +1035,7 @@ code {
 
 .phone-frame {
   position: relative;
-  width: min(760px, 100%);
+  width: min(390px, 100%);
   margin-inline: auto;
   padding: 12px;
   background: #161b1d;

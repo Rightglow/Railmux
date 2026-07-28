@@ -360,7 +360,7 @@ export default function Home() {
           <div className="phone-frame" data-demo="compact-recording">
             <div className="phone-speaker" />
             <div className="mobile-capture-label">
-              REAL 105×21 TERMINAL
+              PORTRAIT COMPACT · 46×38
             </div>
             <TerminalRecording
               source="railmux-mobile-demo.cast"

@@ -35,8 +35,8 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[1].height).toBeGreaterThanOrEqual(26);
   expect(headers[2].width).toBeGreaterThanOrEqual(84);
   expect(headers[2].height).toBeGreaterThanOrEqual(26);
-  expect(headers[3].width).toBe(105);
-  expect(headers[3].height).toBe(21);
+  expect(headers[3].width).toBe(46);
+  expect(headers[3].height).toBe(38);
   expect(headers[4].width).toBeGreaterThanOrEqual(84);
   expect(headers[4].height).toBeGreaterThanOrEqual(26);
   expect(headers.every((header) => header.transcript_sha256.length === 64))
@@ -166,7 +166,7 @@ test("capture deterministic compact preview", async ({ page }) => {
   await expect(
     compactDemo.locator('[data-demo="mobile-recording"] .ap-player'),
   ).toBeVisible();
-  await expect(page.getByText("REAL 105×21 TERMINAL")).toBeVisible();
+  await expect(page.getByText("PORTRAIT COMPACT · 46×38")).toBeVisible();
   await page.waitForTimeout(2_000);
   await compactDemo.screenshot({
     path: join(outputDir, "mobile-workspace.png"),

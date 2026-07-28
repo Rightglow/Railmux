@@ -52,9 +52,9 @@ class RecordingProfile:
 DESKTOP = RecordingProfile("desktop", 180, 38, 10.0)
 DUAL = RecordingProfile("dual", 210, 42, 13.0)
 WORKFLOW = RecordingProfile("workflow", 160, 38, 15.0)
-# A real Termux report was 105 columns by 21 rows. Compact mode is selected by
-# the short height even though the landscape terminal is comfortably wide.
-MOBILE = RecordingProfile("mobile", 105, 21, 10.0)
+# A representative portrait phone geometry. Compact mode is selected by the
+# narrow width; the separately documented 105x21 Termux report was landscape.
+MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
 TOUR = RecordingProfile("tour", 160, 38, 10.0)
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
@@ -282,15 +282,16 @@ for paragraph in run["response"].splitlines():
         emit("  " + line, 0.018)
 footer_row = max(8, rows - 3)
 sys.stdout.write(
-    f"\\033[{footer_row};1H"
+    f"\\033[{footer_row};1H\\033[2K"
     + "\\033[38;5;239m"
     + "─" * columns
     + "\\033[0m"
-    + f"\\033[{footer_row + 1};1H\\033[38;5;147m❯\\033[0m "
-    + f"\\033[{footer_row + 2};1H\\033[38;5;239m"
+    + f"\\033[{footer_row + 1};1H\\033[2K"
+    + "\\033[38;5;147m❯\\033[0m "
+    + f"\\033[{footer_row + 2};1H\\033[2K\\033[38;5;239m"
     + "─" * columns
     + "\\033[0m"
-    + f"\\033[{footer_row + 3};1H\\033[38;5;244m"
+    + f"\\033[{footer_row + 3};1H\\033[2K\\033[38;5;244m"
     + "  ⏵⏵ normal mode · shift+tab to cycle · ← for agents"
     + "\\033[0m"
 )

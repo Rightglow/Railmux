@@ -247,6 +247,7 @@ class _PaneGeometry:
     height: int
     history_server: tmux_server.TmuxServerTarget | None = None
     history_pane_id: str | None = None
+    mouse_forwardable: bool = False
 
 
 _ANSI_FG = {
@@ -485,7 +486,8 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
                 "list-panes", "-t", session_id,
                 "-F", "#{session_id}\t#{window_zoomed_flag}\t#{pane_active}\t"
                 "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t"
-                f"#{{pane_height}}\t#{{{tmux_server.HISTORY_SOURCE_OPTION}}}",
+                "#{pane_height}\t#{mouse_any_flag}\t"
+                f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -498,10 +500,11 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
     for raw_row in output.splitlines():
         fields = raw_row.split("\t")
         if (
-            len(fields) != 9
+            len(fields) != 10
             or fields[0] != session_id
             or fields[1] not in ("0", "1")
             or fields[2] not in ("0", "1")
+            or fields[8] not in ("0", "1")
         ):
             return ()
         pane_id = fields[3]
@@ -522,7 +525,7 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
         seen.add(pane_id)
         history_server = None
         history_pane_id = None
-        marker = fields[8]
+        marker = fields[9]
         if marker:
             source = tmux_server.resolve_history_source(marker, timeout=0.25)
             if source is not None:
@@ -535,8 +538,14 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
             fields[1] == "1",
             fields[2] == "1",
             _PaneGeometry(
-                pane_id, left, top, width, height,
-                history_server, history_pane_id,
+                pane_id=pane_id,
+                x=left,
+                y=top,
+                width=width,
+                height=height,
+                history_server=history_server,
+                history_pane_id=history_pane_id,
+                mouse_forwardable=fields[8] == "1",
             ),
         ))
     if not rows or len({zoomed for zoomed, _active, _pane in rows}) != 1:
@@ -614,6 +623,7 @@ def _capture_pane_history(
         width=pane.width,
         height=pane.height,
         lines=lines,
+        mouse_forwardable=pane.mouse_forwardable,
     )
 
 
@@ -999,7 +1009,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v8 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v9 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE

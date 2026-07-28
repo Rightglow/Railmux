@@ -697,7 +697,9 @@ class LocalHistoryView:
         maximum = max(0, len(cached.lines) - cached.height)
         if maximum == 0:
             self._reset_wheel_gesture()
-            return HistoryAction()
+            return HistoryAction(
+                forwarded_input=event.raw if cached.mouse_forwardable else b""
+            )
         self.cancel_pane(route.pane_id)
         scroll_lines = self._wheel_scroll_lines(
             route.pane_id, event.wheel_direction, now
@@ -889,11 +891,15 @@ class LocalHistoryView:
                 info_message=info_message,
             )
         # Once a pointer is known to be over an agent pane, the local history
-        # layer exclusively owns vertical wheel input. This avoids also
-        # triggering tmux copy-mode or its pane scroll bindings.
+        # layer owns vertical wheel input. The sole fallback is a pane that
+        # explicitly enabled mouse reporting: if tmux has no local history,
+        # that application (for example Claude Code) must receive the wheel.
+        # Non-mouse-aware panes stay isolated from tmux copy-mode.
         if direction < 0:
             self._reset_wheel_gesture()
-            return HistoryAction()
+            return HistoryAction(
+                forwarded_input=event.raw if route.mouse_forwardable else b""
+            )
         return self._start_history(route, event, now)
 
     def pointer_event(
@@ -1338,7 +1344,7 @@ class TerminalSurface:
     def _reconcile_terminal_modes(
         self, requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v8."""
+        """Mirror only input-affecting modes explicitly carried by protocol v9."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -2051,7 +2057,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v8 helper holds the mutex only while registering its exact tmux
+    # A current v9 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)

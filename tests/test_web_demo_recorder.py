@@ -85,8 +85,8 @@ def test_only_mobile_demo_uses_compact_presentation() -> None:
         )
         is WorkspacePresentation.COMPACT
     )
-    assert record_web_demo.MOBILE.width == 105
-    assert record_web_demo.MOBILE.height == 21
+    assert record_web_demo.MOBILE.width == 46
+    assert record_web_demo.MOBILE.height == 38
 
 
 def test_cast_profiles_include_auditable_agent_transcript() -> None:
