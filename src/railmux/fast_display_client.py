@@ -327,7 +327,8 @@ def await_remote_startup(
         magic_start = received.find(_DISPLAY_MAGIC_PREFIX)
         if magic_start >= 0:
             magic_end = magic_start + len(DISPLAY_MAGIC)
-            if len(received) >= magic_end:
+            legacy_end = received.find(b"\0", magic_start)
+            if len(received) >= magic_end or legacy_end >= 0:
                 return RemoteStartup(RemoteStartKind.FAILED)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -697,6 +698,32 @@ class LocalHistoryView:
         maximum = max(0, len(cached.lines) - cached.height)
         if maximum == 0:
             self._reset_wheel_gesture()
+            if cached.more_available:
+                self.cancel_pane(route.pane_id)
+                target_lines = min(
+                    self.history_limit, _HISTORY_INITIAL_LINES
+                )
+                self.viewports[route.pane_id] = _HistoryViewport(
+                    cached,
+                    0,
+                    min(len(cached.lines), self.history_limit),
+                )
+                request_id = self._allocate_request_id()
+                self._deep_pending[request_id] = _PendingHistory(
+                    self.route_epoch,
+                    route.pane_id,
+                    target_lines,
+                    time.monotonic() if now is None else now,
+                )
+                return HistoryAction(
+                    protocol_frame=encode_history_request(
+                        request_id, event.x, event.y, target_lines
+                    )
+                )
+            if cached.transcript_backed:
+                return HistoryAction(
+                    info_message="Local session transcript is not available yet"
+                )
             return HistoryAction(
                 forwarded_input=event.raw if cached.mouse_forwardable else b""
             )
@@ -881,7 +908,11 @@ class LocalHistoryView:
             ):
                 viewport.top_notified = True
                 info_message = (
-                    "History top · complete session history loaded"
+                    (
+                        "History top · complete read-only session transcript loaded"
+                        if viewport.snapshot.transcript_backed
+                        else "History top · complete session history loaded"
+                    )
                     if viewport.exhausted
                     else f"History top · {self.history_limit:,}-line local limit"
                 )
@@ -893,10 +924,16 @@ class LocalHistoryView:
         # Once a pointer is known to be over an agent pane, the local history
         # layer owns vertical wheel input. The sole fallback is a pane that
         # explicitly enabled mouse reporting: if tmux has no local history,
-        # that application (for example Claude Code) must receive the wheel.
+        # a generic application (for example less) must receive the wheel.
+        # A transcript-backed Claude pane remains locally owned even while its
+        # first transcript snapshot is unavailable.
         # Non-mouse-aware panes stay isolated from tmux copy-mode.
         if direction < 0:
             self._reset_wheel_gesture()
+            if route.transcript_backed:
+                return HistoryAction(
+                    info_message="Local session transcript is not available yet"
+                )
             return HistoryAction(
                 forwarded_input=event.raw if route.mouse_forwardable else b""
             )
@@ -1026,10 +1063,7 @@ class LocalHistoryView:
         viewport.snapshot = snapshot
         viewport.offset = aligned_offset
         viewport.loaded_limit = pending.target_lines
-        viewport.exhausted = (
-            len(snapshot.lines) < pending.target_lines
-            or pending.target_lines >= self.history_limit
-        )
+        viewport.exhausted = not snapshot.more_available
         return HistoryAction(
             protocol_frame=self._extend_history(viewport),
             render_history=True,
@@ -1344,7 +1378,7 @@ class TerminalSurface:
     def _reconcile_terminal_modes(
         self, requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v9."""
+        """Mirror only input-affecting modes explicitly carried by protocol v10."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -2057,7 +2091,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v9 helper holds the mutex only while registering its exact tmux
+    # A current v10 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)

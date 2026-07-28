@@ -447,6 +447,9 @@ export default function Home() {
               controls={false}
               loop
               playWhenVisible
+              inputHud
+              cueCols={46}
+              cueRows={38}
               dataDemo="mobile-recording"
             />
           </div>

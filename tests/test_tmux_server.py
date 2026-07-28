@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -204,3 +205,33 @@ def test_target_single_pane_id_requires_one_live_exact_pane(monkeypatch):
 
     assert tmux_server.target_single_pane_id(target, "$7") == "%2"
     assert tmux_server.target_single_pane_id(target, "$7") is None
+
+
+def test_transcript_source_round_trip_opens_only_exact_same_user_file(tmp_path):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    path = tmp_path / f"{session_id}.jsonl"
+    path.write_text('{"type":"user"}\n')
+    marker = tmux_server.encode_transcript_source("claude", session_id, path)
+
+    assert marker is not None
+    source = tmux_server.decode_transcript_source(marker)
+    assert source is not None and source.path == path
+    opened = tmux_server.open_transcript_source(marker)
+    assert opened is not None
+    os.close(opened[1])
+
+
+def test_transcript_source_rejects_final_symlink_and_extra_fields(tmp_path):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    real = tmp_path / f"{session_id}.jsonl.real"
+    real.write_text("{}\n")
+    linked = tmp_path / f"{session_id}.jsonl"
+    linked.symlink_to(real)
+    marker = tmux_server.encode_transcript_source("claude", session_id, linked)
+
+    assert marker is not None
+    assert tmux_server.open_transcript_source(marker) is None
+    assert tmux_server.decode_transcript_source(
+        marker[:-1] + ',"unexpected":true}'
+    ) is None
+    assert tmux_server.decode_transcript_source(None) is None

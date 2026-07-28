@@ -206,6 +206,13 @@ class NestedDisplayTransport:
         return tmux_ctl.set_pane_user_option(
             pane_id, tmux_server.HISTORY_SOURCE_OPTION, value)
 
+    @staticmethod
+    def _clear_display_metadata(pane_id: str) -> None:
+        """Remove history hints before a pane becomes an inert placeholder."""
+        NestedDisplayTransport._set_history_source(pane_id, None)
+        tmux_ctl.set_pane_user_option(
+            pane_id, tmux_server.TRANSCRIPT_SOURCE_OPTION, None)
+
     def attach(
         self,
         slot: AgentSlot,
@@ -259,7 +266,7 @@ class NestedDisplayTransport:
             )
         command = "TMUX= exec " + " ".join(shlex.quote(arg) for arg in argv)
         if not tmux_ctl.respawn_pane(slot.pane_id, command):
-            self._set_history_source(slot.pane_id, None)
+            self._clear_display_metadata(slot.pane_id)
             if created:
                 tmux_ctl.kill_pane(slot.pane_id)
                 slot.pane_id = None
@@ -410,7 +417,7 @@ class AgentDisplayTransport:
             slot.pane_id = tmux_ctl.split_window_h(
                 _PLACEHOLDER_COMMAND, size_percent=70, detached=True)
         else:
-            NestedDisplayTransport._set_history_source(slot.pane_id, None)
+            NestedDisplayTransport._clear_display_metadata(slot.pane_id)
             if not tmux_ctl.respawn_pane(slot.pane_id, _PLACEHOLDER_COMMAND):
                 return None
         if slot.pane_id is None:
@@ -654,6 +661,7 @@ class AgentDisplayTransport:
                 return False
             _clear_markers(state, slot.key)
         slot.pane_id = state.placeholder_pane_id
+        NestedDisplayTransport._clear_display_metadata(slot.pane_id)
         slot.agent_tmux_name = None
         slot.swap_state = None
         slot.transport_kind = DisplayTransportKind.NESTED
@@ -673,7 +681,7 @@ class AgentDisplayTransport:
         pane_id = slot.pane_id
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
             return False
-        NestedDisplayTransport._set_history_source(pane_id, None)
+        NestedDisplayTransport._clear_display_metadata(pane_id)
         if not tmux_ctl.respawn_pane(pane_id, _empty_slot_command(slot)):
             return False
         slot.clear_content()
@@ -694,7 +702,7 @@ class AgentDisplayTransport:
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
             slot.clear_display()
             return KillPreparation(True)
-        NestedDisplayTransport._set_history_source(pane_id, None)
+        NestedDisplayTransport._clear_display_metadata(pane_id)
         if not tmux_ctl.respawn_pane(pane_id, _empty_slot_command(slot)):
             if was_swap:
                 # return_home already detached the real pane. Keep the model

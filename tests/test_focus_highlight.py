@@ -7,20 +7,55 @@ from unittest.mock import MagicMock
 import pytest
 import urwid
 
-from railmux import tmux_ctl
+from railmux import tmux_ctl, tmux_server
 from railmux.models import Project, SessionMeta
 from railmux.display_transport import AttachOutcome
 from railmux.ui import keymap
-from railmux.ui.app import App, _FocusAwareFrame
+from railmux.ui.app import App, _FocusAwareFrame, _Running
 from railmux.ui.modals import DeleteConfirmModal, RenameModal
 from railmux.ui.projects_pane import ProjectsPane
 from railmux.ui.running_pane import RunningEntry
 from railmux.ui.sessions_pane import _SessionRow
 from railmux.ui.workspace import (
     AgentWorkspace,
+    AgentSlot,
     DisplayTransportKind,
     WorkspaceLayout,
 )
+
+
+def test_active_claude_pane_stamps_and_clears_exact_transcript_source(
+    monkeypatch, tmp_path,
+):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    project = Project(tmp_path, "-tmp-project", tmp_path / "history", 1, 1.0)
+    running = _Running(
+        session_id,
+        "agent-session",
+        "Claude",
+        project=project,
+        session_type="claude",
+    )
+    app = App.__new__(App)
+    app._by_tmux = lambda name: running if name == "agent-session" else None
+    slot = AgentSlot("primary", pane_id="%8")
+    observed = []
+    monkeypatch.setattr(
+        tmux_ctl,
+        "set_pane_user_option",
+        lambda pane, option, value: observed.append((pane, option, value)) or True,
+    )
+
+    app._sync_slot_transcript_source(slot, session_id, "agent-session")
+    app._sync_slot_transcript_source(slot, None, None)
+
+    assert observed[0][0:2] == (
+        "%8", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+    )
+    assert f"{session_id}.jsonl" in observed[0][2]
+    assert observed[1] == (
+        "%8", tmux_server.TRANSCRIPT_SOURCE_OPTION, None,
+    )
 
 
 def _canvas_attrs(canvas) -> list[str | None]:

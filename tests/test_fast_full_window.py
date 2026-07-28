@@ -111,7 +111,7 @@ def test_compressed_keyframe_crosses_standalone_client_decoder_in_parts():
     assert update.terminal_modes is TerminalMode.NONE
 
 
-def test_v9_wire_round_trips_allowlisted_terminal_modes_and_rejects_unknown():
+def test_v10_wire_round_trips_allowlisted_terminal_modes_and_rejects_unknown():
     modes = TerminalMode.BRACKETED_PASTE | TerminalMode.FOCUS_EVENTS
     update = ClientScreenUpdateDecoder().feed(
         encode_update(_keyframe(terminal_modes=modes))
@@ -127,13 +127,13 @@ def test_v9_wire_round_trips_allowlisted_terminal_modes_and_rejects_unknown():
     assert ClientScreenUpdateDecoder().feed(malformed) == []
 
 
-def test_v9_decoder_does_not_accept_a_v8_packet_prefix():
-    old_packet = b"RMUXD8\x00" + struct.pack(">I", 32) + bytes(32)
+def test_v10_decoder_does_not_accept_a_v9_packet_prefix():
+    old_packet = b"RMUXD9\x00" + struct.pack(">I", 32) + bytes(32)
 
     assert ClientScreenUpdateDecoder().feed(old_packet) == []
 
 
-def test_v9_unified_decoder_round_trips_history_between_screen_updates():
+def test_v10_unified_decoder_round_trips_history_capabilities():
     snapshot = HistorySnapshot(
         request_id=7,
         pane_id="%42",
@@ -143,6 +143,8 @@ def test_v9_unified_decoder_round_trips_history_between_screen_updates():
         height=2,
         lines=(b"old-1", b"old-2", b"visible-1", b"visible-2"),
         mouse_forwardable=True,
+        transcript_backed=True,
+        more_available=True,
     )
     packet = b"".join((
         encode_update(_keyframe()),
@@ -157,7 +159,7 @@ def test_v9_unified_decoder_round_trips_history_between_screen_updates():
     assert messages == [_keyframe(), snapshot, _keyframe(sequence=2)]
 
 
-def test_v9_history_snapshot_round_trips_the_maximum_line_count():
+def test_v10_history_snapshot_round_trips_the_maximum_line_count():
     snapshot = HistorySnapshot(
         request_id=8,
         pane_id="%42",
@@ -196,7 +198,7 @@ def test_history_request_round_trip_validates_pointer_and_line_limit():
         encode_history_request(1, 80, 24, 20001)
 
 
-def test_v9_history_prefetch_batch_round_trip_is_atomic_and_bounded():
+def test_v10_history_prefetch_batch_round_trip_is_atomic_and_bounded():
     decoder = InputFrameDecoder()
     request = decoder.feed(encode_history_prefetch(17, 300))[0]
     assert request.kind is InputKind.PREFETCH_HISTORY
@@ -871,6 +873,52 @@ def test_local_history_forwards_empty_mouse_aware_agent_history():
     assert view.wheel(wheel_down) == HistoryAction(forwarded_input=b"cc-down")
 
 
+def test_local_history_never_forwards_transcript_backed_claude_wheel():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        30,
+        0,
+        40,
+        3,
+        (b"", b"", b""),
+        mouse_forwardable=True,
+        transcript_backed=True,
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    action = view.wheel(SgrMouseEvent(b"claude-up", 64, 40, 2, True))
+
+    assert action.forwarded_input == b""
+    assert action.info_message == "Local session transcript is not available yet"
+
+
+def test_local_history_requests_deep_page_when_hot_viewport_fills_prefetch():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        0,
+        0,
+        80,
+        300,
+        (b"live",) * 300,
+        more_available=True,
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    action = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+    request = InputFrameDecoder().feed(action.protocol_frame)[0]
+
+    assert decode_history_request(request.data)[3] == 2000
+    assert action.forwarded_input == b""
+
+
 def test_local_history_keeps_empty_plain_agent_wheel_from_tmux_copy_mode():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
@@ -1223,7 +1271,8 @@ def test_history_progressively_extends_to_configured_limit_without_jumping():
     )
     before = view.overlays()[0][1]
     first_action = view.accept(HistorySnapshot(
-        initial_request[0], "%8", 30, 0, 30, 3, first_page
+        initial_request[0], "%8", 30, 0, 30, 3, first_page,
+        more_available=True,
     ))
     assert first_action.protocol_frame == b""
     assert view.overlays()[0][1] == before
@@ -1244,7 +1293,8 @@ def test_history_progressively_extends_to_configured_limit_without_jumping():
         *first_page,
     )
     second_action = view.accept(HistorySnapshot(
-        second_request[0], "%8", 30, 0, 30, 3, second_page
+        second_request[0], "%8", 30, 0, 30, 3, second_page,
+        more_available=True,
     ))
     assert view.overlays()[0][1] == before
     assert second_action.protocol_frame == b""
@@ -3413,8 +3463,8 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4\t0\t1\t%1\t0\t0\t30\t20\t0\t\n"
-            "$4\t0\t0\t%8\t31\t0\t49\t20\t1\t\n"
+            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\n"
+            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t\t\n"
         ),
     )
 
@@ -3429,18 +3479,18 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     ("rows", "expected"),
     [
         (
-            "$4\t1\t1\t%1\t0\t0\t80\t24\t0\t\n"
-            "$4\t1\t0\t%8\t31\t0\t49\t20\t0\t\n",
+            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\n"
+            "$4\t@1\t1\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\n",
             (),
         ),
         (
-            "$4\t1\t0\t%1\t0\t0\t30\t20\t0\t\n"
-            "$4\t1\t1\t%8\t0\t0\t80\t24\t0\t\n",
+            "$4\t@1\t1\t0\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\n"
+            "$4\t@1\t1\t1\t%8\t108\t0\t0\t80\t24\t0\t0\t0\t\t\n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4\t1\t1\t%1\t0\t0\t80\t24\t0\t\n"
-            "$4\t0\t0\t%8\t31\t0\t49\t20\t0\t\n",
+            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\n"
+            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\n",
             (),
         ),
     ],
@@ -3467,8 +3517,9 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            '$4\t0\t1\t%1\t0\t0\t30\t20\t0\t\n'
-            '$4\t0\t0\t%8\t31\t0\t49\t20\t1\t{"source":1}\n'
+            '$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\n'
+            '$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t'
+            '{"source":1}\t\n'
         ),
     )
     monkeypatch.setattr(
@@ -3487,6 +3538,50 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
     assert fast_display_server._list_agent_panes("$4") == (
         fast_display_server._PaneGeometry(
             "%8", 31, 0, 49, 20, target, "%2", True),
+    )
+
+
+def test_server_recovers_exact_pre_v10_claude_transcript_from_binding(
+    monkeypatch, tmp_path,
+):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    transcript = (
+        tmp_path / "projects" / "-workspace" / f"{session_id}.jsonl"
+    )
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    binding = fast_display_server.json.dumps({
+        "session_type": "claude",
+        "key": session_id,
+        "tmux_name": "cc-project-123",
+        "cwd": "/workspace",
+    })
+
+    backed, marker = fast_display_server._binding_transcript_source(binding)
+
+    assert backed and marker is not None
+    assert str(transcript) in marker
+
+
+def test_server_rejects_ambiguous_pre_v10_claude_transcript(
+    monkeypatch, tmp_path,
+):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    for project in ("one", "two"):
+        transcript = tmp_path / "projects" / project / f"{session_id}.jsonl"
+        transcript.parent.mkdir(parents=True)
+        transcript.write_text("{}\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    binding = fast_display_server.json.dumps({
+        "session_type": "claude",
+        "key": session_id,
+        "tmux_name": "cc-project-123",
+        "cwd": "/workspace",
+    })
+
+    assert fast_display_server._binding_transcript_source(binding) == (
+        False, None,
     )
 
 
@@ -3552,6 +3647,129 @@ def test_server_history_capture_honours_limits_above_the_old_4096_cap(
     assert snapshot.lines[0] == b"line-1"
     assert snapshot.lines[-1] == b"line-5000"
     assert calls[0][-2:] == ["-S", "-5000"]
+
+
+def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        20,
+        2,
+        mouse_forwardable=True,
+        alternate_on=True,
+        transcript_source="exact-marker",
+        transcript_backed=True,
+    )
+    transcript_rows = tuple(
+        f"transcript-{index}".encode() for index in range(500)
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"live-a\nlive-b\n",
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_transcript_rows",
+        lambda *_args, **_kwargs: fast_display_server._TranscriptCacheEntry(
+            (1, 2, 3, 4), transcript_rows, False
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_line",
+        lambda _pyte, line, _width: line,
+    )
+
+    hot = fast_display_server._capture_pane_history(
+        object(), pane, 1, 300
+    )
+    deep = fast_display_server._capture_pane_history(
+        object(), pane, 2, 400
+    )
+
+    assert hot is not None and deep is not None
+    assert hot.transcript_backed and hot.more_available
+    assert hot.lines == deep.lines[-300:]
+    assert hot.lines[-2:] == (b"live-a", b"live-b")
+
+
+def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
+    monkeypatch,
+):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        20,
+        2,
+        mouse_forwardable=True,
+        alternate_on=True,
+        transcript_source="unreadable-marker",
+        transcript_backed=True,
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"live-a\nlive-b\n",
+    )
+    monkeypatch.setattr(
+        fast_display_server, "_transcript_rows", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_line",
+        lambda _pyte, line, _width: line,
+    )
+
+    snapshot = fast_display_server._capture_pane_history(
+        object(), pane, 1, 300
+    )
+
+    assert snapshot is not None
+    assert snapshot.mouse_forwardable
+    assert not snapshot.transcript_backed
+
+
+def test_transcript_wrapper_preserves_combined_sgr_after_line_wrap():
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+
+    rows, dropped = fast_display_server._wrap_transcript_rows(
+        pyte, "\033[0;31mabcd", 2
+    )
+
+    assert not dropped
+    assert len(rows) == 2
+    assert b"\033[31m" in rows[1]
+
+
+def test_transcript_cache_evicts_least_recent_file_width(monkeypatch, tmp_path):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    monkeypatch.setattr(
+        fast_display_server, "_TRANSCRIPT_CACHE_LIMIT", 2
+    )
+    fast_display_server._TRANSCRIPT_CACHE.clear()
+    keys = []
+    try:
+        for suffix in ("1", "2", "3"):
+            session_id = f"47fca075-9cb8-44fb-a314-d57ef2256ad{suffix}"
+            path = tmp_path / f"{session_id}.jsonl"
+            path.write_text(
+                '{"type":"user","message":{"role":"user","content":"hello"}}\n'
+            )
+            marker = fast_display_server.tmux_server.encode_transcript_source(
+                "claude", session_id, path
+            )
+            assert marker is not None
+            assert fast_display_server._transcript_rows(
+                pyte, marker, 40, allow_stale=False
+            ) is not None
+            keys.append((str(path), 40))
+
+        assert tuple(fast_display_server._TRANSCRIPT_CACHE) == tuple(keys[-2:])
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
 
 
 def test_server_history_capture_truncates_to_newest_styled_byte_budget(

@@ -57,7 +57,7 @@ WORKFLOW = RecordingProfile("workflow", 160, 38, 15.0)
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
 TOUR = RecordingProfile("tour", 160, 38, 10.0)
 CONTROLS = RecordingProfile("controls", 180, 38, 15.0)
-STARTUP_HOLD_SECONDS = 1.2
+STARTUP_HOLD_SECONDS = 2.4
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
     "LANG",
@@ -349,6 +349,14 @@ def write_row(parts, row, text):
     parts.append(f"\\033[{row};1H\\033[2K" + text)
 
 
+def styled_body(text):
+    pieces = []
+    for index, piece in enumerate(text.split("`")):
+        colour = "\\033[38;5;110m" if index % 2 else "\\033[38;5;252m"
+        pieces.append(colour + piece)
+    return "\\033[22m" + "".join(pieces)
+
+
 def render_claude(run, columns, rows):
     width = max(18, columns - 1)
     footer_row = max(8, rows - 3)
@@ -366,7 +374,7 @@ def render_claude(run, columns, rows):
     ))
     for paragraph in run["response"].splitlines():
         for line in textwrap.wrap(paragraph, max(16, width - 2)):
-            content_rows.append("  \\033[38;5;252m" + line)
+            content_rows.append("  " + styled_body(line))
 
     parts = ["\\033[2J\\033[H"]
     for row, line in enumerate(content_rows[:footer_row - 1], start=1):
@@ -403,7 +411,7 @@ def render_codex(run, columns, rows):
     ]
     for paragraph in run["response"].splitlines():
         for line in textwrap.wrap(paragraph, max(16, width - 2)):
-            content_rows.append("  \\033[38;5;252m" + line)
+            content_rows.append("  " + styled_body(line))
 
     parts = ["\\033[2J\\033[H"]
     for row, line in enumerate(content_rows[:footer_row - 1], start=1):
@@ -861,8 +869,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             None,
                         )
                 elif profile is MOBILE:
-                    # Real compact projection: open Agent 1, return to Railmux,
-                    # then jump back to the live agent through compact routing.
+                    # Real compact projection: open Agent 1, then exercise the
+                    # actual clickable [R] and [1] bottom-row page controls.
                     send_once(
                         "launch-primary",
                         0.8,
@@ -870,18 +878,18 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         "key|N|Open agent",
                     )
                     if real_response_visible:
-                        send_client_keys(
+                        send_once(
                             "mobile-sidebar",
                             4.0,
-                            ("C-b", "Tab"),
-                            "key|C-b Tab|Sidebar",
+                            b"\x1b[<0;2;38M\x1b[<0;2;38m",
+                            "mouse|2|38|Open [R] sidebar",
                         )
                     if "mobile-sidebar" in sent and running_sidebar_visible:
-                        send_client_keys(
+                        send_once(
                             "mobile-agent",
                             5.8,
-                            ("C-b", "Tab"),
-                            "key|C-b Tab|Agent",
+                            b"\x1b[<0;5;38M\x1b[<0;5;38m",
+                            "mouse|5|38|Open [1] agent",
                         )
                 elif profile is TOUR:
                     # Show two discoverable entry points without creating a

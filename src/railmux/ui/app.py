@@ -960,7 +960,41 @@ class App:
             )
         elif session_id is None:
             slot.project_key = None
+        self._sync_slot_transcript_source(slot, session_id, tmux_name)
         self._paint_slot_active_target(slot, session_id, tmux_name)
+
+    def _sync_slot_transcript_source(
+        self,
+        slot: AgentSlot,
+        session_id: str | None,
+        tmux_name: str | None,
+    ) -> None:
+        """Stamp the exact Claude transcript used by fast SSH local history."""
+        pane_id = slot.pane_id
+        if pane_id is None or not pane_id.startswith("%"):
+            return
+        marker = None
+        running = self._by_tmux(tmux_name) if tmux_name else None
+        logical_id = (
+            running.logical_session_id if running is not None else session_id
+        )
+        if (
+            running is not None
+            and running.session_type == "claude"
+            and running.project is not None
+            and logical_id is not None
+            and not running.is_placeholder
+        ):
+            marker = tmux_server.encode_transcript_source(
+                "claude",
+                logical_id,
+                running.project.claude_dir / f"{logical_id}.jsonl",
+            )
+        tmux_ctl.set_pane_user_option(
+            pane_id,
+            tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            marker,
+        )
 
     def _paint_slot_active_target(
         self,
@@ -1853,6 +1887,7 @@ class App:
                 "error",
             )
             return False
+        self._sync_slot_transcript_source(slot, None, None)
         if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
             if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
                 self._set_status("failed to respawn right pane for transcript")

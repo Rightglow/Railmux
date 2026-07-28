@@ -46,8 +46,11 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers.every((header) => header.transcript_sha256.length === 64))
     .toBe(true);
   expect(headers[0].cast).toContain("Restoring your workspace");
+  expect(headers[0].cast).toContain('[2.4');
   expect(headers[1].cast).toContain("Claude Code v2.1.220");
   expect(headers[1].cast).toContain("OpenAI Codex (v0.145.0)");
+  expect(headers[3].cast).toContain("mouse|2|38|Open [R] sidebar");
+  expect(headers[3].cast).toContain("mouse|5|38|Open [1] agent");
 });
 
 test("capture deterministic desktop and social previews", async ({ page }) => {
@@ -177,7 +180,19 @@ test("capture deterministic compact preview", async ({ page }) => {
     compactDemo.locator('[data-demo="mobile-recording"] .ap-player'),
   ).toBeVisible();
   await expect(page.getByText("PORTRAIT COMPACT · 46×38")).toBeVisible();
-  await page.waitForTimeout(2_000);
+  const mobileRecording = compactDemo.locator('[data-demo="mobile-recording"]');
+  await expect(mobileRecording.getByTestId("terminal-pointer")).toBeVisible({
+    timeout: 7_000,
+  });
+  await expect(mobileRecording.getByTestId("terminal-input-hud")).toContainText(
+    "Open [R] sidebar",
+  );
+  await expect(mobileRecording.locator(".ap-term")).toContainText("PROJECTS");
+  await expect(mobileRecording.getByTestId("terminal-input-hud")).toContainText(
+    "Open [1] agent",
+    { timeout: 4_000 },
+  );
+  await expect(mobileRecording.locator(".ap-term")).toContainText("Claude Code");
   await compactDemo.screenshot({
     path: join(outputDir, "mobile-workspace.png"),
     animations: "disabled",

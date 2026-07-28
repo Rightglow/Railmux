@@ -537,8 +537,13 @@ tmux history limit. On the first wheel gesture that reaches the complete
 history or the configured local cap, the client shows a one-time local
 `History top` message; scrolling down rearms that notification.
 
-Agent-pane wheel events are then handled only locally, while sidebar scrolling
-continues to reach Railmux normally. Scroll to the bottom or press `Esc` to
+Agent panes with tmux scrollback are handled locally. Claude Code normally uses
+an alternate screen with no tmux history, so Railmux instead renders the exact
+managed session's read-only JSONL transcript into the same cached local
+overlay; wheel input does not open Claude Code's provider-managed history UI.
+Unrelated mouse-aware terminal applications keep their native wheel behavior.
+Sidebar scrolling continues to reach Railmux normally. Scroll to the bottom or
+press `Esc` to
 return to live output. Each agent pane keeps an independent history position;
 the sidebar and other agents continue updating, and reaching the bottom or
 typing restores only that pane. Reported clicks and drags are ignored while

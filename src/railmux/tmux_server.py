@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -15,8 +16,12 @@ from typing import Iterator, Mapping, MutableMapping, Sequence
 DEFAULT_SOCKET_LABEL = "railmux"
 SOCKET_LABEL_ENV = "RAILMUX_TMUX_LABEL"
 HISTORY_SOURCE_OPTION = "@railmux_history_source_v1"
+TRANSCRIPT_SOURCE_OPTION = "@railmux_transcript_source_v1"
 _LABEL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,256}\Z")
 _HISTORY_SOURCE_SCHEMA = 1
+_TRANSCRIPT_SOURCE_SCHEMA = 1
+_MAX_TRANSCRIPT_SOURCE_BYTES = 8192
 
 
 class TmuxServerError(RuntimeError):
@@ -31,6 +36,15 @@ class TmuxServerUnresponsive(TmuxServerError):
 class TmuxServerTarget:
     socket_path: str
     server_pid: int
+
+
+@dataclass(frozen=True)
+class TranscriptSource:
+    """One bounded, provider-owned transcript locator stamped by Railmux."""
+
+    provider: str
+    session_id: str
+    path: Path
 
 
 def target_argv(target: TmuxServerTarget, *args: str) -> list[str]:
@@ -209,6 +223,99 @@ def encode_history_source(
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def encode_transcript_source(
+    provider: str,
+    session_id: str,
+    path: Path,
+) -> str | None:
+    """Encode an exact transcript hint for a displayed managed agent pane."""
+    raw_path = str(path)
+    if (
+        provider != "claude"
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or not path.is_absolute()
+        or path.name != f"{session_id}.jsonl"
+        or len(raw_path) > 4096
+    ):
+        return None
+    return json.dumps(
+        {
+            "schema_version": _TRANSCRIPT_SOURCE_SCHEMA,
+            "provider": provider,
+            "session_id": session_id,
+            "path": raw_path,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def decode_transcript_source(raw: str) -> TranscriptSource | None:
+    """Decode a transcript locator without opening its untrusted path."""
+    if not isinstance(raw, str) or not raw or len(
+        raw.encode("utf-8", errors="replace")
+    ) > (
+        _MAX_TRANSCRIPT_SOURCE_BYTES
+    ):
+        return None
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version", "provider", "session_id", "path",
+    }:
+        return None
+    provider = payload.get("provider")
+    session_id = payload.get("session_id")
+    raw_path = payload.get("path")
+    if (
+        payload.get("schema_version") != _TRANSCRIPT_SOURCE_SCHEMA
+        or provider != "claude"
+        or not isinstance(session_id, str)
+        or not _SESSION_ID_RE.fullmatch(session_id)
+        or not isinstance(raw_path, str)
+        or not raw_path
+        or len(raw_path) > 4096
+    ):
+        return None
+    path = Path(raw_path)
+    if not path.is_absolute() or path.name != f"{session_id}.jsonl":
+        return None
+    return TranscriptSource(provider, session_id, path)
+
+
+def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
+    """Open an exact same-user transcript without following the final symlink."""
+    source = decode_transcript_source(raw)
+    if source is None:
+        return None
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = -1
+    try:
+        fd = os.open(source.path, flags)
+        info = os.fstat(fd)
+    except OSError:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return None
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_size < 0
+    ):
+        os.close(fd)
+        return None
+    return source, fd
 
 
 def resolve_history_source(

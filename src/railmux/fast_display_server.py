@@ -17,6 +17,7 @@ import argparse
 import errno
 import fcntl
 import hashlib
+import io
 import json
 import os
 import re
@@ -30,18 +31,21 @@ import subprocess
 import sys
 import termios
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
 
 from railmux import __version__, restart_state, tmux_health, tmux_server
+from railmux import transcript as transcript_renderer
 from railmux.fast_display_protocol import (
     HistoryBatch,
     HistorySnapshot,
     InputKind,
     InputFrameDecoder,
+    MAX_HISTORY_LINES,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
@@ -215,6 +219,7 @@ def _build_extended_pyte(pyte: object) -> object:
         Screen=ExtendedScreen,
         DiffScreen=ExtendedDiffScreen,
         ByteStream=ExtendedByteStream,
+        screens=pyte.screens,
         _railmux_extended=True,
     )
 
@@ -248,6 +253,30 @@ class _PaneGeometry:
     history_server: tmux_server.TmuxServerTarget | None = None
     history_pane_id: str | None = None
     mouse_forwardable: bool = False
+    history_size: int = 0
+    alternate_on: bool = False
+    transcript_source: str | None = None
+    transcript_backed: bool = False
+
+
+@dataclass(frozen=True)
+class _TranscriptCacheEntry:
+    identity: tuple[int, int, int, int]
+    rows: tuple[bytes, ...]
+    more_available: bool
+
+
+_TRANSCRIPT_CACHE: OrderedDict[
+    tuple[str, int], _TranscriptCacheEntry
+] = OrderedDict()
+_TRANSCRIPT_CACHE_LIMIT = 4
+_INFERRED_TRANSCRIPTS: OrderedDict[
+    tuple[str, int], tuple[bool, str | None]
+] = OrderedDict()
+_INFERRED_TRANSCRIPT_LIMIT = 8
+_TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024
+_SESSION_BINDING_OPTION = "@railmux_binding_v1"
+_SWAP_OPTIONS = ("@railmux_swap_primary", "@railmux_swap_secondary")
 
 
 _ANSI_FG = {
@@ -461,6 +490,155 @@ def _classify_observed_exit(
     )
 
 
+def _option_value(argv: list[str]) -> str:
+    try:
+        return subprocess.check_output(
+            argv,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=0.5,
+        ).strip()
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
+        return ""
+
+
+def _binding_transcript_source(raw: str) -> tuple[bool, str | None]:
+    """Return whether a valid binding is Claude-owned and its exact locator."""
+    if not raw or len(raw) > 8192:
+        return False, None
+    try:
+        binding = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return False, None
+    if not isinstance(binding, dict):
+        return False, None
+    session_id = binding.get("key")
+    tmux_name = binding.get("tmux_name")
+    cwd = binding.get("cwd")
+    if (
+        binding.get("session_type") != "claude"
+        or not isinstance(session_id, str)
+        or not re.fullmatch(r"[A-Za-z0-9-]{1,256}", session_id)
+        or session_id.startswith("__new__-")
+        or not isinstance(tmux_name, str)
+        or not tmux_name
+        or not isinstance(cwd, str)
+        or not Path(cwd).is_absolute()
+    ):
+        return False, None
+
+    configured = binding.get("transcript_path")
+    candidates: list[Path] = []
+    if isinstance(configured, str) and configured:
+        candidates.append(Path(configured))
+    else:
+        claude_root = Path(
+            os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")
+        )
+        projects = claude_root / "projects"
+        try:
+            candidates.extend(projects.glob(f"*/{session_id}.jsonl"))
+        except OSError:
+            pass
+    markers: set[str] = set()
+    for path in candidates:
+        marker = tmux_server.encode_transcript_source(
+            "claude", session_id, path
+        )
+        if marker is None:
+            continue
+        opened = tmux_server.open_transcript_source(marker)
+        if opened is not None:
+            os.close(opened[1])
+            markers.add(marker)
+    marker = next(iter(markers)) if len(markers) == 1 else None
+    return marker is not None, marker
+
+
+def _swap_binding_for_pane(
+    session_id: str,
+    window_id: str,
+    pane_id: str,
+    pane_pid: int,
+) -> str:
+    """Resolve an old displayed swap to its exact home-session binding."""
+    matches: list[str] = []
+    for option in _SWAP_OPTIONS:
+        raw = _option_value(
+            tmux_server.tmux_argv(
+                "show-window-options", "-v", "-t", window_id, option
+            )
+        )
+        if not raw or len(raw) > 8192:
+            continue
+        try:
+            state = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if (
+            not isinstance(state, dict)
+            or state.get("version") != 1
+            or state.get("phase") != "displayed"
+            or state.get("agent_pane_id") != pane_id
+            or state.get("agent_pane_pid") != pane_pid
+            or state.get("display_window_id") != window_id
+            or state.get("outer_session_id") != session_id
+        ):
+            continue
+        tmux_name = state.get("agent_tmux_name")
+        if not isinstance(tmux_name, str) or not tmux_name:
+            continue
+        binding = _option_value(
+            tmux_server.tmux_argv(
+                "show-options", "-v", "-t", tmux_name,
+                _SESSION_BINDING_OPTION,
+            )
+        )
+        if binding:
+            matches.append(binding)
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _inferred_transcript_source(
+    *,
+    session_id: str,
+    window_id: str,
+    pane_id: str,
+    pane_pid: int,
+    history_server: tmux_server.TmuxServerTarget | None,
+    history_pane_id: str | None,
+) -> tuple[bool, str | None]:
+    """Recover a pre-v10 Claude locator from exact Railmux-owned metadata."""
+    cache_key = (pane_id, pane_pid)
+    cached = _INFERRED_TRANSCRIPTS.get(cache_key)
+    if cached is not None:
+        _INFERRED_TRANSCRIPTS.move_to_end(cache_key)
+        return cached
+    if history_server is not None and history_pane_id is not None:
+        binding = _option_value(
+            tmux_server.target_argv(
+                history_server,
+                "show-options", "-v", "-t", history_pane_id,
+                _SESSION_BINDING_OPTION,
+            )
+        )
+    else:
+        binding = _swap_binding_for_pane(
+            session_id, window_id, pane_id, pane_pid
+        )
+    result = _binding_transcript_source(binding)
+    if not result[0] or result[1] is not None:
+        _INFERRED_TRANSCRIPTS[cache_key] = result
+        _INFERRED_TRANSCRIPTS.move_to_end(cache_key)
+        while len(_INFERRED_TRANSCRIPTS) > _INFERRED_TRANSCRIPT_LIMIT:
+            _INFERRED_TRANSCRIPTS.popitem(last=False)
+    return result
+
+
 def _pane_at_pointer(
     session_id: str, x: int, y: int,
 ) -> _PaneGeometry | None:
@@ -484,10 +662,12 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
         output = subprocess.check_output(
             tmux_server.tmux_argv(
                 "list-panes", "-t", session_id,
-                "-F", "#{session_id}\t#{window_zoomed_flag}\t#{pane_active}\t"
-                "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t"
-                "#{pane_height}\t#{mouse_any_flag}\t"
-                f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}}",
+                "-F", "#{session_id}\t#{window_id}\t#{window_zoomed_flag}\t"
+                "#{pane_active}\t#{pane_id}\t#{pane_pid}\t#{pane_left}\t"
+                "#{pane_top}\t#{pane_width}\t#{pane_height}\t"
+                "#{history_size}\t#{alternate_on}\t#{mouse_any_flag}\t"
+                f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}}\t"
+                f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -500,32 +680,40 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
     for raw_row in output.splitlines():
         fields = raw_row.split("\t")
         if (
-            len(fields) != 10
+            len(fields) != 15
             or fields[0] != session_id
-            or fields[1] not in ("0", "1")
             or fields[2] not in ("0", "1")
-            or fields[8] not in ("0", "1")
+            or fields[3] not in ("0", "1")
+            or fields[11] not in ("0", "1")
+            or fields[12] not in ("0", "1")
         ):
             return ()
-        pane_id = fields[3]
+        window_id = fields[1]
+        pane_id = fields[4]
         try:
-            left, top, width, height = map(int, fields[4:8])
+            pane_pid = int(fields[5])
+            left, top, width, height = map(int, fields[6:10])
+            history_size = int(fields[10])
         except ValueError:
             return ()
         if (
             pane_id in seen
             or not pane_id.startswith("%")
             or not pane_id[1:].isdigit()
+            or not window_id.startswith("@")
+            or not window_id[1:].isdigit()
+            or pane_pid <= 0
             or left < 0
             or top < 0
             or width <= 0
             or height <= 0
+            or history_size < 0
         ):
             return ()
         seen.add(pane_id)
         history_server = None
         history_pane_id = None
-        marker = fields[9]
+        marker = fields[13]
         if marker:
             source = tmux_server.resolve_history_source(marker, timeout=0.25)
             if source is not None:
@@ -534,9 +722,29 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
                     history_server, history_session_id, timeout=0.25)
                 if history_pane_id is None:
                     history_server = None
+        transcript_marker = fields[14] or None
+        transcript_backed = (
+            transcript_marker is not None
+            and tmux_server.decode_transcript_source(
+                transcript_marker
+            ) is not None
+        )
+        if (
+            not transcript_backed
+            and fields[11] == "1"
+            and fields[12] == "1"
+        ):
+            transcript_backed, transcript_marker = _inferred_transcript_source(
+                session_id=session_id,
+                window_id=window_id,
+                pane_id=pane_id,
+                pane_pid=pane_pid,
+                history_server=history_server,
+                history_pane_id=history_pane_id,
+            )
         rows.append((
-            fields[1] == "1",
             fields[2] == "1",
+            fields[3] == "1",
             _PaneGeometry(
                 pane_id=pane_id,
                 x=left,
@@ -545,7 +753,11 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
                 height=height,
                 history_server=history_server,
                 history_pane_id=history_pane_id,
-                mouse_forwardable=fields[8] == "1",
+                mouse_forwardable=fields[12] == "1",
+                history_size=history_size,
+                alternate_on=fields[11] == "1",
+                transcript_source=transcript_marker,
+                transcript_backed=transcript_backed,
             ),
         ))
     if not rows or len({zoomed for zoomed, _active, _pane in rows}) != 1:
@@ -568,11 +780,144 @@ def _render_history_line(pyte: object, line: bytes, width: int) -> bytes:
     return render_rows(screen)[0]
 
 
+def _read_transcript_tail(fd: int) -> tuple[str, bool]:
+    """Read a bounded, whole-record suffix from an already validated file."""
+    size = os.fstat(fd).st_size
+    start = max(0, size - _TRANSCRIPT_MAX_BYTES)
+    os.lseek(fd, start, os.SEEK_SET)
+    chunks: list[bytes] = []
+    remaining = size - start
+    while remaining:
+        chunk = os.read(fd, min(1024 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    raw = b"".join(chunks)
+    if start:
+        newline = raw.find(b"\n")
+        raw = b"" if newline < 0 else raw[newline + 1:]
+    return raw.decode("utf-8", errors="replace"), start > 0
+
+
+def _wrap_transcript_rows(pyte: object, text: str, width: int) -> tuple[
+    tuple[bytes, ...], bool
+]:
+    """Wrap allowlisted transcript ANSI into independently paintable rows."""
+    rows: deque[bytes] = deque(maxlen=MAX_HISTORY_LINES)
+    row = bytearray(b"\033[0m")
+    column = 0
+    active: list[bytes] = []
+    dropped = False
+
+    def finish() -> None:
+        nonlocal row, column, dropped
+        if len(rows) == rows.maxlen:
+            dropped = True
+        rows.append(bytes(row) + b"\033[0m")
+        row = bytearray(b"\033[0m" + b"".join(active))
+        column = 0
+
+    for match in re.finditer(r"\x1b\[[0-9;]*m|[^\x1b]+", text):
+        token = match.group(0)
+        if token.startswith("\x1b["):
+            encoded = token.encode("ascii")
+            params = token[2:-1].split(";")
+            reset_at = max(
+                (
+                    index
+                    for index, param in enumerate(params)
+                    if param in ("", "0")
+                ),
+                default=-1,
+            )
+            if reset_at >= 0:
+                active.clear()
+                remaining = params[reset_at + 1:]
+                if remaining:
+                    active.append(
+                        f"\033[{';'.join(remaining)}m".encode("ascii")
+                    )
+            else:
+                active.append(encoded)
+            row.extend(encoded)
+            continue
+        for char in token:
+            if char == "\n":
+                finish()
+                continue
+            if char == "\r":
+                continue
+            if char == "\t":
+                spaces = 8 - column % 8
+                for _ in range(spaces):
+                    if column >= width:
+                        finish()
+                    row.extend(b" ")
+                    column += 1
+                continue
+            cell_width = pyte.screens.wcwidth(char)
+            if cell_width < 0:
+                continue
+            if cell_width > 0 and column + cell_width > width:
+                finish()
+            row.extend(char.encode("utf-8"))
+            column += max(0, cell_width)
+    if column or len(row) > len(b"\033[0m" + b"".join(active)):
+        finish()
+    return tuple(rows), dropped
+
+
+def _transcript_rows(
+    pyte: object,
+    marker: str,
+    width: int,
+    *,
+    allow_stale: bool,
+) -> _TranscriptCacheEntry | None:
+    """Return a stable cumulative transcript suffix with an inode-aware cache."""
+    opened = tmux_server.open_transcript_source(marker)
+    if opened is None:
+        return None
+    source, fd = opened
+    try:
+        info = os.fstat(fd)
+        identity = (
+            info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size
+        )
+        key = (str(source.path), width)
+        cached = _TRANSCRIPT_CACHE.get(key)
+        if cached is not None and (
+            cached.identity == identity
+            or (allow_stale and bool(cached.rows))
+        ):
+            _TRANSCRIPT_CACHE.move_to_end(key)
+            return cached
+        try:
+            raw, truncated = _read_transcript_tail(fd)
+        except OSError:
+            return None
+        formatted = "".join(
+            transcript_renderer.format_transcript(io.StringIO(raw), "claude")
+        )
+        rows, dropped = _wrap_transcript_rows(pyte, formatted, width)
+        entry = _TranscriptCacheEntry(identity, rows, truncated or dropped)
+        _TRANSCRIPT_CACHE[key] = entry
+        _TRANSCRIPT_CACHE.move_to_end(key)
+        while len(_TRANSCRIPT_CACHE) > _TRANSCRIPT_CACHE_LIMIT:
+            _TRANSCRIPT_CACHE.popitem(last=False)
+        return entry
+    finally:
+        os.close(fd)
+
+
 def _capture_pane_history(
     pyte: object,
     pane: _PaneGeometry,
     request_id: int,
     max_lines: int,
+    *,
+    allow_stale_transcript: bool = False,
 ) -> HistorySnapshot | None:
     try:
         if pane.history_server is not None and pane.history_pane_id is not None:
@@ -602,12 +947,46 @@ def _capture_pane_history(
     # Retain the newest suffix when the styled representation reaches its byte
     # budget. Iterate backwards so an oversized response never sacrifices the
     # pane's current viewport merely to retain older scrollback.
+    current_raw = raw_lines[-pane.height:]
+    transcript_entry = None
+    if (
+        pane.transcript_backed
+        and pane.alternate_on
+        and pane.history_size == 0
+        and pane.transcript_source
+    ):
+        transcript_entry = _transcript_rows(
+            pyte,
+            pane.transcript_source,
+            pane.width,
+            allow_stale=allow_stale_transcript,
+        )
+    source_lines: Sequence[tuple[bytes, bool]]
+    transcript_used = transcript_entry is not None and bool(
+        transcript_entry.rows
+    )
+    if transcript_used:
+        assert transcript_entry is not None
+        transcript_lines = transcript_entry.rows
+        history_count = max(0, max_lines - pane.height)
+        source_lines = (
+            tuple((line, True) for line in transcript_lines[-history_count:])
+            if history_count else ()
+        ) + tuple((line, False) for line in current_raw)
+    else:
+        source_lines = tuple((line, False) for line in raw_lines)
     newest_first: list[bytes] = []
     packed_size = 2  # history line-count prefix
-    for raw_line in reversed(raw_lines[-max_lines:]):
-        rendered = _render_history_line(pyte, raw_line, pane.width)
+    budget_truncated = False
+    for raw_line, rendered_already in reversed(source_lines[-max_lines:]):
+        rendered = (
+            raw_line
+            if rendered_already
+            else _render_history_line(pyte, raw_line, pane.width)
+        )
         line_size = 4 + len(rendered)
         if packed_size + line_size > _HISTORY_SNAPSHOT_RAW_BUDGET:
+            budget_truncated = True
             break
         newest_first.append(rendered)
         packed_size += line_size
@@ -624,6 +1003,16 @@ def _capture_pane_history(
         height=pane.height,
         lines=lines,
         mouse_forwardable=pane.mouse_forwardable,
+        transcript_backed=transcript_used,
+        more_available=(
+            budget_truncated
+            or (
+                transcript_entry.more_available
+                or len(transcript_entry.rows) + pane.height > len(lines)
+                if transcript_used and transcript_entry is not None
+                else pane.history_size + pane.height > len(lines)
+            )
+        ),
     )
 
 
@@ -666,7 +1055,8 @@ def capture_history_batch(
         for pane in _list_agent_panes(session_id)
         if (
             snapshot := _capture_pane_history(
-                pyte, pane, request_id, max_lines
+                pyte, pane, request_id, max_lines,
+                allow_stale_transcript=True,
             )
         ) is not None
     )
@@ -1009,7 +1399,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v9 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v10 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE

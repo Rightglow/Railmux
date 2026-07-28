@@ -470,6 +470,37 @@ code {
   animation: cue-click-ring 900ms 360ms ease-out both;
 }
 
+.mobile-terminal-recording .terminal-input-hud {
+  right: 5px;
+  bottom: 8px;
+  max-width: calc(100% - 10px);
+  min-width: 0;
+  grid-template-columns: auto 1fr;
+  gap: 2px 6px;
+  padding: 6px 7px;
+}
+
+.mobile-terminal-recording .terminal-input-hud > span {
+  padding: 3px 4px;
+  font-size: 6px;
+}
+
+.mobile-terminal-recording .terminal-input-hud strong {
+  font-size: 9px;
+}
+
+.mobile-terminal-recording .terminal-input-hud small {
+  font-size: 6px;
+}
+
+.mobile-terminal-recording .terminal-pointer {
+  transform: translate(-22px, -27px) rotate(-14deg);
+}
+
+.mobile-terminal-recording .terminal-pointer i {
+  top: 1px;
+}
+
 @keyframes cue-hud-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }

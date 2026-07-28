@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.14] - 2026-07-28
+
+### Added
+
+- Serve Claude Code history through Railmux's cached, read-only local
+  transcript overlay when the provider's alternate screen has no tmux
+  scrollback. Generic mouse-aware terminal applications retain their native
+  wheel handling.
+- Add explicit SSH history capabilities for transcript-backed panes and
+  remaining older rows, with a private protocol v10 upgrade boundary.
+- Validate exact same-user Claude transcript locators without following final
+  symlinks, and recover already-running pre-v10 sessions from Railmux-owned
+  binding metadata.
+- Show real compact `[R]` and `[1]` status-bar clicks in the product site's
+  portrait-phone recording.
+
+### Changed
+
+- Hold the real `Restoring your workspace` hero frame long enough to read, and
+  render demo-agent answer bodies with native-looking weight and inline-code
+  colour instead of inheriting the title style.
+- Cache up to 20,000 wrapped transcript rows per file identity and pane width;
+  periodic 300-line prefetches reuse that cache while explicit deep requests
+  refresh changed transcripts.
+
+### Fixed
+
+- Keep `railmux ssh` wheel input local for managed Claude Code sessions instead
+  of opening Claude Code's laggier provider-managed history view and showing
+  its `Ctrl+End … Bottom` prompt.
+- Preserve stable cumulative history suffixes as the client expands from its
+  hot cache toward the configured limit, and report completion explicitly
+  rather than treating every short page as exhausted.
+
 ## [0.2.13] - 2026-07-28
 
 ### Added
