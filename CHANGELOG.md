@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15] - 2026-07-28
+
+### Added
+
+- Make the tmux 3.4+ bottom status bar actionable: switch provider Mode,
+  rotate Layout, change compact pages, and copy the complete right-side
+  status message with native macOS, Wayland, X11, or WSL clipboard support
+  plus a bounded OSC 52 fallback.
+- Offer persistent or one-run Claude Code wheel-history choices over
+  `railmux ssh`, allowing users to choose Railmux's smooth local transcript
+  or Claude Code's native clickable history.
+- Add `Copy title` to session context menus and aggregate live Codex subagent
+  activity into the visible parent session instead of exposing duplicate
+  rollout sessions.
+
+### Changed
+
+- Advance the private SSH display protocol to v11 for scoped history choices
+  and clipboard forwarding, while suppressing redundant mismatch errors after
+  guided version handling.
+- Restore saved wide dual-agent workspaces at their final pane geometry before
+  filling agent content, reducing startup reflow without changing session
+  ownership or recovery fallbacks.
+- Refresh the product website, recordings, and repository front page with
+  source-authentic startup, session-switching, responsive-layout, and
+  Soft Quit demonstrations.
+
+### Fixed
+
+- Restore agent-pane opening on Railmux's dedicated tmux server by preserving
+  the exact inherited socket through nested attach; failed display clients now
+  clean up safely and report the transport reason without stopping the agent.
+- Keep Mode, Layout, compact-page, and status-copy clicks correctly scoped
+  across editors, modals, focus changes, and tmux's user-range size limit.
+- Preserve resumed Codex parent bindings while background rollouts remain
+  active, and avoid repeated UI-thread process walks during status discovery.
+- Keep failed Claude history preference writes from replacing the active
+  runtime choice, and hide the unavailable-transcript pseudo-status before a
+  new Claude session writes its first record.
+- Validate wheel artifacts in an isolated dependency prefix without modifying
+  the invoking development or CI environment.
+
 ## [0.2.15.dev202607284] - 2026-07-28
 
 ### Changed
@@ -1046,7 +1088,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607284...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15...HEAD
+[0.2.15]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15
 [0.2.15.dev202607284]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...v0.2.15.dev202607284
 [0.2.15.dev202607283]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...v0.2.15.dev202607283
 [0.2.15.dev202607282]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...v0.2.15.dev202607282
