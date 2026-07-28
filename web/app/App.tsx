@@ -279,7 +279,7 @@ export default function Home() {
               <div className="workflow-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> GUIDED REAL TERMINAL</span>
-                  <small>wide desktop layout · mouse and key cues stay visible</small>
+                  <small>keyboard cue shown · matching mouse target named beside it</small>
                 </div>
                 <TerminalRecording
                   source="railmux-workflow-demo.cast"
@@ -313,15 +313,15 @@ export default function Home() {
               </div>
               <div className="lifecycle-intro">
                 <p>
-                  Press <kbd>m</kbd> to switch the sidebar between Claude Code
-                  and Codex. Press <kbd>F8</kbd> to cycle single,
-                  side-by-side, and stacked layouts. Running agents continue
-                  even when their mode or pane is not visible.
+                  Use shortcuts or click the matching Button Bar control.
+                  Running agents continue even when their mode or pane is not
+                  visible. The recording shows the keyboard route and names
+                  the equivalent mouse target in every cue.
                 </p>
                 <div>
-                  <span><kbd>+</kbd> More</span>
-                  <span><kbd>m</kbd> Mode</span>
-                  <span><kbd>F8</kbd> Layout</span>
+                  <span><kbd>+</kbd> or click <strong>More</strong></span>
+                  <span><kbd>m</kbd> or click <strong>Mode</strong></span>
+                  <span><kbd>F8</kbd> or click <strong>Layout</strong></span>
                 </div>
               </div>
             </div>
@@ -329,7 +329,7 @@ export default function Home() {
               <div className="lifecycle-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
-                  <small>the recording soft-quits; its agent stays alive</small>
+                  <small>keyboard recorded · mouse equivalent shown in each cue</small>
                 </div>
                 <TerminalRecording
                   source="railmux-controls-demo.cast"
@@ -350,7 +350,8 @@ export default function Home() {
                   <h3><kbd>Ctrl-B d</kbd></h3>
                   <p>
                     Leave this terminal only. Railmux and every agent keep
-                    running exactly where they were.
+                    running exactly where they were. This tmux-level action
+                    intentionally remains the keyboard exception.
                   </p>
                 </article>
                 <article>
@@ -359,6 +360,7 @@ export default function Home() {
                   <p>
                     Close the shared Railmux UI in every attached terminal.
                     Agent sessions stay alive and are recovered next start.
+                    With a mouse, click <strong>Quit → Soft Quit</strong>.
                   </p>
                 </article>
                 <article>
@@ -366,7 +368,8 @@ export default function Home() {
                   <h3><kbd>q</kbd> then <kbd>y</kbd></h3>
                   <p>
                     Close Railmux and stop every running agent session after
-                    explicit confirmation.
+                    explicit confirmation. With a mouse, click
+                    <strong> Quit → Quit</strong>.
                   </p>
                 </article>
               </div>
@@ -433,7 +436,8 @@ export default function Home() {
             <p>
               When space gets tight, Railmux projects the sidebar and each
               agent onto separate pages. Nothing is killed or rearranged
-              underneath.
+              underneath. The phone recording uses touch only: tap
+              <strong> New session</strong>, then tap the page labels.
             </p>
             <div className="compact-controls">
               <span>[R] Sidebar</span>

@@ -4,7 +4,7 @@ import "asciinema-player/dist/bundle/asciinema-player.css";
 
 type InputCue = {
   id: number;
-  kind: "key" | "mouse";
+  kind: "key" | "mouse" | "touch";
   label: string;
   detail: string;
   left?: string;
@@ -42,14 +42,17 @@ function parseInputCue(
       detail: parts.slice(2).join(" · "),
     };
   }
-  if (parts[0] === "mouse" && parts.length >= 4) {
+  if (
+    (parts[0] === "mouse" || parts[0] === "touch")
+    && parts.length >= 4
+  ) {
     const x = Number(parts[1]);
     const y = Number(parts[2]);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
     return {
       id,
-      kind: "mouse",
-      label: "CLICK",
+      kind: parts[0],
+      label: parts[0] === "touch" ? "TAP" : "CLICK",
       detail: parts.slice(3).join(" · "),
       left: `${((x - 0.5) / cols) * 100}%`,
       top: `${((y - 0.5) / rows) * 100}%`,
@@ -166,12 +169,27 @@ export default function TerminalRecording({
               <i />
             </span>
           ) : null}
+          {cue.kind === "touch" ? (
+            <span
+              className="terminal-touch"
+              data-testid="terminal-touch"
+              style={{ left: cue.left, top: cue.top }}
+            >
+              <i />
+            </span>
+          ) : null}
           <div
             className="terminal-input-hud"
             data-testid="terminal-input-hud"
             aria-live="polite"
           >
-            <span>{cue.kind === "mouse" ? "MOUSE" : "KEY"}</span>
+            <span>
+              {cue.kind === "mouse"
+                ? "MOUSE"
+                : cue.kind === "touch"
+                  ? "TOUCH"
+                  : "KEY"}
+            </span>
             <strong>{cue.label}</strong>
             <small>{cue.detail}</small>
           </div>

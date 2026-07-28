@@ -43,7 +43,8 @@ login. It produces six source-authentic recordings:
   other running conversation to switch the agent pane. Semantic input events
   drive the website's durable key HUD and cell-aligned mouse pointer.
 - `public/generated/railmux-mobile-demo.cast` records Railmux's real compact
-  layout and page controls at a representative 46×38 portrait-phone geometry.
+  layout at a representative 46×38 portrait-phone geometry. It taps New
+  session, `[R]`, and `[1]` with touch-only cues; no keyboard action is shown.
   The narrow width selects compact projection; the separate reported 105×21
   Termux geometry is landscape.
 - `public/generated/railmux-tour-demo.cast` records the real New Project

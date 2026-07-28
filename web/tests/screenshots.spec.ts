@@ -67,8 +67,10 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[2].cast).toContain("Start an empty session");
   expect(headers[2].cast).not.toContain("Verify responsive layout gates");
   expect(headers[2].cast).toContain("Switch to Polish SSH history");
-  expect(headers[3].cast).toContain("mouse|2|38|Open [R] sidebar");
-  expect(headers[3].cast).toContain("mouse|5|38|Open [1] agent");
+  expect(headers[3].cast).toContain("touch|10|10|Tap New session");
+  expect(headers[3].cast).toContain("touch|2|38|Tap [R] sidebar");
+  expect(headers[3].cast).toContain("touch|5|38|Tap [1] agent");
+  expect(headers[3].cast).not.toContain("key|");
   expect(headers[5].cast).toContain("Soft quit — keep agents running");
   expect(headers[5].cast).not.toContain(
     "Skip layout save and finish soft quit",
@@ -245,18 +247,24 @@ test("capture deterministic compact preview", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText("PORTRAIT COMPACT · 46×38")).toBeVisible();
   const mobileRecording = compactDemo.locator('[data-demo="mobile-recording"]');
-  await expect(mobileRecording.getByTestId("terminal-pointer")).toBeVisible({
+  await expect(mobileRecording.getByTestId("terminal-touch")).toBeVisible({
     timeout: 7_000,
   });
   await expect(mobileRecording.getByTestId("terminal-input-hud")).toContainText(
-    "Open [R] sidebar",
+    "Tap New session",
+  );
+  await expect(mobileRecording.getByTestId("terminal-input-hud")).toContainText(
+    "Tap [R] sidebar",
+    { timeout: 5_000 },
   );
   await expect(mobileRecording.locator(".ap-term")).toContainText("PROJECTS");
   await expect(mobileRecording.getByTestId("terminal-input-hud")).toContainText(
-    "Open [1] agent",
+    "Tap [1] agent",
     { timeout: 4_000 },
   );
-  await expect(mobileRecording.locator(".ap-term")).toContainText("Claude Code");
+  await expect(mobileRecording.locator(".ap-term")).toContainText(
+    "Explain why a 76x30 Railmux terminal uses",
+  );
   await compactDemo.screenshot({
     path: join(outputDir, "mobile-workspace.png"),
     animations: "disabled",

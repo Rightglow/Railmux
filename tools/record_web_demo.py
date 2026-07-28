@@ -924,6 +924,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "switch-running-agent",
             },
             MOBILE.name: {
+                "launch-primary-cue",
                 "launch-primary",
                 "mobile-sidebar",
                 "mobile-agent",
@@ -1039,28 +1040,37 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "resume-session",
                             4.2,
                             b"\r",
-                            "key|Enter|Resume this conversation",
+                            (
+                                "key|Enter|Resume this conversation"
+                                " · mouse: double-click the selected session"
+                            ),
                         )
                     if "resume-session" in sent and real_response_visible:
                         send_once(
                             "return-sidebar",
                             7.4,
                             b"\x02\t",
-                            "key|C-b Tab|Back to the sidebar",
+                            "key|C-b Tab|Back to the sidebar · mouse: click sidebar",
                         )
                     if "return-sidebar" in sent and b"RUNNING" in raw_output.upper():
                         send_once(
                             "launch-second",
                             8.5,
                             b"n",
-                            "key|N|Start an empty session",
+                            (
+                                "key|N|Start an empty session"
+                                " · mouse: click New session"
+                            ),
                         )
                     if "launch-second" in sent:
                         send_once(
                             "return-sidebar-again",
                             12.2,
                             b"\x02\t",
-                            "key|C-b Tab|See both running sessions",
+                            (
+                                "key|C-b Tab|See both running sessions"
+                                " · mouse: click sidebar"
+                            ),
                         )
                     if (
                         "return-sidebar-again" in sent
@@ -1078,27 +1088,33 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             None,
                         )
                 elif profile is MOBILE:
-                    # Real compact projection: open Agent 1, then exercise the
-                    # actual clickable [R] and [1] bottom-row page controls.
+                    # Real compact projection: tap New session to open Agent 1,
+                    # then exercise the actual [R] and [1] page controls. This
+                    # profile intentionally contains touch cues only.
+                    cue_once(
+                        "launch-primary-cue",
+                        0.6,
+                        "touch|10|10|Tap New session",
+                    )
                     send_once(
                         "launch-primary",
-                        0.8,
-                        b"n",
-                        "key|N|Open agent",
+                        1.2,
+                        b"\x1b[<0;10;10M\x1b[<0;10;10m",
+                        None,
                     )
-                    if real_response_visible:
+                    if b"Claude Code v2.1.220" in raw_output:
                         send_once(
                             "mobile-sidebar",
                             4.0,
                             b"\x1b[<0;2;38M\x1b[<0;2;38m",
-                            "mouse|2|38|Open [R] sidebar",
+                            "touch|2|38|Tap [R] sidebar",
                         )
                     if "mobile-sidebar" in sent and running_sidebar_visible:
                         send_once(
                             "mobile-agent",
                             5.8,
                             b"\x1b[<0;5;38M\x1b[<0;5;38m",
-                            "mouse|5|38|Open [1] agent",
+                            "touch|5|38|Tap [1] agent",
                         )
                 elif profile is TOUR:
                     # Show two discoverable entry points without creating a
@@ -1140,28 +1156,40 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         "launch-primary",
                         0.8,
                         b"n",
-                        "key|N|Start a Claude Code session",
+                        (
+                            "key|N|Start a Claude Code session"
+                            " · mouse: click New session"
+                        ),
                     )
                     if real_response_visible:
                         send_client_keys(
                             "return-sidebar",
                             4.0,
                             ("C-b", "Tab"),
-                            "key|C-b Tab|Return to Railmux",
+                            (
+                                "key|C-b Tab|Return to Railmux"
+                                " · mouse: click sidebar"
+                            ),
                         )
                     if "return-sidebar" in sent and running_sidebar_visible:
                         send_once(
                             "expand-more",
                             6.2,
                             b"+",
-                            "key|+|Show Mode, Layout, and Options",
+                            (
+                                "key|+|Show Mode, Layout, and Options"
+                                " · mouse: click More"
+                            ),
                         )
                     if "expand-more" in sent:
                         send_once(
                             "switch-codex",
                             8.5,
                             b"m",
-                            "key|M|Switch sidebar to Codex",
+                            (
+                                "key|M|Switch sidebar to Codex"
+                                " · mouse: click Mode"
+                            ),
                         )
                     if (
                         "switch-codex" in sent
@@ -1171,21 +1199,30 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "cycle-layout",
                             11.0,
                             ("F8",),
-                            "key|F8|Cycle workspace layout",
+                            (
+                                "key|F8|Cycle workspace layout"
+                                " · mouse: click Layout"
+                            ),
                         )
                     if "cycle-layout" in sent:
                         send_once(
                             "open-quit",
                             13.8,
                             b"q",
-                            "key|Q|Compare Quit and Soft Quit",
+                            (
+                                "key|Q|Compare Quit and Soft Quit"
+                                " · mouse: click Quit"
+                            ),
                         )
                     if "open-quit" in sent and b"Quit railmux?" in raw_output:
                         send_once(
                             "soft-quit",
                             18.0,
                             b"s",
-                            "key|S|Soft quit — keep agents running",
+                            (
+                                "key|S|Soft quit — keep agents running"
+                                " · mouse: click Soft Quit"
+                            ),
                         )
                     if "soft-quit" in sent and b"Keep this layout?" in raw_output:
                         send_once(

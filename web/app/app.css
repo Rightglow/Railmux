@@ -470,6 +470,34 @@ code {
   animation: cue-click-ring 900ms 360ms ease-out both;
 }
 
+.terminal-touch {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  border-radius: 50%;
+  background: rgba(211, 255, 0, 0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  transform: translate(-50%, -50%) scale(0.82);
+  animation: cue-touch-in 280ms ease-out both;
+}
+
+.terminal-touch::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.terminal-touch i {
+  position: absolute;
+  inset: -8px;
+  border: 2px solid var(--acid);
+  border-radius: 50%;
+  animation: cue-click-ring 900ms 180ms ease-out both;
+}
+
 .mobile-terminal-recording .terminal-input-hud {
   right: 5px;
   bottom: 8px;
@@ -493,14 +521,6 @@ code {
   font-size: 6px;
 }
 
-.mobile-terminal-recording .terminal-pointer {
-  transform: translate(-22px, -27px) rotate(-14deg);
-}
-
-.mobile-terminal-recording .terminal-pointer i {
-  top: 1px;
-}
-
 @keyframes cue-hud-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -508,6 +528,11 @@ code {
 
 @keyframes cue-pointer-in {
   to { transform: translate(-2px, -4px) rotate(-14deg); }
+}
+
+@keyframes cue-touch-in {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(1.3); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(0.82); }
 }
 
 @keyframes cue-click-ring {
@@ -1259,6 +1284,11 @@ code {
   color: var(--acid);
 }
 
+.lifecycle-intro span strong {
+  color: var(--paper);
+  font-weight: 700;
+}
+
 .lifecycle-demo-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(270px, 0.45fr);
@@ -1314,6 +1344,11 @@ code {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+.lifecycle-choices p strong {
+  color: var(--night);
+  font-weight: 750;
 }
 
 .install {
