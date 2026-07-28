@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-07-28
+
 ### Added
 
 - Add separate single-agent, dual-agent, and product-entry-point website
@@ -899,7 +901,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/Rightglow/Railmux/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12
 [0.2.12.dev202607270]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12.dev202607270
 [0.2.11]: https://github.com/Rightglow/Railmux/compare/v0.2.10...v0.2.11

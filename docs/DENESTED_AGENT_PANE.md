@@ -260,7 +260,7 @@ path:
 railmux ssh your-server
 ```
 
-Protocol v8 begins with a bounded remote hello containing package version,
+Protocol v9 begins with a bounded remote hello containing package version,
 protocol version, SSH dependency readiness, and tmux availability. The server
 does not inspect or mutate tmux until the compatible client returns the exact
 start acknowledgement. Missing Railmux or its optional dependency can be
@@ -281,7 +281,7 @@ across differing package versions.
 
 If the default `railmux` tmux session is absent, the server starts Railmux in a
 detached tmux session using the same installed Python environment. A custom
-`--session` is never auto-created. Multiple protocol-v8 helpers may attach to
+`--session` is never auto-created. Multiple protocol-v9 helpers may attach to
 the same managed session. A short flock covers only validation and attachment;
 the helper confirms its own child by matching tmux's `#{client_pid}` before it
 releases that boundary. The shared window is set to `window-size=smallest`, so
@@ -344,7 +344,7 @@ A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
 
-Display protocol v8 uses monotonically sequenced, zlib-compressed keyframes and
+Display protocol v9 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
@@ -363,7 +363,7 @@ server resolves the pane from current tmux geometry, excludes the controller,
 and uses `capture-pane -e` without entering copy-mode or sending keys. Raw tmux
 control sequences are parsed through `pyte`; only reconstructed text and
 allowlisted SGR character styles cross the protocol. OSC and other terminal
-actions are not forwarded. Protocol v8 permits at most 20000 physical lines;
+actions are not forwarded. Protocol v9 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from
 2000 lines up to its configured 2000-20000 cap. A server-side styled-byte
 budget may return a shorter newest suffix rather than fail the display helper.
