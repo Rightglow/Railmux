@@ -29,6 +29,10 @@ def _status_app(*, enabled=True, session="railmux", codex_mode=False):
     app._tmux_status_enabled = enabled
     app._tmux_status_session = session
     app._codex_mode = codex_mode
+    app._rendered_status_text = None
+    app._rendered_status_level = "tip"
+    app._status_feedback_alarm = None
+    app._loop = None
     return app
 
 
@@ -94,6 +98,10 @@ def test_level_styles_differ(monkeypatch):
     run.reset_mock()
     app._render_status_to_tmux("careful", "warn")
     assert _payload(run) == "#[fg=colour220,bold]careful#[default] "
+
+    run.reset_mock()
+    app._render_status_to_tmux("copied", "success")
+    assert _payload(run) == "#[fg=colour17,bold]copied#[default] "
 
     run.reset_mock()
     app._render_status_to_tmux("hint", "tip")
@@ -164,7 +172,7 @@ def test_non_error_levels_leave_the_bar_green(monkeypatch):
     monkeypatch.setattr("subprocess.run", run)
     app = _status_app()
 
-    for level in ("info", "warn", "tip"):
+    for level in ("info", "success", "warn", "tip"):
         run.reset_mock()
         app._render_status_to_tmux("msg", level)
         assert _style_calls(run, "status-style") == []
@@ -396,18 +404,27 @@ def test_rendered_status_text_is_clickable_and_copy_uses_full_source(
         "railmux.ui.app.tmux_ctl.copy_to_clipboard", copied)
     app = _status_app()
     app._tmux_binding_manager = MagicMock(status_navigation_available=True)
+    app._loop = MagicMock()
+    app._loop.set_alarm_in.return_value = object()
 
     app._render_status_to_tmux("A long tip that tmux may truncate", "tip")
-
     assert _payload(run).startswith(
         "#[range=user|railmux-copy]#[fg=colour0]")
     assert _payload(run).endswith("#[default] #[norange]")
+    run.reset_mock()
+
     app._copy_current_status()
     copied.assert_called_once_with("A long tip that tmux may truncate")
     assert app._rendered_status_text == "A long tip that tmux may truncate"
-    assert [
-        "tmux", "display-message", "-d", "1200", "Copied status message.",
-    ] in [call.args[0] for call in run.call_args_list]
+    assert "#[fg=colour17,bold]Copied status message." in _payload(run)
+
+    delay, restore = app._loop.set_alarm_in.call_args.args
+    assert delay == 1.2
+    run.reset_mock()
+    restore(app._loop, None)
+
+    assert "#[fg=colour0]A long tip that tmux may truncate" in _payload(run)
+    assert app._status_feedback_alarm is None
 
 
 def test_internal_status_actions_are_modal_safe():

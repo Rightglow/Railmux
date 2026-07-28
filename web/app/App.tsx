@@ -105,7 +105,10 @@ export default function Home() {
           <div className="section-heading">
             <p className="section-kicker">WHAT IT DOES</p>
             <h2>Stay in flow.</h2>
-            <p>Everything important remains visible. Everything running remains alive.</p>
+            <p>
+              Everything important remains visible. Anything you leave running
+              remains alive.
+            </p>
           </div>
           <div className="feature-evidence">
             <article className="feature-showcase feature-showcase-agents">
@@ -122,7 +125,7 @@ export default function Home() {
                 <TerminalRecording
                   source="railmux-dual-demo.cast"
                   className="dual-agent-recording"
-                  poster="npt:11.2"
+                  poster="npt:14.5"
                   controls={false}
                   dataDemo="dual-recording"
                 />
@@ -162,7 +165,7 @@ export default function Home() {
             <div className="feature-support-grid">
               <article>
                 <span>03 / PERSISTENCE</span>
-                <h3>Every session stays alive.</h3>
+                <h3>Keep the sessions you need alive.</h3>
                 <p>
                   Switch projects, detach, or close the Railmux view without
                   interrupting the agents doing the work.

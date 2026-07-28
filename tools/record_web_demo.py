@@ -50,7 +50,7 @@ class RecordingProfile:
 
 
 DESKTOP = RecordingProfile("desktop", 180, 38, 10.0)
-DUAL = RecordingProfile("dual", 210, 42, 13.0)
+DUAL = RecordingProfile("dual", 210, 42, 15.5)
 WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # A representative portrait phone geometry. Compact mode is selected by the
 # narrow width; the separately documented 105x21 Termux report was landscape.
@@ -426,6 +426,34 @@ def render_claude(run, columns, rows):
     return "".join(parts) + "\\033[0m"
 
 
+def render_empty_claude(columns, rows):
+    # A newly opened Claude session before its first prompt.
+    width = max(18, columns - 1)
+    footer_row = max(8, rows - 3)
+    cwd = os.getcwd()
+    content_rows = []
+    for line in CLAUDE_BANNER:
+        line = line.replace("{cwd}", cwd)
+        content_rows.append(
+            "\\033[38;5;173m" + line[:11]
+            + "\\033[38;5;252m" + line[11:]
+        )
+
+    parts = ["\\033[2J\\033[H"]
+    for row, line in enumerate(content_rows, start=1):
+        write_row(parts, row, line)
+    rule = "─" * width
+    write_row(parts, footer_row, "\\033[38;5;239m" + rule)
+    write_row(parts, footer_row + 1, "\\033[38;5;147m❯\\033[0m ")
+    write_row(parts, footer_row + 2, "\\033[38;5;239m" + rule)
+    write_row(
+        parts,
+        footer_row + 3,
+        "\\033[38;5;244m  ⏵⏵ normal mode · shift+tab to cycle · ← for agents",
+    )
+    return "".join(parts) + "\\033[0m"
+
+
 def render_codex(run, columns, rows):
     width = max(18, columns - 1)
     footer_row = max(9, rows - 2)
@@ -460,8 +488,12 @@ def render_codex(run, columns, rows):
 
 def repaint(_signum=None, _frame=None):
     size = shutil.get_terminal_size((88, 24))
-    renderer = render_codex if agent_kind == "codex" else render_claude
-    sys.stdout.write(renderer(run, size.columns, size.lines))
+    if PROFILE == "workflow" and agent_kind == "claude" and session_id is None:
+        rendered = render_empty_claude(size.columns, size.lines)
+    else:
+        renderer = render_codex if agent_kind == "codex" else render_claude
+        rendered = renderer(run, size.columns, size.lines)
+    sys.stdout.write(rendered)
     sys.stdout.flush()
 
 
@@ -719,6 +751,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         sanitizer_tail = bytearray()
         sanitizer_hold = 512
         sent: set[str] = set()
+        controls_exit_frozen = False
 
         def elapsed() -> float:
             return time.monotonic() - ready_at if ready_at is not None else -1.0
@@ -799,6 +832,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "return-sidebar",
                 "switch-codex",
                 "launch-secondary",
+                "secondary-running",
             },
             WORKFLOW.name: {
                 "preview-session",
@@ -899,8 +933,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                 elif profile is WORKFLOW:
                     # Preview a stopped transcript without launching it, resume
-                    # that exact conversation, start a visibly different
-                    # second conversation, then use Running to switch back.
+                    # that exact conversation, start a genuinely empty second
+                    # conversation, then use Running to switch back.
                     cue_once(
                         "preview-session-cue",
                         0.8,
@@ -931,12 +965,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "launch-second",
                             8.5,
                             b"n",
-                            "key|N|Start another running session",
+                            "key|N|Start an empty session",
                         )
-                    if (
-                        "launch-second" in sent
-                        and b"Verify responsive layout gates" in raw_output
-                    ):
+                    if "launch-second" in sent:
                         send_once(
                             "return-sidebar-again",
                             12.2,
@@ -1132,6 +1163,24 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     if resized:
                         post_resize_output.extend(chunk)
                     events.append(_event(cast_time(), "o", chunk))
+                    if (
+                        profile is DUAL
+                        and "launch-secondary" in sent
+                        and b"railmux/(new)" in chunk
+                        and b"(no running Codex sessions)" not in chunk
+                    ):
+                        sent.add("secondary-running")
+                    if (
+                        profile is CONTROLS
+                        and b"Keeping 1 agent session running." in chunk
+                    ):
+                        # Teardown can repaint the outer tmux client a few
+                        # milliseconds later. End on the complete, product-
+                        # native progress surface so viewers can actually read
+                        # the successful soft-quit result.
+                        controls_exit_frozen = True
+                        sanitizer_tail.clear()
+                        break
                 if process.poll() is not None:
                     break
         finally:
@@ -1151,7 +1200,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     process.wait(timeout=2)
             os.close(master)
 
-        if sanitizer_tail:
+        if sanitizer_tail and not controls_exit_frozen:
             chunk = _sanitize_public_output(
                 bytes(sanitizer_tail),
                 stable_fixture_path,

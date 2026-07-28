@@ -92,6 +92,13 @@ def test_set_status_explicit_level_overrides_prefix(app, clock):
     assert app._status_level == "tip"
 
 
+def test_success_status_has_a_short_acknowledgement_ttl(app, clock):
+    app._set_status("Copied title", level="success")
+
+    assert app._status_level == "success"
+    assert app._STATUS_TTL["success"] < app._STATUS_TTL["info"]
+
+
 # ── TTL expiry → idle tips ───────────────────────────────────────────────
 
 def test_info_message_holds_then_falls_back_to_tip(app, clock, shown):

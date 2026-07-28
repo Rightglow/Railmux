@@ -52,8 +52,8 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[2].cast).toContain("Preview stopped session");
   expect(headers[2].cast).toContain("Read-only history preview");
   expect(headers[2].cast).toContain("(no running Claude Code sessions)");
-  expect(headers[2].cast).toContain("Start another running session");
-  expect(headers[2].cast).toContain("Verify responsive layout gates");
+  expect(headers[2].cast).toContain("Start an empty session");
+  expect(headers[2].cast).not.toContain("Verify responsive layout gates");
   expect(headers[2].cast).toContain("Switch to Polish SSH history");
   expect(headers[3].cast).toContain("mouse|2|38|Open [R] sidebar");
   expect(headers[3].cast).toContain("mouse|5|38|Open [1] agent");
@@ -133,6 +133,13 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   );
   await expect(dualDemo.locator(".ap-term")).toContainText(
     "OpenAI Codex (v0.145.0)",
+  );
+  await expect(dualDemo.locator(".ap-term")).toContainText(
+    "railmux/(new)",
+    { timeout: 8_000 },
+  );
+  await expect(dualDemo.locator(".ap-term")).not.toContainText(
+    "(no running Codex sessions)",
   );
   await dualDemo.locator(".ap-term").screenshot({
     path: join(outputDir, "dual-agent-workspace.png"),
@@ -290,6 +297,15 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
   await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
   await expect(hud).toContainText("finish soft quit", { timeout: 5_000 });
+  await expect(player.locator(".ap-term")).toContainText(
+    "Keeping 1 agent session running.",
+    { timeout: 5_000 },
+  );
+  await player.screenshot({
+    path: join(outputDir, "soft-quit-complete.png"),
+    animations: "disabled",
+    scale: "css",
+  });
   expect(pageErrors).toEqual([]);
 });
 
@@ -328,11 +344,14 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
     animations: "disabled",
     scale: "css",
   });
-  await expect(hud).toContainText("Start another running session", {
+  await expect(hud).toContainText("Start an empty session", {
     timeout: 5_000,
   });
   await expect(player.locator(".ap-term")).toContainText(
-    "Verify responsive layout gates",
+    "Claude Code v2.1.220",
+  );
+  await expect(player.locator(".ap-term")).not.toContainText(
+    "●",
     { timeout: 5_000 },
   );
   await expect(hud).toContainText("See both running sessions", {

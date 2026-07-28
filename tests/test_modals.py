@@ -14,7 +14,7 @@ from railmux.models import (
     Project,
     SessionMeta,
 )
-from railmux.ui.app import App
+from railmux.ui.app import App, _context_menu_label
 
 from railmux.ui.modals import (
     ContextMenu,
@@ -759,6 +759,18 @@ def test_modal_esc_clears_filter_first(tmp_path: Path):
 
 
 # ── ContextMenu ─────────────────────────────────────────────────────────
+
+
+def test_context_menu_shortcuts_share_one_column():
+    labels = [
+        _context_menu_label("Open", "↵"),
+        _context_menu_label("Star", "s"),
+        _context_menu_label("Unstar", "s"),
+        _context_menu_label("Copy title", "c"),
+    ]
+
+    assert {len(label) - 1 for label in labels} == {12}
+
 
 def test_context_menu_click_fires_callback_then_closes():
     calls = []

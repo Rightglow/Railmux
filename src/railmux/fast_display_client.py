@@ -29,7 +29,7 @@ from typing import BinaryIO, NoReturn, Optional, Sequence
 
 from packaging.version import InvalidVersion, Version
 
-from railmux import __version__
+from railmux import __version__, local_clipboard
 from railmux.config import (
     ConfigError,
     SSH_HISTORY_DEFAULT_LINES,
@@ -1455,7 +1455,9 @@ class TerminalSurface:
         self.stream.flush()
 
     def copy_to_clipboard(self, data: bytes) -> None:
-        """Relay one protocol-validated payload through local OSC 52."""
+        """Copy one validated payload locally, with OSC 52 as fallback."""
+        if local_clipboard.copy(data):
+            return
         self.start()
         encoded = base64.b64encode(data)
         self.stream.write(b"\033]52;c;" + encoded + b"\007")

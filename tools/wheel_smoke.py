@@ -56,6 +56,23 @@ def _installed_paths(prefix: Path) -> tuple[Path, Path]:
     return package_roots[0], scripts[0]
 
 
+def _install_argv(python: str, prefix: Path, wheel: Path) -> list[str]:
+    """Install into *prefix* without mutating the invoking environment."""
+    return [
+        python,
+        "-m",
+        "pip",
+        "install",
+        "--prefix",
+        str(prefix),
+        # A prefix is isolated for imports, but pip can still uninstall
+        # matching packages from the invoking virtualenv during a forced
+        # reinstall. Ignore that environment and populate the prefix only.
+        "--ignore-installed",
+        f"{wheel}[ssh]",
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("wheel", type=Path)
@@ -75,16 +92,7 @@ def main() -> int:
         Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
 
         _run(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--prefix",
-                str(prefix),
-                "--force-reinstall",
-                f"{wheel}[ssh]",
-            ],
+            _install_argv(sys.executable, prefix, wheel),
             cwd=root,
             env=env,
         )

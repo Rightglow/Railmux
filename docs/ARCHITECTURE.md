@@ -657,8 +657,10 @@ route compact `R`/`1`/`2` controls to exact pane IDs and route Mode, Layout,
 and status-copy actions to private F5/F7/F6 inputs on the controller. The
 private keys are handled before modal dispatch, so a click cannot type `m` into
 an active editor or mutate layout behind a dialog. Action success is visible
-through the changed label/layout plus a transient tmux message; the transient
-copy confirmation does not destroy the copied warning/error. Older tmux keeps
+through the changed label/layout plus a transient acknowledgement. Status-copy
+acknowledgement temporarily replaces only status-right with its own success
+colour, then restores the exact copied tip/info/warning/error; it does not
+mutate the copied source. Older tmux keeps
 the same display and keyboard shortcuts without installing mouse ranges.
 
 The same shared lease owns one indexed `pane-mode-changed` hook on tmux 3.0+.

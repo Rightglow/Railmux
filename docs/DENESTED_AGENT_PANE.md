@@ -364,7 +364,11 @@ and uses `capture-pane -e` without entering copy-mode or sending keys. Raw tmux
 control sequences are parsed through `pyte`; reconstructed text and allowlisted
 SGR character styles cross the screen protocol. One bounded, validated OSC 52
 clipboard payload may cross as a separate explicit message; other OSC and
-terminal actions are not forwarded. A managed Claude Code pane in its alternate screen
+terminal actions are not forwarded. The local client consumes that explicit
+copy request with a native clipboard writer when available (`pbcopy`,
+`wl-copy`, `xclip`, `xsel`, or WSL `clip.exe`) and otherwise emits bounded
+OSC 52 to the local terminal; native commands never run on the remote helper.
+A managed Claude Code pane in its alternate screen
 has no tmux scrollback, so Railmux stamps its exact same-user JSONL locator and
 advertises transcript availability separately from whether it is used. The
 remote `ssh.claude_history` setting chooses a bounded, cached, read-only

@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass, replace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -351,11 +351,31 @@ def test_clipboard_payload_round_trips_and_surface_reencodes_osc52():
 
     output = io.BytesIO()
     surface = TerminalSurface(output)
-    surface.copy_to_clipboard(data)
+    with patch(
+        "railmux.fast_display_client.local_clipboard.copy",
+        return_value=False,
+    ):
+        surface.copy_to_clipboard(data)
     assert (
         b"\033]52;c;" + base64.b64encode(data) + b"\007"
         in output.getvalue()
     )
+
+
+def test_clipboard_payload_uses_native_local_writer_before_osc52():
+    data = "Copied status 你好".encode()
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+
+    with patch(
+        "railmux.fast_display_client.local_clipboard.copy",
+        return_value=True,
+    ) as native:
+        surface.copy_to_clipboard(data)
+
+    native.assert_called_once_with(data)
+    assert output.getvalue() == b""
+    assert surface.active is False
 
 
 def test_remote_osc52_decoder_is_chunked_bounded_and_fail_closed():

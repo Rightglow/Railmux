@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.wheel_smoke import _installed_paths
+from tools.wheel_smoke import _install_argv, _installed_paths
 
 
 @pytest.mark.parametrize(
@@ -27,3 +27,16 @@ def test_installed_paths_supports_pip_prefix_schemes(
     script.touch()
 
     assert _installed_paths(prefix) == (site_packages, script)
+
+
+def test_prefix_install_cannot_uninstall_invoking_environment(
+    tmp_path: Path,
+):
+    prefix = tmp_path / "install"
+    wheel = tmp_path / "railmux.whl"
+
+    argv = _install_argv("/venv/bin/python", prefix, wheel)
+
+    assert "--ignore-installed" in argv
+    assert "--force-reinstall" not in argv
+    assert argv[-1] == f"{wheel}[ssh]"

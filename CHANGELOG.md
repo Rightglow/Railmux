@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15.dev202607283] - 2026-07-28
+
+### Added
+
+- Complete explicit clipboard requests from `railmux ssh` with the local
+  operating-system writer on macOS, Wayland, X11, or WSL, retaining bounded
+  OSC 52 as a fallback when no native helper is available.
+
+### Changed
+
+- Align every session context-menu shortcut in one column and show successful
+  status-copy acknowledgement in the clickable right status area with its own
+  transient colour before restoring the exact copied message.
+- Make the website workflow launch a genuinely empty second conversation,
+  keep the successful Soft Quit surface visible, and require the dual-agent
+  exhibit to show its live Codex session in Running.
+
+### Fixed
+
+- Prevent wheel-package smoke validation from uninstalling dependencies in the
+  invoking development or CI environment while it populates its isolated
+  package prefix.
+
 ## [0.2.15.dev202607282] - 2026-07-28
 
 ### Added
@@ -1012,7 +1035,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...HEAD
+[0.2.15.dev202607283]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...v0.2.15.dev202607283
 [0.2.15.dev202607282]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...v0.2.15.dev202607282
 [0.2.15.dev202607280]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15.dev202607280
 [0.2.14]: https://github.com/Rightglow/Railmux/compare/v0.2.13...v0.2.14

@@ -300,6 +300,7 @@ def _compact_tmux_status_left(
 # black/muted); error is white-bold because the whole bar is already dark red.
 _TMUX_LEVEL_STYLE = {
     "info": "#[fg=colour231]",
+    "success": "#[fg=colour17,bold]",
     "warn": "#[fg=colour220,bold]",
     "error": "#[fg=colour231,bold]",
     "tip": "#[fg=colour0]",
@@ -315,6 +316,11 @@ _RUNNING_SORT_INTERVAL = 60.0
 _SESSION_BINDING_OPTION = "@railmux_binding_v1"
 _HELP_SESSION_OPTION = "@railmux_help_v1"
 _HELP_POLICY_VERSION = "read-only-auto-v2"
+
+
+def _context_menu_label(action: str, shortcut: str) -> str:
+    """Align every context-menu shortcut after the longest action label."""
+    return f" {action:<10} {shortcut}"
 
 
 @dataclass
@@ -700,6 +706,8 @@ class App:
         self._status_level: str = "info"
         self._status_since: float = 0.0
         self._rendered_status_text: str | None = None
+        self._rendered_status_level: str = "tip"
+        self._status_feedback_alarm: object | None = None
         self._attention_notice_key: tuple[str, int] | None = None
         self._tip_index: int = 0
         self._tip_since: float = 0.0
@@ -8275,17 +8283,19 @@ class App:
                 )
             token = r.orphan.creation_token if r.orphan is not None else None
             items: list[tuple[str, Callable[[], None]]] = [
-                (" Open      ↵", lambda: self._open_running_identity(
-                    tmux, token)),
-                (" Copy title c", lambda: self._copy_session_title(copy_title)),
-                (" Kill       k", lambda: self._kill_tmux_session(
-                    tmux, label, token)),
+                (_context_menu_label("Open", "↵"),
+                 lambda: self._open_running_identity(tmux, token)),
+                (_context_menu_label("Copy title", "c"),
+                 lambda: self._copy_session_title(copy_title)),
+                (_context_menu_label("Kill", "k"),
+                 lambda: self._kill_tmux_session(tmux, label, token)),
             ]
             path = (r.project.real_path if r.project is not None
                     else r.placeholder_path)
             if path is not None:
                 items.append(
-                    (" Term       t", lambda: self._open_terminal_for_path(path)))
+                    (_context_menu_label("Term", "t"),
+                     lambda: self._open_terminal_for_path(path)))
             menu = ContextMenu(items, on_close=self._close_modal)
             self._show_overlay(menu, width=36, height=14,
                                click_outside_to_close=True,
@@ -8310,19 +8320,25 @@ class App:
         is_alive = r is not None and not r.is_placeholder
         is_starred = session.session_id in self._favorites.get_ids()
         items: list[tuple[str, Callable[[], None]]] = [
-            (" Open      ↵", lambda s=session: self._do_context_open(s)),
-            (" Preview    ␣", lambda s=session:
+            (_context_menu_label("Open", "↵"),
+             lambda s=session: self._do_context_open(s)),
+            (_context_menu_label("Preview", "␣"), lambda s=session:
              self._on_session_row_preview(s)),
-            (" Info       i", lambda s=session: self._do_context_info(s)),
-            (" Rename     r", lambda s=session: self._do_context_rename(s)),
-            (" Unstar    s" if is_starred else " Star      s",
+            (_context_menu_label("Info", "i"),
+             lambda s=session: self._do_context_info(s)),
+            (_context_menu_label("Rename", "r"),
+             lambda s=session: self._do_context_rename(s)),
+            (_context_menu_label("Unstar" if is_starred else "Star", "s"),
              lambda s=session: self._do_context_star(s)),
-            (" Copy title c", lambda s=session:
+            (_context_menu_label("Copy title", "c"), lambda s=session:
              self._copy_session_title(s.display_title)),
-            (" Kill       k", lambda s=session: self._do_context_kill(s)
+            (_context_menu_label("Kill", "k"),
+             lambda s=session: self._do_context_kill(s)
              if is_alive else None),
-            (" Term       t", lambda s=session: self._do_context_term(s)),
-            (" Delete     d", lambda s=session: self._do_context_delete(s)),
+            (_context_menu_label("Term", "t"),
+             lambda s=session: self._do_context_term(s)),
+            (_context_menu_label("Delete", "d"),
+             lambda s=session: self._do_context_delete(s)),
         ]
         # Filter out None callbacks (e.g. Kill for non-running sessions).
         items = [(label, cb) for label, cb in items if cb is not None]
@@ -8336,7 +8352,7 @@ class App:
 
     def _copy_session_title(self, title: str) -> None:
         if tmux_ctl.copy_to_clipboard(title):
-            self._set_status(f"Copied title: {title}", "info")
+            self._set_status(f"Copied title: {title}", "success")
         else:
             self._set_status(
                 "Could not copy title; terminal clipboard is unavailable",
@@ -8350,12 +8366,56 @@ class App:
             self._set_status("No status message is available to copy.", "warn")
             return
         if tmux_ctl.copy_to_clipboard(text):
-            # tmux restores this transient command message automatically. Keep
-            # the copied source (and any sticky warning/error) as status-right.
-            self._show_tmux_feedback("Copied status message.")
+            # Keep the copied source (and any sticky warning/error) as the
+            # durable status state; this acknowledgement temporarily occupies
+            # only status-right, then restores that exact source.
+            self._show_status_feedback("Copied status message.")
         else:
-            self._show_tmux_feedback(
-                "Clipboard unavailable; status message was not copied.")
+            self._show_status_feedback(
+                "Clipboard unavailable; status message was not copied.",
+                level="warn",
+            )
+
+    def _show_status_feedback(
+        self,
+        text: str,
+        *,
+        level: str = "success",
+        duration: float = 1.2,
+    ) -> None:
+        """Temporarily replace status-right, then restore its exact source."""
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            # Lightweight integrations without an Urwid loop cannot schedule a
+            # safe status-right restoration. Preserve their previous behavior.
+            self._show_tmux_feedback(text)
+            return
+        alarm = getattr(self, "_status_feedback_alarm", None)
+        if alarm is not None:
+            try:
+                loop.remove_alarm(alarm)
+            except Exception:
+                pass
+        self._render_status_to_tmux(text, level, remember=False)
+        try:
+            self._status_feedback_alarm = loop.set_alarm_in(
+                duration,
+                self._restore_status_feedback,
+            )
+        except Exception:
+            self._status_feedback_alarm = None
+            self._restore_status_feedback(loop, None)
+
+    def _restore_status_feedback(self, _loop, _user_data) -> None:
+        """Restore the latest durable status after a transient acknowledgement."""
+        self._status_feedback_alarm = None
+        text = getattr(self, "_rendered_status_text", None)
+        if text is None:
+            return
+        self._render_status_to_tmux(
+            text,
+            getattr(self, "_rendered_status_level", "tip"),
+        )
 
     def _show_tmux_feedback(self, text: str) -> None:
         """Show brief click feedback without replacing status-bar state."""
@@ -8872,7 +8932,12 @@ class App:
     # How long an explicit message holds the bar before it falls back to idle
     # tips. Errors are sticky (cleared only by the next message or action);
     # warnings linger; routine info is brief. Tips rotate on their own cadence.
-    _STATUS_TTL = {"error": None, "warn": 12.0, "info": 6.0}
+    _STATUS_TTL = {
+        "error": None,
+        "warn": 12.0,
+        "info": 6.0,
+        "success": 2.5,
+    }
     _TIP_INTERVAL = 20.0
 
     # Minimum time a message is protected from being overwritten by a *lower*
@@ -8880,10 +8945,17 @@ class App:
     # "Project: …" the very next tick. A message of equal-or-higher severity
     # always wins immediately. Info has no floor (routine, freely replaceable).
     _STATUS_MIN_HOLD = {"error": 4.0, "warn": 2.0}
-    _LEVEL_PRIORITY = {"tip": 0, "info": 1, "warn": 2, "error": 3}
+    _LEVEL_PRIORITY = {
+        "tip": 0,
+        "info": 1,
+        "success": 1,
+        "warn": 2,
+        "error": 3,
+    }
 
     def _render_status_to_tmux(self, text: str, level: str = "info",
-                               refresh: bool = True) -> None:
+                               refresh: bool = True, *,
+                               remember: bool = True) -> None:
         """Render the current status line into the outer tmux status bar.
 
         This is railmux's only status surface — there is no in-pane status widget.
@@ -8927,7 +8999,9 @@ class App:
                     tmux_ctl.STATUS_ACTION_COPY, payload)
             except (TypeError, ValueError):
                 pass
-        self._rendered_status_text = text
+        if remember:
+            self._rendered_status_text = text
+            self._rendered_status_level = level
         try:
             import subprocess as _sp
             _sp.run(

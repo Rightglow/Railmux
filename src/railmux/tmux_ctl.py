@@ -134,7 +134,7 @@ def copy_to_clipboard(text: str) -> bool:
 
     ``set-buffer -w`` emits OSC 52 through tmux's clipboard capability. The
     ordinary client delivers it directly; Railmux's fast SSH helper recognizes
-    the same bounded sequence and relays it to the local terminal.
+    the same bounded sequence and handles it on the local machine.
     """
     if not isinstance(text, str) or not text or "\x00" in text:
         return False
