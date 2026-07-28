@@ -118,6 +118,26 @@ def current_socket_path(env: Mapping[str, str] | None = None) -> str | None:
     return fields[0]
 
 
+def current_target(
+    env: Mapping[str, str] | None = None,
+) -> TmuxServerTarget | None:
+    """Parse the exact server endpoint inherited by the current tmux pane."""
+    source = os.environ if env is None else env
+    raw = source.get("TMUX")
+    if not raw:
+        return None
+    fields = raw.rsplit(",", 2)
+    if len(fields) != 3 or not fields[0]:
+        return None
+    try:
+        server_pid = int(fields[1])
+    except ValueError:
+        return None
+    if server_pid <= 0:
+        return None
+    return TmuxServerTarget(fields[0], server_pid)
+
+
 def discover_target(*, timeout: float = 2.0) -> TmuxServerTarget | None:
     """Resolve the live dedicated server without starting a new server."""
     return _discover_label_target(socket_label(), timeout=timeout)

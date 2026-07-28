@@ -473,6 +473,13 @@ or unowned outer session uses nested display. Controlled preview, close, soft
 quit, hard quit, and delete return the real pane before replacing a display
 placeholder or killing its home session.
 
+Nested display clears `TMUX` to avoid tmux's nested-client guard, so its attach
+argv must retain the exact inherited server as `tmux -S <socket>`; a plain
+`tmux attach-session` would silently fall through to the user's default server.
+The inherited socket/PID is revalidated before the display pane is created.
+After `respawn-pane` reports success, the child must also remain alive through
+a short startup settle before the slot model commits focus or agent ownership.
+
 Pane movement preserves each window's active pane (`swap-pane -d`). Only an
 explicit user-intent path may select the agent display, so a single-click
 preview or attach cannot undo the mouse-selected sidebar focus as a side effect
@@ -644,6 +651,15 @@ consumes right-click over sibling agent panes instead of flashing tmux's
 unrelated stock pane menu. Other windows replay the exact prior right-click
 command. Teardown restores it only while Railmux's marker still owns the
 binding, so a user configuration reload remains newer authority.
+
+On tmux 3.4+, `MouseDown1Status` is part of the same lease. Closed user ranges
+route compact `R`/`1`/`2` controls to exact pane IDs and route Mode, Layout,
+and status-copy actions to private F5/F7/F6 inputs on the controller. The
+private keys are handled before modal dispatch, so a click cannot type `m` into
+an active editor or mutate layout behind a dialog. Action success is visible
+through the changed label/layout plus a transient tmux message; the transient
+copy confirmation does not destroy the copied warning/error. Older tmux keeps
+the same display and keyboard shortcuts without installing mouse ranges.
 
 The same shared lease owns one indexed `pane-mode-changed` hook on tmux 3.0+.
 In a dual-agent layout, entering copy-mode through ordinary mouse selection or

@@ -202,6 +202,7 @@ def _tmux_status_left(
     error: bool,
     mode_label: str | bool,
     layout_indicator: str | None = None,
+    range_wrapper: Callable[[str, str], str] | None = None,
 ) -> str:
     """The tmux status-left segment: the ``railmux`` brand plus a current-mode
     indicator (``· Claude Code`` / ``· Codex``) and a compact workspace-layout
@@ -213,8 +214,17 @@ def _tmux_status_left(
     # code passes the registered label so a third mode renders correctly.
     if isinstance(mode_label, bool):
         mode_label = "Codex" if mode_label else "Claude Code"
-    layout = f" · {layout_indicator}" if layout_indicator else ""
-    return f"{brand}#[fg={fg}]· {mode_label}{layout} #[default]"
+    mode = f"{mode_label}"
+    if range_wrapper is not None:
+        mode = range_wrapper(tmux_ctl.STATUS_ACTION_MODE, mode)
+    layout = ""
+    if layout_indicator:
+        indicator = layout_indicator
+        if range_wrapper is not None:
+            indicator = range_wrapper(
+                tmux_ctl.STATUS_ACTION_LAYOUT, indicator)
+        layout = f" · {indicator}"
+    return f"{brand}#[fg={fg}]· {mode}{layout} #[default]"
 
 
 def _compact_tmux_status_left(
@@ -224,6 +234,8 @@ def _compact_tmux_status_left(
     panes: tuple[str | None, str | None, str | None],
     width: int,
     range_wrapper: Callable[[str, str], str] | None = None,
+    action_range_wrapper: Callable[[str, str], str] | None = None,
+    layout_indicator: str | None = None,
 ) -> tuple[str, int]:
     """Build the responsive compact navigation and its visible cell length.
 
@@ -248,8 +260,8 @@ def _compact_tmux_status_left(
         WorkspacePage.PRIMARY,
         WorkspacePage.SECONDARY,
     )
-    fg_inactive = "colour0"
-    fg_active = "colour231"
+    fg_inactive = "colour231" if error else "colour0"
+    fg_active = "colour220" if error else "colour231"
     rendered: list[str] = []
     visible = 0
     for candidate, pane_id, label in zip(pages, panes, labels):
@@ -263,8 +275,24 @@ def _compact_tmux_status_left(
             content = range_wrapper(pane_id, content)
         rendered.append(content)
         visible += len(label) + 2
-    suffix = f"#[fg={fg_inactive if not error else 'colour231'}] {mode} "
+    mode_content = mode
+    if action_range_wrapper is not None:
+        mode_content = action_range_wrapper(
+            tmux_ctl.STATUS_ACTION_MODE, mode_content)
+    layout = ""
+    if layout_indicator:
+        indicator = layout_indicator
+        if action_range_wrapper is not None:
+            indicator = action_range_wrapper(
+                tmux_ctl.STATUS_ACTION_LAYOUT, indicator)
+        layout = f" · {indicator}"
+    suffix = (
+        f"#[fg={fg_inactive if not error else 'colour231'}] "
+        f"{mode_content}{layout} "
+    )
     visible += len(mode) + 2
+    if layout_indicator:
+        visible += len(layout_indicator) + 3
     return "".join(rendered) + suffix + "#[default]", visible
 
 # Per-level foreground for the status text (status-right). No pill backgrounds:
@@ -546,17 +574,40 @@ class App:
         if manager is None:
             config = getattr(self, "_config", Config())
             wants_swap = config.agent_transport == "swap"
+            restart_identity = getattr(self, "_restart_identity", None)
+            owner_pane_id = (
+                getattr(self, "_railmux_pane_id", None)
+                or (
+                    restart_identity.pane_id
+                    if restart_identity is not None else None
+                )
+            )
+            owner = (
+                tmux_ctl.pane_identity(owner_pane_id)
+                if wants_swap and owner_pane_id is not None else None
+            )
             manager = AgentDisplayTransport(
                 self._agent_workspace(),
                 config.agent_transport,
                 auto_launched=getattr(self, "_auto_launched", False),
                 outer_session_name=(
-                    tmux_ctl.current_session_name() if wants_swap else None),
+                    owner.session_name
+                    if owner is not None else (
+                        "railmux"
+                        if wants_swap
+                        and getattr(self, "_auto_launched", False)
+                        and restart_identity is not None
+                        else None
+                    )
+                ),
                 outer_session_id=(
-                    tmux_ctl.current_session_id() if wants_swap else None),
-                owner_pane_id=(
-                    getattr(self, "_railmux_pane_id", None)
-                    if wants_swap else None),
+                    owner.session_id
+                    if owner is not None else (
+                        restart_identity.session_id
+                        if wants_swap and restart_identity is not None else None
+                    )
+                ),
+                owner_pane_id=owner_pane_id if wants_swap else None,
             )
             self._display_transport_manager = manager
         return manager
@@ -648,6 +699,7 @@ class App:
         self._status_text: str | None = None
         self._status_level: str = "info"
         self._status_since: float = 0.0
+        self._rendered_status_text: str | None = None
         self._attention_notice_key: tuple[str, int] | None = None
         self._tip_index: int = 0
         self._tip_since: float = 0.0
@@ -1735,8 +1787,7 @@ class App:
             ok = self._attach_agent_slot(
                 slot, entry.tmux_name, steal_focus=steal_focus)
         if not ok:
-            msg = "Re-attach failed: could not connect to agent pane"
-            self._set_status(msg, "error")
+            self._report_attach_failure("Re-attach failed")
             return False
         r = self._by_tmux(entry.tmux_name)
         project = r.project if r else None
@@ -1995,7 +2046,10 @@ class App:
     def _attach_agent_slot(self, slot: AgentSlot, agent_tmux_name: str, *,
                            steal_focus: bool = True) -> bool:
         """Make *slot* display an agent through the selected safe transport."""
+        self._last_attach_failure_reason = None
         if not self._agent_workspace().can_display(slot, agent_tmux_name):
+            self._last_attach_failure_reason = (
+                "agent session is already displayed in another pane")
             self._set_status(
                 "That agent session is already displayed in another pane.",
                 "warn",
@@ -2026,17 +2080,31 @@ class App:
         else:
             outcome = self._display_transport().attach(slot, agent_tmux_name)
         if not outcome.ok:
+            self._last_attach_failure_reason = (
+                outcome.reason or "display transport rejected the attach")
             self._reconcile_failed_attach_target(
                 slot,
                 previous_session_id=previous_session_id,
                 previous_tmux_name=previous_tmux_name,
             )
+            self._set_status(
+                f"Could not attach agent pane: "
+                f"{self._last_attach_failure_reason}.",
+                "error",
+            )
             return False
         if slot.pane_id is None:
+            self._last_attach_failure_reason = (
+                "display transport returned no pane")
             self._reconcile_failed_attach_target(
                 slot,
                 previous_session_id=previous_session_id,
                 previous_tmux_name=previous_tmux_name,
+            )
+            self._set_status(
+                "Could not attach agent pane: display transport returned "
+                "no pane.",
+                "error",
             )
             return False
         self._check_agent_slot_size(slot)
@@ -2076,6 +2144,14 @@ class App:
                 else WorkspacePage.PRIMARY
             )
         return True
+
+    def _report_attach_failure(self, prefix: str) -> None:
+        """Add action context while retaining the transport's exact reason."""
+        reason = getattr(self, "_last_attach_failure_reason", None)
+        self._set_status(
+            f"{prefix}: {reason or 'could not connect to agent pane'}",
+            "error",
+        )
 
     def _reconcile_failed_attach_target(
         self,
@@ -2130,6 +2206,12 @@ class App:
                     "Ctrl-B Tab unavailable; existing tmux binding preserved.",
                     "warn",
                 )
+            if manager.status_navigation_available:
+                # The initial bar is painted before the shared binding lease is
+                # acquired. Repaint once ownership is known so its wide
+                # Mode/Layout ranges (and compact page ranges) are immediately
+                # live rather than waiting for the next unrelated transition.
+                self._apply_tmux_bar(self._tmux_error_bar)
 
     def _set_workspace_target(self, slot_key: str) -> AgentSlot:
         """Apply one Target transition and refresh its tmux projection."""
@@ -3684,8 +3766,7 @@ class App:
                 slot, tmux_name, steal_focus=steal_focus)
         )
         if not attached:
-            msg = "Launch failed: could not attach to agent pane"
-            self._set_status(msg, "error")
+            self._report_attach_failure("Launch failed")
             return False
         return True
 
@@ -4131,10 +4212,7 @@ class App:
         if not self._attach_agent_slot(
             self._agent_workspace().target, tmux_name, steal_focus=True,
         ):
-            self._set_status(
-                "Ask Railmux failed: could not attach the help session",
-                "error",
-            )
+            self._report_attach_failure("Ask Railmux failed")
             return
         workspace = self._agent_workspace()
         if workspace.presentation is WorkspacePresentation.COMPACT:
@@ -4990,10 +5068,7 @@ class App:
             else self._attach_agent_slot(slot, tmux_name, steal_focus=False)
         )
         if not ok:
-            self._set_status(
-                "Restore failed: could not re-attach to previous agent session",
-                "error",
-            )
+            self._report_attach_failure("Restore failed")
         return ok
 
     def _restore_workspace_slot(
@@ -6354,6 +6429,24 @@ class App:
         # while a modal is open (notably Help's fullscreen copy workflow).
         if key == "f9":
             self._toggle_agent_fullscreen()
+            return
+        # F6 is an internal target used by the tmux status-range click binding.
+        # It is sent directly to the controller pane and remains useful while
+        # an agent (or a modal) owns visible focus.
+        if key == "f6":
+            self._copy_current_status()
+            return
+        # F5/F7 are private targets for clickable Mode/Layout status ranges.
+        # Unlike literal m/F8 they cannot be inserted into an active Edit
+        # widget. Keep modal state intact and give an explicit click response.
+        if key in ("f5", "f7"):
+            if self._loop is not None and self._loop.widget is not self._frame:
+                self._show_tmux_feedback(
+                    "Close the dialog before changing Mode or Layout.")
+            elif key == "f5":
+                self._cycle_mode()
+            else:
+                self._rotate_split()
             return
         # When a modal overlay is showing, don't dispatch sidebar action keys.
         # Modals handle their own keys (Esc, Enter, y/n) in their keypress
@@ -8250,6 +8343,32 @@ class App:
                 "warn",
             )
 
+    def _copy_current_status(self) -> None:
+        """Copy the exact message currently rendered at status-right."""
+        text = getattr(self, "_rendered_status_text", None)
+        if not text:
+            self._set_status("No status message is available to copy.", "warn")
+            return
+        if tmux_ctl.copy_to_clipboard(text):
+            # tmux restores this transient command message automatically. Keep
+            # the copied source (and any sticky warning/error) as status-right.
+            self._show_tmux_feedback("Copied status message.")
+        else:
+            self._show_tmux_feedback(
+                "Clipboard unavailable; status message was not copied.")
+
+    def _show_tmux_feedback(self, text: str) -> None:
+        """Show brief click feedback without replacing status-bar state."""
+        try:
+            import subprocess as _sp
+            _sp.run(
+                ["tmux", "display-message", "-d", "1200", text],
+                stdout=_sp.DEVNULL,
+                stderr=_sp.DEVNULL,
+            )
+        except Exception:
+            pass
+
     def _do_context_rename(self, session: SessionMeta) -> None:
         modal = RenameModal(
             current_title=session.display_title,
@@ -8801,6 +8920,14 @@ class App:
         safe = text.replace("#", "##").replace("%", "%%")
         style = _TMUX_LEVEL_STYLE.get(level, "")
         payload = f"{style}{safe}#[default] " if style else safe + " "
+        manager = getattr(self, "_tmux_binding_manager", None)
+        if getattr(manager, "status_navigation_available", False) is True:
+            try:
+                payload = tmux_ctl.status_action_range(
+                    tmux_ctl.STATUS_ACTION_COPY, payload)
+            except (TypeError, ValueError):
+                pass
+        self._rendered_status_text = text
         try:
             import subprocess as _sp
             _sp.run(
@@ -8833,13 +8960,23 @@ class App:
                 is WorkspacePresentation.COMPACT):
             width = (getattr(self, "_last_workspace_size", None) or (80, 24))[0]
             manager = getattr(self, "_tmux_binding_manager", None)
-            range_helper = getattr(tmux_ctl, "status_pane_range", None)
-            wrap = None
+            pane_range_helper = getattr(tmux_ctl, "status_pane_range", None)
+            action_range_helper = getattr(
+                tmux_ctl, "status_action_range", None)
+            wrap_pane = None
+            wrap_action = None
             if (getattr(manager, "status_navigation_available", False)
-                    is True and callable(range_helper)):
-                def wrap(pane_id: str, content: str) -> str:
+                    is True and callable(pane_range_helper)):
+                def wrap_pane(pane_id: str, content: str) -> str:
                     try:
-                        return range_helper(pane_id, content)
+                        return pane_range_helper(pane_id, content)
+                    except (TypeError, ValueError):
+                        return content
+            if (getattr(manager, "status_navigation_available", False)
+                    is True and callable(action_range_helper)):
+                def wrap_action(action: str, content: str) -> str:
+                    try:
+                        return action_range_helper(action, content)
                     except (TypeError, ValueError):
                         return content
             brand, visible = _compact_tmux_status_left(
@@ -8852,7 +8989,9 @@ class App:
                     workspace.secondary.pane_id,
                 ),
                 width,
-                wrap,
+                wrap_pane,
+                wrap_action,
+                self._status_layout_indicator(),
             )
             left_length = max(1, visible)
             # Let tmux truncate the original status/tip text naturally inside
@@ -8860,10 +8999,21 @@ class App:
             # unchanged; widening the terminal reveals more of the same text.
             right_length = max(1, width - left_length)
         else:
+            manager = getattr(self, "_tmux_binding_manager", None)
+            range_helper = getattr(tmux_ctl, "status_action_range", None)
+            wrap_action = None
+            if (getattr(manager, "status_navigation_available", False)
+                    is True and callable(range_helper)):
+                def wrap_action(action: str, content: str) -> str:
+                    try:
+                        return range_helper(action, content)
+                    except (TypeError, ValueError):
+                        return content
             brand = _tmux_status_left(
                 error,
                 self._active_mode().label,
                 self._status_layout_indicator(),
+                wrap_action,
             )
         try:
             import subprocess as _sp

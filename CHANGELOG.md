@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15.dev202607281] - 2026-07-28
+
+### Added
+
+- Make the bottom status bar actionable on tmux 3.4+: click the provider name
+  to switch Mode, the layout glyph to rotate Layout, compact `R`/`1`/`2` to
+  change pages, or the right-side tip/info/warning/error text to copy its
+  complete untruncated source.
+- Show transient click confirmation without replacing the current sticky
+  status message, and explain when a modal must be closed before Mode or
+  Layout can change.
+
+### Fixed
+
+- Restore agent-pane opening on Railmux's dedicated tmux server by carrying
+  the exact inherited socket through nested attach instead of falling through
+  to the user's default server.
+- Reject a nested display client that exits during its startup settle, clean
+  up dead `remain-on-exit` panes, and surface the exact transport failure
+  reason while leaving the underlying agent session alive.
+- Keep status clicks out of filter and rename editors by routing Mode and
+  Layout through private function keys, and keep every user-range action
+  within tmux's 15-byte limit so right-side copy works in real terminals.
+- Add Mode and Layout controls to compact status bars, preserve readable
+  compact error colours and exact right-message space, and reinstall the
+  shared click binding safely when upgrading a live lease.
+- Suppress the full-width `Local session transcript is not available yet`
+  pseudo-status while a new Claude Code transcript has not written its first
+  record.
+
 ## [0.2.15.dev202607280] - 2026-07-28
 
 ### Added
@@ -982,7 +1012,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607281...HEAD
+[0.2.15.dev202607281]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...v0.2.15.dev202607281
 [0.2.15.dev202607280]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15.dev202607280
 [0.2.14]: https://github.com/Rightglow/Railmux/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Rightglow/Railmux/compare/v0.2.12...v0.2.13

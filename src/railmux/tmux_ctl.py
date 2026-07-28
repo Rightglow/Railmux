@@ -1166,6 +1166,22 @@ def pane_alive(pane_id: str) -> bool:
         return False
 
 
+def pane_process_alive(pane_id: str) -> bool:
+    """True only while *pane_id* exists and its child process is still live."""
+    if not in_tmux():
+        return False
+    try:
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "-t", pane_id, "#{pane_dead}"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "0"
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
 def session_pane_id(session_name: str) -> str | None:
     """Return the first pane id in *session_name*.
 
@@ -1472,6 +1488,14 @@ _ROOT_RIGHT_CLICK_KEY = "MouseDown3Pane"
 _ROOT_RIGHT_CLICK_MARKER = "railmux-right-click-forward-v1"
 _ROOT_STATUS_CLICK_KEY = "MouseDown1Status"
 _ROOT_STATUS_CLICK_MARKER = "railmux-status-pane-v1"
+STATUS_ACTION_MODE = "railmux-mode"
+STATUS_ACTION_LAYOUT = "railmux-layout"
+STATUS_ACTION_COPY = "railmux-copy"
+_STATUS_ACTIONS = frozenset({
+    STATUS_ACTION_MODE,
+    STATUS_ACTION_LAYOUT,
+    STATUS_ACTION_COPY,
+})
 _PREFIX_TARGET_KEY = "Tab"
 _PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
 RAILMUX_CONTROLLER_OPTION = "@railmux_controller_pane"
@@ -1514,6 +1538,20 @@ def status_pane_range(pane_id: str, content: str) -> str:
     # reports as the intended literal ``%76``.
     escaped_pane_id = pane_id.replace("%", "%%", 1)
     return f"#[range=user|{escaped_pane_id}]{content}#[norange]"
+
+
+def status_action_range(action: str, content: str) -> str:
+    """Make *content* a clickable Railmux status-bar action.
+
+    The action vocabulary is intentionally closed: the selected value is later
+    expanded inside a tmux ``run-shell`` binding, so accepting arbitrary text
+    here would turn display content into shell input.
+    """
+    if action not in _STATUS_ACTIONS or len(action.encode("utf-8")) > 15:
+        raise ValueError(f"invalid Railmux status action: {action!r}")
+    if not status_pane_ranges_supported():
+        return content
+    return f"#[range=user|{action}]{content}#[norange]"
 
 
 def _select_pane_preserving_zoom_shell(target: str) -> str:
@@ -2126,13 +2164,14 @@ def prepare_root_status_click_binding() -> RootStatusClickBindingBackup | None:
 def set_root_status_click_forwarding(
     backup: RootStatusClickBindingBackup, token: str,
 ) -> bool:
-    """Select Railmux pane-ID user ranges and replay all other status clicks."""
+    """Dispatch Railmux user ranges and replay all other status clicks."""
     if not status_pane_ranges_supported():
         return False
     marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
     condition = (
         "#{&&:"
-        "#{m/r:^%[0-9]+$,#{mouse_status_range}},"
+        "#{m/r:^(%[0-9]+|railmux-(mode|layout|copy))$,"
+        "#{mouse_status_range}},"
         "#{!=:#{@railmux_controller_pane},},"
         f"#{{==:{marker},{marker}}}}}"
     )
@@ -2142,6 +2181,17 @@ def set_root_status_click_forwarding(
             _binding_command(original)
             if original is not None else 'run-shell "true"'
         )
+        dispatch = (
+            'run-shell "case \'#{mouse_status_range}\' in '
+            '%*) tmux select-pane -Z -t \'#{mouse_status_range}\' ;; '
+            f'{STATUS_ACTION_MODE}) tmux send-keys -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F5 ;; '
+            f'{STATUS_ACTION_LAYOUT}) tmux send-keys -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F7 ;; '
+            f'{STATUS_ACTION_COPY}) tmux send-keys -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F6 ;; '
+            'esac"'
+        )
         subprocess.check_call(
             [
                 "tmux", "bind-key", "-T", "root", _ROOT_STATUS_CLICK_KEY,
@@ -2149,11 +2199,7 @@ def set_root_status_click_forwarding(
                 # Supplying ``-t =`` worked by fallback on tmux 3.4 but makes
                 # tmux 3.7 reject the command before evaluating the range.
                 "if-shell", "-F", condition,
-                (
-                    'run-shell "tmux select-pane -Z -t '
-                    "'#{mouse_status_range}'"
-                    '"'
-                ),
+                dispatch,
                 fallback,
             ],
             stdout=subprocess.DEVNULL,

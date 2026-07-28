@@ -5,6 +5,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from railmux import tmux_ctl
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
 
@@ -183,7 +185,7 @@ def test_v1_function_lease_upgrades_in_place_with_new_bindings(
 
     def install_after_backup_is_durable(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 5
+        assert persisted["version"] == 7
         assert persisted["phase"] == "installing"
         assert persisted["prefix_tab_backup"] == {"Tab": None}
         assert persisted["right_click_backup"]["MouseDown3Pane"]
@@ -196,7 +198,7 @@ def test_v1_function_lease_upgrades_in_place_with_new_bindings(
 
     assert second.open()
     upgraded = json.loads(state_path.read_text())
-    assert upgraded["version"] == 5
+    assert upgraded["version"] == 7
     assert upgraded["prefix_tab_backup"] == {"Tab": None}
     assert upgraded["prefix_tab_managed"] is True
     assert upgraded["selection_hook_managed"] is True
@@ -237,7 +239,7 @@ def test_v4_lease_upgrades_status_click_after_durable_backup(
 
     def installed_after_backup(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 5
+        assert persisted["version"] == 7
         assert persisted["phase"] == "installing"
         assert persisted["status_click_backup"]["MouseDown1Status"]
         return True
@@ -247,6 +249,27 @@ def test_v4_lease_upgrades_status_click_after_durable_backup(
 
     assert second.open()
     assert second.status_navigation_available is True
+    assert install.status_click.call_count == prior_calls + 1
+
+
+@pytest.mark.parametrize("old_version", [5, 6])
+def test_old_status_lease_reinstalls_internal_status_actions(
+        monkeypatch, tmp_path, old_version):
+    _backup, install, _restore, _set, _unset = _install_mocks(
+        monkeypatch, tmp_path)
+    first = SharedTmuxBindingManager("server", "%1")
+    assert first.open()
+    state_path = first._state_path
+    assert state_path is not None
+    state = json.loads(state_path.read_text())
+    state["version"] = old_version
+    state_path.write_text(json.dumps(state))
+    prior_calls = install.status_click.call_count
+
+    second = SharedTmuxBindingManager("server", "%2")
+
+    assert second.open()
+    assert json.loads(state_path.read_text())["version"] == 7
     assert install.status_click.call_count == prior_calls + 1
 
 

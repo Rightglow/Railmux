@@ -45,6 +45,9 @@ class FakeTmux:
         self.fail_marker_window: str | None = None
         self.fail_swap_at: int | None = None
         self.fail_respawn = False
+        self.exit_after_respawn = False
+        self.dead_after_respawn = False
+        self.dead_panes: set[str] = set()
         self.respawned: list[tuple[str, str]] = []
         self.split_commands: list[str] = []
         self._patch(monkeypatch)
@@ -53,6 +56,8 @@ class FakeTmux:
         names = {
             "tmux_version": lambda: (3, 4),
             "pane_alive": lambda pane: pane in self.panes,
+            "pane_process_alive": lambda pane: (
+                pane in self.panes and pane not in self.dead_panes),
             "pane_identity": lambda pane: self.panes.get(pane),
             "session_exists": lambda name: name in self.sessions,
             "session_topology": self.session_topology,
@@ -122,6 +127,10 @@ class FakeTmux:
         if pane not in self.panes or self.fail_respawn:
             return False
         self.respawned.append((pane, command))
+        if self.exit_after_respawn:
+            self.panes.pop(pane, None)
+        elif self.dead_after_respawn:
+            self.dead_panes.add(pane)
         return True
 
     def create_grouped_session(self, name, target):
@@ -200,6 +209,7 @@ class FakeTmux:
 
     def kill_pane(self, pane):
         identity = self.panes.pop(pane, None)
+        self.dead_panes.discard(pane)
         if identity is None:
             return False
         for name in [
@@ -243,9 +253,16 @@ def rig(monkeypatch):
     fake = FakeTmux(monkeypatch)
     monkeypatch.setattr(
         transport_mod.tmux_server,
-        "discover_target",
+        "current_target",
         lambda **_kwargs: tmux_server.TmuxServerTarget("/tmp/dedicated", 77),
     )
+    monkeypatch.setattr(
+        transport_mod.tmux_server,
+        "target_is_live",
+        lambda target, **_kwargs: target
+        == tmux_server.TmuxServerTarget("/tmp/dedicated", 77),
+    )
+    monkeypatch.setattr(transport_mod.time, "sleep", lambda _seconds: None)
     workspace = AgentWorkspace()
     manager = AgentDisplayTransport(
         workspace, "swap", auto_launched=True,
@@ -304,6 +321,64 @@ def test_unsupported_target_falls_back_nested(rig, mutate, reason):
     assert outcome.kind == DisplayTransportKind.NESTED
     assert reason in (outcome.reason or "")
     assert workspace.primary.swap_state is None
+    assert fake.respawned[-1][1] == (
+        "TMUX= exec tmux -S /tmp/dedicated "
+        "attach-session -t agent-a"
+    )
+
+
+def test_nested_attach_fails_closed_without_exact_dedicated_target(
+        rig, monkeypatch):
+    fake, workspace, _manager = rig
+    monkeypatch.setattr(
+        transport_mod.tmux_server, "current_target", lambda **_kwargs: None)
+    manager = AgentDisplayTransport(
+        workspace, "nested", auto_launched=True,
+        outer_session_name="railmux", outer_session_id="$1",
+        owner_pane_id="%0",
+    )
+
+    outcome = manager.attach(workspace.primary, "agent-a")
+
+    assert not outcome.ok
+    assert "server identity" in (outcome.reason or "")
+    assert not fake.split_commands
+
+
+def test_nested_attach_rejects_child_that_exits_during_startup(rig):
+    fake, workspace, _manager = rig
+    fake.sessions["agent-a"]["attached"] = 1
+    fake.exit_after_respawn = True
+    manager = AgentDisplayTransport(
+        workspace, "nested", auto_launched=True,
+        outer_session_name="railmux", outer_session_id="$1",
+        owner_pane_id="%0",
+    )
+
+    outcome = manager.attach(workspace.primary, "agent-a")
+
+    assert not outcome.ok
+    assert outcome.reason == "nested tmux client exited during startup"
+    assert workspace.primary.pane_id is None
+
+
+def test_nested_attach_kills_dead_remain_on_exit_pane(rig):
+    fake, workspace, _manager = rig
+    fake.sessions["agent-a"]["attached"] = 1
+    fake.dead_after_respawn = True
+    manager = AgentDisplayTransport(
+        workspace, "nested", auto_launched=True,
+        outer_session_name="railmux", outer_session_id="$1",
+        owner_pane_id="%0",
+    )
+
+    outcome = manager.attach(workspace.primary, "agent-a")
+
+    assert not outcome.ok
+    assert outcome.reason == "nested tmux client exited during startup"
+    assert workspace.primary.pane_id is None
+    assert workspace.primary.agent_tmux_name is None
+    assert not fake.dead_panes
 
 
 def test_old_tmux_falls_back_nested(rig, monkeypatch):

@@ -797,9 +797,11 @@ class LocalHistoryView:
                     )
                 )
             if cached.transcript_backed:
-                return HistoryAction(
-                    info_message="Local session transcript is not available yet"
-                )
+                # Claude may not have written its first transcript record yet.
+                # This is a normal transient state, not a Railmux status event:
+                # keep the live frame intact and swallow the wheel tick instead
+                # of painting a local full-width pseudo status bar.
+                return HistoryAction()
             return HistoryAction(
                 forwarded_input=event.raw if cached.mouse_forwardable else b""
             )
@@ -1010,9 +1012,7 @@ class LocalHistoryView:
         if direction < 0:
             self._reset_wheel_gesture()
             if route.transcript_backed:
-                return HistoryAction(
-                    info_message="Local session transcript is not available yet"
-                )
+                return HistoryAction()
             return HistoryAction(
                 forwarded_input=event.raw if route.mouse_forwardable else b""
             )

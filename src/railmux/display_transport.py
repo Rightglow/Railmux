@@ -11,6 +11,7 @@ import json
 import re
 import shlex
 import sys
+import time
 import uuid
 from dataclasses import asdict, dataclass
 
@@ -185,15 +186,18 @@ class NestedDisplayTransport:
         agent_tmux_name: str,
         server_target: tmux_server.TmuxServerTarget | None,
         session_target: str | None,
+        *,
+        current_target: tmux_server.TmuxServerTarget | None = None,
     ) -> str | None:
         legacy = server_target is not None
-        target = server_target
+        target = server_target or current_target
         session_id = session_target
         if target is None:
             try:
                 target = tmux_server.discover_target(timeout=0.5)
             except tmux_server.TmuxServerError:
                 return None
+        if server_target is None and session_id is None:
             topology = tmux_ctl.session_topology(agent_tmux_name)
             session_id = topology.session_id if topology is not None else None
         if target is None or session_id is None:
@@ -221,12 +225,27 @@ class NestedDisplayTransport:
         server_target: tmux_server.TmuxServerTarget | None = None,
         session_target: str | None = None,
     ) -> AttachOutcome:
+        current_target: tmux_server.TmuxServerTarget | None = None
+        if server_target is None:
+            current_target = tmux_server.current_target()
+            if (current_target is None
+                    or not tmux_server.target_is_live(
+                        current_target, timeout=0.5)):
+                return AttachOutcome(
+                    False,
+                    DisplayTransportKind.NESTED,
+                    "dedicated tmux server identity is unavailable",
+                )
         if (slot.pane_id is not None
                 and slot.transport_kind == DisplayTransportKind.NESTED
                 and slot.agent_tmux_name == agent_tmux_name
                 and tmux_ctl.pane_alive(slot.pane_id)):
             marker = self._history_source(
-                agent_tmux_name, server_target, session_target)
+                agent_tmux_name,
+                server_target,
+                session_target,
+                current_target=current_target,
+            )
             self._set_history_source(slot.pane_id, marker)
             return AttachOutcome(True, DisplayTransportKind.NESTED)
 
@@ -244,11 +263,17 @@ class NestedDisplayTransport:
 
         assert slot.pane_id is not None
         marker = self._history_source(
-            agent_tmux_name, server_target, session_target)
+            agent_tmux_name,
+            server_target,
+            session_target,
+            current_target=current_target,
+        )
         self._set_history_source(slot.pane_id, marker)
         if server_target is None:
             tmux_ctl.fit_session_to_pane(agent_tmux_name, slot.pane_id)
-            argv = ["tmux", "attach-session", "-t", agent_tmux_name]
+            assert current_target is not None
+            argv = tmux_server.target_argv(
+                current_target, "attach-session", "-t", agent_tmux_name)
         else:
             if not tmux_server.target_has_session(
                     server_target, session_target or ""):
@@ -273,6 +298,31 @@ class NestedDisplayTransport:
             return AttachOutcome(
                 False, DisplayTransportKind.NESTED,
                 "could not start the nested tmux client",
+            )
+        # respawn-pane reports success once the child is launched, even when
+        # that child immediately exits (for example after resolving the wrong
+        # tmux socket). Require a short stable startup window and treat a
+        # remain-on-exit pane as dead too.
+        pane_id = slot.pane_id
+        deadline = time.monotonic() + 0.15
+        child_alive = True
+        while True:
+            if not tmux_ctl.pane_process_alive(pane_id):
+                child_alive = False
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.025, remaining))
+        if not child_alive:
+            self._clear_display_metadata(pane_id)
+            if tmux_ctl.pane_alive(pane_id):
+                tmux_ctl.kill_pane(pane_id)
+            slot.clear_display()
+            return AttachOutcome(
+                False,
+                DisplayTransportKind.NESTED,
+                "nested tmux client exited during startup",
             )
         slot.transport_kind = DisplayTransportKind.NESTED
         slot.swap_state = None

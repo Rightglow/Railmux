@@ -501,6 +501,8 @@ def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
     monkeypatch.setattr(
         "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
     monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_process_alive", lambda _pane: True)
+    monkeypatch.setattr(
         "railmux.ui.app.tmux_ctl.fit_session_to_pane",
         lambda session, pane: events.append(("fit", session, pane)) or True,
     )
@@ -508,7 +510,6 @@ def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
         "railmux.ui.app.tmux_ctl.respawn_pane",
         lambda pane, _cmd: events.append(("respawn", pane)) or True,
     )
-
     assert app._attach_in_right_pane("cx-new", steal_focus=False) is True
     assert events == [
         ("fit", "cx-new", "%5"),
@@ -544,6 +545,11 @@ def test_first_attach_creates_detached_pane_then_fits_and_respawns(monkeypatch):
         "railmux.ui.app.tmux_ctl.select_pane",
         lambda pane: events.append(("select", pane)) or True,
     )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda pane: pane == "%8")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_process_alive",
+        lambda pane: pane == "%8")
 
     assert app._attach_in_right_pane("cc-new") is True
     assert events == [

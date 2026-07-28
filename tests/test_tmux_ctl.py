@@ -43,6 +43,16 @@ from railmux.tmux_ctl import (
 )
 
 
+def test_pane_process_alive_rejects_dead_remain_on_exit_pane():
+    with patch.object(tmux_ctl, "in_tmux", return_value=True), \
+            patch.object(tmux_ctl.subprocess, "run") as run:
+        run.return_value = MagicMock(returncode=0, stdout="1\n")
+        assert tmux_ctl.pane_process_alive("%7") is False
+
+        run.return_value = MagicMock(returncode=0, stdout="0\n")
+        assert tmux_ctl.pane_process_alive("%7") is True
+
+
 def _mock_check_output(stdout: str):
     return patch("subprocess.check_output", return_value=stdout.encode())
 
@@ -638,7 +648,32 @@ def test_status_pane_range_requires_tmux_34_and_valid_pane():
             raise AssertionError("unsafe pane target was accepted")
 
 
-def test_root_status_click_scopes_pane_range_and_keeps_zoom():
+def test_status_action_range_requires_tmux_34_and_known_action():
+    assert all(
+        len(action.encode("utf-8")) <= 15
+        for action in (
+            tmux_ctl.STATUS_ACTION_MODE,
+            tmux_ctl.STATUS_ACTION_LAYOUT,
+            tmux_ctl.STATUS_ACTION_COPY,
+        )
+    )
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 3)):
+        assert tmux_ctl.status_action_range(
+            tmux_ctl.STATUS_ACTION_MODE, "Claude Code") == "Claude Code"
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)):
+        assert tmux_ctl.status_action_range(
+            tmux_ctl.STATUS_ACTION_LAYOUT, "◨") == (
+            "#[range=user|railmux-layout]◨#[norange]"
+        )
+        try:
+            tmux_ctl.status_action_range("railmux-arbitrary", "unsafe")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("unknown status action was accepted")
+
+
+def test_root_status_click_scopes_ranges_and_dispatches_actions():
     backup = {
         "MouseDown1Status":
         "bind-key -T root MouseDown1Status select-window -t =",
@@ -654,10 +689,17 @@ def test_root_status_click_scopes_pane_range_and_keeps_zoom():
     assert argv[5:7] == ["if-shell", "-F"]
     assert "-t" not in argv[5:8]
     assert "mouse_status_range" in argv[7]
-    assert "^%[0-9]+$" in argv[7]
+    assert "%[0-9]+" in argv[7]
+    assert "railmux-(mode|layout|copy)" in argv[7]
     assert tmux_ctl.RAILMUX_CONTROLLER_OPTION in argv[7]
     assert "railmux-status-pane-v1-owner123" in argv[7]
     assert "tmux select-pane -Z -t '#{mouse_status_range}'" in argv[8]
+    assert "railmux-mode) tmux send-keys" in argv[8]
+    assert "' F5 ;;" in argv[8]
+    assert "railmux-layout) tmux send-keys" in argv[8]
+    assert "' F7 ;;" in argv[8]
+    assert "railmux-copy) tmux send-keys" in argv[8]
+    assert "' F6 ;;" in argv[8]
     assert argv[-1] == "select-window -t ="
 
 

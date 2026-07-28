@@ -1,10 +1,12 @@
 """Bounded agent-workspace state and legacy primary-slot accessors."""
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from railmux import tmux_ctl
 from railmux.display_transport import KillPreparation
+from railmux.restart_state import OuterTmuxIdentity
 from railmux.ui.app import App, _Running
 from railmux.ui.workspace import (
     AgentWorkspace,
@@ -85,6 +87,30 @@ def test_legacy_right_pane_properties_are_primary_slot_views():
     assert slot.agent_tmux_name == "cx-agent"
     assert slot.active_session_id == "session-id"
     assert slot.in_history_mode is True
+
+
+def test_display_transport_uses_captured_owner_before_run_sets_live_pane(
+        monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._display_transport_manager = None
+    app._config = SimpleNamespace(agent_transport="swap")
+    app._auto_launched = True
+    app._railmux_pane_id = None
+    app._restart_identity = OuterTmuxIdentity(
+        "digest", 77, "%9", "$4", "@5")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_identity",
+        lambda pane_id: tmux_ctl.PaneIdentity(
+            pane_id, 123, "railmux", "$4", "@5", False, 80, 24)
+        if pane_id == "%9" else None,
+    )
+
+    manager = app._display_transport()
+
+    assert manager.owner_pane_id == "%9"
+    assert manager.outer_session_name == "railmux"
+    assert manager.outer_session_id == "$4"
 
 
 def test_workspace_layout_cycles_single_columns_rows_single():

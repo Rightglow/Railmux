@@ -236,6 +236,23 @@ def test_status_left_pure_function():
     assert with_layout.endswith("· Codex · ◨ #[default]")
 
 
+def test_wide_status_left_wraps_mode_and_layout_as_separate_actions():
+    wrapped = []
+
+    def wrap(action, content):
+        wrapped.append((action, content))
+        return f"<{action}>{content}</{action}>"
+
+    value = _tmux_status_left(False, "Claude Code", "◧", wrap)
+
+    assert wrapped == [
+        ("railmux-mode", "Claude Code"),
+        ("railmux-layout", "◧"),
+    ]
+    assert "<railmux-mode>Claude Code</railmux-mode>" in value
+    assert "<railmux-layout>◧</railmux-layout>" in value
+
+
 def test_compact_status_left_has_stable_phone_navigation_and_mode_abbreviation():
     value, visible = _compact_tmux_status_left(
         False,
@@ -268,6 +285,32 @@ def test_compact_status_left_expands_without_shortening_tip_pool():
     assert visible == len("[Railmux][Agent 1][Agent 2] Codex ")
 
 
+def test_compact_status_left_wraps_mode_and_layout_as_actions():
+    actions = []
+
+    def wrap_action(action, content):
+        actions.append((action, content))
+        return f"<{action}>{content}</{action}>"
+
+    value, visible = _compact_tmux_status_left(
+        False,
+        "Claude Code",
+        WorkspacePage.PRIMARY,
+        ("%1", "%2", "%3"),
+        40,
+        action_range_wrapper=wrap_action,
+        layout_indicator="◨",
+    )
+
+    assert actions == [
+        ("railmux-mode", "CC"),
+        ("railmux-layout", "◨"),
+    ]
+    assert "<railmux-mode>CC</railmux-mode>" in value
+    assert "<railmux-layout>◨</railmux-layout>" in value
+    assert visible == len("[R][1][2] CC · ◨ ")
+
+
 def test_apply_bar_uses_dynamic_compact_left_length(monkeypatch):
     run = MagicMock()
     monkeypatch.setattr("subprocess.run", run)
@@ -283,15 +326,133 @@ def test_apply_bar_uses_dynamic_compact_left_length(monkeypatch):
     app._apply_tmux_bar(error=False)
 
     lengths = _style_calls(run, "status-left-length")
-    assert lengths[-1] == str(len("[R][1][2] CC "))
+    assert lengths[-1] == str(len("[R][1][2] CC · ▣ "))
     right_lengths = _style_calls(run, "status-right-length")
-    assert right_lengths[-1] == str(40 - len("[R][1][2] CC "))
+    assert right_lengths[-1] == str(40 - len("[R][1][2] CC · ▣ "))
 
     run.reset_mock()
     app._workspace.presentation = WorkspacePresentation.WIDE
     app._apply_tmux_bar(error=False)
     assert _style_calls(run, "status-right-length")[-1] == str(
         app._TMUX_STATUS_RIGHT_LENGTH)
+
+
+def test_apply_compact_bar_makes_pages_mode_and_layout_clickable(monkeypatch):
+    run = MagicMock()
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.tmux_version", lambda: (3, 4))
+    app = _status_app()
+    app._workspace = AgentWorkspace()
+    app._workspace.presentation = WorkspacePresentation.COMPACT
+    app._workspace.compact_page = WorkspacePage.PRIMARY
+    app._workspace.primary.pane_id = "%2"
+    app._workspace.secondary.pane_id = "%3"
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._workspace.set_target(AgentWorkspace.SECONDARY)
+    app._railmux_pane_id = "%1"
+    app._last_workspace_size = (40, 20)
+    app._tmux_binding_manager = MagicMock(status_navigation_available=True)
+
+    app._apply_tmux_bar(error=False)
+
+    left = _style_calls(run, "status-left")[-1]
+    assert "#[range=user|%%1]" in left
+    assert "#[range=user|%%2]" in left
+    assert "#[range=user|%%3]" in left
+    assert "#[range=user|railmux-mode]CC#[norange]" in left
+    assert "#[range=user|railmux-layout]◨#[norange]" in left
+    visible = len("[R][1][2] CC · ◨ ")
+    assert _style_calls(run, "status-left-length")[-1] == str(visible)
+    assert _style_calls(run, "status-right-length")[-1] == str(40 - visible)
+
+
+def test_apply_wide_bar_makes_mode_and_layout_clickable(monkeypatch):
+    run = MagicMock()
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.tmux_version", lambda: (3, 4))
+    app = _status_app()
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%2"
+    app._workspace.layout = WorkspaceLayout.SINGLE
+    app._tmux_binding_manager = MagicMock(status_navigation_available=True)
+
+    app._apply_tmux_bar(error=False)
+
+    left = _style_calls(run, "status-left")[-1]
+    assert "#[range=user|railmux-mode]Claude Code#[norange]" in left
+    assert "#[range=user|railmux-layout]▣#[norange]" in left
+
+
+def test_rendered_status_text_is_clickable_and_copy_uses_full_source(
+        monkeypatch):
+    run = MagicMock()
+    copied = MagicMock(return_value=True)
+    monkeypatch.setattr("subprocess.run", run)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.tmux_version", lambda: (3, 4))
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.copy_to_clipboard", copied)
+    app = _status_app()
+    app._tmux_binding_manager = MagicMock(status_navigation_available=True)
+
+    app._render_status_to_tmux("A long tip that tmux may truncate", "tip")
+
+    assert _payload(run).startswith(
+        "#[range=user|railmux-copy]#[fg=colour0]")
+    assert _payload(run).endswith("#[default] #[norange]")
+    app._copy_current_status()
+    copied.assert_called_once_with("A long tip that tmux may truncate")
+    assert app._rendered_status_text == "A long tip that tmux may truncate"
+    assert [
+        "tmux", "display-message", "-d", "1200", "Copied status message.",
+    ] in [call.args[0] for call in run.call_args_list]
+
+
+def test_internal_status_actions_are_modal_safe():
+    app = _status_app()
+    app._frame = object()
+    app._loop = MagicMock(widget=object())
+    app._show_tmux_feedback = MagicMock()
+    app._cycle_mode = MagicMock()
+    app._rotate_split = MagicMock()
+
+    app._on_input("f5")
+    app._on_input("f7")
+
+    app._cycle_mode.assert_not_called()
+    app._rotate_split.assert_not_called()
+    assert app._show_tmux_feedback.call_count == 2
+    assert "Close the dialog" in app._show_tmux_feedback.call_args.args[0]
+
+
+def test_internal_status_actions_dispatch_without_modal():
+    app = _status_app()
+    app._frame = object()
+    app._loop = MagicMock()
+    app._loop.widget = app._frame
+    app._cycle_mode = MagicMock()
+    app._rotate_split = MagicMock()
+
+    app._on_input("f5")
+    app._on_input("f7")
+
+    app._cycle_mode.assert_called_once_with()
+    app._rotate_split.assert_called_once_with()
+
+
+def test_compact_error_status_uses_legible_control_colours():
+    value, _visible = _compact_tmux_status_left(
+        True,
+        "Claude Code",
+        WorkspacePage.PRIMARY,
+        ("%1", "%2", "%3"),
+        40,
+    )
+
+    assert "#[fg=colour231][R]" in value
+    assert "#[fg=colour220][1]" in value
 
 
 def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):

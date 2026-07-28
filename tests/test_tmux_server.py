@@ -39,6 +39,25 @@ def test_current_socket_parser_allows_commas_in_the_path():
     assert tmux_server.current_socket_path(env) == "/tmp/with,comma/railmux"
 
 
+def test_current_target_parses_exact_inherited_server():
+    env = {"TMUX": "/tmp/with,comma/railmux,4321,9"}
+
+    assert tmux_server.current_target(env) == tmux_server.TmuxServerTarget(
+        "/tmp/with,comma/railmux", 4321)
+    assert tmux_server.current_target({"TMUX": "/tmp/s,-1,0"}) is None
+    assert tmux_server.current_target({"TMUX": "/tmp/s,not-a-pid,0"}) is None
+    assert tmux_server.current_target({}) is None
+
+
+def test_target_is_live_rejects_reused_socket_with_different_server_pid(
+        monkeypatch):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda *_args, **_kwargs: "45\n")
+
+    assert tmux_server.target_is_live(target) is False
+
+
 def test_full_socket_identity_accepts_same_socket_and_rejects_spoof(
     monkeypatch, tmp_path,
 ):

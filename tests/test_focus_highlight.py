@@ -860,6 +860,8 @@ def test_failed_attach_restores_prior_active_target_immediately():
     assert app._redraw_focus_state_now.call_count == 2
     assert slot.active_session_id == "old-session"
     assert slot.agent_tmux_name == "cc-old"
+    assert app._last_attach_failure_reason == "test failure"
+    assert app._status_text == "Could not attach agent pane: test failure."
 
 
 def test_failed_attach_reconciles_transport_recovery_target():

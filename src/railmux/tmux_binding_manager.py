@@ -14,7 +14,7 @@ from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
 
 
-_VERSION = 5
+_VERSION = 7
 _KEYS = ("F8", "F9")
 _MAX_STATE_BYTES = 64 * 1024
 
@@ -80,7 +80,7 @@ class SharedTmuxBindingManager:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
         if (not isinstance(raw, dict)
-                or raw.get("version") not in {1, 2, 3, 4, _VERSION}):
+                or raw.get("version") not in {1, 2, 3, 4, 5, 6, _VERSION}):
             return None
         token = raw.get("token")
         phase = raw.get("phase")
@@ -249,6 +249,17 @@ class SharedTmuxBindingManager:
                         state["status_click_backup"] = (
                             status_click_backup
                             or {"MouseDown1Status": None})
+                        upgraded = True
+                    if state["version"] < 6:
+                        # v6 extends the already-backed-up status click binding
+                        # from compact pane navigation to the wide Mode/Layout
+                        # controls and status-text copy action. Re-enter the
+                        # installing phase so a live v5 lease is replaced
+                        # without losing the user's original binding.
+                        upgraded = True
+                    if state["version"] < 7:
+                        # v7 replaces Mode/Layout's ordinary m/F8 keystrokes
+                        # with edit- and modal-safe internal function keys.
                         upgraded = True
                     if upgraded:
                         state["version"] = _VERSION

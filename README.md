@@ -144,8 +144,11 @@ shows the current value. Press `Ctrl-U` in the filter editor to clear it, then
 The first Button Bar row keeps Help, Quit, and Detach visible. Select **More**
 to reveal a second row with **Mode**, **Layout**, and **Options**; **Less**
 collapses it. The `m`, `F8`, and `o` keyboard shortcuts remain available while
-the row is hidden. Expanding this second row takes its one display line from
-the bottom Running section; Projects and Sessions keep the same heights.
+the row is hidden. On tmux 3.4 or newer, the bottom-left mode name and layout
+symbol are also clickable, and clicking the message at bottom-right copies its
+complete text to the local clipboard. Expanding the second Button Bar row takes
+its one display line from the bottom Running section; Projects and Sessions
+keep the same heights.
 
 After an explicit layout change (`F8` or `[` / `]`), quitting offers to keep
 the current pane proportions: **Always** keeps the latest custom layout,

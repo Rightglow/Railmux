@@ -1069,7 +1069,7 @@ def test_local_history_forwards_empty_mouse_aware_agent_history():
     assert view.wheel(wheel_down) == HistoryAction(forwarded_input=b"cc-down")
 
 
-def test_local_history_never_forwards_transcript_backed_claude_wheel():
+def test_local_history_silently_waits_for_transcript_backed_claude_history():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
     request_id, _limit = decode_history_prefetch(prefetch.data)
@@ -1089,7 +1089,7 @@ def test_local_history_never_forwards_transcript_backed_claude_wheel():
     action = view.wheel(SgrMouseEvent(b"claude-up", 64, 40, 2, True))
 
     assert action.forwarded_input == b""
-    assert action.info_message == "Local session transcript is not available yet"
+    assert action.info_message is None
 
 
 def test_local_history_prompts_before_first_available_claude_scroll():
