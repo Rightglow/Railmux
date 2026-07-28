@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15.dev202607280] - 2026-07-28
+
+### Added
+
+- Offer four first-scroll choices for Claude Code over `railmux ssh`: always
+  or this-time smooth local history, and always or this-time native clickable
+  history. Temporary choices survive automatic transport reconnects without
+  changing the remote setting.
+- Add `Copy title` to session context menus, including Unicode-safe clipboard
+  forwarding through the SSH display protocol.
+- Aggregate live Codex subagent rollout activity into its visible parent
+  session status without exposing duplicate subagent sessions in the sidebar.
+
+### Changed
+
+- Advance the private SSH display protocol to v11 for scoped Claude history
+  choices and remote session-title clipboard forwarding.
+- Render deterministic website agent content with semantic terminal colours
+  and verify the visible browser result instead of generator-specific ANSI
+  constants.
+- Avoid duplicate lint, pytest, and real-tmux jobs after the reusable
+  cross-platform release test workflow has already passed.
+
+### Fixed
+
+- Preserve a resumed Codex parent binding when its completed rollout closes
+  but the exact resume UUID remains in the live process argv and background
+  rollouts are still open; ambiguous and unavailable identity probes continue
+  to fail closed.
+- Cache pane-aware procfs rollout correlation briefly and publish filtered
+  subagent statuses from the background index, avoiding repeated UI-thread
+  process walks and ineffective lookups into the visible-only index.
+- Keep failed persistent Claude history choices from replacing the active
+  runtime override, replay the original wheel only for native history, and
+  suppress the redundant raw protocol-mismatch error after version handling.
+- Isolate teardown tests from the developer's real tmux server and remove
+  temporary implementation details from website and context-menu assertions.
+
 ## [0.2.14] - 2026-07-28
 
 ### Added
@@ -941,7 +979,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.14...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...HEAD
+[0.2.15.dev202607280]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15.dev202607280
 [0.2.14]: https://github.com/Rightglow/Railmux/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Rightglow/Railmux/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12
