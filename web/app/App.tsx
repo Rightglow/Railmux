@@ -12,6 +12,7 @@ export default function Home() {
         <nav aria-label="Main navigation">
           <a href="#features">Features</a>
           <a href="#workflow">Workflow</a>
+          <a href="#controls">Controls</a>
           <a href="#ssh">SSH</a>
           <a href="https://github.com/Rightglow/Railmux">GitHub</a>
         </nav>
@@ -69,13 +70,13 @@ export default function Home() {
           </div>
           <div className="hero-demo">
             <div className="capture-meta">
-              <span><i /> REAL CLAUDE CODE ANSWER · ISOLATED RAILMUX</span>
-              <small>native TUI structure · sanitized deterministic replay</small>
+              <span><i /> CLAUDE CODE 2.1.220 STARTUP · ISOLATED RAILMUX</span>
+              <small>recorded identity block · audited answer replay · no live provider call</small>
             </div>
             <TerminalRecording
               className="hero-terminal-recording"
-              poster="npt:3"
-              startAt={0.4}
+              poster="npt:0.2"
+              startAt={0}
               autoPlay
               loop
               controls={false}
@@ -125,7 +126,7 @@ export default function Home() {
                   controls={false}
                   dataDemo="dual-recording"
                 />
-                <small>REAL CAPTURE · SIDE-BY-SIDE LAYOUT</small>
+                <small>REAL RAILMUX CAPTURE · CLAUDE CODE + CODEX</small>
               </div>
             </article>
             <article className="feature-showcase feature-showcase-sidebar">
@@ -192,11 +193,12 @@ export default function Home() {
             <div className="feature-entrypoints">
               <div className="feature-entrypoints-heading">
                 <span>06 / ENTRY POINTS</span>
-                <h3>Start fresh. Or ask from where you are.</h3>
+                <h3>Start fresh. Or ask Railmux about Railmux.</h3>
                 <p>
                   New Project opens a keyboard-and-mouse directory browser.
                   Help keeps shortcuts nearby and can launch a separate,
-                  read-only Ask Railmux agent.
+                  read-only support session in Railmux&apos;s own help
+                  workspace against the installed guide—not in your project.
                 </p>
               </div>
               <div className="entrypoint-grid">
@@ -227,7 +229,7 @@ export default function Home() {
                   </div>
                   <div>
                     <span>HELP</span>
-                    <small>Shortcuts first; an agent is one key away.</small>
+                    <small>Read-only Railmux support, outside your project.</small>
                   </div>
                 </article>
               </div>
@@ -285,6 +287,82 @@ export default function Home() {
                   cueRows={38}
                   dataDemo="workflow-recording"
                 />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="lifecycle-section" id="controls">
+          <div className="section-wrap">
+            <div className="lifecycle-heading">
+              <div>
+                <p className="section-kicker">
+                  WORKSPACE CONTROL
+                </p>
+                <h2>
+                  Shape the workspace.
+                  <br />
+                  Leave on your terms.
+                </h2>
+              </div>
+              <div className="lifecycle-intro">
+                <p>
+                  Press <kbd>m</kbd> to switch the sidebar between Claude Code
+                  and Codex. Press <kbd>F8</kbd> to cycle single,
+                  side-by-side, and stacked layouts. Running agents continue
+                  even when their mode or pane is not visible.
+                </p>
+                <div>
+                  <span><kbd>+</kbd> More</span>
+                  <span><kbd>m</kbd> Mode</span>
+                  <span><kbd>F8</kbd> Layout</span>
+                </div>
+              </div>
+            </div>
+            <div className="lifecycle-demo-grid">
+              <div className="lifecycle-player">
+                <div className="capture-meta capture-meta-dark">
+                  <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
+                  <small>the recorded quit is cancelled; no agent is stopped</small>
+                </div>
+                <TerminalRecording
+                  source="railmux-controls-demo.cast"
+                  className="controls-terminal-recording"
+                  poster="npt:9.5"
+                  controls={false}
+                  loop
+                  playWhenVisible
+                  inputHud
+                  cueCols={180}
+                  cueRows={38}
+                  dataDemo="controls-recording"
+                />
+              </div>
+              <div className="lifecycle-choices">
+                <article>
+                  <span>DETACH</span>
+                  <h3><kbd>Ctrl-B d</kbd></h3>
+                  <p>
+                    Leave this terminal only. Railmux and every agent keep
+                    running exactly where they were.
+                  </p>
+                </article>
+                <article>
+                  <span>SOFT QUIT</span>
+                  <h3><kbd>q</kbd> then <kbd>s</kbd></h3>
+                  <p>
+                    Close the shared Railmux UI in every attached terminal.
+                    Agent sessions stay alive and are recovered next start.
+                  </p>
+                </article>
+                <article>
+                  <span>QUIT</span>
+                  <h3><kbd>q</kbd> then <kbd>y</kbd></h3>
+                  <p>
+                    Close Railmux and stop every running agent session after
+                    explicit confirmation.
+                  </p>
+                </article>
               </div>
             </div>
           </div>

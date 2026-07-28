@@ -58,8 +58,21 @@ def test_fixture_environment_excludes_provider_credentials(
     assert "RESUMED_SESSIONS" in demo_agent
     assert "❯" in demo_agent
     assert "●" in demo_agent
+    assert "SIGWINCH" in demo_agent
+    assert "Claude Code v2.1.220" in demo_agent
+    assert "OpenAI Codex (v0.145.0)" in demo_agent
     assert "ANTHROPIC_API_KEY" not in demo_agent
     assert "OPENAI_API_KEY" not in demo_agent
+    assert (tmp_path / "bin" / "demo-codex").is_symlink()
+    assert (
+        tmp_path
+        / "home"
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "07"
+        / "28"
+    ).is_dir()
 
 
 def test_only_mobile_demo_uses_compact_presentation() -> None:
@@ -68,6 +81,7 @@ def test_only_mobile_demo_uses_compact_presentation() -> None:
         record_web_demo.DUAL,
         record_web_demo.WORKFLOW,
         record_web_demo.TOUR,
+        record_web_demo.CONTROLS,
     ):
         assert (
             presentation_for_geometry(
@@ -92,9 +106,18 @@ def test_only_mobile_demo_uses_compact_presentation() -> None:
 def test_cast_profiles_include_auditable_agent_transcript() -> None:
     capture, digest = record_web_demo._load_agent_runs()
 
-    assert capture["source_commit"].startswith("f53145d")
-    assert capture["capture_method"].startswith("Claude Code")
-    assert len(capture["runs"]) == 2
+    assert capture["capture_method"].startswith("Audited non-persistent")
+    assert {run["agent"] for run in capture["runs"]} == {
+        "Claude Code",
+        "Codex",
+    }
+    assert len(capture["runs"]) == 3
+    assert all(len(run["source_commit"]) == 40 for run in capture["runs"])
+    assert all(run["captured_at"].startswith("2026-07-") for run in capture["runs"])
+    assert capture["startup_banner"]["version_output"] == (
+        "2.1.220 (Claude Code)"
+    )
+    assert "{cwd}" in capture["startup_banner"]["lines"][-1]
     assert len(digest) == 64
     raw = record_web_demo.REAL_AGENT_RUNS.read_bytes()
     assert all(

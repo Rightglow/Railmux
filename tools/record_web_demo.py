@@ -2,10 +2,10 @@
 """Record deterministic, credential-free Railmux website demos as asciicast v2.
 
 The recorder launches the checkout through Railmux's normal CLI in a private
-tmux server, with a temporary HOME, synthetic Claude history, and a local demo
-agent executable.  The agent replays a reviewed public response captured once
-with no provider session persistence; CI never reads provider configuration or
-credentials.  The resulting casts are suitable for the website's terminal
+tmux server, with a temporary HOME, synthetic provider histories, and local
+demo-agent executables. The agents replay reviewed public responses captured
+without provider session persistence; CI never reads provider configuration or
+credentials. The resulting casts are suitable for the website's terminal
 player and any asciicast-compatible tool.
 """
 
@@ -30,7 +30,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "web" / "public" / "generated"
 REAL_AGENT_RUNS = ROOT / "web" / "demo" / "real-agent-runs.json"
@@ -39,6 +38,7 @@ DEFAULT_DUAL_OUTPUT = GENERATED / "railmux-dual-demo.cast"
 DEFAULT_WORKFLOW_OUTPUT = GENERATED / "railmux-workflow-demo.cast"
 DEFAULT_MOBILE_OUTPUT = GENERATED / "railmux-mobile-demo.cast"
 DEFAULT_TOUR_OUTPUT = GENERATED / "railmux-tour-demo.cast"
+DEFAULT_CONTROLS_OUTPUT = GENERATED / "railmux-controls-demo.cast"
 
 
 @dataclass(frozen=True)
@@ -56,6 +56,8 @@ WORKFLOW = RecordingProfile("workflow", 160, 38, 15.0)
 # narrow width; the separately documented 105x21 Termux report was landscape.
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
 TOUR = RecordingProfile("tour", 160, 38, 10.0)
+CONTROLS = RecordingProfile("controls", 180, 38, 15.0)
+STARTUP_HOLD_SECONDS = 1.2
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
     "LANG",
@@ -116,16 +118,52 @@ def _load_agent_runs() -> tuple[dict[str, object], str]:
     digest = hashlib.sha256(raw).hexdigest()
     data = json.loads(raw)
     runs = data.get("runs")
-    if not isinstance(runs, list) or len(runs) < 2:
-        raise RuntimeError(f"expected two public agent runs: {REAL_AGENT_RUNS}")
+    if not isinstance(runs, list) or len(runs) < 3:
+        raise RuntimeError(f"expected three public agent runs: {REAL_AGENT_RUNS}")
     for run in runs:
         if not isinstance(run, dict):
             raise RuntimeError(f"invalid public agent run: {REAL_AGENT_RUNS}")
-        for field in ("agent", "title", "prompt", "files", "response"):
+        for field in (
+            "agent",
+            "captured_at",
+            "source_commit",
+            "capture_method",
+            "title",
+            "prompt",
+            "files",
+            "response",
+        ):
             if not run.get(field):
                 raise RuntimeError(
                     f"public agent run is missing {field}: {REAL_AGENT_RUNS}"
                 )
+    if {run["agent"] for run in runs} != {"Claude Code", "Codex"}:
+        raise RuntimeError(
+            f"public captures must include Claude Code and Codex: {REAL_AGENT_RUNS}"
+        )
+    banner = data.get("startup_banner")
+    if not isinstance(banner, dict):
+        raise RuntimeError(f"missing public startup banner: {REAL_AGENT_RUNS}")
+    for field in (
+        "agent",
+        "captured_at",
+        "capture_method",
+        "version_command",
+        "version_output",
+        "lines",
+    ):
+        if not banner.get(field):
+            raise RuntimeError(
+                f"public startup banner is missing {field}: {REAL_AGENT_RUNS}"
+            )
+    lines = banner["lines"]
+    if (
+        not isinstance(lines, list)
+        or len(lines) != 3
+        or "{cwd}" not in lines[-1]
+        or "2.1.220" not in banner["version_output"]
+    ):
+        raise RuntimeError(f"invalid public startup banner: {REAL_AGENT_RUNS}")
     return data, digest
 
 
@@ -134,6 +172,7 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
     runtime = root / "runtime"
     tmux_tmp = root / "tmux"
     claude_home = home / ".claude"
+    codex_home = home / ".codex"
     config_dir = home / ".config" / "railmux"
     bin_dir = root / "bin"
     for directory in (
@@ -141,6 +180,7 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
         runtime,
         tmux_tmp,
         claude_home / "projects",
+        codex_home / "sessions",
         config_dir,
         bin_dir,
     ):
@@ -210,12 +250,68 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
             fixed_mtime = 1_785_000_000 - project_index * 100 - session_index
             os.utime(session_path, (fixed_mtime, fixed_mtime))
 
+    codex_project = root / "projects" / "railmux"
+    codex_rollout = (
+        codex_home
+        / "sessions"
+        / "2026"
+        / "07"
+        / "28"
+        / "rollout-2026-07-28T10-00-00-019fa707-1ef5-70d3-bf86-f2bdb7c1457b.jsonl"
+    )
+    _write_jsonl(
+        codex_rollout,
+        [
+            {
+                "timestamp": "2026-07-28T10:00:00.000Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "019fa707-1ef5-70d3-bf86-f2bdb7c1457b",
+                    "timestamp": "2026-07-28T10:00:00.000Z",
+                    "cwd": str(codex_project),
+                    "originator": "codex_cli_rs",
+                    "cli_version": "0.145.0",
+                    "source": "cli",
+                    "thread_source": "user",
+                    "model_provider": "openai",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{
+                        "type": "input_text",
+                        "text": "Explain workspace layout",
+                    }],
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "Compact presentation keeps detached agents alive.",
+                    }],
+                },
+            },
+        ],
+    )
+    os.utime(codex_rollout, (1_785_000_050, 1_785_000_050))
+
     agent_capture, _transcript_digest = _load_agent_runs()
     runs_json_literal = repr(json.dumps(agent_capture["runs"], ensure_ascii=False))
+    banner_json_literal = repr(
+        json.dumps(agent_capture["startup_banner"]["lines"], ensure_ascii=False)
+    )
     resumed_sessions_literal = repr(
         json.dumps(
             {
                 "11111111-1111-4111-8111-111111111111": {
+                    "agent": "Claude Code",
                     "title": "Polish SSH history",
                     "prompt": "Polish SSH history",
                     "response": (
@@ -233,21 +329,95 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
     demo_agent_source = """#!/usr/bin/env python3
 import fcntl
 import json
+import os
 import shutil
+import signal
 import sys
 import textwrap
-import time
 
 RUNS = json.loads(__RUNS_JSON__)
+CLAUDE_BANNER = json.loads(__BANNER_JSON__)
 RESUMED_SESSIONS = json.loads(__RESUMED_SESSIONS__)
 COUNTER = __COUNTER__
 
 
-def emit(text="", delay=0.0):
-    sys.stdout.write(text + "\\r\\n")
+def clipped(text, width):
+    return text[:max(0, width)]
+
+
+def write_row(parts, row, text):
+    parts.append(f"\\033[{row};1H\\033[2K" + text)
+
+
+def render_claude(run, columns, rows):
+    width = max(18, columns - 1)
+    footer_row = max(8, rows - 3)
+    content_rows = []
+    cwd = os.getcwd()
+    for line in CLAUDE_BANNER:
+        content_rows.append("\\033[38;5;252m" + line.replace("{cwd}", cwd))
+    content_rows.append("")
+    for index, line in enumerate(textwrap.wrap(run["prompt"], max(16, width - 4))):
+        prefix = "\\033[38;5;147m❯\\033[0m " if index == 0 else "  "
+        content_rows.append(prefix + "\\033[38;5;252m" + line)
+    content_rows.extend((
+        "",
+        "\\033[38;5;147m●\\033[0m \\033[1;38;5;252m" + run["title"],
+    ))
+    for paragraph in run["response"].splitlines():
+        for line in textwrap.wrap(paragraph, max(16, width - 2)):
+            content_rows.append("  \\033[38;5;252m" + line)
+
+    parts = ["\\033[2J\\033[H"]
+    for row, line in enumerate(content_rows[:footer_row - 1], start=1):
+        write_row(parts, row, line)
+    rule = "─" * width
+    write_row(parts, footer_row, "\\033[38;5;239m" + rule)
+    write_row(parts, footer_row + 1, "\\033[38;5;147m❯\\033[0m ")
+    write_row(parts, footer_row + 2, "\\033[38;5;239m" + rule)
+    write_row(
+        parts,
+        footer_row + 3,
+        "\\033[38;5;244m  ⏵⏵ normal mode · shift+tab to cycle · ← for agents",
+    )
+    return "".join(parts) + "\\033[0m"
+
+
+def render_codex(run, columns, rows):
+    width = max(18, columns - 1)
+    footer_row = max(9, rows - 2)
+    inner = max(12, width - 4)
+    cwd = os.getcwd()
+    box_rule = "─" * (width - 2)
+    content_rows = [
+        "\\033[38;5;252m╭" + box_rule + "╮",
+        "\\033[38;5;252m│ \\033[1m>_ OpenAI Codex (v0.145.0)"
+        + " " * max(1, inner - 27) + "\\033[22m│",
+        "\\033[38;5;252m│ model: gpt-5.3-codex"
+        + " " * max(1, inner - 22) + "│",
+        "\\033[38;5;252m│ directory: " + clipped(cwd, max(8, inner - 11))
+        + " " * max(1, inner - 11 - len(clipped(cwd, max(8, inner - 11)))) + "│",
+        "\\033[38;5;252m╰" + box_rule + "╯",
+        "",
+        "\\033[38;5;75m•\\033[0m \\033[1;38;5;252m" + run["title"],
+    ]
+    for paragraph in run["response"].splitlines():
+        for line in textwrap.wrap(paragraph, max(16, width - 2)):
+            content_rows.append("  \\033[38;5;252m" + line)
+
+    parts = ["\\033[2J\\033[H"]
+    for row, line in enumerate(content_rows[:footer_row - 1], start=1):
+        write_row(parts, row, line)
+    write_row(parts, footer_row, "\\033[38;5;252m› Ask Codex to do anything")
+    write_row(parts, footer_row + 1, "\\033[38;5;244m  ? for shortcuts")
+    return "".join(parts) + "\\033[0m"
+
+
+def repaint(_signum=None, _frame=None):
+    size = shutil.get_terminal_size((88, 24))
+    renderer = render_codex if agent_kind == "codex" else render_claude
+    sys.stdout.write(renderer(run, size.columns, size.lines))
     sys.stdout.flush()
-    if delay:
-        time.sleep(delay)
 
 
 with open(COUNTER, "a+", encoding="utf-8") as handle:
@@ -265,42 +435,20 @@ if "--resume" in sys.argv:
     position = sys.argv.index("--resume")
     if position + 1 < len(sys.argv):
         session_id = sys.argv[position + 1]
-run = RESUMED_SESSIONS.get(session_id, RUNS[invocation % len(RUNS)])
-columns = shutil.get_terminal_size((88, 24)).columns
-rows = shutil.get_terminal_size((88, 24)).lines
-wrap_width = max(28, columns - 4)
-
-sys.stdout.write("\\033[2J\\033[H")
-prompt_lines = textwrap.wrap(run["prompt"], wrap_width - 2)
-for index, line in enumerate(prompt_lines):
-    prefix = "\\033[38;5;147m❯\\033[0m " if index == 0 else "  "
-    emit(prefix + "\\033[38;5;252m" + line + "\\033[0m", 0.025)
-emit()
-emit("\\033[38;5;147m●\\033[0m \\033[1;38;5;252m" + run["title"] + "\\033[0m", 0.08)
-for paragraph in run["response"].splitlines():
-    for line in textwrap.wrap(paragraph, wrap_width):
-        emit("  " + line, 0.018)
-footer_row = max(8, rows - 3)
-sys.stdout.write(
-    f"\\033[{footer_row};1H\\033[2K"
-    + "\\033[38;5;239m"
-    + "─" * columns
-    + "\\033[0m"
-    + f"\\033[{footer_row + 1};1H\\033[2K"
-    + "\\033[38;5;147m❯\\033[0m "
-    + f"\\033[{footer_row + 2};1H\\033[2K\\033[38;5;239m"
-    + "─" * columns
-    + "\\033[0m"
-    + f"\\033[{footer_row + 3};1H\\033[2K\\033[38;5;244m"
-    + "  ⏵⏵ normal mode · shift+tab to cycle · ← for agents"
-    + "\\033[0m"
-)
-sys.stdout.flush()
+agent_kind = "codex" if "codex" in os.path.basename(sys.argv[0]) else "claude"
+candidates = [
+    item for item in RUNS
+    if item["agent"] == ("Codex" if agent_kind == "codex" else "Claude Code")
+]
+run = RESUMED_SESSIONS.get(session_id, candidates[invocation % len(candidates)])
+signal.signal(signal.SIGWINCH, repaint)
+repaint()
 while True:
-    time.sleep(1)
+    signal.pause()
 """
     demo_agent_source = (
         demo_agent_source.replace("__RUNS_JSON__", runs_json_literal)
+        .replace("__BANNER_JSON__", banner_json_literal)
         .replace("__RESUMED_SESSIONS__", resumed_sessions_literal)
         .replace("__COUNTER__", counter_literal)
     )
@@ -309,10 +457,16 @@ while True:
         encoding="utf-8",
     )
     demo_agent.chmod(0o700)
+    demo_codex = bin_dir / "demo-codex"
+    demo_codex.symlink_to(demo_agent)
 
     (config_dir / "config.toml").write_text(
         "[claude]\n"
         f'binary = "{demo_agent}"\n\n'
+        "[codex]\n"
+        f'binary = "{demo_codex}"\n'
+        f'home = "{codex_home}"\n'
+        'auto_run = "never"\n\n'
         "[live]\n"
         "poll_interval_ms = 250\n\n"
         "[updates]\n"
@@ -402,6 +556,29 @@ def _railmux_python(env: dict[str, str]) -> str:
     )
 
 
+def _startup_surface(
+    python: str,
+    env: dict[str, str],
+    width: int,
+    height: int,
+) -> bytes:
+    """Render the exact installed Railmux startup surface."""
+    return subprocess.check_output(
+        [
+            python,
+            "-c",
+            (
+                "import sys; "
+                "from railmux.pane_surface import render_startup_surface; "
+                "sys.stdout.write(render_startup_surface("
+                f"{width}, {height}))"
+            ),
+        ],
+        env=env,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def _client_name(label: str, env: dict[str, str]) -> str | None:
     try:
         names = subprocess.check_output(
@@ -447,12 +624,14 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         )
         os.close(slave)
 
+        startup_offset = STARTUP_HOLD_SECONDS if profile is DESKTOP else 0.0
+        total_duration = profile.duration + startup_offset
         header = {
             "version": 2,
             "width": profile.width,
             "height": profile.height,
             "timestamp": 1785146400,
-            "duration": profile.duration,
+            "duration": total_duration,
             "command": f"railmux (isolated {profile.name} website demo)",
             "title": (f"Railmux — real {profile.name} tmux UI, credential-free demo"),
             "transcript_sha256": _load_agent_runs()[1],
@@ -464,17 +643,21 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         started = time.monotonic()
         ready_at: float | None = None
         startup_output = bytearray()
+        post_resize_output = bytearray()
         sent: set[str] = set()
 
         def elapsed() -> float:
             return time.monotonic() - ready_at if ready_at is not None else -1.0
+
+        def cast_time() -> float:
+            return max(0.0, startup_offset + elapsed())
 
         def record_input(payload: str) -> None:
             if ready_at is None:
                 return
             events.append(
                 _event(
-                    elapsed(),
+                    cast_time(),
                     "i",
                     payload.encode(),
                 )
@@ -532,6 +715,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
 
         required_actions = {
             DESKTOP.name: {
+                "startup-surface",
                 "launch-primary",
             },
             DUAL.name: {
@@ -539,6 +723,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "split",
                 "target-secondary",
                 "return-sidebar",
+                "switch-codex",
                 "launch-secondary",
             },
             WORKFLOW.name: {
@@ -556,6 +741,15 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "new-project",
                 "close-new-project",
                 "open-help",
+            },
+            CONTROLS.name: {
+                "launch-primary",
+                "return-sidebar",
+                "expand-more",
+                "switch-codex",
+                "cycle-layout",
+                "open-quit",
+                "cancel-quit",
             },
         }[profile.name]
 
@@ -611,10 +805,20 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                     if "return-sidebar" in sent and running_sidebar_visible:
                         send_once(
+                            "switch-codex",
+                            5.3,
+                            b"m",
+                            "key|M|Switch to Codex mode",
+                        )
+                    if (
+                        "switch-codex" in sent
+                        and b"Explain workspace layout" in raw_output
+                    ):
+                        send_once(
                             "launch-secondary",
-                            5.5,
+                            6.2,
                             b"n",
-                            "key|N|Open the second agent",
+                            "key|N|Open Codex in agent two",
                         )
                 elif profile is WORKFLOW:
                     # Preview a stopped transcript without launching it, resume
@@ -679,7 +883,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             ("C-b", "Tab"),
                             "key|C-b Tab|Agent",
                         )
-                else:
+                elif profile is TOUR:
                     # Show two discoverable entry points without creating a
                     # project or starting a provider session.
                     cue_once(
@@ -710,6 +914,61 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             b"?",
                             "key|?|Open Help",
                         )
+                else:
+                    # One bounded control story: keep a Claude session alive,
+                    # expose More, switch the sidebar to Codex, cycle layout,
+                    # then show and cancel the real quit confirmation.
+                    send_once(
+                        "launch-primary",
+                        0.8,
+                        b"n",
+                        "key|N|Start a Claude Code session",
+                    )
+                    if real_response_visible:
+                        send_client_keys(
+                            "return-sidebar",
+                            3.0,
+                            ("C-b", "Tab"),
+                            "key|C-b Tab|Return to Railmux",
+                        )
+                    if "return-sidebar" in sent and running_sidebar_visible:
+                        send_once(
+                            "expand-more",
+                            3.8,
+                            b"+",
+                            "key|+|Show Mode, Layout, and Options",
+                        )
+                    if "expand-more" in sent:
+                        send_once(
+                            "switch-codex",
+                            5.0,
+                            b"m",
+                            "key|M|Switch sidebar to Codex",
+                        )
+                    if (
+                        "switch-codex" in sent
+                        and b"Explain workspace layout" in raw_output
+                    ):
+                        send_client_keys(
+                            "cycle-layout",
+                            6.5,
+                            ("F8",),
+                            "key|F8|Cycle workspace layout",
+                        )
+                    if "cycle-layout" in sent:
+                        send_once(
+                            "open-quit",
+                            8.0,
+                            b"q",
+                            "key|Q|Compare Quit and Soft Quit",
+                        )
+                    if "open-quit" in sent and b"Quit railmux?" in raw_output:
+                        send_once(
+                            "cancel-quit",
+                            12.0,
+                            b"n",
+                            "key|N|Cancel — nothing was stopped",
+                        )
 
                 readable, _, _ = select.select([master], [], [], 0.05)
                 if readable:
@@ -730,14 +989,33 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         if b"PROJECTS" not in ready or b"NEW SESSION" not in ready:
                             continue
                         ready_at = time.monotonic()
+                        if profile is DESKTOP:
+                            if b"Restoring your workspace" not in startup_output:
+                                raise RuntimeError(
+                                    "desktop launch did not paint its startup surface"
+                                )
+                            sent.add("startup-surface")
+                            startup = _startup_surface(
+                                python, env, profile.width, profile.height
+                            )
+                            raw_output.extend(startup)
+                            events.append(_event(0, "o", startup))
                         # The readiness chunk is a full Railmux repaint in
-                        # normal startup. Keep it as frame zero and discard
-                        # tmux's machine-specific startup chrome.
+                        # normal startup. Keep it after the held product-native
+                        # startup surface and discard machine-specific chrome.
                         raw_output.extend(chunk)
-                        events.append(_event(0, "o", chunk))
+                        events.append(_event(startup_offset, "o", chunk))
                         continue
                     raw_output.extend(chunk)
-                    events.append(_event(elapsed(), "o", chunk))
+                    resized = (
+                        profile is DUAL
+                        and "split" in sent
+                        or profile is CONTROLS
+                        and "cycle-layout" in sent
+                    )
+                    if resized:
+                        post_resize_output.extend(chunk)
+                    events.append(_event(cast_time(), "o", chunk))
                 if process.poll() is not None:
                     break
         finally:
@@ -765,6 +1043,14 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 + (f" ({', '.join(missing_actions)})" if missing_actions else "")
                 + (f": {tail}" if tail else "")
             )
+        if (
+            profile in (DUAL, CONTROLS)
+            and re.search("─{101,}".encode(), post_resize_output)
+        ):
+            raise RuntimeError(
+                f"Railmux {profile.name} demo retained an over-wide rule "
+                "after pane resize"
+            )
         private_fragments = (
             b"/tmp/railmux-web-demo-",
             label.encode(),
@@ -780,7 +1066,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         # Extend the final visible state so control-free looping does not snap
         # immediately back to frame zero.
-        events.append(_event(profile.duration - 0.1, "o", b"\x1b7\x1b8"))
+        events.append(_event(total_duration - 0.1, "o", b"\x1b7\x1b8"))
         output.write_text(
             json.dumps(header, ensure_ascii=False) + "\n" + "\n".join(events) + "\n",
             encoding="utf-8",
@@ -819,6 +1105,12 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_MOBILE_OUTPUT,
         help=f"mobile asciicast path (default: {DEFAULT_MOBILE_OUTPUT})",
     )
+    parser.add_argument(
+        "--controls-output",
+        type=Path,
+        default=DEFAULT_CONTROLS_OUTPUT,
+        help=f"controls asciicast path (default: {DEFAULT_CONTROLS_OUTPUT})",
+    )
     args = parser.parse_args(argv)
     try:
         _record(args.desktop_output.resolve(), DESKTOP)
@@ -826,6 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
         _record(args.workflow_output.resolve(), WORKFLOW)
         _record(args.mobile_output.resolve(), MOBILE)
         _record(args.tour_output.resolve(), TOUR)
+        _record(args.controls_output.resolve(), CONTROLS)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"record_web_demo.py: error: {exc}", file=sys.stderr)
         return 1
@@ -834,6 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"recorded workflow Railmux demo: {args.workflow_output.resolve()}")
     print(f"recorded mobile Railmux demo: {args.mobile_output.resolve()}")
     print(f"recorded product tour demo: {args.tour_output.resolve()}")
+    print(f"recorded controls demo: {args.controls_output.resolve()}")
     return 0
 
 

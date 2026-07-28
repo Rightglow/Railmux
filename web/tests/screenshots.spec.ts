@@ -18,14 +18,16 @@ test("reserve compact projection for the mobile recording", async () => {
       "railmux-workflow-demo.cast",
       "railmux-mobile-demo.cast",
       "railmux-tour-demo.cast",
+      "railmux-controls-demo.cast",
     ]
       .map(async (name) => {
         const cast = await readFile(join(outputDir, name), "utf8");
-        return JSON.parse(cast.split("\n", 1)[0]) as {
+        const header = JSON.parse(cast.split("\n", 1)[0]) as {
           width: number;
           height: number;
           transcript_sha256: string;
         };
+        return { ...header, cast };
       }),
   );
 
@@ -39,8 +41,13 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[3].height).toBe(38);
   expect(headers[4].width).toBeGreaterThanOrEqual(84);
   expect(headers[4].height).toBeGreaterThanOrEqual(26);
+  expect(headers[5].width).toBeGreaterThanOrEqual(84);
+  expect(headers[5].height).toBeGreaterThanOrEqual(26);
   expect(headers.every((header) => header.transcript_sha256.length === 64))
     .toBe(true);
+  expect(headers[0].cast).toContain("Restoring your workspace");
+  expect(headers[1].cast).toContain("Claude Code v2.1.220");
+  expect(headers[1].cast).toContain("OpenAI Codex (v0.145.0)");
 });
 
 test("capture deterministic desktop and social previews", async ({ page }) => {
@@ -52,7 +59,7 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   await expect(desktopDemo.locator(".ap-player")).toBeVisible();
   await expect(page.locator("h1")).toContainText("Keep every");
   await expect(
-    page.getByText("REAL CLAUDE CODE ANSWER · ISOLATED RAILMUX"),
+    page.getByText("CLAUDE CODE 2.1.220 STARTUP · ISOLATED RAILMUX"),
   ).toBeVisible();
   await page.waitForTimeout(1_000);
   const startOverlay = desktopDemo.locator(".ap-overlay-start");
@@ -147,6 +154,9 @@ test("show real New Project and Help entry points", async ({ page }) => {
   const help = page.locator('[data-demo="help-recording"]');
   await expect(help.locator(".ap-term")).toContainText("Ask Railmux with");
   await expect(help.locator(".ap-term")).toContainText("Help");
+  await expect(
+    page.getByText("Railmux's own help workspace", { exact: false }),
+  ).toBeVisible();
   await help.locator("xpath=..").screenshot({
     path: join(outputDir, "help-workspace.png"),
     animations: "disabled",
@@ -189,6 +199,39 @@ test("capture deterministic compact preview", async ({ page }) => {
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test("show real mode, layout, and quit controls", async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(".");
+  const player = page.locator('[data-demo="controls-recording"]');
+  await player.scrollIntoViewIfNeeded();
+  await expect(player.locator(".ap-player")).toBeVisible();
+  await expect(player.locator(".ap-control-bar")).toHaveCount(0);
+  const hud = player.getByTestId("terminal-input-hud");
+
+  await expect(hud).toContainText("Show Mode, Layout, and Options", {
+    timeout: 8_000,
+  });
+  await expect(hud).toContainText("Switch sidebar to Codex", {
+    timeout: 5_000,
+  });
+  await expect(player.locator(".ap-term")).toContainText("Codex");
+  await expect(hud).toContainText("Compare Quit and Soft Quit", {
+    timeout: 8_000,
+  });
+  await expect(player.locator(".ap-term")).toContainText("Quit railmux?");
+  await expect(player.locator(".ap-term")).toContainText("soft quit");
+  await expect(player.locator(".ap-term")).toContainText("sessions alive");
+  await player.screenshot({
+    path: join(outputDir, "controls-workspace.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+  await expect(hud).toContainText("nothing was stopped", { timeout: 7_000 });
   expect(pageErrors).toEqual([]);
 });
 

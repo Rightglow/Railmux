@@ -1,10 +1,24 @@
 {
-  "captured_at": "2026-07-27",
-  "source_commit": "f53145d16f1ca87c82eb122a5481c7c0c06cd95f",
-  "capture_method": "Claude Code print mode with no session persistence and read-only tools",
+  "bundle_updated_at": "2026-07-28",
+  "capture_method": "Audited non-persistent, read-only agent captures; see each run",
+  "startup_banner": {
+    "agent": "Claude Code",
+    "captured_at": "2026-07-28",
+    "capture_method": "User-supplied native startup frame; version verified with `claude --version`; cwd templated",
+    "version_command": "claude --version",
+    "version_output": "2.1.220 (Claude Code)",
+    "lines": [
+      " ▐▛███▜▌   Claude Code v2.1.220",
+      "▝▜█████▛▘  Opus 5 (1M context) · API Usage Billing",
+      "  ▘▘ ▝▝    {cwd}"
+    ]
+  },
   "runs": [
     {
       "agent": "Claude Code",
+      "captured_at": "2026-07-27",
+      "source_commit": "f53145d16f1ca87c82eb122a5481c7c0c06cd95f",
+      "capture_method": "Claude Code print mode with no session persistence and read-only tools",
       "title": "Trace SSH wheel ownership",
       "prompt": "In railmux ssh, explain how a mouse-wheel event over an agent pane is served from the fast client's local history overlay rather than forwarded upstream. Point to the exact implementation symbols and one existing focused test that directly asserts empty forwarded_input. Then suggest one small additional assertion.",
       "files": [
@@ -15,6 +29,9 @@
     },
     {
       "agent": "Claude Code",
+      "captured_at": "2026-07-27",
+      "source_commit": "f53145d16f1ca87c82eb122a5481c7c0c06cd95f",
+      "capture_method": "Claude Code print mode with no session persistence and read-only tools",
       "title": "Verify responsive layout gates",
       "prompt": "Explain why a 76x30 Railmux terminal uses the compact single-page projection while a 160x38 terminal remains in the ordinary wide sidebar-plus-agent layout. Cite the exact responsive-layout symbols and one existing focused test. Suggest one website-recorder assertion that prevents a desktop demo from accidentally using compact mode.",
       "files": [
@@ -22,6 +39,18 @@
         "tests/test_agent_workspace.py"
       ],
       "response": "presentation_for_geometry() selects the projection from geometry with hysteresis.\n\nFrom WorkspacePresentation.WIDE it enters COMPACT when either dimension is cramped: width < COMPACT_ENTER_WIDTH (80) or height < COMPACT_ENTER_HEIGHT (24).\n\n76x30: width 76 < 80, so it returns COMPACT even though 30 rows clear the height gate.\n160x38: 160 ≥ 80 and 38 ≥ 24, so it stays WIDE with sidebar plus agent. COMPACT_EXIT_WIDTH/HEIGHT (84/26) only applies once already compact.\n\nExisting focused test: tests/test_agent_workspace.py::test_compact_presentation_uses_two_dimensional_hysteresis pins both width and height behavior.\n\nRecorder guard: pass each non-mobile profile through presentation_for_geometry and assert WorkspacePresentation.WIDE."
+    },
+    {
+      "agent": "Codex",
+      "captured_at": "2026-07-28",
+      "source_commit": "7c23952f16415bb26bc3e564ee9106d558bb3b33",
+      "capture_method": "Codex exec --ephemeral with read-only sandbox",
+      "title": "Explain workspace layout",
+      "prompt": "Read src/railmux/ui/workspace.py only. In 3 concise sentences, explain what Railmux's F8 layout cycle does, how compact presentation differs from the saved layout, and why switching or hiding panes does not stop their agents. Name the exact relevant symbols. Do not modify files.",
+      "files": [
+        "src/railmux/ui/workspace.py"
+      ],
+      "response": "F8 uses `next_workspace_layout()` to cycle `WorkspaceLayout.SINGLE → SIDE_BY_SIDE → STACKED → SINGLE`.\n`WorkspacePresentation.COMPACT` preserves `AgentWorkspace.layout` but shows one full-window `WorkspacePage` at a time via `AgentWorkspace.compact_page`.\nPage switching only changes presentation, while `collapse_to_primary()` hides the secondary outer pane and preserves its detached agent identity in `AgentWorkspace.collapsed_secondary_agent`, so the agent keeps running."
     }
   ]
 }

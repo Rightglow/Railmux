@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add separate single-agent, dual-agent, and product-entry-point website
   recordings. The guided flow now dwells on stopped-session preview before
   resume, while New Project and Help are shown from the real Railmux UI.
+- Add an audited Codex source-analysis capture and a sixth website recording
+  that demonstrates More, provider Mode, F8 Layout, and the real
+  Quit/Soft Quit confirmation without stopping any session.
 - Explain on the product site that Railmux discovers interactive Claude Code
   and Codex history created outside Railmux while filtering `codex exec` and
   subagent rollouts.
@@ -42,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt/response/input structure, switch the compact demo to a representative
   46×38 portrait-phone geometry, and loop control-free recordings after a held
   final frame.
+- Begin the hero recording with Railmux's real `Restoring your workspace`
+  surface, include Claude Code's recorded version/model/cwd identity block,
+  and distinguish Claude Code and Codex in the dual-agent demo.
+- Clarify that Ask Railmux opens a dedicated read-only support session in
+  Railmux's own help workspace, and document provider/layout controls plus the
+  distinct Detach, Soft Quit, and Quit lifecycle choices on the product site.
 - Refresh the terminal UI hierarchy with right-aligned sidebar and project
   counts, stable uppercase section labels, and responsive neutral shortcut
   controls in the clickable Button Bar.
@@ -67,6 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clear every synthetic Claude input row before repainting it so the website
   recording shows one separator above and below the bare prompt instead of
   stale horizontal-rule fragments on the input line.
+- Repaint deterministic agent demos on terminal resize so switching to a
+  dual-agent layout cannot leave full-width prompt rules reflowed across panes.
 - Suppress tmux's default right-click menu over Railmux agent panes while
   retaining context-menu forwarding in the mouse-aware sidebar and preserving
   the user's original binding in unrelated tmux windows.
