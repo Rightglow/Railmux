@@ -330,6 +330,7 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
 import fcntl
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -350,12 +351,38 @@ def write_row(parts, row, text):
     parts.append(f"\\033[{row};1H\\033[2K" + text)
 
 
+BODY_TOKEN = re.compile(
+    r"`[^`]+`"
+    r"|(?:src|tests)/[A-Za-z0-9_./-]+(?:::[A-Za-z0-9_]+)?"
+    r"|[A-Za-z_][A-Za-z0-9_]*(?:\\(\\)|\\.[A-Za-z_][A-Za-z0-9_]*)+"
+    r"|\\b(?:True|False|None|COMPACT|WIDE|SINGLE|SIDE_BY_SIDE|STACKED)\\b"
+    r'|b""|=='
+)
+
+
 def styled_body(text):
-    pieces = []
-    for index, piece in enumerate(text.split("`")):
-        colour = "\\033[38;5;110m" if index % 2 else "\\033[38;5;252m"
-        pieces.append(colour + piece)
-    return "\\033[22m" + "".join(pieces)
+    # Restrained semantic colour matching the agent TUIs.
+    pieces = ["\\033[22;38;5;252m"]
+    offset = 0
+    for match in BODY_TOKEN.finditer(text):
+        pieces.append(text[offset:match.start()])
+        token = match.group(0)
+        if token.startswith(("src/", "tests/")):
+            colour = 114
+        elif token in {
+            "True", "False", "None", "COMPACT", "WIDE", "SINGLE",
+            "SIDE_BY_SIDE", "STACKED", 'b""', "==",
+        }:
+            colour = 179
+        else:
+            colour = 110
+        if token.startswith("`") and token.endswith("`"):
+            token = token[1:-1]
+        pieces.append(f"\\033[38;5;{colour}m" + token)
+        pieces.append("\\033[38;5;252m")
+        offset = match.end()
+    pieces.append(text[offset:])
+    return "".join(pieces)
 
 
 def render_claude(run, columns, rows):
@@ -364,7 +391,14 @@ def render_claude(run, columns, rows):
     content_rows = []
     cwd = os.getcwd()
     for line in CLAUDE_BANNER:
-        content_rows.append("\\033[38;5;252m" + line.replace("{cwd}", cwd))
+        line = line.replace("{cwd}", cwd)
+        # Claude Code's mark is warm coral; the product/version text remains
+        # neutral so the banner reads like the real TUI rather than a logo
+        # pasted over the terminal recording.
+        content_rows.append(
+            "\\033[38;5;173m" + line[:11]
+            + "\\033[38;5;252m" + line[11:]
+        )
     content_rows.append("")
     for index, line in enumerate(textwrap.wrap(run["prompt"], max(16, width - 4))):
         prefix = "\\033[38;5;147m❯\\033[0m " if index == 0 else "  "
@@ -399,14 +433,16 @@ def render_codex(run, columns, rows):
     cwd = os.getcwd()
     box_rule = "─" * (width - 2)
     content_rows = [
-        "\\033[38;5;252m╭" + box_rule + "╮",
-        "\\033[38;5;252m│ \\033[1m>_ OpenAI Codex (v0.145.0)"
-        + " " * max(1, inner - 27) + "\\033[22m│",
-        "\\033[38;5;252m│ model: gpt-5.3-codex"
-        + " " * max(1, inner - 22) + "│",
-        "\\033[38;5;252m│ directory: " + clipped(cwd, max(8, inner - 11))
+        "\\033[38;5;244m╭" + box_rule + "╮",
+        "\\033[38;5;244m│ \\033[1;38;5;75m>_ OpenAI Codex (v0.145.0)"
+        + "\\033[22;38;5;244m" + " " * max(1, inner - 27) + "│",
+        "\\033[38;5;244m│ model: \\033[38;5;110mgpt-5.3-codex"
+        + "\\033[38;5;244m" + " " * max(1, inner - 22) + "│",
+        "\\033[38;5;244m│ directory: \\033[38;5;114m"
+        + clipped(cwd, max(8, inner - 11))
+        + "\\033[38;5;244m"
         + " " * max(1, inner - 11 - len(clipped(cwd, max(8, inner - 11)))) + "│",
-        "\\033[38;5;252m╰" + box_rule + "╯",
+        "\\033[38;5;244m╰" + box_rule + "╯",
         "",
         "\\033[38;5;75m•\\033[0m \\033[1;38;5;252m" + run["title"],
     ]

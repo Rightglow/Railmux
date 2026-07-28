@@ -85,6 +85,26 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
 
   await expect(desktopDemo.locator(".ap-term")).toContainText("❯");
   await expect(desktopDemo.locator(".ap-term")).toContainText("●");
+  const hasSemanticAgentColor = await desktopDemo.locator(".ap-line").evaluateAll(
+    (lines) => {
+      const evidence = lines.filter((line) =>
+        /handle_terminal_part|test_fast_full_window/.test(
+          line.textContent ?? "",
+        )
+      );
+      return evidence.some((line) =>
+        [...line.querySelectorAll("span")].some((span) => {
+          const channels = getComputedStyle(span).color
+            .match(/\d+/g)
+            ?.slice(0, 3)
+            .map(Number);
+          return channels !== undefined
+            && Math.max(...channels) - Math.min(...channels) >= 20;
+        }),
+      );
+    },
+  );
+  expect(hasSemanticAgentColor).toBe(true);
   await expect(desktopDemo.locator(".ap-term")).not.toContainText(
     "captured 2026",
   );
