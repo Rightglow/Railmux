@@ -5,36 +5,45 @@
 [![Python](https://img.shields.io/pypi/pyversions/railmux.svg)](https://pypi.org/project/railmux/)
 [![License](https://img.shields.io/github/license/Rightglow/Railmux.svg)](LICENSE)
 
-A terminal UI to navigate, resume, and start
+A persistent terminal workspace to navigate, resume, and run
 [Claude Code](https://claude.com/claude-code) and
 [Codex](https://github.com/openai/codex) sessions across all your projects.
-Railmux lives in the left pane of a tmux window; the right pane shows the active
-agent. Each session runs in its own detached tmux session, so switching never
-interrupts in-progress responses or tool calls.
+Railmux gives tmux a project-aware sidebar and one or two live agent panes.
+Every agent runs independently, so browsing, switching, detaching, and
+responsive layout changes do not interrupt in-progress work.
 
 **[Product website](https://rightglow.github.io/Railmux/)** ·
 **[Releases](https://github.com/Rightglow/Railmux/releases)** ·
 **[PyPI](https://pypi.org/project/railmux/)**
 
-- **Claude Code mode** — reads `~/.claude/projects/*`, lists sessions by project, resume with `claude --resume`
-- **Codex mode** — reads `~/.codex/sessions/*`, same sidebar workflow for Codex sessions
-- Press `m` to cycle through the available modes
+<p align="center">
+  <a href="https://rightglow.github.io/Railmux/">
+    <img
+      src="web/public/generated/dual-agent-workspace.png"
+      alt="Railmux running Claude Code and Codex side by side with a project and session sidebar"
+      width="1100"
+    />
+  </a>
+</p>
+
+- **Find existing work automatically** — Railmux indexes resumable Claude Code
+  and Codex sessions, including conversations started outside Railmux.
+- **Run two agents together** — use single, side-by-side, or stacked layouts
+  without stopping the agent hidden by a layout change.
+- **Leave without losing momentum** — detach one terminal or soft-quit the
+  shared UI while detached agent sessions keep running.
+- **Use it comfortably over SSH** — `railmux ssh` coalesces superseded redraws
+  and provides responsive, locally cached history scrolling.
+
+One-off non-resumable invocations such as `codex exec` are intentionally
+filtered from the sidebar.
 
 ## Why Railmux?
 
-Without Railmux, managing multiple agent sessions means manually tracking tmux
-windows, remembering which session lives where, and copy-pasting session IDs.
-Sessions pile up across projects, context gets lost, and switching between
-them is friction.
-
-Railmux replaces all of that with a single keystroke:
-
-- **One sidebar, all sessions** — browse every Claude Code and Codex session
-  across every project, filter by name, star favourites
-- **Instant switching** — press Enter and the right pane attaches to a different
-  background tmux session; every agent keeps running, no responses lost
-- **Zero manual bookkeeping** — no more `tmux ls | grep cc-` or hunting through
-  `~/.claude/projects/`
+Agent conversations tend to outlive the terminal tab where they began.
+Railmux replaces tmux-window bookkeeping and copied session IDs with one
+sidebar: select a project, preview or resume its history, and switch among live
+agents without losing their context.
 
 ## Quick start
 

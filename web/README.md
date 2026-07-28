@@ -33,7 +33,8 @@ login. It produces six source-authentic recordings:
 
 - `public/generated/railmux-demo.cast` records the opening single-agent
   workspace, beginning with Railmux's product-native
-  `Restoring your workspace` startup surface.
+  `Restoring your workspace` startup surface, opening a fresh Claude Code
+  session, and typing a short prompt one character at a time.
 - `public/generated/railmux-dual-demo.cast` records the full desktop workspace,
   including Claude Code and Codex in separate live agent panes.
 - `public/generated/railmux-workflow-demo.cast` records a focused 160×38
@@ -50,7 +51,9 @@ login. It produces six source-authentic recordings:
   launching an agent.
 - `public/generated/railmux-controls-demo.cast` records More, provider Mode,
   F8 Layout, and the real Quit/Soft Quit confirmation. It completes a soft quit
-  in the isolated workspace and leaves the recorded agent session running.
+  in the isolated workspace and leaves the recorded agent session running. The
+  final layout choice is submitted without a separate input HUD because the
+  resulting soft-quit state is the user-visible outcome.
 
 The website plays all six casts directly as text through asciinema-player. The
 recorder launches Railmux through its normal CLI, opens isolated local

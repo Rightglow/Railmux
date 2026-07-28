@@ -71,7 +71,7 @@ export default function Home() {
           <div className="hero-demo">
             <div className="capture-meta">
               <span><i /> CLAUDE CODE 2.1.220 STARTUP · ISOLATED RAILMUX</span>
-              <small>recorded identity block · audited answer replay · no live provider call</small>
+              <small>recorded identity block · deterministic local agent · no live provider call</small>
             </div>
             <TerminalRecording
               className="hero-terminal-recording"

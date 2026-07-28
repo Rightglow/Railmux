@@ -25,9 +25,15 @@ test("reserve compact projection for the mobile recording", async () => {
         const header = JSON.parse(cast.split("\n", 1)[0]) as {
           width: number;
           height: number;
+          duration: number;
           transcript_sha256: string;
         };
-        return { ...header, cast };
+        const timestamps = cast
+          .trimEnd()
+          .split("\n")
+          .slice(1)
+          .map((line) => Number(JSON.parse(line)[0]));
+        return { ...header, cast, timestamps };
       }),
   );
 
@@ -45,8 +51,14 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[5].height).toBeGreaterThanOrEqual(26);
   expect(headers.every((header) => header.transcript_sha256.length === 64))
     .toBe(true);
+  expect(
+    headers[0].timestamps.every(
+      (timestamp) => timestamp <= headers[0].duration,
+    ),
+  ).toBe(true);
   expect(headers[0].cast).toContain("Restoring your workspace");
   expect(headers[0].cast).toContain('[2.4');
+  expect(headers[0].cast).toContain("start your work");
   expect(headers[1].cast).toContain("Claude Code v2.1.220");
   expect(headers[1].cast).toContain("OpenAI Codex (v0.145.0)");
   expect(headers[2].cast).toContain("Preview stopped session");
@@ -58,7 +70,9 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[3].cast).toContain("mouse|2|38|Open [R] sidebar");
   expect(headers[3].cast).toContain("mouse|5|38|Open [1] agent");
   expect(headers[5].cast).toContain("Soft quit — keep agents running");
-  expect(headers[5].cast).toContain("Skip layout save and finish soft quit");
+  expect(headers[5].cast).not.toContain(
+    "Skip layout save and finish soft quit",
+  );
   expect(headers[5].cast).toContain("Keeping 1 agent session running.");
 });
 
@@ -93,13 +107,15 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   ).toBe(true);
 
   await expect(desktopDemo.locator(".ap-term")).toContainText("❯");
-  await expect(desktopDemo.locator(".ap-term")).toContainText("●");
+  await expect(desktopDemo.locator(".ap-term")).toContainText(
+    "start your work",
+    { timeout: 6_000 },
+  );
+  await expect(desktopDemo.locator(".ap-term")).not.toContainText("●");
   const hasSemanticAgentColor = await desktopDemo.locator(".ap-line").evaluateAll(
     (lines) => {
       const evidence = lines.filter((line) =>
-        /handle_terminal_part|test_fast_full_window/.test(
-          line.textContent ?? "",
-        )
+        /Claude Code v2\.1\.220/.test(line.textContent ?? "")
       );
       return evidence.some((line) =>
         [...line.querySelectorAll("span")].some((span) => {
@@ -296,10 +312,9 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   });
   await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
   await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
-  await expect(hud).toContainText("finish soft quit", { timeout: 7_000 });
   await expect(player.locator(".ap-term")).toContainText(
     "Keeping 1 agent session running.",
-    { timeout: 5_000 },
+    { timeout: 7_000 },
   );
   await player.screenshot({
     path: join(outputDir, "soft-quit-complete.png"),

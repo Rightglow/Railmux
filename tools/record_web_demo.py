@@ -49,7 +49,7 @@ class RecordingProfile:
     duration: float
 
 
-DESKTOP = RecordingProfile("desktop", 180, 38, 10.0)
+DESKTOP = RecordingProfile("desktop", 180, 38, 6.5)
 DUAL = RecordingProfile("dual", 210, 42, 15.5)
 WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # A representative portrait phone geometry. Compact mode is selected by the
@@ -426,7 +426,7 @@ def render_claude(run, columns, rows):
     return "".join(parts) + "\\033[0m"
 
 
-def render_empty_claude(columns, rows):
+def render_empty_claude(columns, rows, prompt=""):
     # A newly opened Claude session before its first prompt.
     width = max(18, columns - 1)
     footer_row = max(8, rows - 3)
@@ -444,7 +444,11 @@ def render_empty_claude(columns, rows):
         write_row(parts, row, line)
     rule = "─" * width
     write_row(parts, footer_row, "\\033[38;5;239m" + rule)
-    write_row(parts, footer_row + 1, "\\033[38;5;147m❯\\033[0m ")
+    write_row(
+        parts,
+        footer_row + 1,
+        "\\033[38;5;147m❯\\033[0m \\033[38;5;252m" + prompt,
+    )
     write_row(parts, footer_row + 2, "\\033[38;5;239m" + rule)
     write_row(
         parts,
@@ -488,8 +492,12 @@ def render_codex(run, columns, rows):
 
 def repaint(_signum=None, _frame=None):
     size = shutil.get_terminal_size((88, 24))
-    if PROFILE == "workflow" and agent_kind == "claude" and session_id is None:
-        rendered = render_empty_claude(size.columns, size.lines)
+    if (
+        PROFILE in {"desktop", "workflow"}
+        and agent_kind == "claude"
+        and session_id is None
+    ):
+        rendered = render_empty_claude(size.columns, size.lines, typed_prompt)
     else:
         renderer = render_codex if agent_kind == "codex" else render_claude
         rendered = renderer(run, size.columns, size.lines)
@@ -527,10 +535,30 @@ candidate_index = invocation + profile_offsets.get(PROFILE, 0)
 run = RESUMED_SESSIONS.get(
     session_id, candidates[candidate_index % len(candidates)]
 )
+typed_prompt = ""
 signal.signal(signal.SIGWINCH, repaint)
 repaint()
-while True:
-    signal.pause()
+if PROFILE == "desktop" and agent_kind == "claude" and session_id is None:
+    import termios
+
+    original_tty = termios.tcgetattr(sys.stdin)
+    input_tty = termios.tcgetattr(sys.stdin)
+    input_tty[3] &= ~(termios.ICANON | termios.ECHO)
+    input_tty[6][termios.VMIN] = 1
+    input_tty[6][termios.VTIME] = 0
+    termios.tcsetattr(sys.stdin, termios.TCSANOW, input_tty)
+    try:
+        while True:
+            value = os.read(sys.stdin.fileno(), 1)
+            if not value:
+                break
+            typed_prompt += value.decode("utf-8", errors="ignore")
+            repaint()
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSANOW, original_tty)
+else:
+    while True:
+        signal.pause()
 """
     demo_agent_source = (
         demo_agent_source.replace("__RUNS_JSON__", runs_json_literal)
@@ -759,6 +787,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         sanitizer_tail = bytearray()
         sanitizer_hold = 512
         sent: set[str] = set()
+        typed: dict[str, tuple[int, float]] = {}
         controls_exit_frozen = False
 
         def elapsed() -> float:
@@ -794,6 +823,49 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             if name not in sent and elapsed() >= at:
                 record_input(cue)
                 sent.add(name)
+
+        def type_once(
+            name: str,
+            at: float,
+            value: str,
+            *,
+            interval: float = 0.16,
+        ) -> None:
+            """Type one visible character at a time into the focused agent."""
+
+            if name in sent or elapsed() < at:
+                return
+            index, next_at = typed.get(name, (0, at))
+            if elapsed() < next_at:
+                return
+            os.write(master, value[index].encode())
+            # The real terminal paints each character immediately, but the
+            # detached recorder client otherwise tends to report those tiny
+            # pane updates only with its next periodic refresh. Sample the
+            # already-rendered tmux client after each real keypress so the cast
+            # preserves the same visible typing cadence.
+            client = _client_name(label, env)
+            if client is not None:
+                subprocess.run(
+                    [
+                        "tmux",
+                        "-L",
+                        label,
+                        "refresh-client",
+                        "-t",
+                        client,
+                    ],
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            index += 1
+            if index == len(value):
+                sent.add(name)
+                typed.pop(name, None)
+                return
+            typed[name] = (index, elapsed() + interval)
 
         def send_client_keys(
             name: str,
@@ -832,6 +904,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             DESKTOP.name: {
                 "startup-surface",
                 "launch-primary",
+                "type-greeting",
             },
             DUAL.name: {
                 "launch-primary",
@@ -883,14 +956,21 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 preview_visible = b"Read-only history preview" in raw_output
                 running_sidebar_visible = b"railmux/(new)" in raw_output
                 if profile is DESKTOP:
-                    # The opening website view stays deliberately simple: one
-                    # sidebar and one native-looking agent pane.
+                    # The opening website view stays deliberately simple: the
+                    # latest startup flow, one sidebar, and one fresh agent
+                    # receiving a short prompt at a human-readable pace.
                     send_once(
                         "launch-primary",
                         0.8,
                         b"n",
                         "key|N|Open a real agent",
                     )
+                    if real_response_visible:
+                        type_once(
+                            "type-greeting",
+                            2.8,
+                            "start your work",
+                        )
                 elif profile is DUAL:
                     # Build a real two-agent workspace. Function/navigation keys
                     # go through the attached tmux client's key tables so the
@@ -1112,7 +1192,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "finish-soft-quit",
                             22.0,
                             b"n",
-                            "key|N|Skip layout save and finish soft quit",
+                            None,
                         )
 
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -1262,8 +1342,13 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         # Extend the final visible state so control-free looping does not snap
-        # immediately back to frame zero.
-        events.append(_event(total_duration - 0.1, "o", b"\x1b7\x1b8"))
+        # immediately back to frame zero. A final sanitizer tail can land just
+        # past the nominal profile duration, so derive the cast boundary from
+        # the actual last event instead of clipping a valid final repaint.
+        last_event_at = json.loads(events[-1])[0] if events else 0.0
+        final_duration = max(total_duration, last_event_at + 1.0)
+        header["duration"] = final_duration
+        events.append(_event(final_duration - 0.1, "o", b"\x1b7\x1b8"))
         output.write_text(
             json.dumps(header, ensure_ascii=False) + "\n" + "\n".join(events) + "\n",
             encoding="utf-8",
