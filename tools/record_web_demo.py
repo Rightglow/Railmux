@@ -35,8 +35,10 @@ ROOT = Path(__file__).resolve().parents[1]
 GENERATED = ROOT / "web" / "public" / "generated"
 REAL_AGENT_RUNS = ROOT / "web" / "demo" / "real-agent-runs.json"
 DEFAULT_DESKTOP_OUTPUT = GENERATED / "railmux-demo.cast"
+DEFAULT_DUAL_OUTPUT = GENERATED / "railmux-dual-demo.cast"
 DEFAULT_WORKFLOW_OUTPUT = GENERATED / "railmux-workflow-demo.cast"
 DEFAULT_MOBILE_OUTPUT = GENERATED / "railmux-mobile-demo.cast"
+DEFAULT_TOUR_OUTPUT = GENERATED / "railmux-tour-demo.cast"
 
 
 @dataclass(frozen=True)
@@ -47,9 +49,13 @@ class RecordingProfile:
     duration: float
 
 
-DESKTOP = RecordingProfile("desktop", 210, 42, 13.0)
-WORKFLOW = RecordingProfile("workflow", 160, 38, 14.0)
-MOBILE = RecordingProfile("mobile", 46, 26, 9.0)
+DESKTOP = RecordingProfile("desktop", 180, 38, 10.0)
+DUAL = RecordingProfile("dual", 210, 42, 13.0)
+WORKFLOW = RecordingProfile("workflow", 160, 38, 15.0)
+# A real Termux report was 105 columns by 21 rows. Compact mode is selected by
+# the short height even though the landscape terminal is comfortably wide.
+MOBILE = RecordingProfile("mobile", 105, 21, 10.0)
+TOUR = RecordingProfile("tour", 160, 38, 10.0)
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
     "LANG",
@@ -204,11 +210,24 @@ def _create_fixture(root: Path) -> tuple[Path, dict[str, str]]:
             fixed_mtime = 1_785_000_000 - project_index * 100 - session_index
             os.utime(session_path, (fixed_mtime, fixed_mtime))
 
-    agent_capture, transcript_digest = _load_agent_runs()
+    agent_capture, _transcript_digest = _load_agent_runs()
     runs_json_literal = repr(json.dumps(agent_capture["runs"], ensure_ascii=False))
+    resumed_sessions_literal = repr(
+        json.dumps(
+            {
+                "11111111-1111-4111-8111-111111111111": {
+                    "title": "Polish SSH history",
+                    "prompt": "Polish SSH history",
+                    "response": (
+                        "The local history overlay now skips superseded frames while "
+                        "keeping the latest terminal state responsive."
+                    ),
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
     counter_literal = repr(str(root / "agent-invocations"))
-    captured_at_literal = repr(str(agent_capture["captured_at"]))
-    digest_literal = repr(transcript_digest[:12])
 
     demo_agent = bin_dir / "demo-agent"
     demo_agent_source = """#!/usr/bin/env python3
@@ -220,9 +239,8 @@ import textwrap
 import time
 
 RUNS = json.loads(__RUNS_JSON__)
+RESUMED_SESSIONS = json.loads(__RESUMED_SESSIONS__)
 COUNTER = __COUNTER__
-CAPTURED_AT = __CAPTURED_AT__
-TRANSCRIPT_DIGEST = __TRANSCRIPT_DIGEST__
 
 
 def emit(text="", delay=0.0):
@@ -242,34 +260,48 @@ with open(COUNTER, "a+", encoding="utf-8") as handle:
     handle.write(str(invocation + 1))
     handle.flush()
 
-run = RUNS[invocation % len(RUNS)]
+session_id = None
+if "--resume" in sys.argv:
+    position = sys.argv.index("--resume")
+    if position + 1 < len(sys.argv):
+        session_id = sys.argv[position + 1]
+run = RESUMED_SESSIONS.get(session_id, RUNS[invocation % len(RUNS)])
 columns = shutil.get_terminal_size((88, 24)).columns
-wrap_width = max(32, columns - 4)
+rows = shutil.get_terminal_size((88, 24)).lines
+wrap_width = max(28, columns - 4)
 
 sys.stdout.write("\\033[2J\\033[H")
-emit("\\033[38;5;244m╭─ " + run["agent"] + " · captured " + CAPTURED_AT + "\\033[0m", 0.08)
-for line in textwrap.wrap(run["prompt"], wrap_width - 2):
-    emit("\\033[38;5;252m│ " + line + "\\033[0m", 0.025)
-emit("\\033[38;5;244m╰─ read-only source analysis\\033[0m", 0.08)
+prompt_lines = textwrap.wrap(run["prompt"], wrap_width - 2)
+for index, line in enumerate(prompt_lines):
+    prefix = "\\033[38;5;147m❯\\033[0m " if index == 0 else "  "
+    emit(prefix + "\\033[38;5;252m" + line + "\\033[0m", 0.025)
 emit()
-for path in run["files"]:
-    emit("\\033[38;5;244m• Read " + path + "\\033[0m", 0.07)
-emit()
-emit("\\033[38;5;118m" + run["title"] + "\\033[0m", 0.08)
+emit("\\033[38;5;147m●\\033[0m \\033[1;38;5;252m" + run["title"] + "\\033[0m", 0.08)
 for paragraph in run["response"].splitlines():
     for line in textwrap.wrap(paragraph, wrap_width):
-        emit(line, 0.018)
-emit()
-emit("\\033[38;5;70m✓ Read-only analysis complete · transcript " + TRANSCRIPT_DIGEST + "\\033[0m")
-emit("\\033[38;5;244m› Captured once; sanitized transcript replay; no provider session persisted.\\033[0m")
+        emit("  " + line, 0.018)
+footer_row = max(8, rows - 3)
+sys.stdout.write(
+    f"\\033[{footer_row};1H"
+    + "\\033[38;5;239m"
+    + "─" * columns
+    + "\\033[0m"
+    + f"\\033[{footer_row + 1};1H\\033[38;5;147m❯\\033[0m "
+    + f"\\033[{footer_row + 2};1H\\033[38;5;239m"
+    + "─" * columns
+    + "\\033[0m"
+    + f"\\033[{footer_row + 3};1H\\033[38;5;244m"
+    + "  ⏵⏵ normal mode · shift+tab to cycle · ← for agents"
+    + "\\033[0m"
+)
+sys.stdout.flush()
 while True:
     time.sleep(1)
 """
     demo_agent_source = (
         demo_agent_source.replace("__RUNS_JSON__", runs_json_literal)
+        .replace("__RESUMED_SESSIONS__", resumed_sessions_literal)
         .replace("__COUNTER__", counter_literal)
-        .replace("__CAPTURED_AT__", captured_at_literal)
-        .replace("__TRANSCRIPT_DIGEST__", digest_literal)
     )
     demo_agent.write_text(
         demo_agent_source,
@@ -500,6 +532,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         required_actions = {
             DESKTOP.name: {
                 "launch-primary",
+            },
+            DUAL.name: {
+                "launch-primary",
                 "split",
                 "target-secondary",
                 "return-sidebar",
@@ -516,6 +551,11 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "mobile-sidebar",
                 "mobile-agent",
             },
+            TOUR.name: {
+                "new-project",
+                "close-new-project",
+                "open-help",
+            },
         }[profile.name]
 
         try:
@@ -525,10 +565,19 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 if ready_at is not None and elapsed() >= profile.duration:
                     break
 
-                real_response_visible = b"sanitized transcript replay" in raw_output
+                real_response_visible = "← for agents".encode() in raw_output
                 preview_visible = b"Read-only history preview" in raw_output
                 running_sidebar_visible = b"railmux/(new)" in raw_output
                 if profile is DESKTOP:
+                    # The opening website view stays deliberately simple: one
+                    # sidebar and one native-looking agent pane.
+                    send_once(
+                        "launch-primary",
+                        0.8,
+                        b"n",
+                        "key|N|Open a real agent",
+                    )
+                elif profile is DUAL:
                     # Build a real two-agent workspace. Function/navigation keys
                     # go through the attached tmux client's key tables so the
                     # recording exercises the same global bindings as a user.
@@ -583,30 +632,30 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     if preview_visible:
                         send_once(
                             "resume-session",
-                            3.2,
+                            4.2,
                             b"\r",
                             "key|Enter|Resume this conversation",
                         )
                     if "resume-session" in sent and real_response_visible:
                         send_once(
                             "return-sidebar",
-                            7.0,
+                            8.0,
                             b"\x02\t",
                             "key|C-b Tab|Back to the sidebar",
                         )
                     if "return-sidebar" in sent and b"RUNNING" in raw_output.upper():
                         cue_once(
                             "reopen-agent-cue",
-                            8.2,
+                            9.3,
                             "mouse|10|26|Running session",
                         )
                         send_once(
                             "reopen-agent",
-                            8.8,
+                            9.9,
                             b"\x1b[<0;10;26M\x1b[<0;10;26m",
                             None,
                         )
-                else:
+                elif profile is MOBILE:
                     # Real compact projection: open Agent 1, return to Railmux,
                     # then jump back to the live agent through compact routing.
                     send_once(
@@ -628,6 +677,37 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             5.8,
                             ("C-b", "Tab"),
                             "key|C-b Tab|Agent",
+                        )
+                else:
+                    # Show two discoverable entry points without creating a
+                    # project or starting a provider session.
+                    cue_once(
+                        "new-project-cue",
+                        0.6,
+                        "mouse|10|2|Open New project",
+                    )
+                    send_once(
+                        "new-project",
+                        1.2,
+                        b"\x1b[<0;10;2M\x1b[<0;10;2m",
+                        None,
+                    )
+                    if b"Choose directory" in raw_output:
+                        send_once(
+                            "close-new-project",
+                            4.0,
+                            b"\x1b",
+                            "key|Esc|Close directory browser",
+                        )
+                    if (
+                        "close-new-project" in sent
+                        and b"PROJECTS" in raw_output.upper()
+                    ):
+                        send_once(
+                            "open-help",
+                            5.2,
+                            b"?",
+                            "key|?|Open Help",
                         )
 
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -697,6 +777,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 f"Railmux {profile.name} demo retained private recorder metadata"
             )
         output.parent.mkdir(parents=True, exist_ok=True)
+        # Extend the final visible state so control-free looping does not snap
+        # immediately back to frame zero.
+        events.append(_event(profile.duration - 0.1, "o", b"\x1b7\x1b8"))
         output.write_text(
             json.dumps(header, ensure_ascii=False) + "\n" + "\n".join(events) + "\n",
             encoding="utf-8",
@@ -712,10 +795,22 @@ def main(argv: list[str] | None = None) -> int:
         help=f"desktop asciicast path (default: {DEFAULT_DESKTOP_OUTPUT})",
     )
     parser.add_argument(
+        "--dual-output",
+        type=Path,
+        default=DEFAULT_DUAL_OUTPUT,
+        help=f"dual-agent asciicast path (default: {DEFAULT_DUAL_OUTPUT})",
+    )
+    parser.add_argument(
         "--workflow-output",
         type=Path,
         default=DEFAULT_WORKFLOW_OUTPUT,
         help=f"workflow asciicast path (default: {DEFAULT_WORKFLOW_OUTPUT})",
+    )
+    parser.add_argument(
+        "--tour-output",
+        type=Path,
+        default=DEFAULT_TOUR_OUTPUT,
+        help=f"New Project/Help asciicast path (default: {DEFAULT_TOUR_OUTPUT})",
     )
     parser.add_argument(
         "--mobile-output",
@@ -726,14 +821,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         _record(args.desktop_output.resolve(), DESKTOP)
+        _record(args.dual_output.resolve(), DUAL)
         _record(args.workflow_output.resolve(), WORKFLOW)
         _record(args.mobile_output.resolve(), MOBILE)
+        _record(args.tour_output.resolve(), TOUR)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         print(f"record_web_demo.py: error: {exc}", file=sys.stderr)
         return 1
     print(f"recorded desktop Railmux demo: {args.desktop_output.resolve()}")
+    print(f"recorded dual-agent Railmux demo: {args.dual_output.resolve()}")
     print(f"recorded workflow Railmux demo: {args.workflow_output.resolve()}")
     print(f"recorded mobile Railmux demo: {args.mobile_output.resolve()}")
+    print(f"recorded product tour demo: {args.tour_output.resolve()}")
     return 0
 
 

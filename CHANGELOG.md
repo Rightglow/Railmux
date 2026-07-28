@@ -9,14 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add separate single-agent, dual-agent, and product-entry-point website
+  recordings. The guided flow now dwells on stopped-session preview before
+  resume, while New Project and Help are shown from the real Railmux UI.
+- Explain on the product site that Railmux discovers interactive Claude Code
+  and Codex history created outside Railmux while filtering `codex exec` and
+  subagent rollouts.
 - Add a responsive product website for Railmux, including deterministic
   desktop and compact-workspace previews, automated browser screenshots, and a
   GitHub Pages deployment workflow.
 - Add a credential-free website recorder that launches the real Railmux UI in
   an isolated tmux server, publishes its asciicast through an embedded terminal
   player, and regenerates the recording during every Pages build.
-- Add a second source-authentic 46×26 recording for the small-screen product
-  section, recorded through Railmux's real compact layout and page controls.
+- Add a source-authentic compact recording for the small-screen product
+  section, recorded through Railmux's real responsive layout and page controls.
 - Add a dedicated 160×38 guided desktop workflow with durable keyboard labels,
   a cell-aligned mouse pointer, and two audited real Claude Code source-analysis
   runs captured without provider session persistence. It demonstrates
@@ -29,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Rework the deterministic agent pane around Claude Code's native
+  prompt/response/input structure, switch the compact demo to a reported
+  105×21 Termux geometry, and loop control-free recordings after a held final
+  frame.
 - Refresh the terminal UI hierarchy with right-aligned sidebar and project
   counts, stable uppercase section labels, and responsive neutral shortcut
   controls in the clickable Button Bar.

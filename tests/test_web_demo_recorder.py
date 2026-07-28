@@ -54,15 +54,21 @@ def test_fixture_environment_excludes_provider_credentials(
     assert env["XDG_CONFIG_HOME"] == str(tmp_path / "home" / ".config")
 
     demo_agent = (tmp_path / "bin" / "demo-agent").read_text(encoding="utf-8")
-    assert "read-only source analysis" in demo_agent
-    assert "sanitized transcript replay" in demo_agent
-    assert "no provider session persisted" in demo_agent
+    assert "shift+tab to cycle" in demo_agent
+    assert "RESUMED_SESSIONS" in demo_agent
+    assert "❯" in demo_agent
+    assert "●" in demo_agent
     assert "ANTHROPIC_API_KEY" not in demo_agent
     assert "OPENAI_API_KEY" not in demo_agent
 
 
 def test_only_mobile_demo_uses_compact_presentation() -> None:
-    for profile in (record_web_demo.DESKTOP, record_web_demo.WORKFLOW):
+    for profile in (
+        record_web_demo.DESKTOP,
+        record_web_demo.DUAL,
+        record_web_demo.WORKFLOW,
+        record_web_demo.TOUR,
+    ):
         assert (
             presentation_for_geometry(
                 WorkspacePresentation.WIDE,
@@ -79,6 +85,8 @@ def test_only_mobile_demo_uses_compact_presentation() -> None:
         )
         is WorkspacePresentation.COMPACT
     )
+    assert record_web_demo.MOBILE.width == 105
+    assert record_web_demo.MOBILE.height == 21
 
 
 def test_cast_profiles_include_auditable_agent_transcript() -> None:

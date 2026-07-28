@@ -23,6 +23,7 @@ type TerminalRecordingProps = {
   inputHud?: boolean;
   cueCols?: number;
   cueRows?: number;
+  idleTimeLimit?: number;
   dataDemo?: string;
 };
 
@@ -69,6 +70,7 @@ export default function TerminalRecording({
   inputHud = false,
   cueCols = 80,
   cueRows = 24,
+  idleTimeLimit = 3,
   dataDemo,
 }: TerminalRecordingProps) {
   const container = useRef<HTMLDivElement>(null);
@@ -86,7 +88,7 @@ export default function TerminalRecording({
         loop,
         poster,
         startAt,
-        idleTimeLimit: 1.5,
+        idleTimeLimit,
         fit: "width",
         controls,
         cursorMode: "hidden",
@@ -135,6 +137,7 @@ export default function TerminalRecording({
     cueCols,
     cueRows,
     inputHud,
+    idleTimeLimit,
     loop,
     playWhenVisible,
     poster,

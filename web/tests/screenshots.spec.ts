@@ -12,7 +12,13 @@ test.beforeAll(async () => {
 
 test("reserve compact projection for the mobile recording", async () => {
   const headers = await Promise.all(
-    ["railmux-demo.cast", "railmux-workflow-demo.cast", "railmux-mobile-demo.cast"]
+    [
+      "railmux-demo.cast",
+      "railmux-dual-demo.cast",
+      "railmux-workflow-demo.cast",
+      "railmux-mobile-demo.cast",
+      "railmux-tour-demo.cast",
+    ]
       .map(async (name) => {
         const cast = await readFile(join(outputDir, name), "utf8");
         return JSON.parse(cast.split("\n", 1)[0]) as {
@@ -27,7 +33,12 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[0].height).toBeGreaterThanOrEqual(26);
   expect(headers[1].width).toBeGreaterThanOrEqual(84);
   expect(headers[1].height).toBeGreaterThanOrEqual(26);
-  expect(headers[2].width).toBeLessThan(80);
+  expect(headers[2].width).toBeGreaterThanOrEqual(84);
+  expect(headers[2].height).toBeGreaterThanOrEqual(26);
+  expect(headers[3].width).toBe(105);
+  expect(headers[3].height).toBe(21);
+  expect(headers[4].width).toBeGreaterThanOrEqual(84);
+  expect(headers[4].height).toBeGreaterThanOrEqual(26);
   expect(headers.every((header) => header.transcript_sha256.length === 64))
     .toBe(true);
 });
@@ -40,7 +51,9 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   const desktopDemo = page.locator('[data-demo="desktop-recording"]');
   await expect(desktopDemo.locator(".ap-player")).toBeVisible();
   await expect(page.locator("h1")).toContainText("Keep every");
-  await expect(page.getByText("REAL CLAUDE CODE RUNS · ISOLATED RAILMUX")).toBeVisible();
+  await expect(
+    page.getByText("REAL CLAUDE CODE ANSWER · ISOLATED RAILMUX"),
+  ).toBeVisible();
   await page.waitForTimeout(1_000);
   const startOverlay = desktopDemo.locator(".ap-overlay-start");
   if (await startOverlay.count()) {
@@ -54,7 +67,23 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
     ),
   ).toBe(true);
 
+  await expect(desktopDemo.locator(".ap-term")).toContainText("❯");
+  await expect(desktopDemo.locator(".ap-term")).toContainText("●");
+  await expect(desktopDemo.locator(".ap-term")).not.toContainText(
+    "captured 2026",
+  );
+  await expect(desktopDemo.locator(".ap-control-bar")).toHaveCount(0);
   await desktopDemo.locator(".ap-term").screenshot({
+    path: join(outputDir, "desktop-workspace.png"),
+    animations: "disabled",
+    scale: "device",
+  });
+
+  const dualDemo = page.locator('[data-demo="dual-recording"]');
+  await dualDemo.scrollIntoViewIfNeeded();
+  await expect(dualDemo.locator(".ap-term")).toBeVisible();
+  await expect(dualDemo.locator(".ap-term")).toContainText("RUNNING");
+  await dualDemo.locator(".ap-term").screenshot({
     path: join(outputDir, "dual-agent-workspace.png"),
     animations: "disabled",
     scale: "device",
@@ -80,14 +109,46 @@ test("show a native sidebar evidence frame", async ({ page }) => {
   await expect(evidence.locator(".ap-player")).toBeVisible();
   await expect(evidence.locator(".ap-term")).toContainText("PROJECTS");
   await expect(evidence.locator(".ap-term")).toContainText(
-    "Trace SSH wheel ownership",
+    "Polish SSH history",
   );
   const legend = page.locator(".sidebar-evidence-legend");
   await expect(legend.getByText("NEW PROJECT", { exact: true })).toBeVisible();
   await expect(legend.getByText("NEW SESSION", { exact: true })).toBeVisible();
   await expect(legend.getByText("RUNNING", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("even when they were started outside Railmux", {
+      exact: false,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("codex exec", { exact: true })).toBeVisible();
   await page.locator(".feature-showcase-sidebar").screenshot({
     path: join(outputDir, "sidebar-workspace.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+  expect(pageErrors).toEqual([]);
+});
+
+test("show real New Project and Help entry points", async ({ page }) => {
+  const pageErrors: Error[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto(".");
+
+  const newProject = page.locator('[data-demo="new-project-recording"]');
+  await newProject.scrollIntoViewIfNeeded();
+  await expect(newProject.locator(".ap-term")).toContainText("Choose directory");
+  await newProject.locator("xpath=..").screenshot({
+    path: join(outputDir, "new-project-workspace.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+
+  const help = page.locator('[data-demo="help-recording"]');
+  await expect(help.locator(".ap-term")).toContainText("Ask Railmux with");
+  await expect(help.locator(".ap-term")).toContainText("Help");
+  await help.locator("xpath=..").screenshot({
+    path: join(outputDir, "help-workspace.png"),
     animations: "disabled",
     scale: "css",
   });
@@ -105,6 +166,7 @@ test("capture deterministic compact preview", async ({ page }) => {
   await expect(
     compactDemo.locator('[data-demo="mobile-recording"] .ap-player'),
   ).toBeVisible();
+  await expect(page.getByText("REAL 105×21 TERMINAL")).toBeVisible();
   await page.waitForTimeout(2_000);
   await compactDemo.screenshot({
     path: join(outputDir, "mobile-workspace.png"),
@@ -138,6 +200,7 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   const player = page.locator('[data-demo="workflow-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
+  await expect(player.locator(".ap-control-bar")).toHaveCount(0);
   const hud = player.getByTestId("terminal-input-hud");
   const pointer = player.getByTestId("terminal-pointer");
   await expect(pointer).toBeVisible({
@@ -161,7 +224,7 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   await expect(hud).toContainText("Resume this conversation");
   await expect(hud).toContainText("Enter");
   await expect(player.locator(".ap-term")).toContainText(
-    "Trace SSH wheel ownership",
+    "Polish SSH history",
   );
   await expect(hud).toContainText("Back to the sidebar", { timeout: 8_000 });
   await expect(player.locator(".ap-term")).toContainText("PROJECTS");

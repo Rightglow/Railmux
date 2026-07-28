@@ -69,15 +69,16 @@ export default function Home() {
           </div>
           <div className="hero-demo">
             <div className="capture-meta">
-              <span><i /> REAL CLAUDE CODE RUNS · ISOLATED RAILMUX</span>
-              <small>captured 2026-07-27 · sanitized transcript replay</small>
+              <span><i /> REAL CLAUDE CODE ANSWER · ISOLATED RAILMUX</span>
+              <small>native TUI structure · sanitized deterministic replay</small>
             </div>
             <TerminalRecording
               className="hero-terminal-recording"
-              poster="npt:8"
-              startAt={7.4}
+              poster="npt:3"
+              startAt={0.4}
               autoPlay
-              controls
+              loop
+              controls={false}
               dataDemo="desktop-recording"
             />
           </div>
@@ -117,9 +118,12 @@ export default function Home() {
                 </p>
               </div>
               <div className="feature-real-shot">
-                <img
-                  src={`${import.meta.env.BASE_URL}generated/dual-agent-workspace.png`}
-                  alt="A real Railmux terminal with two agent panes"
+                <TerminalRecording
+                  source="railmux-dual-demo.cast"
+                  className="dual-agent-recording"
+                  poster="npt:8"
+                  controls={false}
+                  dataDemo="dual-recording"
                 />
                 <small>REAL CAPTURE · SIDE-BY-SIDE LAYOUT</small>
               </div>
@@ -171,6 +175,62 @@ export default function Home() {
                   diagnostics report failures without taking agents down.
                 </p>
               </article>
+              <article>
+                <span>05 / DISCOVERY</span>
+                <h3>Bring the sessions you already have.</h3>
+                <p>
+                  Railmux discovers interactive Claude Code and Codex
+                  conversations from provider history—even when they were
+                  started outside Railmux.
+                  <small>
+                    One-off <code>codex exec</code> runs and subagent rollouts
+                    are filtered from the sidebar.
+                  </small>
+                </p>
+              </article>
+            </div>
+            <div className="feature-entrypoints">
+              <div className="feature-entrypoints-heading">
+                <span>06 / ENTRY POINTS</span>
+                <h3>Start fresh. Or ask from where you are.</h3>
+                <p>
+                  New Project opens a keyboard-and-mouse directory browser.
+                  Help keeps shortcuts nearby and can launch a separate,
+                  read-only Ask Railmux agent.
+                </p>
+              </div>
+              <div className="entrypoint-grid">
+                <article>
+                  <div className="entrypoint-terminal-viewport">
+                    <TerminalRecording
+                      source="railmux-tour-demo.cast"
+                      className="entrypoint-recording"
+                      poster="npt:2.5"
+                      controls={false}
+                      dataDemo="new-project-recording"
+                    />
+                  </div>
+                  <div>
+                    <span>NEW PROJECT</span>
+                    <small>Browse, filter, create, or choose a directory.</small>
+                  </div>
+                </article>
+                <article>
+                  <div className="entrypoint-terminal-viewport">
+                    <TerminalRecording
+                      source="railmux-tour-demo.cast"
+                      className="entrypoint-recording"
+                      poster="npt:6.2"
+                      controls={false}
+                      dataDemo="help-recording"
+                    />
+                  </div>
+                  <div>
+                    <span>HELP</span>
+                    <small>Shortcuts first; an agent is one key away.</small>
+                  </div>
+                </article>
+              </div>
             </div>
           </div>
         </section>
@@ -217,7 +277,8 @@ export default function Home() {
                   source="railmux-workflow-demo.cast"
                   className="workflow-terminal-recording"
                   poster="npt:0.6"
-                  controls
+                  controls={false}
+                  loop
                   playWhenVisible
                   inputHud
                   cueCols={160}
@@ -299,12 +360,12 @@ export default function Home() {
           <div className="phone-frame" data-demo="compact-recording">
             <div className="phone-speaker" />
             <div className="mobile-capture-label">
-              REAL 46×26 TERMINAL
+              REAL 105×21 TERMINAL
             </div>
             <TerminalRecording
               source="railmux-mobile-demo.cast"
               className="mobile-terminal-recording"
-              poster="npt:3.5"
+              poster="npt:4.8"
               controls={false}
               loop
               playWhenVisible
