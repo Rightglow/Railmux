@@ -410,9 +410,18 @@ custom paths.
 Under tmux the sidebar and agent share the screen, and over SSH your clipboard
 lives on the *local* machine.
 
+**With `railmux ssh`**: drag directly inside one agent pane. Railmux briefly
+highlights the visible selection and copies it to the local clipboard on
+release, using a native clipboard command where available and bounded OSC 52
+as fallback. The
+initial implementation intentionally stops at the pane border and current
+visible viewport; it does not autoscroll or merge application soft-wrapped
+physical lines. A click without drag is replayed normally, including pane focus
+and double-click actions.
+
 **OSC 52** (iTerm2, kitty, WezTerm, Alacritty, foot, Windows Terminal):
 drag-select in the agent pane copies to the local clipboard automatically,
-even over SSH, no Shift needed. (iTerm2: enable *Settings → General →
+over ordinary SSH, no Shift needed. (iTerm2: enable *Settings → General →
 Selection → "Applications in terminal may access clipboard"*.)
 
 **Without OSC 52** (Terminal.app, etc.): press **F9** to fullscreen the agent →
@@ -577,8 +586,11 @@ other agent changes focus without moving either history pane, while a sidebar
 click safely restores them all. F8/F9,
 Help's controller-pane zoom, modal close, and resize invalidate the old pointer
 map before it can be reused. Terminal-native selection overrides remain
-terminal-dependent. Agent-pane clicks still change focus, but reported mouse
-drags are kept local so they cannot accidentally invoke tmux copy-mode;
+terminal-dependent. Agent-pane clicks still change focus; a reported left drag
+instead selects within that pane and copies locally without invoking tmux
+copy-mode. Selection is limited to the current visible viewport and cannot
+cross a pane divider; keyboard input, resize, reconnect, and layout changes
+clear it.
 `Ctrl-B [` remains the explicit copy-mode path. Use `--no-mouse` when reliable
 ordinary terminal selection is more important than local history. History
 preserves text colours and common

@@ -54,6 +54,8 @@ login. It produces six source-authentic recordings:
 - `public/generated/railmux-controls-demo.cast` records More, provider Mode,
   F8 Layout, and the real Quit/Soft Quit confirmation. It completes a soft quit
   in the isolated workspace and leaves the recorded agent session running. The
+  pointer stops at the clickable Quit control; the keyboard-only safety
+  confirmation is represented only by its actual `s` input. The
   final layout choice is submitted without a separate input HUD because the
   resulting soft-quit state is the user-visible outcome.
 

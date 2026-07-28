@@ -8,6 +8,7 @@ type InputCue = {
   label: string;
   detail: string;
   mouseDetail?: string;
+  mouseClicks?: 1 | 2;
   left?: string;
   top?: string;
 };
@@ -56,6 +57,9 @@ function parseInputCue(
       label: parts[1],
       detail: parts[4],
       mouseDetail: parts.slice(6).join(" · "),
+      mouseClicks: parts.slice(6).join(" · ").toLowerCase().startsWith(
+        "double-click",
+      ) ? 2 : 1,
       left: `${((x - 0.5) / cols) * 100}%`,
       top: `${((y - 0.5) / rows) * 100}%`,
     };
@@ -190,9 +194,11 @@ export default function TerminalRecording({
             <span
               className="terminal-pointer"
               data-testid="terminal-pointer"
+              data-clicks={cue.mouseClicks ?? 1}
               style={{ left: cue.left, top: cue.top }}
             >
               <i />
+              {cue.mouseClicks === 2 ? <i className="second-click" /> : null}
             </span>
           ) : null}
           {cue.kind === "touch" ? (

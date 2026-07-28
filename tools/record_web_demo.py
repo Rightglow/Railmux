@@ -1222,10 +1222,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "soft-quit",
                             18.0,
                             b"s",
-                            (
-                                "keymouse|S|18|21|Soft quit — keep agents running"
-                                "|mouse|Click Soft Quit in the dialog"
-                            ),
+                            "key|S|Soft quit — keep agents running",
                         )
                     if "soft-quit" in sent and b"Keep this layout?" in raw_output:
                         send_once(

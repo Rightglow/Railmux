@@ -685,12 +685,25 @@ missed hook after interruption. tmux 2.7-2.9 keeps its existing selection
 behavior because configurable hooks and pane-local options are unavailable.
 
 The `railmux ssh` client owns a different mouse boundary before input reaches
-the remote tmux client. A press/release over an agent remains forwarded for
-pane focus, but intervening reported drag motion is dropped so tmux's stock
-`MouseDrag1Pane` cannot enter copy-mode accidentally. Sidebar gestures are
-still forwarded, terminal-native selection overrides never enter the client,
-and the opaque keyboard sequence `Ctrl-B [` remains the explicit copy-mode
-path. Vertical wheel input also fails closed while agent geometry is unknown
+the remote tmux client. A plain left press over a known agent route begins a
+local click candidate. If it is released without motion, the original
+press/release pair is replayed in order so pane focus, preview, and double-click
+semantics remain authoritative remotely. Once motion is reported, the local
+client pins the gesture to that one pane and immutable visible-row snapshot,
+clamps it at the pane border, paints a reverse-video selection, and copies the
+selected UTF-8 text to the initiating machine on release. The highlight clears
+after a short acknowledgement interval so immutable captured text cannot cover
+subsequent live output indefinitely. Native clipboard
+writers are preferred, with bounded OSC 52 as fallback. The first version is
+deliberately physical-line and visible-viewport only: it does not autoscroll,
+join application soft wraps, or cross pane borders. Keyboard input, resize,
+reconnect, and changed route geometry invalidate the local selection.
+
+This client-owned drag never reaches tmux, so stock `MouseDrag1Pane` cannot
+enter copy-mode accidentally. Non-left sidebar and status gestures are still
+forwarded, terminal-native selection overrides never enter the client, and the
+opaque keyboard sequence `Ctrl-B [` remains the explicit copy-mode path.
+Vertical wheel input also fails closed while agent geometry is unknown
 and on the one-cell tmux border around a known agent; losing one transitional
 wheel tick is preferable to leaking stock `WheelUpPane`, entering copy-mode,
 and activating sibling selection isolation. An authoritative empty route set

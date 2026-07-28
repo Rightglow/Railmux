@@ -478,6 +478,10 @@ code {
   animation: cue-click-ring 900ms 360ms ease-out both;
 }
 
+.terminal-pointer i.second-click {
+  animation-delay: 760ms;
+}
+
 .terminal-touch {
   position: absolute;
   width: 20px;

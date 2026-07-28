@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Let `railmux ssh` users drag within one visible agent pane to highlight and
+  automatically copy text on the local machine without entering tmux
+  copy-mode; ordinary clicks and double-clicks remain remote UI actions.
+
+### Changed
+
+- Make the website's session-resume cue visibly animate both clicks, and stop
+  presenting keyboard-only Quit confirmations as mouse-clickable actions.
+
 ## [0.2.15] - 2026-07-28
 
 ### Added

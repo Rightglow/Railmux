@@ -79,12 +79,11 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[3].cast).toContain("touch|5|38|Tap [1] agent");
   expect(headers[3].cast).not.toContain("key|");
   expect(headers[5].cast).toContain("Soft quit — keep agents running");
-  expect(headers[5].cast).not.toContain('"key|');
   expect(headers[5].cast).toContain(
     "keymouse|+|48|37|Show Mode, Layout, and Options",
   );
   expect(headers[5].cast).toContain(
-    "keymouse|S|18|21|Soft quit — keep agents running",
+    "key|S|Soft quit — keep agents running",
   );
   expect(headers[5].cast).not.toContain(
     "Skip layout save and finish soft quit",
@@ -356,8 +355,8 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
     scale: "css",
   });
   await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
-  await expect(pointer).toBeVisible();
-  await expect(mouseTarget).toContainText("Click Soft Quit in the dialog");
+  await expect(pointer).toHaveCount(0);
+  await expect(mouseTarget).toHaveCount(0);
   await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
   await expect(player.locator(".ap-term")).toContainText(
     "Keeping 1 agent session running.",
@@ -400,6 +399,8 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   await expect(player.getByTestId("terminal-mouse-target")).toContainText(
     "Double-click the selected session",
   );
+  await expect(pointer).toHaveAttribute("data-clicks", "2");
+  await expect(pointer.locator("i")).toHaveCount(2);
   await expect(player.locator(".ap-term")).toContainText(
     "Polish SSH history",
   );

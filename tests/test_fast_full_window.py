@@ -53,14 +53,17 @@ from railmux.fast_display_server import render_rows
 from railmux.fast_display_server import terminal_modes_for_screen
 from railmux import fast_display_client, fast_display_server
 from railmux.fast_display_client import (
+    AppliedScreen,
     HistoryAction,
     LOCAL_ESCAPE,
     LocalHistoryView,
+    LocalTextSelection,
     RemoteHello,
     RemoteAttachKind,
     RemoteStartKind,
     RemoteStartup,
     ScreenModel,
+    SelectionSource,
     SgrMouseEvent,
     TerminalInputDecoder,
     TerminalSurface,
@@ -376,6 +379,174 @@ def test_clipboard_payload_uses_native_local_writer_before_osc52():
     native.assert_called_once_with(data)
     assert output.getvalue() == b""
     assert surface.active is False
+
+
+def test_local_text_selection_replays_a_plain_click_unchanged():
+    route = HistorySnapshot(1, "%8", 3, 0, 6, 1)
+    source = SelectionSource(
+        route,
+        (b"\033[0mabcHello!\033[0m",),
+        3,
+    )
+    selection = LocalTextSelection()
+    press = SgrMouseEvent(b"down", 0, 4, 1, True)
+    release = SgrMouseEvent(b"up", 0, 4, 1, False)
+
+    assert selection.pointer_event(press, source).handled is True
+    action = selection.pointer_event(release, source)
+
+    assert action.handled is True
+    assert action.replay_events == (press, release)
+    assert action.copy_data is None
+    assert selection.active is False
+
+
+def test_local_text_selection_preserves_two_remote_click_gestures():
+    history = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(history.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id, "%8", 3, 0, 6, 1, (b"Hello!",)
+    )
+    history.accept_prefetch(HistoryBatch(request_id, (route,)))
+    selection = LocalTextSelection()
+    forwarded: list[bytes] = []
+
+    for suffix in ("first", "second"):
+        press = SgrMouseEvent(f"{suffix}-down".encode(), 0, 4, 1, True)
+        release = SgrMouseEvent(f"{suffix}-up".encode(), 0, 4, 1, False)
+        source = history.selection_source(press, (b"abcHello!",))
+        selection.pointer_event(press, source)
+        action = selection.pointer_event(release, source)
+        for replay in action.replay_events:
+            routed = history.pointer_event(replay)
+            forwarded.append(routed.forwarded_input)
+
+    assert forwarded == [
+        b"first-down",
+        b"first-up",
+        b"second-down",
+        b"second-up",
+    ]
+
+
+def test_local_text_selection_copies_and_highlights_one_visible_pane():
+    route = HistorySnapshot(1, "%8", 3, 0, 6, 1)
+    source = SelectionSource(
+        route,
+        (b"\033[0mabc\033[31mHello!\033[0m",),
+        3,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 4, 1, True), source)
+    drag = selection.pointer_event(
+        SgrMouseEvent(b"drag", 32, 8, 1, True), None
+    )
+    release = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 8, 1, False), None
+    )
+
+    assert drag == fast_display_client.SelectionAction(
+        handled=True, repaint=True
+    )
+    assert release.copy_data == b"Hello"
+    assert selection.segments() == ((0, 3, b"Hello"),)
+    assert selection.active is True
+
+
+def test_local_text_selection_clamps_drag_and_handles_wide_characters():
+    route = HistorySnapshot(1, "%8", 10, 4, 5, 2)
+    source = SelectionSource(
+        route,
+        (
+            "\033[0m你ab \033[0m".encode(),
+            "\033[0mcd   \033[0m".encode(),
+        ),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    # Start on the continuation cell of 你, then drag beyond this pane.
+    selection.pointer_event(
+        SgrMouseEvent(b"down", 0, 12, 5, True), source
+    )
+    selection.pointer_event(
+        SgrMouseEvent(b"drag", 32, 99, 99, True), None
+    )
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 99, 99, False), None
+    )
+
+    assert action.copy_data == "你ab\ncd".encode()
+    assert selection.segments() == (
+        (4, 10, "你ab ".encode()),
+        (5, 10, b"cd   "),
+    )
+
+
+def test_local_text_selection_cancels_when_pane_geometry_changes():
+    route = HistorySnapshot(1, "%8", 10, 4, 5, 2)
+    source = SelectionSource(route, (b"first", b"second"), 0)
+    selection = LocalTextSelection()
+    selection.pointer_event(
+        SgrMouseEvent(b"down", 0, 11, 5, True), source
+    )
+    selection.pointer_event(
+        SgrMouseEvent(b"drag", 32, 12, 5, True), None
+    )
+
+    changed = replace(route, width=6)
+    assert selection.validate_routes((changed,)) is True
+    assert selection.active is False
+    assert selection.capturing is False
+
+
+def test_local_text_selection_uses_the_displayed_history_viewport():
+    history = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(history.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        4,
+        1,
+        6,
+        2,
+        (b"old-0", b"old-1", b"old-2"),
+    )
+    history.accept_prefetch(HistoryBatch(request_id, (route,)))
+    history.wheel(SgrMouseEvent(b"wheel", 64, 5, 2, True))
+
+    source = history.selection_source(
+        SgrMouseEvent(b"down", 0, 5, 2, True),
+        (b"live-0", b"live-1", b"live-2"),
+    )
+
+    assert source is not None
+    assert source.rows == (b"old-0", b"old-1")
+    assert source.row_x_offset == 0
+
+
+def test_surface_paints_local_selection_after_remote_styled_rows():
+    output = io.BytesIO()
+    surface = TerminalSurface(output, mouse=False)
+    screen = AppliedScreen(
+        width=8,
+        height=2,
+        cursor_x=0,
+        cursor_y=0,
+        cursor_visible=False,
+        terminal_modes=TerminalMode.NONE,
+        rows=(b"\033[31mHello", b"world"),
+        changed_rows=(0, 1),
+        clear=True,
+    )
+
+    surface.paint(screen, selection=((0, 0, b"Hel"),))
+
+    painted = output.getvalue()
+    assert painted.index(b"\033[31mHello") < painted.index(b"\033[0;7mHel")
 
 
 def test_remote_osc52_decoder_is_chunked_bounded_and_fail_closed():

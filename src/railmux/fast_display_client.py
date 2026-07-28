@@ -23,8 +23,10 @@ import sys
 import termios
 import time
 import tty
+import unicodedata
 from dataclasses import dataclass, replace
 from enum import Enum
+from functools import lru_cache
 from typing import BinaryIO, NoReturn, Optional, Sequence
 
 from packaging.version import InvalidVersion, Version
@@ -43,6 +45,7 @@ from railmux.fast_display_protocol import (
     DISPLAY_MAGIC,
     HistoryBatch,
     HistorySnapshot,
+    MAX_CLIPBOARD_BYTES,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
@@ -80,6 +83,7 @@ _CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_PREFETCH_TIMEOUT = 6.0
 _HISTORY_DEEP_TIMEOUT = 10.0
 _HISTORY_INFO_SECONDS = 2.0
+_SELECTION_HIGHLIGHT_SECONDS = 2.0
 _HISTORY_CONTENT_PANES = 8
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
@@ -584,6 +588,280 @@ class HistoryAction:
     claude_history_prompt: bytes = b""
 
 
+@dataclass(frozen=True)
+class SelectionSource:
+    """One immutable visible agent-pane surface eligible for local selection."""
+
+    route: HistorySnapshot
+    rows: tuple[bytes, ...]
+    row_x_offset: int
+
+
+SelectionSegment = tuple[int, int, bytes]
+
+
+@dataclass(frozen=True)
+class SelectionAction:
+    """Pure routing result for one local text-selection pointer event."""
+
+    handled: bool = False
+    replay_events: tuple[SgrMouseEvent, ...] = ()
+    repaint: bool = False
+    copy_data: bytes | None = None
+
+
+@lru_cache(maxsize=4096)
+def _display_width(character: str) -> int:
+    """Return one terminal-cell width without adding a base dependency."""
+    try:
+        import pyte
+    except ImportError:
+        if unicodedata.combining(character) or character == "\u200d":
+            return 0
+        return 2 if unicodedata.east_asian_width(character) in ("F", "W") else 1
+    return max(0, pyte.screens.wcwidth(character))
+
+
+def _plain_display_cells(line: bytes, width: int) -> tuple[str | None, ...]:
+    """Decode one server-rendered SGR row into bounded display cells."""
+    plain = _SGR_STYLE_RE.sub(b"", line).decode("utf-8", errors="replace")
+    cells: list[str | None] = [" "] * width
+    column = 0
+    for character in plain:
+        cell_width = _display_width(character)
+        if cell_width == 0:
+            previous = column - 1
+            while previous >= 0 and cells[previous] is None:
+                previous -= 1
+            if previous >= 0:
+                cells[previous] = (cells[previous] or "") + character
+            continue
+        if column >= width or column + cell_width > width:
+            break
+        cells[column] = character
+        for continuation in range(1, cell_width):
+            cells[column + continuation] = None
+        column += cell_width
+    return tuple(cells)
+
+
+class LocalTextSelection:
+    """Own one pane-bounded, visible-screen selection for ``railmux ssh``."""
+
+    def __init__(self) -> None:
+        self._press: SgrMouseEvent | None = None
+        self._route: HistorySnapshot | None = None
+        self._rows: tuple[tuple[str | None, ...], ...] = ()
+        self._anchor: tuple[int, int] | None = None
+        self._head: tuple[int, int] | None = None
+        self._active = False
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    @property
+    def capturing(self) -> bool:
+        return self._press is not None
+
+    def cancel(self) -> bool:
+        was_active = self._active
+        self._press = None
+        self._route = None
+        self._rows = ()
+        self._anchor = None
+        self._head = None
+        self._active = False
+        return was_active
+
+    def validate_routes(
+        self, routes: tuple[HistorySnapshot, ...],
+    ) -> bool:
+        """Cancel when a refreshed route set no longer matches the capture."""
+        if self._route is None:
+            return False
+        route = self._route
+        if any(
+            candidate.pane_id == route.pane_id
+            and candidate.x == route.x
+            and candidate.y == route.y
+            and candidate.width == route.width
+            and candidate.height == route.height
+            for candidate in routes
+        ):
+            return False
+        return self.cancel()
+
+    @staticmethod
+    def _is_plain_left_press(event: SgrMouseEvent) -> bool:
+        return (
+            event.pressed
+            and event.wheel_direction == 0
+            and not event.button & 32
+            and event.button & 3 == 0
+        )
+
+    @staticmethod
+    def _point(
+        event: SgrMouseEvent, route: HistorySnapshot,
+    ) -> tuple[int, int]:
+        x = min(
+            route.width - 1,
+            max(0, event.x - 1 - route.x),
+        )
+        y = min(
+            route.height - 1,
+            max(0, event.y - 1 - route.y),
+        )
+        return x, y
+
+    def _begin(
+        self, event: SgrMouseEvent, source: SelectionSource,
+    ) -> None:
+        route = source.route
+        decoded: list[tuple[str | None, ...]] = []
+        decode_width = source.row_x_offset + route.width
+        for index in range(route.height):
+            line = source.rows[index] if index < len(source.rows) else b""
+            cells = _plain_display_cells(line, decode_width)
+            decoded.append(
+                cells[
+                    source.row_x_offset:
+                    source.row_x_offset + route.width
+                ]
+            )
+        self._press = event
+        self._route = route
+        self._rows = tuple(decoded)
+        self._anchor = self._point(event, route)
+        self._head = self._anchor
+        self._active = False
+
+    def pointer_event(
+        self,
+        event: SgrMouseEvent,
+        source: SelectionSource | None,
+    ) -> SelectionAction:
+        """Capture a drag, or replay an unchanged click through normal routing."""
+        if self._press is not None:
+            assert self._route is not None
+            if event.pressed and event.button & 32:
+                head = self._point(event, self._route)
+                changed = head != self._head
+                self._head = head
+                if head != self._anchor:
+                    self._active = True
+                return SelectionAction(
+                    handled=True,
+                    repaint=changed and self._active,
+                )
+            if not event.pressed:
+                press = self._press
+                if not self._active:
+                    self.cancel()
+                    return SelectionAction(
+                        handled=True,
+                        replay_events=(press, event),
+                    )
+                head = self._point(event, self._route)
+                changed = head != self._head
+                self._head = head
+                self._press = None
+                return SelectionAction(
+                    handled=True,
+                    repaint=changed,
+                    copy_data=self.selected_text(),
+                )
+            press = self._press
+            repaint = self.cancel()
+            return SelectionAction(
+                replay_events=(press,),
+                repaint=repaint,
+            )
+
+        if self._is_plain_left_press(event) and source is not None:
+            repaint = self.cancel()
+            self._begin(event, source)
+            return SelectionAction(handled=True, repaint=repaint)
+
+        return SelectionAction(repaint=self.cancel())
+
+    def _ordered_points(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        assert self._anchor is not None and self._head is not None
+        if (self._anchor[1], self._anchor[0]) <= (
+            self._head[1], self._head[0]
+        ):
+            return self._anchor, self._head
+        return self._head, self._anchor
+
+    @staticmethod
+    def _row_span(
+        row: int,
+        start: tuple[int, int],
+        end: tuple[int, int],
+        width: int,
+    ) -> tuple[int, int]:
+        start_x = start[0] if row == start[1] else 0
+        end_x = end[0] if row == end[1] else width - 1
+        return start_x, end_x
+
+    @staticmethod
+    def _adjust_wide_start(
+        cells: tuple[str | None, ...], start: int,
+    ) -> int:
+        while start > 0 and cells[start] is None:
+            start -= 1
+        return start
+
+    def selected_text(self) -> bytes | None:
+        if not self._active or self._route is None:
+            return None
+        start, end = self._ordered_points()
+        lines: list[str] = []
+        for row in range(start[1], end[1] + 1):
+            cells = self._rows[row]
+            start_x, end_x = self._row_span(
+                row, start, end, self._route.width
+            )
+            start_x = self._adjust_wide_start(cells, start_x)
+            text = "".join(
+                cell or "" for cell in cells[start_x:end_x + 1]
+            ).rstrip(" ")
+            lines.append(text)
+        data = "\n".join(lines).encode("utf-8")
+        if not data:
+            return None
+        if len(data) > MAX_CLIPBOARD_BYTES:
+            data = (
+                data[:MAX_CLIPBOARD_BYTES]
+                .decode("utf-8", errors="ignore")
+                .encode("utf-8")
+            )
+        return data or None
+
+    def segments(self) -> tuple[SelectionSegment, ...]:
+        """Return reverse-video text runs in logical screen coordinates."""
+        if not self._active or self._route is None:
+            return ()
+        start, end = self._ordered_points()
+        segments: list[SelectionSegment] = []
+        for row in range(start[1], end[1] + 1):
+            cells = self._rows[row]
+            start_x, end_x = self._row_span(
+                row, start, end, self._route.width
+            )
+            start_x = self._adjust_wide_start(cells, start_x)
+            text = "".join(
+                cell or "" for cell in cells[start_x:end_x + 1]
+            )
+            segments.append((
+                self._route.y + row,
+                self._route.x + start_x,
+                text.encode("utf-8"),
+            ))
+        return tuple(segments)
+
+
 @dataclass
 class _HistoryViewport:
     """One immutable pane snapshot plus its local offset from the bottom."""
@@ -750,6 +1028,29 @@ class LocalHistoryView:
     def pane_id_at_position(self, x: int, y: int) -> str | None:
         route = self._route_at_position(x, y)
         return None if route is None else route.pane_id
+
+    def selection_source(
+        self,
+        event: SgrMouseEvent,
+        live_rows: tuple[bytes, ...],
+    ) -> SelectionSource | None:
+        """Freeze the visible pane rows under one prospective local drag."""
+        route = self._route_at(event)
+        if route is None or route.pane_id is None:
+            return None
+        viewport = self.viewports.get(route.pane_id)
+        if viewport is not None:
+            return SelectionSource(
+                route,
+                self._visible_lines(viewport),
+                0,
+            )
+        start = route.y
+        return SelectionSource(
+            route,
+            live_rows[start:start + route.height],
+            route.x,
+        )
 
     @staticmethod
     def _same_geometry(left: HistorySnapshot, right: HistorySnapshot) -> bool:
@@ -1588,6 +1889,29 @@ class TerminalSurface:
                     line,
                 ))
 
+    @staticmethod
+    def _append_selection_segments(
+        rendered: list[bytes],
+        selection: tuple[SelectionSegment, ...],
+        *,
+        projection_top: int = 0,
+        visible_height: int | None = None,
+    ) -> None:
+        for row, column, text in selection:
+            if (
+                visible_height is not None
+                and not projection_top
+                <= row
+                < projection_top + visible_height
+            ):
+                continue
+            rendered.extend((
+                f"\033[{row - projection_top + 1};{column + 1}H".encode(),
+                b"\033[0;7m",
+                text,
+                b"\033[0m",
+            ))
+
     @classmethod
     def _append_cursor(
         cls,
@@ -1625,6 +1949,7 @@ class TerminalSurface:
         self,
         screen: AppliedScreen,
         overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...] = (),
+        selection: tuple[SelectionSegment, ...] = (),
     ) -> bool:
         """Paint a screen and report whether focus reporting was just enabled."""
         self.start()
@@ -1652,6 +1977,12 @@ class TerminalSurface:
             visible_height=visible_height,
             changed_rows=frozenset(screen.changed_rows),
         )
+        self._append_selection_segments(
+            rendered,
+            selection,
+            projection_top=projection_top,
+            visible_height=visible_height,
+        )
         self._append_cursor(
             rendered,
             screen,
@@ -1667,6 +1998,7 @@ class TerminalSurface:
         self,
         screen: AppliedScreen,
         overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
+        selection: tuple[SelectionSegment, ...] = (),
     ) -> None:
         self.start()
         projection_top, visible_height = self._projection(screen.height)
@@ -1674,6 +2006,12 @@ class TerminalSurface:
         self._append_overlay_rows(
             rendered,
             overlays,
+            projection_top=projection_top,
+            visible_height=visible_height,
+        )
+        self._append_selection_segments(
+            rendered,
+            selection,
             projection_top=projection_top,
             visible_height=visible_height,
         )
@@ -2532,6 +2870,7 @@ def run(args: argparse.Namespace) -> int:
     model = ScreenModel()
     terminal_input = TerminalInputDecoder()
     history = LocalHistoryView(history_limit)
+    selection = LocalTextSelection()
     selector = selectors.DefaultSelector()
     selector.register(process.stdout.fileno(), selectors.EVENT_READ, "remote")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "local")
@@ -2548,6 +2887,7 @@ def run(args: argparse.Namespace) -> int:
     latest_screen: AppliedScreen | None = None
     route_refresh_needed = False
     history_info_until: float | None = None
+    selection_clear_at: float | None = None
     claude_history_prompt_input: bytes | None = None
     claude_history_pending_choice: tuple[str, bool, bytes] | None = None
     claude_history_pending_since: float | None = None
@@ -2569,9 +2909,17 @@ def run(args: argparse.Namespace) -> int:
         nonlocal history_info_until, claude_history_prompt_input
         overlays = history.overlays()
         if action.restore_live and latest_screen is not None:
-            surface.paint(full_repaint(latest_screen), overlays)
+            surface.paint(
+                full_repaint(latest_screen),
+                overlays,
+                selection.segments(),
+            )
         elif action.render_history and latest_screen is not None:
-            surface.paint_overlays(latest_screen, overlays)
+            surface.paint_overlays(
+                latest_screen,
+                overlays,
+                selection.segments(),
+            )
         if action.protocol_frame:
             send_protocol_frame(action.protocol_frame)
         if action.forwarded_input:
@@ -2596,6 +2944,7 @@ def run(args: argparse.Namespace) -> int:
         nonlocal claude_history_prompt_mouse_button
         nonlocal claude_history_runtime_choice
         nonlocal history_info_until
+        nonlocal selection_clear_at
         if claude_history_prompt_input is not None:
             if isinstance(part, SgrMouseEvent):
                 selected = surface.claude_history_prompt_choice(part)
@@ -2683,6 +3032,57 @@ def run(args: argparse.Namespace) -> int:
                     latest_screen.cursor_x, latest_screen.cursor_y
                 )
             )
+            selection_action = selection.pointer_event(
+                part,
+                (
+                    None
+                    if latest_screen is None
+                    else history.selection_source(part, latest_screen.rows)
+                ),
+            )
+            if selection.capturing or not selection.active:
+                selection_clear_at = None
+            if selection_action.repaint and latest_screen is not None:
+                surface.paint(
+                    full_repaint(latest_screen),
+                    history.overlays(),
+                    selection.segments(),
+                )
+            for replay_event in selection_action.replay_events:
+                replay_action = history.pointer_event(
+                    replay_event,
+                    focused_pane_id,
+                    status_row=(
+                        compact_status_row(latest_screen)
+                        if latest_screen is not None else None
+                    ),
+                    now=time.monotonic(),
+                )
+                apply_history_action(
+                    coalesce_forwarded_wheel(
+                        replay_action,
+                        replay_event,
+                        forwarded_wheels,
+                    )
+                )
+            if selection_action.copy_data is not None:
+                surface.copy_to_clipboard(selection_action.copy_data)
+                character_count = len(
+                    selection_action.copy_data.decode(
+                        "utf-8", errors="replace"
+                    )
+                )
+                surface.show_local_status(
+                    f"Copied {character_count:,} characters locally"
+                )
+                history_info_until = (
+                    time.monotonic() + _HISTORY_INFO_SECONDS
+                )
+                selection_clear_at = (
+                    time.monotonic() + _SELECTION_HIGHLIGHT_SECONDS
+                )
+            if selection_action.handled:
+                return
             action = history.pointer_event(
                 part,
                 focused_pane_id,
@@ -2698,6 +3098,12 @@ def run(args: argparse.Namespace) -> int:
             return
         if not part:
             return
+        selection_clear_at = None
+        if selection.cancel() and latest_screen is not None:
+            surface.paint(
+                full_repaint(latest_screen),
+                history.overlays(),
+            )
         may_change_routes = screen_input_may_change_routes(
             part, history, latest_screen,
         )
@@ -2728,7 +3134,8 @@ def run(args: argparse.Namespace) -> int:
 
     print(
         "railmux ssh: Ctrl-] disconnects locally; Ctrl-B d detaches; "
-        f"mouse forwarding is {'off' if args.no_mouse else 'on'}; "
+        f"mouse forwarding and local drag-copy are "
+        f"{'off' if args.no_mouse else 'on'}; "
         f"automatic reconnect is {'on' if args.reconnect else 'off'}",
         file=sys.stderr,
     )
@@ -2737,6 +3144,8 @@ def run(args: argparse.Namespace) -> int:
             while True:
                 observed_size = os.get_terminal_size(sys.stdout.fileno())
                 if observed_size != local_size:
+                    selection.cancel()
+                    selection_clear_at = None
                     if _terminal_size_exceeds_limits(observed_size):
                         raise ProbeError(
                             "resized terminal reports "
@@ -2753,6 +3162,7 @@ def run(args: argparse.Namespace) -> int:
                             surface.paint(
                                 full_repaint(latest_screen),
                                 history.overlays(),
+                                selection.segments(),
                             )
                             if claude_history_prompt_input is not None:
                                 surface.show_claude_history_prompt()
@@ -2787,6 +3197,7 @@ def run(args: argparse.Namespace) -> int:
                             surface.paint(
                                 full_repaint(latest_screen),
                                 history.overlays(),
+                                selection.segments(),
                             )
                             if claude_history_prompt_input is not None:
                                 surface.show_claude_history_prompt()
@@ -2794,7 +3205,10 @@ def run(args: argparse.Namespace) -> int:
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if history.active and latest_screen is not None:
-                            surface.paint(full_repaint(latest_screen))
+                            surface.paint(
+                                full_repaint(latest_screen),
+                                selection=selection.segments(),
+                            )
                         if claude_history_prompt_input is not None:
                             surface.show_claude_history_prompt()
                         history.clear_cache()
@@ -2818,9 +3232,23 @@ def run(args: argparse.Namespace) -> int:
                                 surface.copy_to_clipboard(message.data)
                                 continue
                             if isinstance(message, HistoryBatch):
-                                apply_history_action(
-                                    history.accept_prefetch(message)
+                                action = history.accept_prefetch(message)
+                                selection_changed = (
+                                    selection.validate_routes(
+                                        history.visible_routes
+                                    )
                                 )
+                                if selection_changed:
+                                    selection_clear_at = None
+                                apply_history_action(action)
+                                if (
+                                    selection_changed
+                                    and latest_screen is not None
+                                ):
+                                    surface.paint(
+                                        full_repaint(latest_screen),
+                                        history.overlays(),
+                                    )
                                 continue
                             if isinstance(message, HistorySnapshot):
                                 apply_history_action(history.accept(message))
@@ -2876,7 +3304,9 @@ def run(args: argparse.Namespace) -> int:
                                 awaiting_keyframe = False
                             latest_screen = applied
                             focus_reporting_started = surface.paint(
-                                applied, history.overlays()
+                                applied,
+                                history.overlays(),
+                                selection.segments(),
                             )
                             if claude_history_prompt_input is not None:
                                 surface.show_claude_history_prompt()
@@ -2914,17 +3344,28 @@ def run(args: argparse.Namespace) -> int:
                 if not local_exit:
                     for part in terminal_input.flush_pending():
                         handle_terminal_part(part, set())
-                if (
+                now = time.monotonic()
+                restore_local_status = (
                     history_info_until is not None
-                    and time.monotonic() >= history_info_until
-                ):
+                    and now >= history_info_until
+                )
+                clear_selection = (
+                    selection_clear_at is not None
+                    and now >= selection_clear_at
+                )
+                if restore_local_status or clear_selection:
+                    if clear_selection:
+                        selection.cancel()
                     if latest_screen is not None:
                         surface.paint(
                             full_repaint(latest_screen),
                             history.overlays(),
+                            selection.segments(),
                         )
-                    history_info_until = None
-                now = time.monotonic()
+                    if restore_local_status:
+                        history_info_until = None
+                    if clear_selection:
+                        selection_clear_at = None
                 if (
                     claude_history_pending_choice is not None
                     and claude_history_save_timed_out(
@@ -2981,7 +3422,9 @@ def run(args: argparse.Namespace) -> int:
                         model = ScreenModel()
                         terminal_input = TerminalInputDecoder()
                         history = LocalHistoryView(history_limit)
+                        selection = LocalTextSelection()
                         history_info_until = None
+                        selection_clear_at = None
                         claude_history_prompt_input = None
                         claude_history_pending_choice = None
                         claude_history_pending_since = None

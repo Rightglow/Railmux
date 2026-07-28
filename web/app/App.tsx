@@ -316,7 +316,8 @@ export default function Home() {
                   Use shortcuts or click the matching Button Bar control.
                   Running agents continue even when their mode or pane is not
                   visible. The recording shows the keyboard route and names
-                  the equivalent mouse target with a pointer in every cue.
+                  the equivalent mouse target where Railmux exposes one.
+                  Safety confirmations remain explicit keyboard choices.
                 </p>
                 <div>
                   <span><kbd>+</kbd> or click <strong>More</strong></span>
@@ -329,7 +330,7 @@ export default function Home() {
               <div className="lifecycle-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
-                  <small>keyboard recorded · pointer marks each mouse equivalent</small>
+                  <small>keyboard recorded · pointer marks supported mouse equivalents</small>
                 </div>
                 <TerminalRecording
                   source="railmux-controls-demo.cast"
@@ -360,7 +361,8 @@ export default function Home() {
                   <p>
                     Close the shared Railmux UI in every attached terminal.
                     Agent sessions stay alive and are recovered next start.
-                    With a mouse, click <strong>Quit → Soft Quit</strong>.
+                    Click <strong>Quit</strong>, then press <kbd>s</kbd> in
+                    the confirmation.
                   </p>
                 </article>
                 <article>
@@ -368,8 +370,8 @@ export default function Home() {
                   <h3><kbd>q</kbd> then <kbd>y</kbd></h3>
                   <p>
                     Close Railmux and stop every running agent session after
-                    explicit confirmation. With a mouse, click
-                    <strong> Quit → Quit</strong>.
+                    explicit confirmation. Click <strong>Quit</strong>, then
+                    press <kbd>y</kbd> in the confirmation.
                   </p>
                 </article>
               </div>
@@ -395,6 +397,7 @@ export default function Home() {
               <ul>
                 <li><span>↗</span> Skip superseded intermediate frames</li>
                 <li><span>↗</span> Scroll up to 20,000 configured history lines</li>
+                <li><span>↗</span> Drag-select one pane and copy locally</li>
                 <li><span>↗</span> Reconnect without restarting remote agents</li>
                 <li><span>↗</span> Install a matching remote helper with consent</li>
               </ul>
