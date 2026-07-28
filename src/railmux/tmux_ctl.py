@@ -394,6 +394,62 @@ def open_rollout_uuids_for_pid(pid: int, sessions_dir: Path) -> set[str]:
     return ids
 
 
+def process_tree_rollout_ids(
+    pid: int, sessions_dir: Path,
+) -> set[str] | None:
+    """Rollout UUIDs held by *pid* or any of its descendants.
+
+    ``None`` means the platform has no procfs and therefore cannot provide the
+    correlation.  An empty set means the probe ran but found no open rollout.
+    Keeping this process-rooted form separate from :func:`session_rollout_ids`
+    lets callers inspect a real pane after the swap display transport has moved
+    it out of its detached home session.
+    """
+    if not proc_fs_available():
+        return None
+    ids: set[str] = set()
+    for process_id in (pid, *descendant_pids(pid)):
+        ids |= open_rollout_uuids_for_pid(process_id, sessions_dir)
+    return ids
+
+
+def process_tree_has_exact_arg(pid: int, expected: str) -> bool | None:
+    """Whether *pid* or a descendant has an argv element equal to *expected*.
+
+    This reads NUL-delimited ``/proc/<pid>/cmdline`` directly instead of
+    searching a rendered shell command, so prefixes, substrings, quoting, and
+    unrelated environment text cannot count as identity evidence. ``None``
+    means procfs is unavailable; inaccessible or exited processes simply do
+    not provide positive evidence.
+    """
+    if not proc_fs_available():
+        return None
+    try:
+        expected_bytes = expected.encode()
+    except UnicodeEncodeError:
+        return False
+    for process_id in (pid, *descendant_pids(pid)):
+        try:
+            argv = Path(f"/proc/{process_id}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if expected_bytes in argv:
+            return True
+    return False
+
+
+def session_process_has_exact_arg(
+    session_name: str, expected: str,
+) -> bool | None:
+    """Apply :func:`process_tree_has_exact_arg` to a detached session pane."""
+    if not proc_fs_available():
+        return None
+    pid = pane_pid_for_session(session_name)
+    if pid is None:
+        return False
+    return process_tree_has_exact_arg(pid, expected)
+
+
 def session_rollout_ids(session_name: str, sessions_dir: Path) -> set[str] | None:
     """Correlate *session_name*'s pane to the rollout UUID(s) its codex process
     currently holds open under *sessions_dir* (#12).
@@ -419,10 +475,7 @@ def session_rollout_ids(session_name: str, sessions_dir: Path) -> set[str] | Non
     pid = pane_pid_for_session(session_name)
     if pid is None:
         return set()  # transient: pane not up yet → caller waits, not fallback
-    ids: set[str] = set()
-    for p in (pid, *descendant_pids(pid)):
-        ids |= open_rollout_uuids_for_pid(p, sessions_dir)
-    return ids
+    return process_tree_rollout_ids(pid, sessions_dir)
 
 
 def current_pane_id() -> str | None:

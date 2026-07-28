@@ -19,12 +19,15 @@ from railmux.tmux_ctl import (
     pane_pid_for_session,
     prepare_scroll_bindings,
     process_has_child,
+    process_tree_rollout_ids,
+    process_tree_has_exact_arg,
     restore_scroll_bindings,
     restore_owned_scroll_bindings,
     session_rollout_ids,
     set_window_border_style,
     set_window_user_option,
     session_has_child,
+    session_process_has_exact_arg,
     session_process_ids,
     split_window_h,
     split_window_v,
@@ -301,14 +304,63 @@ def test_open_rollout_uuids_handles_missing_proc():
         assert open_rollout_uuids_for_pid(999, Path("/nope")) == set()
 
 
-def test_session_rollout_ids_unions_pid_and_descendants(monkeypatch):
+def test_session_rollout_ids_routes_from_session_pane(monkeypatch):
     monkeypatch.setattr(tmux_ctl, "pane_pid_for_session", lambda name: 100)
     monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: True)
-    monkeypatch.setattr(tmux_ctl, "descendant_pids", lambda pid: [200, 300])
-    opened = {100: set(), 200: {_UUID_A}, 300: set()}
-    monkeypatch.setattr(tmux_ctl, "open_rollout_uuids_for_pid",
-                        lambda pid, d: opened[pid])
+    calls = []
+    monkeypatch.setattr(
+        tmux_ctl,
+        "process_tree_rollout_ids",
+        lambda pid, sessions: calls.append((pid, sessions)) or {_UUID_A},
+    )
+
     assert session_rollout_ids("cx-example", Path("/s")) == {_UUID_A}
+    assert calls == [(100, Path("/s"))]
+
+
+def test_process_tree_rollout_ids_supports_swapped_real_pane(monkeypatch):
+    monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: True)
+    monkeypatch.setattr(tmux_ctl, "descendant_pids", lambda pid: [200, 300])
+    opened = {100: set(), 200: {_UUID_A}, 300: {_UUID_B}}
+    monkeypatch.setattr(
+        tmux_ctl, "open_rollout_uuids_for_pid",
+        lambda pid, _sessions: opened[pid],
+    )
+
+    assert process_tree_rollout_ids(100, Path("/s")) == {_UUID_A, _UUID_B}
+
+
+def test_process_tree_rollout_ids_none_without_procfs(monkeypatch):
+    monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: False)
+    assert process_tree_rollout_ids(100, Path("/s")) is None
+
+
+def test_process_tree_has_exact_arg_checks_nul_delimited_argv(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: True)
+    monkeypatch.setattr(tmux_ctl, "descendant_pids", lambda _pid: [200])
+    monkeypatch.setattr(
+        Path, "read_bytes",
+        lambda path: (
+            b"codex\0resume\0expected-id\0"
+            if str(path) == "/proc/200/cmdline"
+            else b"node\0wrapper\0"
+        ),
+    )
+
+    assert process_tree_has_exact_arg(100, "expected-id") is True
+    assert process_tree_has_exact_arg(100, "expected") is False
+
+
+def test_session_process_has_exact_arg_routes_from_pane(monkeypatch):
+    monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: True)
+    monkeypatch.setattr(tmux_ctl, "pane_pid_for_session", lambda _name: 100)
+    monkeypatch.setattr(
+        tmux_ctl, "process_tree_has_exact_arg",
+        lambda pid, expected: pid == 100 and expected == _UUID_A,
+    )
+    assert session_process_has_exact_arg("cx-example", _UUID_A) is True
 
 
 def test_session_rollout_ids_empty_when_pane_pid_not_ready(monkeypatch):

@@ -5,6 +5,8 @@ import threading
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 from railmux.codex_index import CodexIndex, ScanReport
 from railmux.models import SessionMeta
@@ -22,6 +24,7 @@ class IndexSnapshot:
     sessions: tuple[SessionMeta, ...]
     published_at: float
     report: ScanReport | None
+    hidden_statuses: Mapping[str, str]
 
 
 class BackgroundCodexIndex:
@@ -50,7 +53,8 @@ class BackgroundCodexIndex:
         self._clock = clock
         self._condition = threading.Condition()
         self._reader = threading.local()
-        self._snapshot = IndexSnapshot(0, (), 0.0, None)
+        self._snapshot = IndexSnapshot(
+            0, (), 0.0, None, MappingProxyType({}))
         self._requested = False
         self._force_requested = False
         self._invalidate_requested = False
@@ -203,6 +207,14 @@ class BackgroundCodexIndex:
                 return self._with_override(meta)
         return None
 
+    def hidden_status(
+        self, session_id: str, *, refresh: bool = True,
+    ) -> str | None:
+        """Status for a sidebar-filtered rollout in the current generation."""
+        if refresh:
+            self.refresh()
+        return self.current_snapshot().hidden_statuses.get(session_id)
+
     def close(self, timeout_s: float = 0.2) -> bool:
         """Stop accepting work and wait only a bounded time for NFS IO."""
         with self._condition:
@@ -273,10 +285,13 @@ class BackgroundCodexIndex:
                     self._scanner.invalidate()
                 report = self._scanner.refresh()
                 sessions = self._scanner.snapshot()
+                hidden_statuses = getattr(
+                    self._scanner, "hidden_statuses", lambda: {})()
                 error: str | None = None
             except Exception:
                 report = None
                 sessions = ()
+                hidden_statuses = {}
                 error = "Codex background index failed unexpectedly"
 
             with self._condition:
@@ -304,6 +319,8 @@ class BackgroundCodexIndex:
                         sessions=sessions,
                         published_at=self._clock(),
                         report=report,
+                        hidden_statuses=MappingProxyType(
+                            dict(hidden_statuses)),
                     )
                     live_ids = {meta.session_id for meta in sessions}
                     self._tombstones.intersection_update(live_ids)

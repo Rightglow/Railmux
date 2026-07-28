@@ -31,6 +31,7 @@ def _report(*, complete: bool = True, warning: str | None = None,
 class _EventScanner:
     def __init__(self, sessions=()) -> None:
         self.sessions = tuple(sessions)
+        self.hidden = {}
         self.report = _report()
         self.started = threading.Event()
         self.release = threading.Event()
@@ -60,6 +61,9 @@ class _EventScanner:
     def snapshot(self):
         return self.sessions
 
+    def hidden_statuses(self):
+        return dict(self.hidden)
+
     def invalidate(self) -> None:
         self.invalidations += 1
 
@@ -88,6 +92,21 @@ def test_publishes_immutable_monotonic_generations() -> None:
         assert [meta.session_id for meta in first.sessions] == ["one"]
         assert second.generation == 2
         assert [meta.session_id for meta in second.sessions] == ["two"]
+    finally:
+        index.close()
+
+
+def test_publishes_hidden_rollout_status_with_same_generation() -> None:
+    scanner = _EventScanner([_meta("parent")])
+    scanner.hidden = {"worker": "busy"}
+    index = BackgroundCodexIndex(
+        Path("/unused"), scanner=scanner, min_interval_s=0)
+    try:
+        index.refresh()
+        assert index.wait_for_generation(1)
+
+        assert index.get("worker", refresh=False) is None
+        assert index.hidden_status("worker", refresh=False) == "busy"
     finally:
         index.close()
 

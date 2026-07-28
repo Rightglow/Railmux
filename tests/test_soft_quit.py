@@ -1156,7 +1156,7 @@ def test_legacy_command_matcher_accepts_only_historical_launch_grammar():
 
 
 def test_discover_orphans_restores_persisted_binding_without_procfs(
-        monkeypatch):
+    monkeypatch):
     """A validated state binding is the cross-platform soft-restart path."""
     cwd = Path("/tmp/codex-only")
     project = _project("codex-only")
@@ -1187,6 +1187,90 @@ def test_discover_orphans_restores_persisted_binding_without_procfs(
 
     assert app._running[session_id].tmux_name == "cx-new---abcdef-1"
     assert app._running[session_id].label.endswith("/Recovered")
+
+
+def test_soft_restart_keeps_resumed_parent_with_open_background_rollout(
+    monkeypatch,
+):
+    """A completed parent rollout may close while its resumed Codex process
+    still owns a busy background rollout; exact resume argv preserves it."""
+    cwd = Path("/tmp/codex-only")
+    project = _project("codex-only")
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    background_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    meta = _codex_meta(project, session_id)
+    tmux_name = "cx-12345678-1234-12"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.all_cwds.return_value = {cwd: 1}
+    app._codex_index.get.side_effect = (
+        lambda candidate, refresh=False: (
+            meta if candidate == session_id else None
+        )
+    )
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    monkeypatch.setattr(
+        tmux_ctl, "session_rollout_ids",
+        lambda *_args: {background_id},
+    )
+    exact_arg = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        tmux_ctl, "session_process_has_exact_arg", exact_arg)
+    binding = {
+        "key": session_id,
+        "tmux_name": tmux_name,
+        "session_type": "codex",
+        "cwd": str(cwd),
+    }
+
+    running = app._valid_running_binding(
+        binding,
+        {tmux_name: (cwd, 100)},
+        {app._path_key(cwd): project},
+    )
+
+    assert running is not None
+    assert running.tmux_name == tmux_name
+    exact_arg.assert_called_once_with(tmux_name, session_id)
+
+
+@pytest.mark.parametrize("probe_result", [False, None, OSError("denied")])
+def test_soft_restart_rejects_other_writer_without_exact_resume_arg(
+    monkeypatch, probe_result,
+):
+    """Sibling rollout ids alone cannot weaken stale-writer rejection."""
+    cwd = Path("/tmp/codex-only")
+    project = _project("codex-only")
+    session_id = "12345678-1234-1234-1234-1234567890ab"
+    tmux_name = "cx-12345678-1234-12"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.all_cwds.return_value = {cwd: 1}
+    app._codex_index.get.return_value = _codex_meta(project, session_id)
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    monkeypatch.setattr(
+        tmux_ctl, "session_rollout_ids",
+        lambda *_args: {"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+    )
+    def exact_arg_probe(*_args):
+        if isinstance(probe_result, Exception):
+            raise probe_result
+        return probe_result
+
+    monkeypatch.setattr(
+        tmux_ctl, "session_process_has_exact_arg", exact_arg_probe)
+    binding = {
+        "key": session_id,
+        "tmux_name": tmux_name,
+        "session_type": "codex",
+        "cwd": str(cwd),
+    }
+
+    assert app._valid_running_binding(
+        binding,
+        {tmux_name: (cwd, 100)},
+        {app._path_key(cwd): project},
+    ) is None
 
 
 def test_discover_orphans_reuses_initial_project_snapshot():
@@ -2205,6 +2289,8 @@ def test_run_teardown_reverts_bar_if_setup_raises(monkeypatch):
     monkeypatch.setattr(app_mod.tmux_ctl, "current_session_name", lambda: "railmux")
     monkeypatch.setattr(app_mod.tmux_ctl, "enable_clipboard_passthrough", lambda: None)
     monkeypatch.setattr(app_mod.tmux_ctl, "current_pane_id", lambda: "%0")
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "use_smallest_window_size", lambda _pane: True)
     monkeypatch.setattr("subprocess.run", MagicMock())
     # Screen construction blows up AFTER the status bar has been set up.
     monkeypatch.setattr("urwid.raw_display.Screen",

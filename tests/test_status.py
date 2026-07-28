@@ -3,6 +3,7 @@ import json
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import urwid
@@ -176,6 +177,86 @@ def test_effective_status_codex_pending_skips_claude_child_probe(app, monkeypatc
         status="blocked", pending_tool=True, session_type="codex",
     )
     assert a._effective_status(meta) == "blocked"
+
+
+def test_effective_status_codex_background_rollout_keeps_parent_busy(
+    app, monkeypatch,
+):
+    """A completed parent remains busy while its exact Codex process owns an
+    active background rollout, including when swap moved the real pane."""
+    a, _Running = app
+    worker_id = "22222222-2222-2222-2222-222222222222"
+    a._running[_UID] = _Running(
+        key=_UID, tmux_name="cx-x", label="l", session_type="codex")
+    primary = SessionMeta(
+        project=None, session_id=_UID, jsonl_path=Path("/primary"),
+        title="t", message_count=1, token_total=1, last_mtime=1.0,
+        status="idle", session_type="codex",
+    )
+    transport = a._display_transport()
+    monkeypatch.setattr(
+        transport, "displayed_real_pane",
+        lambda tmux_name: "%42" if tmux_name == "cx-x" else None,
+    )
+    monkeypatch.setattr(
+        tmux_ctl, "pane_identity",
+        lambda pane_id: SimpleNamespace(pane_pid=4321)
+        if pane_id == "%42" else None,
+    )
+    calls = []
+    monkeypatch.setattr(
+        tmux_ctl, "process_tree_rollout_ids",
+        lambda pid, sessions_dir: (
+            calls.append((pid, sessions_dir)) or {_UID, worker_id}
+        ),
+    )
+    monkeypatch.setattr(
+        tmux_ctl, "session_rollout_ids",
+        lambda *_args: pytest.fail("swapped pane used its placeholder session"),
+    )
+    monkeypatch.setattr(
+        a._codex_index, "get",
+        lambda _session_id, refresh=False: None,
+    )
+    monkeypatch.setattr(
+        a._codex_index, "hidden_status",
+        lambda session_id, refresh=False: (
+            "busy" if session_id == worker_id else None
+        ),
+    )
+
+    assert a._effective_status(
+        primary, codex_rollout_probes={}) == "busy"
+    assert a._effective_status(
+        primary, codex_rollout_probes={}) == "busy"
+    assert calls == [(4321, a._codex_home_path() / "sessions")]
+
+
+def test_effective_status_codex_blocked_sibling_refines_idle_parent(
+    app, monkeypatch,
+):
+    a, _Running = app
+    worker_id = "22222222-2222-2222-2222-222222222222"
+    a._running[_UID] = _Running(
+        key=_UID, tmux_name="cx-x", label="l", session_type="codex")
+    primary = SessionMeta(
+        project=None, session_id=_UID, jsonl_path=Path("/primary"),
+        title="t", message_count=1, token_total=1, last_mtime=1.0,
+        status="idle", session_type="codex",
+    )
+    monkeypatch.setattr(a._codex_index, "get", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        a._codex_index,
+        "hidden_status",
+        lambda session_id, **_kwargs: (
+            "blocked" if session_id == worker_id else None
+        ),
+    )
+
+    assert a._effective_status(
+        primary,
+        codex_rollout_probes={"cx-x": {_UID, worker_id}},
+    ) == "blocked"
 
 
 def test_effective_status_reuses_probe_within_refresh(app, monkeypatch):

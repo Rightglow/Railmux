@@ -111,6 +111,7 @@ _BODY = "#d0d0d0"
 _STATUS_YELLOW = "#ffd700"
 _STATUS_RED = "#ff5f5f"
 _TERMINAL_COLORS = 2**24
+_CODEX_ROLLOUT_PROBE_TTL_S = 2.0
 
 
 PALETTE = [
@@ -688,6 +689,12 @@ class App:
         # Every agent session this Railmux instance has opened, keyed by
         # session_id (or a "__new__-N" placeholder until the JSONL appears).
         self._running: dict[str, _Running] = {}
+        # Procfs rollout correlation is useful but relatively expensive
+        # (process-tree traversal plus fd reads). Cache it across UI ticks and
+        # include the real pane identity so a swap cannot reuse stale data.
+        self._codex_rollout_probe_cache: dict[
+            tuple[str, str], tuple[float, set[str] | None]
+        ] = {}
         # Wall-clock of the last Running-pane re-sort; throttles reordering to
         # once per _RUNNING_SORT_INTERVAL so rows don't jump under the cursor.
         self._running_sort_ts: float = 0.0
@@ -5457,17 +5464,42 @@ class App:
                 return None
             if probe_live_writer:
                 try:
-                    open_ids = tmux_ctl.session_rollout_ids(
-                        tmux_name, self._codex_home_path() / "sessions")
+                    displayed_pid = (
+                        self._display_transport().displayed_real_pid(
+                            tmux_name)
+                    )
+                    if (not isinstance(displayed_pid, int)
+                            or isinstance(displayed_pid, bool)):
+                        displayed_pid = None
+                    open_ids = (
+                        tmux_ctl.process_tree_rollout_ids(
+                            displayed_pid,
+                            self._codex_home_path() / "sessions",
+                        )
+                        if displayed_pid is not None
+                        else tmux_ctl.session_rollout_ids(
+                            tmux_name,
+                            self._codex_home_path() / "sessions",
+                        )
+                    )
                 except Exception:
                     open_ids = None
             else:
                 open_ids = None
             # An empty set is a transient/permission failure and does not
-            # disprove the persisted mapping.  A non-empty set naming other
-            # rollouts but not this id does disprove it.
+            # disprove the persisted mapping. A resumed Codex process can close
+            # its completed parent rollout while keeping background rollouts
+            # open; in that case the exact UUID remains an argv element and is
+            # stronger evidence than the sibling rollout-fd mismatch.
             if open_ids and key not in open_ids:
-                return None
+                try:
+                    resumed_key_matches = (
+                        tmux_ctl.session_process_has_exact_arg(tmux_name, key)
+                    )
+                except Exception:
+                    resumed_key_matches = None
+                if resumed_key_matches is not True:
+                    return None
             if meta is None:
                 if not allow_missing_codex_metadata:
                     return None
@@ -7013,6 +7045,7 @@ class App:
         )
         server = tmux_ctl.server_snapshot() if needs_liveness else None
         child_probes: dict[str, bool | None] = {}
+        codex_rollout_probes: dict[str, set[str] | None] = {}
 
         self._repair_adaptive_running_guards(server)
         recovered_displayed = self._recover_unrepresented_displayed_agents(
@@ -7090,7 +7123,8 @@ class App:
                 # pane agrees with the Running pane on each session's status dot.
                 sessions = self._pane_sessions(
                     matched, refresh=False,
-                    child_probes=child_probes, server=server)
+                    child_probes=child_probes, server=server,
+                    codex_rollout_probes=codex_rollout_probes)
                 self._sessions_pane.set_sessions(matched, sessions, running_ids=running_ids,
                                                   favorite_ids=self._favorites.get_ids())
             else:
@@ -7098,7 +7132,8 @@ class App:
                 self._sessions_pane.set_sessions(None, [], running_ids=running_ids,
                                                   favorite_ids=self._favorites.get_ids())
 
-        self._update_running_pane(child_probes, server)
+        self._update_running_pane(
+            child_probes, server, codex_rollout_probes)
         # Advance the status-bar state machine (TTL expiry + idle tip rotation)
         self._update_status()
         # Keep the hint bar showing only the keys valid for the focused pane.
@@ -7206,20 +7241,53 @@ class App:
         meta: SessionMeta,
         child_probes: dict[str, bool | None] | None = None,
         server: tmux_ctl.ServerSnapshot | None = None,
+        codex_rollout_probes: dict[str, set[str] | None] | None = None,
     ) -> str:
         """Displayed status, refined by the live process when we own the session.
 
         For a Claude session railmux has opened, a pending ``tool_use`` with a
         live child process means a tool is actively running (busy); no child
-        means Claude is waiting for approval (blocked).  Codex is deliberately
-        excluded: its pane has permanent wrapper/native/MCP children, so the
-        same probe would report busy even while Codex is waiting for approval.
-        Codex therefore keeps its JSONL age heuristic. Probe failures fall back
-        to ``meta.status``. Used by both panes so the same session never shows
-        two different dots.
+        means Claude is waiting for approval (blocked).
+
+        Codex's pane has permanent wrapper/native/MCP children, so that child
+        heuristic cannot distinguish work from an approval prompt.  Instead,
+        exact procfs rollout-fd correlation folds active background threads
+        owned by the same Codex process into the parent session's status.  This
+        matches Codex's own ``Working · background terminal running`` state
+        even after the parent rollout has emitted ``task_complete``. Probe
+        failures fall back to ``meta.status``. Used by both panes so the same
+        session never shows two different dots.
         """
+        r = self._by_session_id(meta.session_id)
+        if (meta.session_type == "codex"
+                and r is not None and not r.is_placeholder
+                and codex_rollout_probes is not None):
+            if r.tmux_name in codex_rollout_probes:
+                rollout_ids = codex_rollout_probes[r.tmux_name]
+            else:
+                rollout_ids = self._codex_rollout_ids(r, server)
+                codex_rollout_probes[r.tmux_name] = rollout_ids
+
+            statuses = {meta.status}
+            for rollout_id in rollout_ids or ():
+                if rollout_id == meta.session_id:
+                    continue
+                hidden_status = self._codex_index.hidden_status(
+                    rollout_id, refresh=False)
+                if hidden_status is not None:
+                    statuses.add(hidden_status)
+                    continue
+                related = self._codex_index.get(rollout_id, refresh=False)
+                if related is not None:
+                    statuses.add(related.status)
+            # A process with any active thread is working. Only show blocked
+            # when no sibling thread is making progress.
+            if "busy" in statuses:
+                return "busy"
+            if "blocked" in statuses:
+                return "blocked"
+
         if meta.pending_tool and meta.session_type != "codex":
-            r = self._by_session_id(meta.session_id)
             if r is not None and not r.is_placeholder:
                 if child_probes is not None and r.tmux_name in child_probes:
                     has_child = child_probes[r.tmux_name]
@@ -7238,14 +7306,64 @@ class App:
                     return "busy" if has_child else "blocked"
         return meta.status
 
+    def _codex_rollout_ids(
+        self,
+        running: _Running,
+        server: tmux_ctl.ServerSnapshot | None,
+    ) -> set[str] | None:
+        """Probe one Codex process tree, reusing a short pane-aware TTL."""
+        real_pane = self._display_transport().displayed_real_pane(
+            running.tmux_name)
+        if not isinstance(real_pane, str) or not real_pane:
+            real_pane = None
+        pane_pid = (
+            server.pane_pid_for(running.tmux_name)
+            if real_pane is None and server is not None
+            else None
+        )
+        source = real_pane or (
+            f"home:{pane_pid}" if pane_pid is not None else "home:unknown")
+        key = (running.tmux_name, source)
+        now = time.monotonic()
+        cache = getattr(self, "_codex_rollout_probe_cache", {})
+        cached = cache.get(key)
+        if cached is not None and now - cached[0] < _CODEX_ROLLOUT_PROBE_TTL_S:
+            return cached[1]
+
+        sessions_dir = self._codex_home_path() / "sessions"
+        try:
+            if real_pane is not None:
+                identity = tmux_ctl.pane_identity(real_pane)
+                pane_pid = identity.pane_pid if identity is not None else None
+            rollout_ids = (
+                tmux_ctl.process_tree_rollout_ids(pane_pid, sessions_dir)
+                if pane_pid is not None
+                else tmux_ctl.session_rollout_ids(
+                    running.tmux_name, sessions_dir)
+            )
+        except Exception:
+            rollout_ids = None
+
+        cache[key] = (now, rollout_ids)
+        live_names = {item.tmux_name for item in self._running.values()}
+        self._codex_rollout_probe_cache = {
+            cache_key: value
+            for cache_key, value in cache.items()
+            if cache_key[0] in live_names
+            and now - value[0] < _CODEX_ROLLOUT_PROBE_TTL_S
+        }
+        return rollout_ids
+
     def _refine_status(
         self,
         meta: SessionMeta,
         child_probes: dict[str, bool | None] | None = None,
         server: tmux_ctl.ServerSnapshot | None = None,
+        codex_rollout_probes: dict[str, set[str] | None] | None = None,
     ) -> SessionMeta:
         """Return `meta` with its status refined, copying only when it changes."""
-        status = self._effective_status(meta, child_probes, server)
+        status = self._effective_status(
+            meta, child_probes, server, codex_rollout_probes)
         return meta if status == meta.status else replace(meta, status=status)
 
     def _pane_sessions(
@@ -7255,6 +7373,7 @@ class App:
         refresh: bool,
         child_probes: dict[str, bool | None] | None = None,
         server: tmux_ctl.ServerSnapshot | None = None,
+        codex_rollout_probes: dict[str, set[str] | None] | None = None,
     ) -> list[SessionMeta]:
         """Sessions for the Sessions pane, from the right source and status-refined.
 
@@ -7274,12 +7393,17 @@ class App:
             raw = []
         else:
             raw = self._session_cache.list_sessions(project)
-        return [self._refine_status(s, child_probes, server) for s in raw]
+        return [
+            self._refine_status(
+                s, child_probes, server, codex_rollout_probes)
+            for s in raw
+        ]
 
     def _update_running_pane(
         self,
         child_probes: dict[str, bool | None] | None = None,
         server: tmux_ctl.ServerSnapshot | None = None,
+        codex_rollout_probes: dict[str, set[str] | None] | None = None,
     ) -> None:
         """Sync labels/status and repopulate the Running pane."""
         for r in self._running.values():
@@ -7297,7 +7421,8 @@ class App:
             if meta is not None:
                 if meta.title:
                     r.label = f"{meta.project.display_name}/{meta.display_title}"
-                r.status = self._effective_status(meta, child_probes, server)
+                r.status = self._effective_status(
+                    meta, child_probes, server, codex_rollout_probes)
                 r.last_mtime = meta.last_mtime
                 r.attention = meta.attention
                 if self._agent_workspace().target.agent_tmux_name == r.tmux_name:

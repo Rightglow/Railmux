@@ -451,7 +451,7 @@ def test_codex_append_during_scan_forces_next_refresh(
             {"role": "assistant", "text": "ok"},
         ],
     )
-    real_scan = index_module._scan_codex_session
+    real_scan = index_module._scan_codex_rollout
     calls = []
 
     def scan_then_append(path):
@@ -470,7 +470,7 @@ def test_codex_append_during_scan_forces_next_refresh(
                 stream.write(json.dumps(record) + "\n")
         return meta
 
-    monkeypatch.setattr(index_module, "_scan_codex_session", scan_then_append)
+    monkeypatch.setattr(index_module, "_scan_codex_rollout", scan_then_append)
     idx = CodexIndex(tmp_path)
 
     assert idx.get(sid).message_count == 2
@@ -565,6 +565,27 @@ def test_scan_codex_session_skips_subagent_thread_source(tmp_path: Path):
                          thread_source="subagent",
                          messages=[{"role": "user", "text": "hello"}])
     assert _scan_codex_session(p) is None
+
+
+def test_codex_index_keeps_subagent_status_out_of_visible_sessions(
+    tmp_path: Path,
+):
+    sessions = tmp_path / "sessions" / "2026" / "07" / "09"
+    subagent_id = "22222222-2222-2222-2222-222222222222"
+    _write_codex_session(
+        sessions / "rollout-subagent.jsonl",
+        subagent_id,
+        "/tmp/proj",
+        originator="codex-tui",
+        thread_source="subagent",
+        messages=[{"role": "user", "text": "run background work"}],
+    )
+    index = CodexIndex(tmp_path)
+
+    index.refresh()
+
+    assert index.snapshot() == ()
+    assert index.hidden_statuses() == {subagent_id: "busy"}
 
 
 def test_scan_codex_session_skips_subagent_source_dict(tmp_path: Path):
@@ -1003,14 +1024,14 @@ def test_codex_index_negative_cache_skips_reparse(tmp_path, monkeypatch):
     _write_codex_session(exec_path, "sid-exec", "/proj",
                          originator="codex_exec")
 
-    real_scan = index_module._scan_codex_session
+    real_scan = index_module._scan_codex_rollout
     scanned: list = []
 
     def counting_scan(path):
         scanned.append(path)
         return real_scan(path)
 
-    monkeypatch.setattr(index_module, "_scan_codex_session", counting_scan)
+    monkeypatch.setattr(index_module, "_scan_codex_rollout", counting_scan)
     idx = CodexIndex(tmp_path)
 
     idx.refresh()
@@ -1139,14 +1160,14 @@ def test_codex_index_filtered_stays_negative_cached(tmp_path, monkeypatch):
     exec_path = sessions_dir / "rollout-exec.jsonl"
     _write_codex_session(exec_path, "sid-exec", "/proj", originator="codex_exec")
 
-    real_scan = index_module._scan_codex_session
+    real_scan = index_module._scan_codex_rollout
     scanned: list = []
 
     def counting_scan(path):
         scanned.append(path)
         return real_scan(path)
 
-    monkeypatch.setattr(index_module, "_scan_codex_session", counting_scan)
+    monkeypatch.setattr(index_module, "_scan_codex_rollout", counting_scan)
     idx = CodexIndex(tmp_path)
 
     idx.refresh()
@@ -1173,7 +1194,7 @@ def test_codex_index_transient_error_retried_not_hidden(tmp_path, monkeypatch):
                   {"role": "assistant", "text": "ok"}],
     )
 
-    real_scan = index_module._scan_codex_session
+    real_scan = index_module._scan_codex_rollout
     calls = {"n": 0}
 
     def flaky_scan(p):
@@ -1183,7 +1204,7 @@ def test_codex_index_transient_error_retried_not_hidden(tmp_path, monkeypatch):
             return index_module.SCAN_ERROR
         return real_scan(p)
 
-    monkeypatch.setattr(index_module, "_scan_codex_session", flaky_scan)
+    monkeypatch.setattr(index_module, "_scan_codex_rollout", flaky_scan)
     idx = CodexIndex(tmp_path)
 
     # First refresh: transient error -> not indexed, but not permanently hidden.

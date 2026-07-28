@@ -51,8 +51,9 @@ class _ScanError:
     """Sentinel returned by :func:`_scan_codex_session` for a *transient*
     failure — an IO/OSError or an unexpected exception raised while reading a
     rollout — as distinct from ``None``, which marks a *deterministic* skip
-    (a filtered codex_exec/subagent rollout, a missing cwd, an empty session,
-    or a malformed session_meta header).
+    (a filtered codex_exec rollout, a missing cwd, an empty session, or a
+    malformed session_meta header). Filtered subagents use a status-only
+    result instead.
 
     The distinction drives the negative cache: deterministic skips are safe to
     remember by file signature so they aren't reopened every refresh, but a
@@ -71,6 +72,21 @@ class _ScanError:
 SCAN_ERROR = _ScanError()
 
 
+@dataclass(frozen=True)
+class HiddenCodexStatus:
+    """Activity retained for a filtered subagent rollout.
+
+    Subagent rollouts must not appear as duplicate sidebar conversations, but
+    their status is still needed to refine the visible parent session while
+    the same Codex process has the rollout open.
+    """
+
+    session_id: str
+    status: str
+    last_mtime: float
+    pending_tool: bool
+
+
 class CodexIndex:
     """mtime-keyed cache of all Codex sessions under ``codex_home/sessions/``."""
 
@@ -79,8 +95,14 @@ class CodexIndex:
         self._sessions_dir = codex_home / "sessions"
         # path -> (file signature captured before parsing, metadata)
         self._entries: dict[Path, tuple[FileSignature, SessionMeta]] = {}
-        # Negative cache: files that scanned to ``None`` (filtered codex_exec /
-        # subagent rollouts, empty/cwd-less files, unparseable JSON).  Keyed by
+        # Filtered subagent rollouts remain absent from the public session
+        # snapshot, while this status-only cache lets the background worker
+        # publish their activity without UI-thread JSONL reads.
+        self._hidden_statuses: dict[
+            Path, tuple[FileSignature, HiddenCodexStatus]
+        ] = {}
+        # Negative cache: files that scanned to ``None`` (filtered codex_exec,
+        # empty/cwd-less files, unparseable JSON). Keyed by
         # the signature they had when scanned so they aren't reopened every
         # refresh until their signature changes.  See ``_refresh``.
         self._negative: dict[Path, FileSignature] = {}
@@ -133,6 +155,20 @@ class CodexIndex:
             reverse=True,
         ))
 
+    def hidden_statuses(self) -> dict[str, str]:
+        """Newest status for each filtered subagent rollout UUID."""
+        newest: dict[str, HiddenCodexStatus] = {}
+        for _, hidden in self._hidden_statuses.values():
+            current = newest.get(hidden.session_id)
+            if (current is None
+                    or (hidden.last_mtime, hidden.session_id)
+                    > (current.last_mtime, current.session_id)):
+                newest[hidden.session_id] = hidden
+        return {
+            session_id: hidden.status
+            for session_id, hidden in newest.items()
+        }
+
     def all_cwds(self, *, refresh: bool = True) -> dict[Path, int]:
         """Map from cwd to Codex session count for every cwd that has at
         least one Codex session.
@@ -179,6 +215,7 @@ class CodexIndex:
 
     def invalidate(self) -> None:
         self._entries.clear()
+        self._hidden_statuses.clear()
         self._negative.clear()
 
     # -- internal ---------------------------------------------------------
@@ -241,26 +278,44 @@ class CodexIndex:
                             self._entries[path] = (
                                 signature, replace(meta, status="blocked"))
                         continue
+                    hidden_cached = self._hidden_statuses.get(path)
+                    if (hidden_cached is not None
+                            and hidden_cached[0] == signature):
+                        hidden = hidden_cached[1]
+                        if (hidden.pending_tool and hidden.status == "busy"
+                                and now - hidden.last_mtime
+                                > _TOOL_BLOCK_AGE_S):
+                            self._hidden_statuses[path] = (
+                                signature,
+                                replace(hidden, status="blocked"),
+                            )
+                        continue
                     elif cached is None:
                         # Negative cache: a file that previously scanned to
-                        # None (filtered / empty / unparseable) isn't reopened
+                        # None (exec / empty / unparseable) isn't reopened
                         # until its signature changes.
                         neg = self._negative.get(path)
                         if neg is not None and neg == signature:
                             continue
                     parse_count += 1
-                    result = _scan_codex_session(path)
+                    result = _scan_codex_rollout(path)
                     if isinstance(result, SessionMeta):
                         self._entries[path] = (signature, result)
+                        self._hidden_statuses.pop(path, None)
+                        self._negative.pop(path, None)
+                    elif isinstance(result, HiddenCodexStatus):
+                        self._hidden_statuses[path] = (signature, result)
+                        self._entries.pop(path, None)
                         self._negative.pop(path, None)
                     elif result is None:
-                        # Deterministic skip (filtered codex_exec/subagent,
+                        # Deterministic skip (filtered codex_exec,
                         # missing cwd, empty, or malformed header): remember the
                         # miss by signature so we don't re-parse next tick, and
                         # drop any now-stale cached entry (file was reclassified
                         # or corrupted after its signature changed).
                         self._negative[path] = signature
                         self._entries.pop(path, None)
+                        self._hidden_statuses.pop(path, None)
                     else:
                         # SCAN_ERROR — a transient IO/parse error.  Do NOT
                         # negative-cache it: that would hide an otherwise-stable
@@ -282,6 +337,9 @@ class CodexIndex:
             for stale in list(self._negative):
                 if stale not in current_paths:
                     del self._negative[stale]
+            for stale in list(self._hidden_statuses):
+                if stale not in current_paths:
+                    del self._hidden_statuses[stale]
 
         warning = None
         if walk_failed:
@@ -357,7 +415,9 @@ def _codex_abort_attention(
     )
 
 
-def _scan_codex_session(path: Path) -> SessionMeta | None | _ScanError:
+def _scan_codex_rollout(
+    path: Path,
+) -> SessionMeta | HiddenCodexStatus | None | _ScanError:
     """Extract metadata from a single Codex rollout JSONL file.
 
     Tri-state result:
@@ -395,7 +455,15 @@ def _scan_codex_session(path: Path) -> SessionMeta | None | _ScanError:
         f.close()
 
 
-def _parse_codex_session(path: Path, f) -> SessionMeta | None:
+def _scan_codex_session(path: Path) -> SessionMeta | None | _ScanError:
+    """Compatibility scanner exposing only sidebar-visible sessions."""
+    result = _scan_codex_rollout(path)
+    return None if isinstance(result, HiddenCodexStatus) else result
+
+
+def _parse_codex_session(
+    path: Path, f,
+) -> SessionMeta | HiddenCodexStatus | None:
     # -- read first line for session_meta -------------------------------
     first_line = f.readline().strip()
     if not first_line:
@@ -424,9 +492,10 @@ def _parse_codex_session(path: Path, f) -> SessionMeta | None:
     # dict ``source`` like ``{"subagent": {...}}`` (vs a plain string such
     # as ``"cli"``).  Blocklist, consistent with the codex_exec skip above.
     source = payload.get("source")
-    if (payload.get("thread_source") == "subagent"
-            or (isinstance(source, dict) and "subagent" in source)):
-        return None
+    hidden_subagent = (
+        payload.get("thread_source") == "subagent"
+        or (isinstance(source, dict) and "subagent" in source)
+    )
     session_id = payload.get("id")
     if not session_id or not isinstance(session_id, str):
         return None
@@ -619,7 +688,7 @@ def _parse_codex_session(path: Path, f) -> SessionMeta | None:
         last_activity_ts=0.0,
     )
 
-    return SessionMeta(
+    meta = SessionMeta(
         project=project,
         session_id=session_id,
         jsonl_path=path,
@@ -635,6 +704,14 @@ def _parse_codex_session(path: Path, f) -> SessionMeta | None:
         session_type="codex",
         attention=attention,
     )
+    if hidden_subagent:
+        return HiddenCodexStatus(
+            session_id=session_id,
+            status=status,
+            last_mtime=mtime,
+            pending_tool=pending_tool,
+        )
+    return meta
 
 
 def _codex_cumulative_tokens(info: object) -> int | None:

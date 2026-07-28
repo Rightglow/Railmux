@@ -312,6 +312,13 @@ carry the marker token and recheck live session/pane identity. Stopping an
 unresolved entry may kill only that exact tmux identity and cannot delete a
 provider file because no provider UUID is authorized.
 
+A resumed Codex parent may close its rollout descriptor after `task_complete`
+while background rollouts remain open in the same process. Recovery must not
+interpret those sibling descriptors alone as a different writer: an exact
+NUL-delimited process argv element equal to the stamped resume UUID preserves
+the binding. A substring, rendered shell command, cwd match, or sibling rollout
+without that exact argv evidence must retain the stale-writer veto.
+
 ## Session indexes publish immutable generations
 
 The Codex history tree is owned by one `BackgroundCodexIndex` worker. Urwid
@@ -776,6 +783,22 @@ the last user/assistant message. Codex does not persist a reliable approval-wait
 signal, so a pending tool must remain unchanged for two minutes before the
 session becomes blocked. This delay avoids classifying ordinary long-running
 commands as approval waits.
+
+On procfs systems, a live Codex process may keep working in background threads
+after its parent rollout emits `task_complete`. Exact rollout-file descriptors
+held by the real pane process tree associate those threads with the parent
+Running entry; any busy associated rollout keeps the aggregate session busy,
+and an associated blocked rollout applies only when no sibling is busy. This
+correlation must follow a pane moved by the swap transport and must never infer
+ownership from cwd, title, or rollout recency. Where procfs is unavailable or
+the probe fails, the parent rollout remains the status authority.
+
+Subagent rollouts remain filtered from visible session lists, but the Codex
+index worker publishes their UUID-to-status values in the same immutable
+generation as visible metadata. The UI therefore performs only snapshot
+lookups after process correlation; it never parses rollout JSONL on the Urwid
+thread. Process-tree/fd correlation is cached briefly by tmux name and real
+pane identity so normal status refreshes do not repeatedly walk procfs.
 
 Attention summaries come only from dedicated provider error/lifecycle fields and
 must be short and sanitized. Never classify an error from user prompts,
