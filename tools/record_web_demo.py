@@ -695,6 +695,14 @@ def _client_name(label: str, env: dict[str, str]) -> str | None:
     return names[0] if names else None
 
 
+def _running_row_follows_empty_state(output: bytes | bytearray) -> bool:
+    """Whether the latest Codex repaint replaced its empty Running state."""
+    return (
+        output.rfind(b"railmux/(new)")
+        > output.rfind(b"(no running Codex sessions)")
+    )
+
+
 def _record(output: Path, profile: RecordingProfile) -> None:
     if shutil.which("tmux") is None:
         raise RuntimeError("tmux is required to record the Railmux demo")
@@ -1166,8 +1174,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     if (
                         profile is DUAL
                         and "launch-secondary" in sent
-                        and chunk.rfind(b"railmux/(new)")
-                        > chunk.rfind(b"(no running Codex sessions)")
+                        and _running_row_follows_empty_state(raw_output)
                     ):
                         sent.add("secondary-running")
                     if (
@@ -1208,6 +1215,15 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             )
             raw_output.extend(chunk)
             events.append(_event(cast_time(), "o", chunk))
+        if (
+            profile is DUAL
+            and "launch-secondary" in sent
+            and _running_row_follows_empty_state(raw_output)
+        ):
+            # The final repaint can fit entirely in the sanitizer's bounded
+            # UTF-8/secret holdback. Validate the completed public stream too,
+            # after that tail has been sanitized and committed to the cast.
+            sent.add("secondary-running")
 
         missing_actions = sorted(required_actions - sent)
         if ready_at is None or b"PROJECTS" not in raw_output.upper() or missing_actions:

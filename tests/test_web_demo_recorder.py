@@ -91,6 +91,18 @@ def test_startup_surface_normalizes_pipe_newlines_for_terminal_replay(
     assert output == b"centered one\r\ncentered two\r\n"
 
 
+def test_running_milestone_survives_repaint_chunk_boundaries() -> None:
+    output = bytearray(
+        b"railmux/(new)\n(no running Codex sessions)\n"
+    )
+    assert not record_web_demo._running_row_follows_empty_state(output)
+
+    output.extend(b"RUN")
+    output.extend(b"NING\nrailmux/(new)\n")
+
+    assert record_web_demo._running_row_follows_empty_state(output)
+
+
 def test_only_mobile_demo_uses_compact_presentation() -> None:
     for profile in (
         record_web_demo.DESKTOP,
