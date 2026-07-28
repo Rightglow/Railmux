@@ -122,7 +122,7 @@ export default function Home() {
                 <TerminalRecording
                   source="railmux-dual-demo.cast"
                   className="dual-agent-recording"
-                  poster="npt:8"
+                  poster="npt:11.2"
                   controls={false}
                   dataDemo="dual-recording"
                 />

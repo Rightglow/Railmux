@@ -127,8 +127,8 @@ PALETTE = [
     # Persistent right-pane target. Slate stays visible after focus moves but
     # does not compete with the grass-green input focus.
     ("selected", "white,bold", "dark gray", "bold", "#ffffff,bold", _SLATE),
-    ("title", "white,bold", ""),
-    ("dim", "dark gray", ""),
+    ("title", "white,bold", "", "bold", "#ffffff,bold", "default"),
+    ("dim", "dark gray", "", "", "#808080", "default"),
     # Session-row metadata remains visibly secondary even when its title is
     # focused or selected. Deliberately omit bold from all three variants.
     ("session_meta", "dark gray", "", "", "#808080", "default"),
@@ -182,7 +182,7 @@ PALETTE = [
     # Pane border. Dim by default; grass green when focused. Keep
     # row selection and status colours separate so green retains a clear focus
     # role rather than also meaning "selected" or "idle".
-    ("pane", "dark gray", ""),
+    ("pane", "dark gray", "", "", "#808080", "default"),
     ("pane_focus", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", ""),
 ]
 
@@ -8038,10 +8038,28 @@ class App:
             # on the dedicated server instead.
             tmux = r.tmux_name
             label = r.label
+            copy_title = label
+            if not r.is_placeholder:
+                session_id = r.logical_session_id
+                meta = (
+                    self._find_session_meta(
+                        session_id, r.project, r.session_type
+                    )
+                    if session_id is not None else None
+                )
+                # Legacy recovery can remain usable even when its provider
+                # metadata is temporarily unavailable. Its visible label is
+                # ``project/title``, so retain only the title in that fallback.
+                copy_title = (
+                    meta.display_title
+                    if meta is not None
+                    else label.partition("/")[2] or label
+                )
             token = r.orphan.creation_token if r.orphan is not None else None
             items: list[tuple[str, Callable[[], None]]] = [
                 (" Open      ↵", lambda: self._open_running_identity(
                     tmux, token)),
+                (" Copy title c", lambda: self._copy_session_title(copy_title)),
                 (" Kill       k", lambda: self._kill_tmux_session(
                     tmux, label, token)),
             ]
@@ -8051,7 +8069,7 @@ class App:
                 items.append(
                     (" Term       t", lambda: self._open_terminal_for_path(path)))
             menu = ContextMenu(items, on_close=self._close_modal)
-            self._show_overlay(menu, width=36, height=13,
+            self._show_overlay(menu, width=36, height=14,
                                click_outside_to_close=True,
                                fixed_width=True, fixed_height=True)
             return
@@ -8081,6 +8099,8 @@ class App:
             (" Rename     r", lambda s=session: self._do_context_rename(s)),
             (" Unstar    s" if is_starred else " Star      s",
              lambda s=session: self._do_context_star(s)),
+            (" Copy title c", lambda s=session:
+             self._copy_session_title(s.display_title)),
             (" Kill       k", lambda s=session: self._do_context_kill(s)
              if is_alive else None),
             (" Term       t", lambda s=session: self._do_context_term(s)),
@@ -8089,12 +8109,21 @@ class App:
         # Filter out None callbacks (e.g. Kill for non-running sessions).
         items = [(label, cb) for label, cb in items if cb is not None]
         menu = ContextMenu(items, on_close=self._close_modal)
-        self._show_overlay(menu, width=36, height=15,
+        self._show_overlay(menu, width=36, height=16,
                            click_outside_to_close=True,
                            fixed_width=True, fixed_height=True)
 
     def _do_context_open(self, session: SessionMeta) -> None:
         self._on_session_select(session, steal_focus=True)
+
+    def _copy_session_title(self, title: str) -> None:
+        if tmux_ctl.copy_to_clipboard(title):
+            self._set_status(f"Copied title: {title}", "info")
+        else:
+            self._set_status(
+                "Could not copy title; terminal clipboard is unavailable",
+                "warn",
+            )
 
     def _do_context_rename(self, session: SessionMeta) -> None:
         modal = RenameModal(

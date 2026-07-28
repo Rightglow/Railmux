@@ -9,6 +9,7 @@ from railmux.tmux_ctl import (
     _bindings_are_tmux_defaults,
     _read_key_binding,
     _set_scroll_bindings,
+    copy_to_clipboard,
     descendant_pids,
     enable_clipboard_passthrough,
     install_scroll_bindings,
@@ -79,6 +80,25 @@ def test_clipboard_handles_check_output_error():
          _mock_check_call() as call:
         enable_clipboard_passthrough()
         call.assert_called_once()
+
+
+def test_copy_to_clipboard_uses_tmux_write_clipboard_flag():
+    with _mock_check_call() as call:
+        assert copy_to_clipboard("Review layout policy")
+
+    call.assert_called_once_with(
+        ["tmux", "set-buffer", "-w", "--", "Review layout policy"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def test_copy_to_clipboard_rejects_unsafe_or_unbounded_payload():
+    with _mock_check_call() as call:
+        assert not copy_to_clipboard("bad\x00title")
+        assert not copy_to_clipboard("x" * (64 * 1024 + 1))
+        assert not copy_to_clipboard("\udcff")
+    call.assert_not_called()
 
 
 def test_server_snapshot_collects_sessions_and_panes():

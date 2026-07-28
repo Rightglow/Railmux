@@ -260,7 +260,7 @@ path:
 railmux ssh your-server
 ```
 
-Protocol v10 begins with a bounded remote hello containing package version,
+Protocol v11 begins with a bounded remote hello containing package version,
 protocol version, SSH dependency readiness, and tmux availability. The server
 does not inspect or mutate tmux until the compatible client returns the exact
 start acknowledgement. Missing Railmux or its optional dependency can be
@@ -281,7 +281,7 @@ across differing package versions.
 
 If the default `railmux` tmux session is absent, the server starts Railmux in a
 detached tmux session using the same installed Python environment. A custom
-`--session` is never auto-created. Multiple protocol-v10 helpers may attach to
+`--session` is never auto-created. Multiple protocol-v11 helpers may attach to
 the same managed session. A short flock covers only validation and attachment;
 the helper confirms its own child by matching tmux's `#{client_pid}` before it
 releases that boundary. The shared window is set to `window-size=smallest`, so
@@ -344,7 +344,7 @@ A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
 
-Display protocol v10 uses monotonically sequenced, zlib-compressed keyframes and
+Display protocol v11 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
@@ -361,20 +361,22 @@ upgrade flow instead of attempting wire compatibility.
 History is a separate bounded response in that same ordered output stream. The
 server resolves the pane from current tmux geometry, excludes the controller,
 and uses `capture-pane -e` without entering copy-mode or sending keys. Raw tmux
-control sequences are parsed through `pyte`; only reconstructed text and
-allowlisted SGR character styles cross the protocol. OSC and other terminal
-actions are not forwarded. A managed Claude Code pane in its alternate screen
+control sequences are parsed through `pyte`; reconstructed text and allowlisted
+SGR character styles cross the screen protocol. One bounded, validated OSC 52
+clipboard payload may cross as a separate explicit message; other OSC and
+terminal actions are not forwarded. A managed Claude Code pane in its alternate screen
 has no tmux scrollback, so Railmux stamps its exact same-user JSONL locator and
 advertises transcript availability separately from whether it is used. The
 remote `ssh.claude_history` setting chooses a bounded, cached, read-only
 transcript suffix behind the live viewport or Claude Code's native clickable
-history; the default asks locally on the first upward scroll and persists the
-answer only after a helper acknowledgement. This capability is explicit on the
+history; the default asks locally on the first upward scroll and applies either
+a persistent or current-invocation answer only after helper acknowledgement.
+This capability is explicit on the
 wire: an unrelated mouse-aware TUI retains application-level wheel input, while
 locally transcript-backed wheel input never opens Claude Code's
-provider-managed history view. Protocol v10 also
+provider-managed history view. Protocol v11 also
 reports whether older rows remain, instead of inferring exhaustion from a
-short compressed page. Protocol v10 permits at most 20000 physical lines;
+short compressed page. Protocol v11 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from
 2000 lines up to its configured 2000-20000 cap. A server-side styled-byte
 budget may return a shorter newest suffix rather than fail the display helper.

@@ -106,12 +106,13 @@ using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,
 or `native`: `ask` makes the first upward wheel gesture open a local-only
 keyboard/mouse dialog, `local` renders the bounded read-only transcript into
 the ordinary history overlay, and `native` forwards wheel input to Claude Code.
-The client sends a policy mutation only after an explicit choice and waits for
-the helper's persisted-success response before changing wheel ownership. The
-wait is bounded; on timeout the client refreshes the authoritative remote
-policy without clearing another pane's frozen viewport. The dialog, paired
-mouse press/release suppression, and save status never enter tmux or alter
-another attached client.
+The dialog offers persistent and current-invocation variants for both routes.
+The client waits for the helper's applied-success response before changing
+wheel ownership; a current-invocation choice is replayed after automatic
+reconnect without changing the settings file. The wait is bounded; on timeout
+the client refreshes the authoritative remote policy without clearing another
+pane's frozen viewport. The dialog, paired mouse press/release suppression,
+and status never enter tmux or alter another attached client.
 
 The SSH compatibility handshake precedes every tmux lookup, session creation,
 lock, PTY allocation, or attach. The remote reports a bounded package version,
@@ -133,7 +134,7 @@ The local upgrade uses its current Python environment and re-execs the original
 `railmux ssh` invocation only after pip succeeds. Failure leaves tmux untouched
 and prints a reproducible manual command.
 
-Protocol v10 reports a second bounded status after the attach boundary and
+Protocol v11 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45

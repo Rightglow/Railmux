@@ -75,6 +75,22 @@ def test_fixture_environment_excludes_provider_credentials(
     ).is_dir()
 
 
+def test_startup_surface_normalizes_pipe_newlines_for_terminal_replay(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        record_web_demo.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"centered one\ncentered two\r\n",
+    )
+
+    output = record_web_demo._startup_surface(
+        "python", {"PATH": "/bin"}, 80, 24
+    )
+
+    assert output == b"centered one\r\ncentered two\r\n"
+
+
 def test_only_mobile_demo_uses_compact_presentation() -> None:
     for profile in (
         record_web_demo.DESKTOP,

@@ -20,6 +20,8 @@ GREEN = "\033[32m"
 YELLOW = "\033[33m"
 RED = "\033[31m"
 RESET = "\033[0m"
+CLAUDE_ACCENT = "\033[38;5;147m"
+CLAUDE_MUTED = "\033[38;5;244m"
 
 _CODEX_SYNTHETIC_PREFIXES = (
     "<environment_context>",
@@ -191,7 +193,114 @@ def _render_claude_tool_results(record: dict, calls: dict[str, str]):
         yield _truncate(text, 500) + "\n"
 
 
-def format_transcript(source: Path | object, fmt: str | None = None):
+def _claude_native_block(marker: str, text: str, *, colour: str) -> str:
+    """Render a static, non-interactive approximation of one Claude TUI block."""
+    lines = _sanitize_text(text).strip().splitlines()
+    if not lines:
+        return ""
+    continuation = "\n".join(f"  {line}" for line in lines[1:])
+    result = f"\n{colour}{marker}{RESET} {lines[0]}"
+    if continuation:
+        result += "\n" + continuation
+    return result + "\n"
+
+
+def _render_claude_native_user(record: dict) -> str | None:
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return None
+    content = message.get("content")
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        text = "\n".join(
+            str(block.get("text", "")).strip()
+            for block in content
+            if isinstance(block, dict) and block.get("type") == "text"
+        ).strip()
+    else:
+        text = ""
+    return _claude_native_block("❯", text, colour=CLAUDE_ACCENT) or None
+
+
+def _render_claude_native_assistant(
+    record: dict, calls: dict[str, str],
+):
+    """Yield Claude-like read-only text/tool rows from semantic JSONL records."""
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        block_type = block.get("type")
+        if block_type == "text":
+            rendered = _claude_native_block(
+                "●", str(block.get("text", "")), colour=CLAUDE_ACCENT
+            )
+            if rendered:
+                yield rendered
+            continue
+        if block_type != "tool_use":
+            continue
+        name = _sanitize_text(block.get("name")) or "Tool"
+        tool_id = block.get("id")
+        if isinstance(tool_id, str) and tool_id:
+            calls[tool_id] = name
+        tool_input = block.get("input")
+        summary = ""
+        if isinstance(tool_input, dict):
+            for key in (
+                "description", "command", "query", "pattern",
+                "file_path", "path", "url",
+            ):
+                value = tool_input.get(key)
+                if isinstance(value, str) and value.strip():
+                    summary = _sanitize_text(value.strip()).replace("\n", " ")
+                    break
+        suffix = f"({_truncate(summary, 180)})" if summary else ""
+        yield (
+            f"\n{CLAUDE_ACCENT}●{RESET} {BOLD}{name}{RESET}{suffix}\n"
+        )
+
+
+def _render_claude_native_tool_results(
+    record: dict, calls: dict[str, str],
+):
+    message = record.get("message")
+    if not isinstance(message, dict):
+        return
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_result":
+            continue
+        text = _flatten_output_text(block.get("content")).strip()
+        if not text:
+            continue
+        tool_id = block.get("tool_use_id")
+        if isinstance(tool_id, str):
+            calls.pop(tool_id, None)
+        lines = _sanitize_text(_truncate(text, 500)).splitlines()
+        if not lines:
+            continue
+        colour = RED if block.get("is_error") is True else CLAUDE_MUTED
+        yield f"  {colour}⎿  {lines[0]}\n"
+        for line in lines[1:]:
+            yield f"     {line}\n"
+        yield RESET
+
+
+def format_transcript(
+    source: Path | object,
+    fmt: str | None = None,
+    *,
+    claude_native: bool = False,
+):
     """Read a session JSONL and yield ANSI-formatted strings.
 
     *source* may be a ``Path`` or any file-like object (e.g. ``sys.stdin``).
@@ -257,13 +366,27 @@ def format_transcript(source: Path | object, fmt: str | None = None):
                 continue
 
             if _is_real_user(record):
-                rendered = _render_user(record)
+                rendered = (
+                    _render_claude_native_user(record)
+                    if claude_native
+                    else _render_user(record)
+                )
                 if rendered:
                     yield rendered
             if rtype == "user":
-                yield from _render_claude_tool_results(record, claude_calls)
+                renderer = (
+                    _render_claude_native_tool_results
+                    if claude_native
+                    else _render_claude_tool_results
+                )
+                yield from renderer(record, claude_calls)
             elif rtype == "assistant":
-                yield from _render_assistant_blocks(record, claude_calls)
+                renderer = (
+                    _render_claude_native_assistant
+                    if claude_native
+                    else _render_assistant_blocks
+                )
+                yield from renderer(record, claude_calls)
     except OSError:
         yield f"{YELLOW}Could not read: {source}{RESET}\n"
     finally:

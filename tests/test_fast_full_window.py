@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import io
 import os
+import base64
 import shlex
 import signal
 import struct
@@ -15,6 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from railmux.fast_display_protocol import (
+    ClipboardCopy,
     ClaudeHistoryPolicyResult,
     DISPLAY_MAGIC,
     HistoryBatch,
@@ -35,12 +37,14 @@ from railmux.fast_display_protocol import (
     decode_history_prefetch,
     decode_history_request,
     decode_claude_history_policy,
+    decode_claude_history_choice,
     encode_history_batch,
     encode_history_prefetch,
     encode_history_request,
     encode_history_snapshot,
     encode_claude_history_policy,
     encode_claude_history_policy_result,
+    encode_clipboard_copy,
     encode_heartbeat,
     encode_update,
 )
@@ -218,27 +222,65 @@ def test_claude_history_policy_input_round_trip_is_bounded():
     message = decoder.feed(encoded)[0]
 
     assert message.kind is InputKind.SET_CLAUDE_HISTORY
-    assert decode_claude_history_policy(message.data) == "local"
-    assert decoder.feed(encoded[:-1] + b"\x03") == []
+    assert decode_claude_history_choice(message.data) == ("local", True)
+    temporary = decoder.feed(
+        encode_claude_history_policy("native", persistent=False)
+    )[0]
+    assert decode_claude_history_choice(temporary.data) == ("native", False)
+    assert decoder.feed(encoded[:-1] + b"\x05") == []
     with pytest.raises(ValueError):
         encode_claude_history_policy("ask")
     with pytest.raises(ValueError):
         decode_claude_history_policy(b"\x03")
+    with pytest.raises(ValueError):
+        decode_claude_history_choice(b"\x05")
 
 
-def test_claude_history_policy_result_round_trips_save_outcome():
+def test_claude_history_policy_result_round_trips_scope_and_outcome():
     decoder = ServerMessageDecoder()
 
     assert decoder.feed(
-        encode_claude_history_policy_result("native", saved=True)
-    ) == [ClaudeHistoryPolicyResult("native", True)]
+        encode_claude_history_policy_result(
+            "native", persistent=True, applied=True
+        )
+    ) == [ClaudeHistoryPolicyResult("native", True, True)]
     assert decoder.feed(
-        encode_claude_history_policy_result("local", saved=False)
-    ) == [ClaudeHistoryPolicyResult("local", False)]
+        encode_claude_history_policy_result(
+            "local", persistent=False, applied=True
+        )
+    ) == [ClaudeHistoryPolicyResult("local", False, True)]
     with pytest.raises(ValueError):
-        encode_claude_history_policy_result("ask", saved=True)
+        encode_claude_history_policy_result(
+            "ask", persistent=True, applied=True
+        )
     with pytest.raises(ValueError):
-        encode_claude_history_policy_result("local", saved=1)
+        encode_claude_history_policy_result(
+            "local", persistent=True, applied=1
+        )
+
+
+def test_clipboard_payload_round_trips_and_surface_reencodes_osc52():
+    data = "Review layout 你好".encode()
+    decoder = ServerMessageDecoder()
+
+    assert decoder.feed(encode_clipboard_copy(data)) == [ClipboardCopy(data)]
+
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.copy_to_clipboard(data)
+    assert (
+        b"\033]52;c;" + base64.b64encode(data) + b"\007"
+        in output.getvalue()
+    )
+
+
+def test_remote_osc52_decoder_is_chunked_bounded_and_fail_closed():
+    decoder = fast_display_server._Osc52ClipboardDecoder()
+    payload = base64.b64encode("Session title".encode())
+
+    assert decoder.feed(b"noise\033]52;c;" + payload[:4]) == ()
+    assert decoder.feed(payload[4:] + b"\007tail") == (b"Session title",)
+    assert decoder.feed(b"\033]52;c;not base64!\007") == ()
 
 
 def test_history_choice_capability_requires_available_non_backed_transcript():
@@ -2423,16 +2465,23 @@ def test_claude_history_prompt_is_local_bounded_and_mouse_selectable():
 
     painted = output.getvalue()
     assert b"Claude Code history" in painted
-    assert b"Local transcript" in painted
+    assert b"Always use smooth local history" in painted
     assert b"Claude native" in painted
+    assert b"\033[1;38;5;220m[1]\033[0m" in painted
+    assert surface.claude_history_prompt_choice(
+        SgrMouseEvent(b"", 0, 20, 4, True)
+    ) == ("local", True)
     assert surface.claude_history_prompt_choice(
         SgrMouseEvent(b"", 0, 20, 5, True)
-    ) == "local"
+    ) == ("local", False)
     assert surface.claude_history_prompt_choice(
         SgrMouseEvent(b"", 0, 20, 6, True)
-    ) == "native"
+    ) == ("native", True)
     assert surface.claude_history_prompt_choice(
         SgrMouseEvent(b"", 0, 20, 7, True)
+    ) == ("native", False)
+    assert surface.claude_history_prompt_choice(
+        SgrMouseEvent(b"", 0, 20, 8, True)
     ) is None
 
 
@@ -3201,6 +3250,9 @@ def test_remote_server_missing_dependency_never_touches_tmux(monkeypatch):
     )
     emit = MagicMock()
     monkeypatch.setattr(fast_display_server, "_emit_remote_hello", emit)
+    monkeypatch.setattr(
+        fast_display_server, "_await_client_start", lambda: True
+    )
     socket_label = MagicMock()
     monkeypatch.setattr(
         fast_display_server.tmux_server, "socket_label", socket_label
@@ -3215,6 +3267,29 @@ def test_remote_server_missing_dependency_never_touches_tmux(monkeypatch):
     assert result == 2
     emit.assert_called_once_with(False)
     socket_label.assert_not_called()
+
+
+def test_remote_protocol_probe_exits_quietly_before_local_upgrade_prompt(
+    monkeypatch, capsys,
+):
+    monkeypatch.setattr(
+        fast_display_server, "_fast_dependency_ready", lambda: True
+    )
+    monkeypatch.setattr(
+        fast_display_server, "_emit_remote_hello", MagicMock()
+    )
+    monkeypatch.setattr(
+        fast_display_server, "_await_client_start", lambda: False
+    )
+
+    result = fast_display_server.main([
+        "--protocol", str(PROTOCOL_VERSION - 1),
+        "--width", "80",
+        "--height", "24",
+    ])
+
+    assert result == 2
+    assert capsys.readouterr().err == ""
 
 
 def test_remote_server_attaches_only_after_start_confirmation(monkeypatch):
@@ -3640,8 +3715,12 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         ),
     )
 
-    assert fast_display_server._pane_at_pointer("$4", 5, 5) is None
-    pane = fast_display_server._pane_at_pointer("$4", 40, 5)
+    assert fast_display_server._pane_at_pointer(
+        "$4", 5, 5, claude_history_policy="ask"
+    ) is None
+    pane = fast_display_server._pane_at_pointer(
+        "$4", 40, 5, claude_history_policy="ask"
+    )
     assert pane == fast_display_server._PaneGeometry(
         "%8", 31, 0, 49, 20, mouse_forwardable=True
     )
@@ -3677,7 +3756,9 @@ def test_server_exposes_only_coherent_visible_panes_when_zoomed(
         subprocess, "check_output", lambda *args, **kwargs: rows
     )
 
-    assert fast_display_server._list_agent_panes("$4") == expected
+    assert fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask"
+    ) == expected
 
 
 def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
@@ -3707,7 +3788,9 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         ),
     )
 
-    assert fast_display_server._list_agent_panes("$4") == (
+    assert fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask"
+    ) == (
         fast_display_server._PaneGeometry(
             "%8", 31, 0, 49, 20, target, "%2", True),
     )
@@ -4063,7 +4146,6 @@ def test_server_captures_nested_history_from_real_pane_without_resizing(
         ["--protocol", "6", "--width", "39", "--height", "24"],
         ["--protocol", "6", "--width", "80", "--height", "11"],
         ["--protocol", "6", "--width", "80", "--height", "24", "--fps", "61"],
-        ["--protocol", "5", "--width", "80", "--height", "24"],
     ],
 )
 def test_server_rejects_unbounded_geometry_and_frame_rates(argv):

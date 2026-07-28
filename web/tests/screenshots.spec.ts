@@ -60,6 +60,12 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   await page.goto(".");
   const desktopDemo = page.locator('[data-demo="desktop-recording"]');
   await expect(desktopDemo.locator(".ap-player")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const lines = await desktopDemo.locator(".ap-line").allTextContents();
+      return lines.map((line) => line.trim());
+    })
+    .toContain("Restoring your workspace");
   await expect(page.locator("h1")).toContainText("Keep every");
   await expect(
     page.getByText("CLAUDE CODE 2.1.220 STARTUP · ISOLATED RAILMUX"),
@@ -93,6 +99,12 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
   await dualDemo.scrollIntoViewIfNeeded();
   await expect(dualDemo.locator(".ap-term")).toBeVisible();
   await expect(dualDemo.locator(".ap-term")).toContainText("RUNNING");
+  await expect(dualDemo.locator(".ap-term")).toContainText(
+    "Claude Code v2.1.220",
+  );
+  await expect(dualDemo.locator(".ap-term")).toContainText(
+    "OpenAI Codex (v0.145.0)",
+  );
   await dualDemo.locator(".ap-term").screenshot({
     path: join(outputDir, "dual-agent-workspace.png"),
     animations: "disabled",

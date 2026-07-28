@@ -1,4 +1,4 @@
-"""Private v10 framing for the coalesced full-window SSH display."""
+"""Private v11 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD10\x00"
-INPUT_MAGIC = b"RMUXK10\x00"
-PROTOCOL_VERSION = 10
+DISPLAY_MAGIC = b"RMUXD11\x00"
+INPUT_MAGIC = b"RMUXK11\x00"
+PROTOCOL_VERSION = 11
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
 REMOTE_START = b"RAILMUX-START/1\n"
@@ -24,6 +24,7 @@ MAX_HEIGHT = 500
 MAX_HISTORY_LINES = 20000
 MAX_PREFETCH_HISTORY_LINES = 300
 MAX_HISTORY_PANES = 8
+MAX_CLIPBOARD_BYTES = 64 * 1024
 _UPDATE_METADATA = struct.Struct(">BIHHHHBHI")
 _HISTORY_METADATA = struct.Struct(">IIHHHHBI")
 _HISTORY_REQUEST = struct.Struct(">IHHH")
@@ -54,6 +55,7 @@ class OutputKind(IntEnum):
     HISTORY = 2
     HISTORY_BATCH = 3
     CLAUDE_HISTORY_POLICY = 4
+    CLIPBOARD = 5
 
 
 class InputKind(IntEnum):
@@ -128,10 +130,18 @@ class HistoryBatch:
 
 @dataclass(frozen=True)
 class ClaudeHistoryPolicyResult:
-    """Confirmation that the remote helper persisted a history preference."""
+    """Confirmation that the remote helper applied a history preference."""
 
     policy: str
-    saved: bool
+    persistent: bool
+    applied: bool
+
+
+@dataclass(frozen=True)
+class ClipboardCopy:
+    """One bounded clipboard payload requested by the remote tmux client."""
+
+    data: bytes
 
 
 @dataclass(frozen=True)
@@ -327,15 +337,33 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
 
 
-def encode_claude_history_policy_result(policy: str, *, saved: bool) -> bytes:
+def encode_claude_history_policy_result(
+    policy: str, *, persistent: bool, applied: bool,
+) -> bytes:
     values = {"local": 1, "native": 2}
-    if policy not in values or not isinstance(saved, bool):
+    if (
+        policy not in values
+        or not isinstance(persistent, bool)
+        or not isinstance(applied, bool)
+    ):
         raise ValueError("invalid Claude history policy")
     payload = bytes((
         int(OutputKind.CLAUDE_HISTORY_POLICY),
         values[policy],
-        int(saved),
+        int(persistent),
+        int(applied),
     ))
+    return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
+def encode_clipboard_copy(data: bytes) -> bytes:
+    if (
+        not isinstance(data, bytes)
+        or not data
+        or len(data) > MAX_CLIPBOARD_BYTES
+    ):
+        raise ValueError("invalid clipboard payload")
+    payload = bytes((int(OutputKind.CLIPBOARD),)) + data
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
 
 
@@ -589,12 +617,22 @@ class ServerMessageDecoder:
                     messages.append(HistoryBatch(request_id, tuple(snapshots)))
                     continue
                 if output_kind is OutputKind.CLAUDE_HISTORY_POLICY:
-                    if len(body) != 2 or body[1] not in (0, 1):
+                    if (
+                        len(body) != 3
+                        or body[1] not in (0, 1)
+                        or body[2] not in (0, 1)
+                    ):
                         raise ValueError("invalid Claude history result")
                     messages.append(ClaudeHistoryPolicyResult(
                         policy=decode_claude_history_policy(body[:1]),
-                        saved=bool(body[1]),
+                        persistent=bool(body[1]),
+                        applied=bool(body[2]),
                     ))
+                    continue
+                if output_kind is OutputKind.CLIPBOARD:
+                    if not 1 <= len(body) <= MAX_CLIPBOARD_BYTES:
+                        raise ValueError("invalid clipboard payload")
+                    messages.append(ClipboardCopy(body))
                     continue
                 if len(body) < _UPDATE_METADATA.size:
                     raise ValueError("truncated screen metadata")
@@ -640,7 +678,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v10 history response messages."""
+    """Compatibility view which ignores v11 history response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()
@@ -680,12 +718,19 @@ def encode_heartbeat() -> bytes:
     return _encode_input_message(InputKind.HEARTBEAT, b"")
 
 
-def encode_claude_history_policy(policy: str) -> bytes:
-    values = {"local": 1, "native": 2}
-    if policy not in values:
+def encode_claude_history_policy(
+    policy: str, *, persistent: bool = True,
+) -> bytes:
+    values = {
+        ("local", True): 1,
+        ("native", True): 2,
+        ("local", False): 3,
+        ("native", False): 4,
+    }
+    if (policy, persistent) not in values:
         raise ValueError("invalid Claude history policy")
     return _encode_input_message(
-        InputKind.SET_CLAUDE_HISTORY, bytes((values[policy],))
+        InputKind.SET_CLAUDE_HISTORY, bytes((values[(policy, persistent)],))
     )
 
 
@@ -693,6 +738,18 @@ def decode_claude_history_policy(data: bytes) -> str:
     values = {1: "local", 2: "native"}
     if len(data) != 1 or data[0] not in values:
         raise ValueError("invalid Claude history policy")
+    return values[data[0]]
+
+
+def decode_claude_history_choice(data: bytes) -> tuple[str, bool]:
+    values = {
+        1: ("local", True),
+        2: ("native", True),
+        3: ("local", False),
+        4: ("native", False),
+    }
+    if len(data) != 1 or data[0] not in values:
+        raise ValueError("invalid Claude history choice")
     return values[data[0]]
 
 
@@ -786,7 +843,9 @@ class InputFrameDecoder:
                 or (kind is InputKind.HEARTBEAT and message_data)
                 or (
                     kind is InputKind.SET_CLAUDE_HISTORY
-                    and message_data not in (b"\x01", b"\x02")
+                    and message_data not in (
+                        b"\x01", b"\x02", b"\x03", b"\x04"
+                    )
                 )
                 or (
                     kind is InputKind.REQUEST_HISTORY

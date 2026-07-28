@@ -339,6 +339,7 @@ RUNS = json.loads(__RUNS_JSON__)
 CLAUDE_BANNER = json.loads(__BANNER_JSON__)
 RESUMED_SESSIONS = json.loads(__RESUMED_SESSIONS__)
 COUNTER = __COUNTER__
+PROFILE = os.environ.get("RAILMUX_DEMO_PROFILE", "")
 
 
 def clipped(text, width):
@@ -448,7 +449,16 @@ candidates = [
     item for item in RUNS
     if item["agent"] == ("Codex" if agent_kind == "codex" else "Claude Code")
 ]
-run = RESUMED_SESSIONS.get(session_id, candidates[invocation % len(candidates)])
+profile_offsets = {
+    "desktop": 0,
+    "dual": 1,
+    "mobile": 1,
+    "controls": 0,
+}
+candidate_index = invocation + profile_offsets.get(PROFILE, 0)
+run = RESUMED_SESSIONS.get(
+    session_id, candidates[candidate_index % len(candidates)]
+)
 signal.signal(signal.SIGWINCH, repaint)
 repaint()
 while True:
@@ -521,6 +531,18 @@ def _fixed_width(value: bytes, width: int) -> bytes:
     return (value + b" " * width)[:width]
 
 
+def _utf8_event_boundary(data: bytes, preferred: int) -> int:
+    """Move a cast-event boundary left if it bisects one UTF-8 character."""
+    cut = max(0, min(len(data), preferred))
+    for candidate in range(cut, max(-1, cut - 4), -1):
+        try:
+            data[:candidate].decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        return candidate
+    return 0
+
+
 def _sanitize_public_output(chunk: bytes, stable_path: bytes, label: bytes) -> bytes:
     """Remove machine-specific paths, socket labels, and host names."""
 
@@ -571,7 +593,7 @@ def _startup_surface(
     height: int,
 ) -> bytes:
     """Render the exact installed Railmux startup surface."""
-    return subprocess.check_output(
+    output = subprocess.check_output(
         [
             python,
             "-c",
@@ -585,6 +607,11 @@ def _startup_surface(
         env=env,
         stderr=subprocess.DEVNULL,
     )
+    # The renderer writes ordinary ``\n`` because this subprocess uses a
+    # pipe. A real TTY's ONLCR would turn those into CRLF; asciicast replays
+    # bytes literally, so normalize here or each centered row starts at the
+    # previous row's cursor column and wraps across the player.
+    return output.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 
 
 def _client_name(label: str, env: dict[str, str]) -> str | None:
@@ -607,6 +634,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
     with tempfile.TemporaryDirectory(prefix="railmux-web-demo-", dir="/tmp") as raw:
         fixture_root = Path(raw)
         claude_home, env = _create_fixture(fixture_root)
+        env["RAILMUX_DEMO_PROFILE"] = profile.name
         env["RAILMUX_TMUX_LABEL"] += f"-{profile.name}"
         python = _railmux_python(env)
         label = env["RAILMUX_TMUX_LABEL"]
@@ -652,6 +680,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         ready_at: float | None = None
         startup_output = bytearray()
         post_resize_output = bytearray()
+        sanitizer_tail = bytearray()
+        sanitizer_hold = 512
         sent: set[str] = set()
 
         def elapsed() -> float:
@@ -986,11 +1016,21 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         break
                     if not chunk:
                         break
-                    chunk = _sanitize_public_output(
-                        chunk,
+                    sanitizer_tail.extend(chunk)
+                    sanitized = _sanitize_public_output(
+                        bytes(sanitizer_tail),
                         stable_fixture_path,
                         label.encode(),
                     )
+                    if len(sanitized) <= sanitizer_hold:
+                        continue
+                    cut = _utf8_event_boundary(
+                        sanitized, len(sanitized) - sanitizer_hold
+                    )
+                    if cut == 0:
+                        continue
+                    chunk = sanitized[:cut]
+                    sanitizer_tail = bytearray(sanitized[cut:])
                     if ready_at is None:
                         startup_output.extend(chunk)
                         ready = startup_output.upper()
@@ -1042,6 +1082,15 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     process.kill()
                     process.wait(timeout=2)
             os.close(master)
+
+        if sanitizer_tail:
+            chunk = _sanitize_public_output(
+                bytes(sanitizer_tail),
+                stable_fixture_path,
+                label.encode(),
+            )
+            raw_output.extend(chunk)
+            events.append(_event(cast_time(), "o", chunk))
 
         missing_actions = sorted(required_actions - sent)
         if ready_at is None or b"PROJECTS" not in raw_output.upper() or missing_actions:

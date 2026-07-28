@@ -546,10 +546,13 @@ history or the configured local cap, the client shows a one-time local
 Agent panes with tmux scrollback are handled locally. Claude Code normally uses
 an alternate screen with no tmux history. On the first upward scroll in a
 managed Claude pane, the default `claude_history = "ask"` shows a local dialog:
-choose **Local transcript** for Railmux's smooth cached, read-only JSONL
-overlay, or **Claude native** for Claude Code's clickable but redraw-heavier
-history UI. The choice is saved in the remote workspace's
-`~/.config/railmux/config.toml` and can be changed later under
+choose **Always smooth local**, **Smooth local this time**,
+**Always Claude native**, or **Claude native this time**. Local history is a
+smooth cached, read-only JSONL reconstruction styled like Claude Code; native
+history keeps Claude Code's clickable but redraw-heavier UI. **Always** saves
+the choice in the remote workspace's `~/.config/railmux/config.toml`;
+**this time** lasts for the current `railmux ssh` invocation, including its
+automatic reconnects. Persistent behavior can be changed later under
 **More → Options → Claude history in railmux ssh**. Press `Esc` to decide later.
 Unrelated mouse-aware terminal applications keep their native wheel behavior.
 Sidebar scrolling continues to reach Railmux normally. Scroll to the bottom or

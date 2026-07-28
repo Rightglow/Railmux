@@ -14,6 +14,8 @@ path exists solely to recover older helpers which held the attach lock for life.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import errno
 import fcntl
 import hashlib
@@ -45,6 +47,7 @@ from railmux.fast_display_protocol import (
     HistorySnapshot,
     InputKind,
     InputFrameDecoder,
+    MAX_CLIPBOARD_BYTES,
     MAX_HISTORY_LINES,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
@@ -55,10 +58,11 @@ from railmux.fast_display_protocol import (
     ScreenUpdate,
     TerminalMode,
     UpdateKind,
+    decode_claude_history_choice,
     decode_history_prefetch,
     decode_history_request,
-    decode_claude_history_policy,
     encode_claude_history_policy_result,
+    encode_clipboard_copy,
     encode_history_batch,
     encode_history_snapshot,
     encode_update,
@@ -86,6 +90,63 @@ _WINDOW_SIZE_ATTEMPTS = 3
 # scrollback may therefore return fewer lines than requested, which the client
 # treats as the effective end instead of allowing the helper to fail.
 _HISTORY_SNAPSHOT_RAW_BUDGET = 12 * 1024 * 1024
+_OSC52_PREFIX = b"\033]52;"
+_OSC52_MAX_ENCODED = ((MAX_CLIPBOARD_BYTES + 2) // 3) * 4
+
+
+class _Osc52ClipboardDecoder:
+    """Extract bounded tmux clipboard replies across arbitrary PTY chunks."""
+
+    def __init__(self) -> None:
+        self._buffer = bytearray()
+
+    def feed(self, data: bytes) -> tuple[bytes, ...]:
+        self._buffer.extend(data)
+        decoded: list[bytes] = []
+        while True:
+            start = self._buffer.find(_OSC52_PREFIX)
+            if start < 0:
+                keep = min(len(self._buffer), len(_OSC52_PREFIX) - 1)
+                if len(self._buffer) > keep:
+                    del self._buffer[:-keep]
+                break
+            if start:
+                del self._buffer[:start]
+            selection_end = self._buffer.find(
+                b";", len(_OSC52_PREFIX)
+            )
+            if selection_end < 0:
+                if len(self._buffer) > len(_OSC52_PREFIX) + 16:
+                    del self._buffer[0]
+                    continue
+                break
+            bel = self._buffer.find(b"\007", selection_end + 1)
+            st = self._buffer.find(b"\033\\", selection_end + 1)
+            endings = [
+                (position, length)
+                for position, length in ((bel, 1), (st, 2))
+                if position >= 0
+            ]
+            if not endings:
+                if (
+                    len(self._buffer) - selection_end - 1
+                    > _OSC52_MAX_ENCODED
+                ):
+                    del self._buffer[0]
+                    continue
+                break
+            end, terminator_length = min(endings)
+            payload = bytes(self._buffer[selection_end + 1:end])
+            del self._buffer[:end + terminator_length]
+            if not payload or len(payload) > _OSC52_MAX_ENCODED:
+                continue
+            try:
+                value = base64.b64decode(payload, validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            if 0 < len(value) <= MAX_CLIPBOARD_BYTES:
+                decoded.append(value)
+        return tuple(decoded)
 
 
 def _fast_dependency_ready() -> bool:
@@ -644,11 +705,17 @@ def _inferred_transcript_source(
 
 
 def _pane_at_pointer(
-    session_id: str, x: int, y: int,
+    session_id: str,
+    x: int,
+    y: int,
+    *,
+    claude_history_policy: str | None = None,
 ) -> _PaneGeometry | None:
     """Resolve a non-controller pane from 1-based client coordinates."""
     pointer_x, pointer_y = x - 1, y - 1
-    for pane in _list_agent_panes(session_id):
+    for pane in _list_agent_panes(
+        session_id, claude_history_policy=claude_history_policy
+    ):
         if (
             pane.x <= pointer_x < pane.x + pane.width
             and pane.y <= pointer_y < pane.y + pane.height
@@ -657,7 +724,9 @@ def _pane_at_pointer(
     return None
 
 
-def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
+def _list_agent_panes(
+    session_id: str, *, claude_history_policy: str | None = None,
+) -> tuple[_PaneGeometry, ...]:
     """Return one coherent, fail-closed generation of visible agent panes."""
     controller = _live_controller(session_id)
     if controller is None:
@@ -679,7 +748,8 @@ def _list_agent_panes(session_id: str) -> tuple[_PaneGeometry, ...]:
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return ()
-    claude_history_policy = Settings().claude_history_policy
+    if claude_history_policy is None:
+        claude_history_policy = Settings().claude_history_policy
     rows: list[tuple[bool, bool, _PaneGeometry]] = []
     seen: set[str] = set()
     for raw_row in output.splitlines():
@@ -909,7 +979,9 @@ def _transcript_rows(
         except OSError:
             return None
         formatted = "".join(
-            transcript_renderer.format_transcript(io.StringIO(raw), "claude")
+            transcript_renderer.format_transcript(
+                io.StringIO(raw), "claude", claude_native=True
+            )
         )
         rows, dropped = _wrap_transcript_rows(pyte, formatted, width)
         entry = _TranscriptCacheEntry(identity, rows, truncated or dropped)
@@ -1040,9 +1112,20 @@ def capture_history_snapshot(
     y: int,
     max_lines: int,
     pyte: object | None = None,
+    *,
+    claude_history_policy: str | None = None,
 ) -> HistorySnapshot:
     """Capture bounded styled history without entering tmux copy-mode."""
-    pane = _pane_at_pointer(session_id, x, y)
+    pane = (
+        _pane_at_pointer(session_id, x, y)
+        if claude_history_policy is None
+        else _pane_at_pointer(
+            session_id,
+            x,
+            y,
+            claude_history_policy=claude_history_policy,
+        )
+    )
     if pane is None:
         return HistorySnapshot(request_id, None)
     try:
@@ -1064,12 +1147,16 @@ def capture_history_batch(
     session_id: str,
     request_id: int,
     max_lines: int,
+    *,
+    claude_history_policy: str | None = None,
 ) -> HistoryBatch:
     """Atomically describe and warm-cache every visible agent pane."""
     pyte = _extended_pyte(pyte)
     snapshots = tuple(
         snapshot
-        for pane in _list_agent_panes(session_id)
+        for pane in _list_agent_panes(
+            session_id, claude_history_policy=claude_history_policy
+        )
         if (
             snapshot := _capture_pane_history(
                 pyte, pane, request_id, max_lines,
@@ -1416,7 +1503,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v10 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v11 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE
@@ -1576,6 +1663,8 @@ def _serve_attached(
     pending_offset = 0
     pending_state: _ScreenState | None = None
     control_packets: deque[bytes] = deque()
+    clipboard_decoder = _Osc52ClipboardDecoder()
+    claude_history_override: str | None = None
     input_closed = False
     last_input = time.monotonic()
     watchdog = tmux_health.FailureWatchdog.starting(
@@ -1741,7 +1830,10 @@ def _serve_attached(
                             except ValueError:
                                 continue
                             snapshot = capture_history_snapshot(
-                                session_id, *request, pyte=pyte
+                                session_id,
+                                *request,
+                                pyte=pyte,
+                                claude_history_policy=claude_history_override,
                             )
                             queue_control_packet(
                                 encode_history_snapshot(snapshot)
@@ -1756,19 +1848,33 @@ def _serve_attached(
                             except ValueError:
                                 continue
                             batch = capture_history_batch(
-                                pyte, session_id, request_id, max_lines
+                                pyte,
+                                session_id,
+                                request_id,
+                                max_lines,
+                                claude_history_policy=claude_history_override,
                             )
                             queue_control_packet(encode_history_batch(batch))
                         continue
                     if message.kind is InputKind.SET_CLAUDE_HISTORY:
                         try:
-                            policy = decode_claude_history_policy(message.data)
+                            policy, persistent = decode_claude_history_choice(
+                                message.data
+                            )
                         except ValueError:
                             continue
-                        saved = Settings().set_claude_history_policy(policy)
+                        applied = (
+                            Settings().set_claude_history_policy(policy)
+                            if persistent
+                            else True
+                        )
+                        if applied:
+                            claude_history_override = policy
                         queue_control_packet(
                             encode_claude_history_policy_result(
-                                policy, saved=saved
+                                policy,
+                                persistent=persistent,
+                                applied=applied,
                             ),
                             priority=True,
                         )
@@ -1798,6 +1904,11 @@ def _serve_attached(
                 if not output:
                     pty_open = False
                 else:
+                    for clipboard_data in clipboard_decoder.feed(output):
+                        queue_control_packet(
+                            encode_clipboard_copy(clipboard_data),
+                            priority=True,
+                        )
                     stream.feed(output)
                     screen_changed = True
 
@@ -1868,10 +1979,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
-    if args.protocol != PROTOCOL_VERSION:
-        parser.error(
-            f"protocol mismatch: server requires version {PROTOCOL_VERSION}"
-        )
     if not 40 <= args.width <= 1000:
         parser.error("--width must be between 40 and 1000")
     if not 12 <= args.height <= 500:
@@ -1885,16 +1992,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     ready = _fast_dependency_ready()
     _emit_remote_hello(ready)
     args = parse_args(argv)
+    # Compatibility probes intentionally stop after the hello. Do not emit
+    # remote argparse/dependency diagnostics while the local client is asking
+    # whether to upgrade; the local side owns that user-facing decision.
+    if not _await_client_start():
+        return 2
+    if args.protocol != PROTOCOL_VERSION:
+        print(
+            "fast display server: incompatible client protocol",
+            file=sys.stderr,
+        )
+        return 2
     if not ready:
         print(
             "remote display: pyte is unavailable; install "
             "'railmux[ssh]'",
-            file=sys.stderr,
-        )
-        return 2
-    if not _await_client_start():
-        print(
-            "remote display: compatible client did not confirm startup",
             file=sys.stderr,
         )
         return 2

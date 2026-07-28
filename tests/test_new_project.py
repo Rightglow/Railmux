@@ -140,7 +140,11 @@ def test_new_project_placeholder_has_running_context_menu(tmp_path):
               for row in shown[0]._walker]
     assert any("Open" in label for label in labels)
     assert not any("Preview" in label for label in labels)
+    assert any("Copy title" in label for label in labels)
     assert any("Kill" in label for label in labels)
+    assert next(i for i, label in enumerate(labels) if "Copy title" in label) + 1 == (
+        next(i for i, label in enumerate(labels) if "Kill" in label)
+    )
     assert any("Term" in label for label in labels)
 
 

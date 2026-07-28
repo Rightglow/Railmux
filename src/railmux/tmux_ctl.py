@@ -129,6 +129,32 @@ def enable_clipboard_passthrough() -> None:
         pass
 
 
+def copy_to_clipboard(text: str) -> bool:
+    """Ask tmux to copy bounded UTF-8 text to the attached terminal.
+
+    ``set-buffer -w`` emits OSC 52 through tmux's clipboard capability. The
+    ordinary client delivers it directly; Railmux's fast SSH helper recognizes
+    the same bounded sequence and relays it to the local terminal.
+    """
+    if not isinstance(text, str) or not text or "\x00" in text:
+        return False
+    try:
+        encoded = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    if len(encoded) > 64 * 1024:
+        return False
+    try:
+        subprocess.check_call(
+            ["tmux", "set-buffer", "-w", "--", text],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    return True
+
+
 def in_tmux() -> bool:
     """True if the current process is running inside tmux."""
     return os.environ.get("TMUX") is not None

@@ -8,6 +8,9 @@ from unittest.mock import patch
 import pytest
 
 from railmux.transcript import (
+    BOLD,
+    CLAUDE_ACCENT,
+    RESET,
     _is_real_user,
     _render_user,
     _render_assistant_blocks,
@@ -255,6 +258,52 @@ def test_claude_tool_result_is_paired_rendered_and_truncated():
     assert "x" * 500 in rendered
     assert "x" * 501 not in rendered
     assert "…" in rendered
+
+
+def test_claude_native_history_uses_static_tui_like_blocks():
+    records = [
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "Explain the change"},
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "tool-1",
+                        "name": "Bash",
+                        "input": {"command": "git diff --stat"},
+                    },
+                    {"type": "text", "text": "The tests now pass."},
+                ],
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tool-1",
+                    "content": "3 files changed",
+                }],
+            },
+        },
+    ]
+    text = "\n".join(json.dumps(record) for record in records) + "\n"
+    rendered = "".join(format_transcript(
+        io.StringIO(text), fmt="claude", claude_native=True
+    ))
+
+    assert f"{CLAUDE_ACCENT}❯{RESET} Explain the change" in rendered
+    assert f"{CLAUDE_ACCENT}●{RESET} {BOLD}Bash{RESET}" in rendered
+    assert "git diff --stat" in rendered
+    assert "⎿  3 files changed" in rendered
+    assert "───── User" not in rendered
+    assert "tokens)" not in rendered
 
 
 def test_session_text_cannot_inject_osc_or_terminal_query():
