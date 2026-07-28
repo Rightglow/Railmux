@@ -83,13 +83,13 @@ def main() -> int:
                 "--prefix",
                 str(prefix),
                 "--force-reinstall",
-                str(wheel),
+                f"{wheel}[ssh]",
             ],
             cwd=root,
             env=env,
         )
         site_packages, railmux = _installed_paths(prefix)
-        # The wheel and its declared dependencies live under the isolated
+        # The wheel and its declared SSH dependencies live under the isolated
         # prefix. Put that prefix first so Railmux itself cannot resolve to an
         # editable source checkout or inherit undeclared CI dependencies.
         env["PYTHONPATH"] = str(site_packages)
