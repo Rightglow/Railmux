@@ -941,7 +941,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.13...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.14...HEAD
+[0.2.14]: https://github.com/Rightglow/Railmux/compare/v0.2.13...v0.2.14
 [0.2.13]: https://github.com/Rightglow/Railmux/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12
 [0.2.12.dev202607270]: https://github.com/Rightglow/Railmux/compare/v0.2.11...v0.2.12.dev202607270
