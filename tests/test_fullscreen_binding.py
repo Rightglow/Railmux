@@ -1,6 +1,7 @@
 """Tests for F8/F9 dispatch and managed binding lifecycle."""
 from unittest.mock import MagicMock
 
+from railmux import tmux_server
 from railmux.config import Config
 from railmux.ui.app import App
 from railmux.ui.workspace import (
@@ -9,6 +10,19 @@ from railmux.ui.workspace import (
     WorkspacePage,
     WorkspacePresentation,
 )
+
+
+def _patch_nested_target(monkeypatch):
+    """Give transport-focused tests an exact server without ambient TMUX."""
+    target = tmux_server.TmuxServerTarget("/tmp/test-railmux", 4242)
+    monkeypatch.setattr(
+        "railmux.display_transport.tmux_server.current_target",
+        lambda: target,
+    )
+    monkeypatch.setattr(
+        "railmux.display_transport.tmux_server.target_is_live",
+        lambda candidate, **_kwargs: candidate == target,
+    )
 
 
 def _bare_app(**attrs):
@@ -473,6 +487,7 @@ def test_f9_remains_global_while_modal_is_open():
 
 def test_fast_path_still_rebinds(monkeypatch):
     """Fast path in _attach_in_right_pane also re-installs the binding."""
+    _patch_nested_target(monkeypatch)
     app = _bare_app(
         _railmux_pane_id="%1",
         _right_pane_id="%5",
@@ -490,6 +505,7 @@ def test_fast_path_still_rebinds(monkeypatch):
 
 
 def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
+    _patch_nested_target(monkeypatch)
     app = _bare_app(_right_pane_id="%5", _right_pane_claude="cc-old")
     app._set_active_tmux_target = MagicMock()
     app._set_railmux_focus = MagicMock()
@@ -520,6 +536,7 @@ def test_attach_presizes_existing_outer_pane_before_respawn(monkeypatch):
 
 
 def test_first_attach_creates_detached_pane_then_fits_and_respawns(monkeypatch):
+    _patch_nested_target(monkeypatch)
     app = _bare_app()
     app._set_active_tmux_target = MagicMock()
     app._set_railmux_focus = MagicMock()
@@ -562,6 +579,7 @@ def test_first_attach_creates_detached_pane_then_fits_and_respawns(monkeypatch):
 
 
 def test_failed_first_respawn_removes_new_outer_pane(monkeypatch):
+    _patch_nested_target(monkeypatch)
     app = _bare_app()
     app._check_agent_slot_size = MagicMock()
     monkeypatch.setattr(
