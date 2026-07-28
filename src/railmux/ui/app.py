@@ -2633,6 +2633,54 @@ class App:
             minimum, round(usable * ratio / 1000)))
         return tmux_ctl.resize_pane_height(primary, desired)
 
+    def _planned_dual_restore_geometry(
+        self, layout: WorkspaceLayout,
+    ) -> tuple[int, int] | None:
+        """Return exact empty-skeleton extents for a wide dual restore."""
+        if (layout is WorkspaceLayout.SINGLE
+                or self._agent_workspace().presentation
+                is not WorkspacePresentation.WIDE):
+            return None
+        profile = getattr(self, "_layout_profile", None)
+        if profile is not None and profile.layout != layout.value:
+            # Preserve the established invalid/mismatched-profile fallback.
+            # _apply_layout_profile reports it after ordinary topology exists.
+            return None
+        sidebar_id = getattr(self, "_railmux_pane_id", None)
+        if sidebar_id is None:
+            return None
+        window = tmux_ctl.window_size(sidebar_id)
+        if window is None:
+            return None
+        width, height = window
+        sidebar = self._sidebar_width_for_layout(
+            layout,
+            width,
+            getattr(self, "_active_sidebar_permille", None),
+        )
+        region = (width - sidebar - 1, height)
+        if not self._layout_fits(region, layout):
+            return None
+        usable = (
+            region[0] - 1
+            if layout is WorkspaceLayout.SIDE_BY_SIDE
+            else region[1] - 1
+        )
+        minimum = (
+            self._MINIMUM_AGENT_PANE_SIZE[0]
+            if layout is WorkspaceLayout.SIDE_BY_SIDE
+            else self._MINIMUM_AGENT_PANE_SIZE[1]
+        )
+        if usable < minimum * 2:
+            return None
+        ratio = getattr(self, "_active_primary_permille", None)
+        ratio = 500 if ratio is None else ratio
+        primary = min(
+            usable - minimum,
+            max(minimum, round(usable * ratio / 1000)),
+        )
+        return region[0], usable - primary
+
     def _restore_transient_layout_profile(
         self, profile: LayoutProfile | None,
     ) -> bool:
@@ -5128,6 +5176,20 @@ class App:
         workspace = self._agent_workspace()
         transport = self._display_transport()
         slots = saved["slots"]
+        requested = WorkspaceLayout(saved["layout"])
+
+        # On a fresh wide restart, establish the final sidebar + P1 + P2
+        # geometry in one tmux command queue before either agent is swapped or
+        # attached.  The fallback below retains the established incremental
+        # recovery path if geometry or tmux cannot be validated.
+        planned = self._planned_dual_restore_geometry(requested)
+        if planned is not None:
+            agent_width, secondary_extent = planned
+            transport.create_dual(
+                requested,
+                agent_width=agent_width,
+                secondary_extent=secondary_extent,
+            )
 
         def live_represented(raw: object) -> str | None:
             if not isinstance(raw, dict):
@@ -5169,7 +5231,6 @@ class App:
             self._set_railmux_focus(True, force_border=True)
             return False
 
-        requested = WorkspaceLayout(saved["layout"])
         self._resize_sidebar_for_layout(requested)
         secondary_ok = True
         deferred_for_size = False

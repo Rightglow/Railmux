@@ -50,6 +50,7 @@ class FakeTmux:
         self.dead_panes: set[str] = set()
         self.respawned: list[tuple[str, str]] = []
         self.split_commands: list[str] = []
+        self.dual_calls: list[tuple[str, str, str, int, int]] = []
         self._patch(monkeypatch)
 
     def _patch(self, monkeypatch):
@@ -65,6 +66,7 @@ class FakeTmux:
                 name in self.sessions and window in self.sessions[name]["windows"]),
             "split_window_h": self.split_window_h,
             "split_window_v": self.split_window_h,
+            "create_dual_pane_layout": self.create_dual_pane_layout,
             "respawn_pane": self.respawn_pane,
             "fit_session_to_pane": lambda *_args: True,
             "wait_session_detached": lambda name, timeout=1.0: (
@@ -122,6 +124,28 @@ class FakeTmux:
             pane_id, 1000 + self.next_pane, "railmux", "$1", "@1",
             False, 80, 30)
         return pane_id
+
+    def create_dual_pane_layout(
+        self,
+        primary_command,
+        secondary_command,
+        *,
+        target,
+        layout,
+        agent_width,
+        secondary_extent,
+    ):
+        self.dual_calls.append((
+            primary_command,
+            secondary_command,
+            layout,
+            agent_width,
+            secondary_extent,
+        ))
+        assert target == "%0"
+        primary = self.split_window_h(primary_command)
+        secondary = self.split_window_h(secondary_command)
+        return primary, secondary
 
     def respawn_pane(self, pane, command):
         if pane not in self.panes or self.fail_respawn:
@@ -576,6 +600,24 @@ def test_create_primary_and_reset_slot_use_branded_empty_surface(rig):
     assert workspace.primary.pane_id == pane_id
     assert workspace.primary.agent_tmux_name is None
     assert "railmux.pane_surface --empty 1" in fake.respawned[-1][1]
+
+
+def test_create_dual_builds_both_empty_slots_with_one_transport_call(rig):
+    fake, workspace, manager = rig
+
+    assert manager.create_dual(
+        WorkspaceLayout.SIDE_BY_SIDE,
+        agent_width=143,
+        secondary_extent=57,
+    )
+
+    assert workspace.layout is WorkspaceLayout.SIDE_BY_SIDE
+    assert workspace.primary.pane_id == "%10"
+    assert workspace.secondary.pane_id == "%11"
+    primary, secondary, layout, width, extent = fake.dual_calls[-1]
+    assert "railmux.pane_surface --empty 1" in primary
+    assert "railmux.pane_surface --empty 2" in secondary
+    assert (layout, width, extent) == ("side-by-side", 143, 57)
 
 
 def test_prepare_kill_returns_swap_home_and_keeps_secondary_empty(rig):

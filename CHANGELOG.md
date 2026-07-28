@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.15.dev202607284] - 2026-07-28
+
+### Changed
+
+- Restore a saved wide dual-agent workspace by creating its final sidebar,
+  Pane 1, and Pane 2 geometry in one tmux command queue before filling either
+  agent pane, reducing visible startup reflow without changing session
+  ownership or recovery fallbacks.
+- Slow the website workspace-control recording so each Mode, Layout, Quit, and
+  Soft Quit input remains readable before the next action.
+
 ## [0.2.15.dev202607283] - 2026-07-28
 
 ### Added
@@ -1035,7 +1046,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607284...HEAD
+[0.2.15.dev202607284]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...v0.2.15.dev202607284
 [0.2.15.dev202607283]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...v0.2.15.dev202607283
 [0.2.15.dev202607282]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...v0.2.15.dev202607282
 [0.2.15.dev202607280]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15.dev202607280

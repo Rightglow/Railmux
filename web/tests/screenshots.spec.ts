@@ -296,7 +296,7 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   });
   await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
   await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
-  await expect(hud).toContainText("finish soft quit", { timeout: 5_000 });
+  await expect(hud).toContainText("finish soft quit", { timeout: 7_000 });
   await expect(player.locator(".ap-term")).toContainText(
     "Keeping 1 agent session running.",
     { timeout: 5_000 },

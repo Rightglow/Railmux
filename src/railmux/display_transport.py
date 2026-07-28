@@ -461,6 +461,39 @@ class AgentDisplayTransport:
         self.workspace.layout = layout
         return True
 
+    def create_dual(
+        self,
+        layout: WorkspaceLayout,
+        *,
+        agent_width: int,
+        secondary_extent: int,
+    ) -> bool:
+        """Create both empty display slots at their final geometry at once."""
+        if layout is WorkspaceLayout.SINGLE or self.owner_pane_id is None:
+            return False
+        primary = self.workspace.primary
+        secondary = self.workspace.secondary
+        if ((primary.pane_id is not None
+             and tmux_ctl.pane_alive(primary.pane_id))
+                or (secondary.pane_id is not None
+                    and tmux_ctl.pane_alive(secondary.pane_id))):
+            return False
+        panes = tmux_ctl.create_dual_pane_layout(
+            _empty_slot_command(primary),
+            _empty_slot_command(secondary),
+            target=self.owner_pane_id,
+            layout=layout.value,
+            agent_width=agent_width,
+            secondary_extent=secondary_extent,
+        )
+        if panes is None:
+            return False
+        primary.clear_display()
+        secondary.clear_display()
+        primary.pane_id, secondary.pane_id = panes
+        self.workspace.layout = layout
+        return True
+
     def _prepare_placeholder(self, slot: AgentSlot) -> str | None:
         old_agent = slot.agent_tmux_name
         if not slot.pane_id or not tmux_ctl.pane_alive(slot.pane_id):

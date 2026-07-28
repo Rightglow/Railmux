@@ -10,6 +10,7 @@ from railmux.tmux_ctl import (
     _read_key_binding,
     _set_scroll_bindings,
     copy_to_clipboard,
+    create_dual_pane_layout,
     descendant_pids,
     enable_clipboard_passthrough,
     install_scroll_bindings,
@@ -1013,6 +1014,64 @@ def test_split_window_v_supports_equal_detached_layout():
     assert "-d" in args
     assert args[args.index("-p") + 1] == "50"
     assert args[args.index("-t") + 1] == "%9"
+
+
+def test_create_dual_pane_layout_batches_final_geometry():
+    result = MagicMock(
+        returncode=0,
+        stdout="railmux-primary:%9\nrailmux-secondary:%10\n",
+    )
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         patch("subprocess.run", return_value=result) as run:
+        assert create_dual_pane_layout(
+            "primary command",
+            "secondary command",
+            target="%1",
+            layout="side-by-side",
+            agent_width=143,
+            secondary_extent=57,
+        ) == ("%9", "%10")
+
+    args = run.call_args.args[0]
+    assert args.count("tmux") == 1
+    assert args.count(";") == 2
+    assert args[:11] == [
+        "tmux",
+        "split-window", "-h", "-P", "-F",
+        "railmux-primary:#{pane_id}",
+        "-l", "143",
+        "-t", "%1",
+        "primary command",
+    ]
+    second = args.index(";") + 1
+    assert args[second:second + 7] == [
+        "split-window", "-h", "-P", "-F",
+        "railmux-secondary:#{pane_id}",
+        "-l", "57",
+    ]
+    assert args[-4:] == [";", "select-pane", "-t", "%1"]
+
+
+def test_create_dual_pane_layout_cleans_partial_empty_surface():
+    result = MagicMock(
+        returncode=1,
+        stdout="railmux-primary:%9\n",
+    )
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         patch("subprocess.run", return_value=result), \
+         patch("railmux.tmux_ctl.kill_pane", return_value=True) as kill, \
+         patch("railmux.tmux_ctl.select_pane", return_value=True) as select:
+        assert create_dual_pane_layout(
+            "primary command",
+            "secondary command",
+            target="%1",
+            layout="stacked",
+            agent_width=143,
+            secondary_extent=19,
+        ) is None
+
+    kill.assert_called_once_with("%9")
+    select.assert_called_once_with("%1")
 
 
 def test_last_pane_id_uses_tmux_previous_active_flag():

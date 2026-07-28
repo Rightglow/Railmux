@@ -572,6 +572,12 @@ routing with focus, selection, or history.
   authority. `[` and `]` resize the sidebar pane directly and never address an
   agent pane directionally; after either key, a dual layout assigns each agent
   half of the remaining region.
+- A fresh wide restart with a restorable dual workspace creates both inert
+  display slots, the final sidebar width, and the saved/default inner ratio in
+  one tmux command queue before attaching either agent. This is a repaint
+  optimization only: validation, swap ownership, fallback, and agent-session
+  lifecycle remain unchanged. If exact geometry cannot be established, restore
+  falls back to the ordinary incremental path.
 - Narrow screens should prefer stacked panes because three side-by-side columns
   make agent TUIs unusably narrow.
 - Railmux globally routes `F8` to the sidebar controller and cycles

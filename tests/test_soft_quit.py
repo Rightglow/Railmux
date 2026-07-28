@@ -536,6 +536,69 @@ def test_restore_workspace_rebuilds_both_slots_target_and_agent_focus(
         workspace.secondary, saved["slots"]["secondary"], [])
 
 
+def test_restore_workspace_builds_final_dual_geometry_before_agent_content(
+        monkeypatch):
+    app = _minimal_app()
+    workspace = app._agent_workspace()
+    transport = MagicMock()
+    app._display_transport_manager = transport
+    app._railmux_pane_id = "%1"
+    app._layout_profile = LayoutProfile(
+        "always", "side-by-side", 200, 600)
+    app._active_sidebar_permille = 200
+    app._active_primary_permille = 600
+    app._agent_region_size = MagicMock(return_value=(143, 40))
+    app._layout_fits = MagicMock(return_value=True)
+    app._resize_sidebar_for_layout = MagicMock(return_value=True)
+    app._set_railmux_focus = MagicMock()
+    app._paint_slot_active_target = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._apply_layout_profile = MagicMock(return_value=True)
+
+    def create_dual(layout, *, agent_width, secondary_extent):
+        assert workspace.primary.pane_id is None
+        assert workspace.secondary.pane_id is None
+        workspace.primary.pane_id = "%2"
+        workspace.secondary.pane_id = "%3"
+        workspace.layout = layout
+        assert (agent_width, secondary_extent) == (143, 57)
+        return True
+
+    def restore_primary(_state, slot):
+        assert workspace.layout is WorkspaceLayout.SIDE_BY_SIDE
+        assert workspace.secondary.pane_id == "%3"
+        slot.agent_tmux_name = "cc-primary"
+        return True
+
+    transport.create_dual.side_effect = create_dual
+    app._restore_agent_target = MagicMock(side_effect=restore_primary)
+    app._restore_workspace_slot = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.window_size", lambda _pane: (180, 40))
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.select_pane", lambda _pane: True)
+    saved = {
+        "layout": "side-by-side",
+        "target": "primary",
+        "focus": "sidebar",
+        "slots": {
+            "primary": {"kind": "agent", "tmux": "cc-primary"},
+            "secondary": {"kind": "empty"},
+        },
+    }
+
+    assert app._restore_workspace({}, saved)
+
+    transport.create_dual.assert_called_once_with(
+        WorkspaceLayout.SIDE_BY_SIDE,
+        agent_width=143,
+        secondary_extent=57,
+    )
+    app._restore_agent_target.assert_called_once()
+    app._restore_workspace_slot.assert_called_once_with(
+        workspace.secondary, saved["slots"]["secondary"], None)
+
+
 def test_restore_workspace_keeps_dual_layout_when_secondary_content_fails(
         monkeypatch):
     app = _minimal_app()

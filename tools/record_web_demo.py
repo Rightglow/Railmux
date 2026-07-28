@@ -56,7 +56,7 @@ WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # narrow width; the separately documented 105x21 Termux report was landscape.
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
 TOUR = RecordingProfile("tour", 160, 38, 10.0)
-CONTROLS = RecordingProfile("controls", 180, 38, 19.0)
+CONTROLS = RecordingProfile("controls", 180, 38, 27.0)
 STARTUP_HOLD_SECONDS = 2.4
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
@@ -1057,21 +1057,21 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     if real_response_visible:
                         send_client_keys(
                             "return-sidebar",
-                            3.0,
+                            4.0,
                             ("C-b", "Tab"),
                             "key|C-b Tab|Return to Railmux",
                         )
                     if "return-sidebar" in sent and running_sidebar_visible:
                         send_once(
                             "expand-more",
-                            3.8,
+                            6.2,
                             b"+",
                             "key|+|Show Mode, Layout, and Options",
                         )
                     if "expand-more" in sent:
                         send_once(
                             "switch-codex",
-                            5.0,
+                            8.5,
                             b"m",
                             "key|M|Switch sidebar to Codex",
                         )
@@ -1081,28 +1081,28 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     ):
                         send_client_keys(
                             "cycle-layout",
-                            6.5,
+                            11.0,
                             ("F8",),
                             "key|F8|Cycle workspace layout",
                         )
                     if "cycle-layout" in sent:
                         send_once(
                             "open-quit",
-                            8.0,
+                            13.8,
                             b"q",
                             "key|Q|Compare Quit and Soft Quit",
                         )
                     if "open-quit" in sent and b"Quit railmux?" in raw_output:
                         send_once(
                             "soft-quit",
-                            12.0,
+                            18.0,
                             b"s",
                             "key|S|Soft quit — keep agents running",
                         )
                     if "soft-quit" in sent and b"Keep this layout?" in raw_output:
                         send_once(
                             "finish-soft-quit",
-                            14.2,
+                            22.0,
                             b"n",
                             "key|N|Skip layout save and finish soft quit",
                         )

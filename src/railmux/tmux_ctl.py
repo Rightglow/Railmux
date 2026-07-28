@@ -933,6 +933,76 @@ def split_window_v(cmd: str = "", target: str | None = None,
         return None
 
 
+def create_dual_pane_layout(
+    primary_cmd: str,
+    secondary_cmd: str,
+    *,
+    target: str,
+    layout: str,
+    agent_width: int,
+    secondary_extent: int,
+) -> tuple[str, str] | None:
+    """Create an exact two-pane agent skeleton in one tmux command queue.
+
+    The first split establishes the final sidebar width.  The second splits
+    that new agent region and the last command returns focus to *target*.
+    Keeping the geometry changes in one queue lets tmux repaint an attached
+    client from the completed topology instead of exposing each intermediate
+    split during workspace restore.
+    """
+    if (not in_tmux()
+            or layout not in {"side-by-side", "stacked"}
+            or agent_width < 1
+            or secondary_extent < 1):
+        return None
+    secondary_flag = "-h" if layout == "side-by-side" else "-v"
+    args = [
+        "tmux",
+        "split-window", "-h", "-P", "-F",
+        "railmux-primary:#{pane_id}",
+        "-l", str(agent_width),
+        "-t", target,
+        primary_cmd,
+        ";",
+        "split-window", secondary_flag, "-P", "-F",
+        "railmux-secondary:#{pane_id}",
+        "-l", str(secondary_extent),
+        secondary_cmd,
+        ";",
+        "select-pane", "-t", target,
+    ]
+    try:
+        result = subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+
+    created: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        label, separator, pane_id = line.partition(":")
+        if (separator and label in {"railmux-primary", "railmux-secondary"}
+                and re.fullmatch(r"%[0-9]+", pane_id)):
+            created[label] = pane_id
+    primary = created.get("railmux-primary")
+    secondary = created.get("railmux-secondary")
+    if (result.returncode == 0 and primary is not None
+            and secondary is not None and primary != secondary):
+        return primary, secondary
+
+    # A later command can fail after the first empty surface was created.
+    # Remove only pane IDs emitted by this exact queue, then restore the
+    # controller focus so the ordinary sequential fallback starts cleanly.
+    for pane_id in set(created.values()):
+        kill_pane(pane_id)
+    select_pane(target)
+    return None
+
+
 def respawn_pane(pane_id: str, cmd: str) -> bool:
     """Replace the running command in `pane_id` with `cmd`. -k kills any existing process."""
     try:
