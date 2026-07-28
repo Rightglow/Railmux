@@ -78,6 +78,22 @@ class DisplayServerBusy(DisplayServerError):
     """The short attach mutex is held by a legacy or starting helper."""
 
 
+def apply_claude_history_choice(
+    policy: str,
+    *,
+    persistent: bool,
+    current_override: str | None,
+    settings: Settings | None = None,
+) -> tuple[bool, str | None]:
+    """Apply one remote history choice without losing a prior override."""
+    applied = (
+        (settings or Settings()).set_claude_history_policy(policy)
+        if persistent
+        else True
+    )
+    return applied, policy if applied else current_override
+
+
 _WATCHDOG_INTERVAL = 5.0
 _WATCHDOG_FAILURES = 3
 _START_HANDSHAKE_TIMEOUT = 300.0
@@ -1863,13 +1879,13 @@ def _serve_attached(
                             )
                         except ValueError:
                             continue
-                        applied = (
-                            Settings().set_claude_history_policy(policy)
-                            if persistent
-                            else True
+                        applied, claude_history_override = (
+                            apply_claude_history_choice(
+                                policy,
+                                persistent=persistent,
+                                current_override=claude_history_override,
+                            )
                         )
-                        if applied:
-                            claude_history_override = policy
                         queue_control_packet(
                             encode_claude_history_policy_result(
                                 policy,

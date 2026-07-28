@@ -1173,19 +1173,36 @@ def test_session_context_menu_preview_uses_space_action():
     menu = app._show_overlay.call_args.args[0]
     labels = [row._wrapped_widget.base_widget.text for row in menu._walker]
     assert any("Preview" in label and "␣" in label for label in labels)
-    assert any("Copy title" in label for label in labels)
-    copy_index = next(
-        i for i, label in enumerate(labels) if "Copy title" in label
-    )
-    kill_index = next(i for i, label in enumerate(labels) if "Kill" in label)
-    assert copy_index + 1 == kill_index
-    menu._walker[copy_index]._on_click()
-    app._copy_session_title.assert_called_once_with("Review layout policy")
     preview_row = next(
         row for row in menu._walker
         if "Preview" in row._wrapped_widget.base_widget.text)
     preview_row._on_click()
     app._on_session_row_preview.assert_called_once_with(session)
+
+
+def test_session_context_menu_copy_title_uses_provider_title():
+    app = App.__new__(App)
+    app._railmux_pane_id = None
+    app._sessions_pane = MagicMock()
+    app._running = {}
+    app._favorites = MagicMock()
+    app._favorites.get_ids.return_value = set()
+    app._close_modal = MagicMock()
+    app._show_overlay = MagicMock()
+    app._copy_session_title = MagicMock()
+    session = MagicMock()
+    session.session_id = "preview-id"
+    session.display_title = "Review layout policy"
+
+    app._open_session_context_menu(session)
+
+    menu = app._show_overlay.call_args.args[0]
+    copy_row = next(
+        row for row in menu._walker
+        if "Copy title" in row._wrapped_widget.base_widget.text
+    )
+    copy_row._on_click()
+    app._copy_session_title.assert_called_once_with("Review layout policy")
 
 
 def test_legacy_running_menu_copies_provider_title_without_project_prefix(

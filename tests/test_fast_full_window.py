@@ -259,6 +259,90 @@ def test_claude_history_policy_result_round_trips_scope_and_outcome():
         )
 
 
+@pytest.mark.parametrize(
+    ("policy", "persistent", "runtime", "prefetch", "forwarded"),
+    [
+        ("local", True, None, True, b""),
+        ("local", False, "local", True, b""),
+        ("native", True, None, False, b"wheel"),
+        ("native", False, "native", False, b"wheel"),
+    ],
+)
+def test_claude_history_policy_ack_applies_scope_and_original_wheel(
+    policy, persistent, runtime, prefetch, forwarded,
+):
+    action = fast_display_client.apply_claude_history_policy_result(
+        (policy, persistent, b"wheel"),
+        ClaudeHistoryPolicyResult(policy, persistent, True),
+    )
+
+    assert action is not None
+    assert action.update_runtime
+    assert action.runtime_choice == runtime
+    assert action.prefetch is prefetch
+    assert action.forwarded_input == forwarded
+
+
+def test_claude_history_policy_ack_rejects_mismatch_and_preserves_failed_state():
+    assert fast_display_client.apply_claude_history_policy_result(
+        ("local", False, b"wheel"),
+        ClaudeHistoryPolicyResult("native", False, True),
+    ) is None
+
+    failed = fast_display_client.apply_claude_history_policy_result(
+        ("local", True, b"wheel"),
+        ClaudeHistoryPolicyResult("local", True, False),
+    )
+    assert failed is not None
+    assert not failed.update_runtime
+    assert not failed.prefetch
+    assert failed.forwarded_input == b""
+
+
+def test_claude_history_reconnect_resends_only_this_time_choice():
+    assert fast_display_client.claude_history_reconnect_frame(None) == b""
+    message = InputFrameDecoder().feed(
+        fast_display_client.claude_history_reconnect_frame("native")
+    )[0]
+    assert decode_claude_history_choice(message.data) == ("native", False)
+
+
+def test_server_claude_history_choice_persists_only_when_requested():
+    settings = MagicMock()
+    settings.set_claude_history_policy.return_value = True
+
+    applied, override = fast_display_server.apply_claude_history_choice(
+        "local",
+        persistent=True,
+        current_override="native",
+        settings=settings,
+    )
+    assert (applied, override) == (True, "local")
+    settings.set_claude_history_policy.assert_called_once_with("local")
+
+    settings.reset_mock()
+    applied, override = fast_display_server.apply_claude_history_choice(
+        "native",
+        persistent=False,
+        current_override="local",
+        settings=settings,
+    )
+    assert (applied, override) == (True, "native")
+    settings.set_claude_history_policy.assert_not_called()
+
+
+def test_server_failed_persistent_history_choice_keeps_previous_override():
+    settings = MagicMock()
+    settings.set_claude_history_policy.return_value = False
+
+    assert fast_display_server.apply_claude_history_choice(
+        "local",
+        persistent=True,
+        current_override="native",
+        settings=settings,
+    ) == (False, "native")
+
+
 def test_clipboard_payload_round_trips_and_surface_reencodes_osc52():
     data = "Review layout 你好".encode()
     decoder = ServerMessageDecoder()
@@ -4143,9 +4227,12 @@ def test_server_captures_nested_history_from_real_pane_without_resizing(
 @pytest.mark.parametrize(
     "argv",
     [
-        ["--protocol", "6", "--width", "39", "--height", "24"],
-        ["--protocol", "6", "--width", "80", "--height", "11"],
-        ["--protocol", "6", "--width", "80", "--height", "24", "--fps", "61"],
+        ["--protocol", str(PROTOCOL_VERSION), "--width", "39", "--height", "24"],
+        ["--protocol", str(PROTOCOL_VERSION), "--width", "80", "--height", "11"],
+        [
+            "--protocol", str(PROTOCOL_VERSION),
+            "--width", "80", "--height", "24", "--fps", "61",
+        ],
     ],
 )
 def test_server_rejects_unbounded_geometry_and_frame_rates(argv):

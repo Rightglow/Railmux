@@ -514,6 +514,66 @@ def claude_history_save_timed_out(
 
 
 @dataclass(frozen=True)
+class ClaudeHistoryPolicyAction:
+    """Pure result of matching a helper acknowledgement to a pending choice."""
+
+    update_runtime: bool
+    runtime_choice: str | None
+    prefetch: bool
+    forwarded_input: bytes
+    status_text: str | None
+
+
+def apply_claude_history_policy_result(
+    pending: tuple[str, bool, bytes] | None,
+    result: ClaudeHistoryPolicyResult,
+) -> ClaudeHistoryPolicyAction | None:
+    """Resolve a four-way Claude history choice without select-loop coupling."""
+    if (
+        pending is None
+        or pending[0] != result.policy
+        or pending[1] != result.persistent
+    ):
+        return None
+    if not result.applied:
+        return ClaudeHistoryPolicyAction(
+            update_runtime=False,
+            runtime_choice=None,
+            prefetch=False,
+            forwarded_input=b"",
+            status_text=(
+                "Could not save Claude history choice; setting remains Ask"
+            ),
+        )
+    runtime_choice = None if result.persistent else result.policy
+    if result.policy == "local":
+        return ClaudeHistoryPolicyAction(
+            update_runtime=True,
+            runtime_choice=runtime_choice,
+            prefetch=True,
+            forwarded_input=b"",
+            status_text=(
+                "Smooth local Claude history enabled; scroll again"
+            ),
+        )
+    return ClaudeHistoryPolicyAction(
+        update_runtime=True,
+        runtime_choice=runtime_choice,
+        prefetch=False,
+        forwarded_input=pending[2],
+        status_text=None,
+    )
+
+
+def claude_history_reconnect_frame(runtime_choice: str | None) -> bytes:
+    """Resend only a non-persistent policy after transport replacement."""
+    if runtime_choice is None:
+        return b""
+    return encode_claude_history_policy(
+        runtime_choice, persistent=False)
+
+
+@dataclass(frozen=True)
 class HistoryAction:
     protocol_frame: bytes = b""
     forwarded_input: bytes = b""
@@ -2765,43 +2825,33 @@ def run(args: argparse.Namespace) -> int:
                                 continue
                             if isinstance(message, ClaudeHistoryPolicyResult):
                                 pending = claude_history_pending_choice
-                                if (
-                                    pending is None
-                                    or pending[0] != message.policy
-                                    or pending[1] != message.persistent
-                                ):
+                                action = apply_claude_history_policy_result(
+                                    pending, message)
+                                if action is None:
                                     continue
                                 claude_history_pending_choice = None
                                 claude_history_pending_since = None
-                                if not message.applied:
+                                if action.status_text is not None:
                                     surface.show_local_status(
-                                        "Could not save Claude history choice; "
-                                        "setting remains Ask"
-                                    )
+                                        action.status_text)
+                                if not action.update_runtime:
                                     history_info_until = (
                                         time.monotonic()
                                         + _HISTORY_INFO_SECONDS
                                     )
                                     continue
                                 claude_history_runtime_choice = (
-                                    None
-                                    if message.persistent
-                                    else message.policy
-                                )
-                                prefetch = history.begin_prefetch(
-                                    time.monotonic(), force=True
-                                )
-                                if prefetch:
-                                    send_protocol_frame(prefetch)
-                                route_refresh_needed = False
-                                if message.policy == "local":
-                                    surface.show_local_status(
-                                        "Smooth local Claude history enabled; "
-                                        "scroll again"
+                                    action.runtime_choice)
+                                if action.prefetch:
+                                    prefetch = history.begin_prefetch(
+                                        time.monotonic(), force=True
                                     )
-                                else:
+                                    if prefetch:
+                                        send_protocol_frame(prefetch)
+                                route_refresh_needed = False
+                                if action.forwarded_input:
                                     send_protocol_frame(
-                                        encode_input(pending[2])
+                                        encode_input(action.forwarded_input)
                                     )
                                     surface.show_local_status(
                                         "Claude native clickable history enabled"
@@ -2939,11 +2989,10 @@ def run(args: argparse.Namespace) -> int:
                         remote_closed = False
                         awaiting_keyframe = False
                         route_refresh_needed = False
-                        if claude_history_runtime_choice is not None:
-                            send_protocol_frame(encode_claude_history_policy(
-                                claude_history_runtime_choice,
-                                persistent=False,
-                            ))
+                        reconnect_policy = claude_history_reconnect_frame(
+                            claude_history_runtime_choice)
+                        if reconnect_policy:
+                            send_protocol_frame(reconnect_policy)
                         now = time.monotonic()
                         next_history_prefetch = now
                         next_heartbeat = now + _HEARTBEAT_INTERVAL
