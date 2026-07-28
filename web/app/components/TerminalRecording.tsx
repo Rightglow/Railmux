@@ -7,6 +7,7 @@ type InputCue = {
   kind: "key" | "mouse" | "touch";
   label: string;
   detail: string;
+  mouseDetail?: string;
   left?: string;
   top?: string;
 };
@@ -34,6 +35,31 @@ function parseInputCue(
   rows: number,
 ): InputCue | null {
   const parts = data.split("|");
+  if (
+    parts[0] === "keymouse"
+    && parts.length >= 7
+    && parts[5] === "mouse"
+  ) {
+    const x = Number(parts[2]);
+    const y = Number(parts[3]);
+    if (
+      !Number.isFinite(x)
+      || !Number.isFinite(y)
+      || x < 1
+      || x > cols
+      || y < 1
+      || y > rows
+    ) return null;
+    return {
+      id,
+      kind: "key",
+      label: parts[1],
+      detail: parts[4],
+      mouseDetail: parts.slice(6).join(" · "),
+      left: `${((x - 0.5) / cols) * 100}%`,
+      top: `${((y - 0.5) / rows) * 100}%`,
+    };
+  }
   if (parts[0] === "key" && parts.length >= 3) {
     return {
       id,
@@ -160,7 +186,7 @@ export default function TerminalRecording({
           data-input-kind={cue.kind}
           key={cue.id}
         >
-          {cue.kind === "mouse" ? (
+          {cue.kind !== "touch" && cue.left && cue.top ? (
             <span
               className="terminal-pointer"
               data-testid="terminal-pointer"
@@ -188,10 +214,19 @@ export default function TerminalRecording({
                 ? "MOUSE"
                 : cue.kind === "touch"
                   ? "TOUCH"
-                  : "KEY"}
+                  : cue.mouseDetail
+                    ? "KEY + MOUSE"
+                    : "KEY"}
             </span>
             <strong>{cue.label}</strong>
-            <small>{cue.detail}</small>
+            <small>
+              {cue.detail}
+              {cue.mouseDetail ? (
+                <em data-testid="terminal-mouse-target">
+                  Mouse: {cue.mouseDetail}
+                </em>
+              ) : null}
+            </small>
           </div>
         </div>
       ) : null}

@@ -67,11 +67,25 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[2].cast).toContain("Start an empty session");
   expect(headers[2].cast).not.toContain("Verify responsive layout gates");
   expect(headers[2].cast).toContain("Switch to Polish SSH history");
+  expect(headers[2].cast).not.toContain('"key|');
+  expect(headers[2].cast).toContain(
+    "keymouse|Enter|10|12|Resume this conversation",
+  );
+  expect(headers[2].cast).toContain(
+    "keymouse|N|10|10|Start an empty session",
+  );
   expect(headers[3].cast).toContain("touch|10|10|Tap New session");
   expect(headers[3].cast).toContain("touch|2|38|Tap [R] sidebar");
   expect(headers[3].cast).toContain("touch|5|38|Tap [1] agent");
   expect(headers[3].cast).not.toContain("key|");
   expect(headers[5].cast).toContain("Soft quit — keep agents running");
+  expect(headers[5].cast).not.toContain('"key|');
+  expect(headers[5].cast).toContain(
+    "keymouse|+|48|37|Show Mode, Layout, and Options",
+  );
+  expect(headers[5].cast).toContain(
+    "keymouse|S|18|21|Soft quit — keep agents running",
+  );
   expect(headers[5].cast).not.toContain(
     "Skip layout save and finish soft quit",
   );
@@ -299,17 +313,40 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await expect(player.locator(".ap-player")).toBeVisible();
   await expect(player.locator(".ap-control-bar")).toHaveCount(0);
   const hud = player.getByTestId("terminal-input-hud");
+  const pointer = player.getByTestId("terminal-pointer");
+  const mouseTarget = player.getByTestId("terminal-mouse-target");
 
-  await expect(hud).toContainText("Show Mode, Layout, and Options", {
-    timeout: 8_000,
+  await expect(hud).toContainText("Start a Claude Code session", {
+    timeout: 5_000,
   });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click New session");
+  await expect(hud).toContainText("Return to Railmux", {
+    timeout: 5_000,
+  });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click the sidebar");
+  await expect(hud).toContainText("Show Mode, Layout, and Options", {
+    timeout: 5_000,
+  });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click More");
   await expect(hud).toContainText("Switch sidebar to Codex", {
     timeout: 5_000,
   });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click Mode");
   await expect(player.locator(".ap-term")).toContainText("Codex");
-  await expect(hud).toContainText("Compare Quit and Soft Quit", {
-    timeout: 8_000,
+  await expect(hud).toContainText("Cycle workspace layout", {
+    timeout: 5_000,
   });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click Layout");
+  await expect(hud).toContainText("Compare Quit and Soft Quit", {
+    timeout: 5_000,
+  });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click Quit");
   await expect(player.locator(".ap-term")).toContainText("Quit railmux?");
   await expect(player.locator(".ap-term")).toContainText("soft quit");
   await expect(player.locator(".ap-term")).toContainText("sessions alive");
@@ -319,6 +356,8 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
     scale: "css",
   });
   await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
+  await expect(pointer).toBeVisible();
+  await expect(mouseTarget).toContainText("Click Soft Quit in the dialog");
   await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
   await expect(player.locator(".ap-term")).toContainText(
     "Keeping 1 agent session running.",
@@ -357,10 +396,18 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   });
   await expect(hud).toContainText("Resume this conversation");
   await expect(hud).toContainText("Enter");
+  await expect(pointer).toBeVisible();
+  await expect(player.getByTestId("terminal-mouse-target")).toContainText(
+    "Double-click the selected session",
+  );
   await expect(player.locator(".ap-term")).toContainText(
     "Polish SSH history",
   );
   await expect(hud).toContainText("Back to the sidebar", { timeout: 8_000 });
+  await expect(pointer).toBeVisible();
+  await expect(player.getByTestId("terminal-mouse-target")).toContainText(
+    "Click the sidebar",
+  );
   await expect(player.locator(".ap-term")).toContainText("PROJECTS");
   await player.screenshot({
     path: join(outputDir, "recorded-workspace.png"),
@@ -370,6 +417,10 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   await expect(hud).toContainText("Start an empty session", {
     timeout: 5_000,
   });
+  await expect(pointer).toBeVisible();
+  await expect(player.getByTestId("terminal-mouse-target")).toContainText(
+    "Click New session",
+  );
   await expect(player.locator(".ap-term")).toContainText(
     "Claude Code v2.1.220",
   );
@@ -380,6 +431,10 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   await expect(hud).toContainText("See both running sessions", {
     timeout: 6_000,
   });
+  await expect(pointer).toBeVisible();
+  await expect(player.getByTestId("terminal-mouse-target")).toContainText(
+    "Click the sidebar",
+  );
   await expect(pointer).toBeVisible({ timeout: 5_000 });
   await expect(player.getByTestId("terminal-input-hud")).toContainText(
     "Switch to Polish SSH history",

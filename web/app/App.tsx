@@ -279,7 +279,7 @@ export default function Home() {
               <div className="workflow-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> GUIDED REAL TERMINAL</span>
-                  <small>keyboard cue shown · matching mouse target named beside it</small>
+                  <small>keyboard cue shown · pointer marks the matching mouse target</small>
                 </div>
                 <TerminalRecording
                   source="railmux-workflow-demo.cast"
@@ -316,7 +316,7 @@ export default function Home() {
                   Use shortcuts or click the matching Button Bar control.
                   Running agents continue even when their mode or pane is not
                   visible. The recording shows the keyboard route and names
-                  the equivalent mouse target in every cue.
+                  the equivalent mouse target with a pointer in every cue.
                 </p>
                 <div>
                   <span><kbd>+</kbd> or click <strong>More</strong></span>
@@ -329,7 +329,7 @@ export default function Home() {
               <div className="lifecycle-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
-                  <small>keyboard recorded · mouse equivalent shown in each cue</small>
+                  <small>keyboard recorded · pointer marks each mouse equivalent</small>
                 </div>
                 <TerminalRecording
                   source="railmux-controls-demo.cast"

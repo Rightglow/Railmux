@@ -40,8 +40,9 @@ login. It produces six source-authentic recordings:
 - `public/generated/railmux-workflow-demo.cast` records a focused 160×38
   wide-layout history workflow: single-click preview, Enter resume, return to
   the sidebar, start a genuinely empty second conversation, and click the
-  other running conversation to switch the agent pane. Semantic input events
-  drive the website's durable key HUD and cell-aligned mouse pointer.
+  other running conversation to switch the agent pane. Composite semantic
+  input events keep the recorded keyboard action in the HUD while placing a
+  cell-aligned mouse pointer on the equivalent live control.
 - `public/generated/railmux-mobile-demo.cast` records Railmux's real compact
   layout at a representative 46×38 portrait-phone geometry. It taps New
   session, `[R]`, and `[1]` with touch-only cues; no keyboard action is shown.

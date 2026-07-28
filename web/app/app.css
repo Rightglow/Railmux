@@ -441,6 +441,14 @@ code {
   font-size: 10px;
 }
 
+.terminal-input-hud small em {
+  display: block;
+  margin-top: 2px;
+  color: rgba(211, 255, 0, 0.86);
+  font-style: normal;
+  font-weight: 700;
+}
+
 .terminal-pointer {
   position: absolute;
   width: 19px;

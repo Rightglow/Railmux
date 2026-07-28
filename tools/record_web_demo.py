@@ -1041,8 +1041,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             4.2,
                             b"\r",
                             (
-                                "key|Enter|Resume this conversation"
-                                " · mouse: double-click the selected session"
+                                "keymouse|Enter|10|12|Resume this conversation"
+                                "|mouse|Double-click the selected session"
                             ),
                         )
                     if "resume-session" in sent and real_response_visible:
@@ -1050,7 +1050,10 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "return-sidebar",
                             7.4,
                             b"\x02\t",
-                            "key|C-b Tab|Back to the sidebar · mouse: click sidebar",
+                            (
+                                "keymouse|C-b Tab|10|4|Back to the sidebar"
+                                "|mouse|Click the sidebar"
+                            ),
                         )
                     if "return-sidebar" in sent and b"RUNNING" in raw_output.upper():
                         send_once(
@@ -1058,8 +1061,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             8.5,
                             b"n",
                             (
-                                "key|N|Start an empty session"
-                                " · mouse: click New session"
+                                "keymouse|N|10|10|Start an empty session"
+                                "|mouse|Click New session"
                             ),
                         )
                     if "launch-second" in sent:
@@ -1068,8 +1071,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             12.2,
                             b"\x02\t",
                             (
-                                "key|C-b Tab|See both running sessions"
-                                " · mouse: click sidebar"
+                                "keymouse|C-b Tab|10|4|See both running sessions"
+                                "|mouse|Click the sidebar"
                             ),
                         )
                     if (
@@ -1157,8 +1160,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         0.8,
                         b"n",
                         (
-                            "key|N|Start a Claude Code session"
-                            " · mouse: click New session"
+                            "keymouse|N|10|10|Start a Claude Code session"
+                            "|mouse|Click New session"
                         ),
                     )
                     if real_response_visible:
@@ -1167,8 +1170,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             4.0,
                             ("C-b", "Tab"),
                             (
-                                "key|C-b Tab|Return to Railmux"
-                                " · mouse: click sidebar"
+                                "keymouse|C-b Tab|10|4|Return to Railmux"
+                                "|mouse|Click the sidebar"
                             ),
                         )
                     if "return-sidebar" in sent and running_sidebar_visible:
@@ -1177,8 +1180,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             6.2,
                             b"+",
                             (
-                                "key|+|Show Mode, Layout, and Options"
-                                " · mouse: click More"
+                                "keymouse|+|48|37|Show Mode, Layout, and Options"
+                                "|mouse|Click More"
                             ),
                         )
                     if "expand-more" in sent:
@@ -1187,8 +1190,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             8.5,
                             b"m",
                             (
-                                "key|M|Switch sidebar to Codex"
-                                " · mouse: click Mode"
+                                "keymouse|M|4|37|Switch sidebar to Codex"
+                                "|mouse|Click Mode"
                             ),
                         )
                     if (
@@ -1200,8 +1203,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             11.0,
                             ("F8",),
                             (
-                                "key|F8|Cycle workspace layout"
-                                " · mouse: click Layout"
+                                "keymouse|F8|13|37|Cycle workspace layout"
+                                "|mouse|Click Layout"
                             ),
                         )
                     if "cycle-layout" in sent:
@@ -1210,8 +1213,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             13.8,
                             b"q",
                             (
-                                "key|Q|Compare Quit and Soft Quit"
-                                " · mouse: click Quit"
+                                "keymouse|Q|10|36|Compare Quit and Soft Quit"
+                                "|mouse|Click Quit"
                             ),
                         )
                     if "open-quit" in sent and b"Quit railmux?" in raw_output:
@@ -1220,8 +1223,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             18.0,
                             b"s",
                             (
-                                "key|S|Soft quit — keep agents running"
-                                " · mouse: click Soft Quit"
+                                "keymouse|S|18|21|Soft quit — keep agents running"
+                                "|mouse|Click Soft Quit in the dialog"
                             ),
                         )
                     if "soft-quit" in sent and b"Keep this layout?" in raw_output:
