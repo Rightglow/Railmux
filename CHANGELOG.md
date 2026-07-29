@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18.dev202607293] - 2026-07-29
+
+### Changed
+
+- Keep `railmux ssh` startup feedback on a recoverable alternate screen,
+  delaying interactive mouse and cursor modes until the first real frame.
+- Advance smooth local history by exactly one row for each terminal wheel
+  event.
+
+### Fixed
+
+- Preserve bounded local history safely across automatic reconnects without
+  allowing a retry to recreate a Railmux UI that was intentionally Soft Quit.
+- Remove obsolete blank history tails left by temporary full-screen Codex
+  `/btw` views.
+- Require a fresh painted frame before another automatic reconnect attempt,
+  and keep interactive remote prompts from interleaving with startup output.
+
 ## [0.2.18.dev202607292] - 2026-07-29
 
 ### Changed
@@ -1215,7 +1233,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607292...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607293...HEAD
+[0.2.18.dev202607293]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607292...v0.2.18.dev202607293
 [0.2.18.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607291...v0.2.18.dev202607292
 [0.2.18.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607290...v0.2.18.dev202607291
 [0.2.18.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18.dev202607290
