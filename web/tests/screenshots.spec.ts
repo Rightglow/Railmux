@@ -18,12 +18,27 @@ test("honor direct section links after React mounts", async ({ page }) => {
 
   const install = page.locator("#install");
   await expect(install).toBeVisible();
+  await install.evaluate((element) => {
+    const delayedContent = document.createElement("div");
+    delayedContent.dataset.testid = "delayed-content";
+    delayedContent.style.height = "600px";
+    element.before(delayedContent);
+  });
   await expect
     .poll(async () => install.evaluate((element) => {
       const top = element.getBoundingClientRect().top;
       return top >= 70 && top < window.innerHeight;
     }))
     .toBe(true);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new WheelEvent("wheel"));
+    window.scrollTo(0, 0);
+    const laterContent = document.createElement("div");
+    laterContent.style.height = "600px";
+    document.querySelector("#install")?.before(laterContent);
+  });
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 });
 
 test("reserve compact projection for the mobile recording", async () => {

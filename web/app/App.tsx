@@ -5,19 +5,62 @@ import TerminalRecording from "./components/TerminalRecording";
 
 export default function Home() {
   useEffect(() => {
-    const scrollToHash = () => {
+    let resizeObserver: ResizeObserver | null = null;
+    let frame: number | null = null;
+    let stopTimer: number | null = null;
+    let active = false;
+
+    const stopTracking = () => {
+      active = false;
+      resizeObserver?.disconnect();
+      resizeObserver = null;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = null;
+      if (stopTimer !== null) window.clearTimeout(stopTimer);
+      stopTimer = null;
+    };
+
+    const alignToHash = () => {
+      if (!active) return;
       const targetId = window.location.hash.slice(1);
       if (!targetId) {
         return;
       }
-      window.requestAnimationFrame(() => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
         document.getElementById(targetId)?.scrollIntoView({ block: "start" });
       });
     };
 
-    scrollToHash();
-    window.addEventListener("hashchange", scrollToHash);
-    return () => window.removeEventListener("hashchange", scrollToHash);
+    const startTracking = () => {
+      stopTracking();
+      if (!window.location.hash.slice(1)) return;
+      active = true;
+      resizeObserver = new ResizeObserver(alignToHash);
+      resizeObserver.observe(document.body);
+      alignToHash();
+      // Asciinema players size themselves after their recordings load. Keep
+      // the requested section anchored through that bounded startup window,
+      // but never fight deliberate wheel, touch, pointer, or keyboard input.
+      stopTimer = window.setTimeout(stopTracking, 8_000);
+    };
+
+    const userEvents = ["wheel", "touchstart", "pointerdown", "keydown"];
+    startTracking();
+    window.addEventListener("hashchange", startTracking);
+    window.addEventListener("load", alignToHash);
+    for (const event of userEvents) {
+      window.addEventListener(event, stopTracking, { passive: true });
+    }
+    return () => {
+      stopTracking();
+      window.removeEventListener("hashchange", startTracking);
+      window.removeEventListener("load", alignToHash);
+      for (const event of userEvents) {
+        window.removeEventListener(event, stopTracking);
+      }
+    };
   }, []);
 
   return (
