@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18.dev202607290] - 2026-07-29
+
+### Changed
+
+- Clarify in Options whether each setting affects exit, future agent launches,
+  the next outer launch, or the current SSH history refresh.
+
+### Fixed
+
+- Preserve already-fetched `railmux ssh` history across shallow periodic
+  prefetches and shrinking tmux/Claude transcript suffixes, while keeping the
+  cache bounded by the configured local history limit.
+- Apply persistent Claude history changes from Options to the active
+  `railmux ssh` connection instead of leaving an earlier “this time” choice in
+  control until restart.
+
 ## [0.2.17] - 2026-07-29
 
 ### Changed
@@ -1179,7 +1195,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.17...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607290...HEAD
+[0.2.18.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18.dev202607290
 [0.2.17]: https://github.com/Rightglow/Railmux/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16
 [0.2.16.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...v0.2.16.dev202607291

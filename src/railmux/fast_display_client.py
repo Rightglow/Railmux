@@ -967,13 +967,95 @@ class LocalHistoryView:
                 restore_live = True
         return HistoryAction(restore_live=restore_live)
 
-    def _remember_content(self, snapshot: HistorySnapshot) -> None:
+    @staticmethod
+    def _history_source_matches(
+        left: HistorySnapshot, right: HistorySnapshot,
+    ) -> bool:
+        """Do not combine native, transcript, and undecided history."""
+        return (
+            left.transcript_backed == right.transcript_backed
+            and left.history_choice_required == right.history_choice_required
+        )
+
+    @staticmethod
+    def _timeline_delta(
+        previous: tuple[bytes, ...], incoming: tuple[bytes, ...],
+    ) -> int | None:
+        """Locate incoming[0] in previous's coordinate space."""
+        previous_positions: dict[bytes, list[int]] = {}
+        incoming_positions: dict[bytes, list[int]] = {}
+        for index, line in enumerate(previous):
+            key = _SGR_STYLE_RE.sub(b"", line)
+            if key.strip():
+                previous_positions.setdefault(key, []).append(index)
+        for index, line in enumerate(incoming):
+            key = _SGR_STYLE_RE.sub(b"", line)
+            if key in previous_positions:
+                incoming_positions.setdefault(key, []).append(index)
+        votes: dict[int, int] = {}
+        for key, positions in incoming_positions.items():
+            old_positions = previous_positions[key]
+            if len(old_positions) == 1 and len(positions) == 1:
+                delta = old_positions[0] - positions[0]
+                votes[delta] = votes.get(delta, 0) + 1
+        if not votes:
+            return None
+        best_votes = max(votes.values())
+        best = [delta for delta, count in votes.items() if count == best_votes]
+        if best_votes < 2 or len(best) != 1:
+            return None
+        return best[0]
+
+    def _merge_content(
+        self,
+        previous: HistorySnapshot,
+        incoming: HistorySnapshot,
+    ) -> HistorySnapshot:
+        """Retain already-fetched history when a later hot capture shrinks."""
+        if (
+            not self._same_geometry(previous, incoming)
+            or not self._history_source_matches(previous, incoming)
+        ):
+            return incoming
+        delta = self._timeline_delta(previous.lines, incoming.lines)
+        if delta is None:
+            # A full-screen TUI redraw can leave no trustworthy text anchor.
+            # Preserve the known history and replace only the mutable live
+            # viewport. Appending every unaligned 300-line prefetch would
+            # duplicate a full screen every three seconds.
+            live_count = min(incoming.height, len(incoming.lines))
+            retained = previous.lines[:-min(previous.height, len(previous.lines))]
+            lines = retained + incoming.lines[-live_count:]
+        else:
+            start = min(0, delta)
+            end = max(len(previous.lines), delta + len(incoming.lines))
+            merged = [b""] * (end - start)
+            old_start = -start
+            merged[old_start:old_start + len(previous.lines)] = previous.lines
+            new_start = delta - start
+            # Prefer the fresher capture for the overlapping live viewport.
+            merged[new_start:new_start + len(incoming.lines)] = incoming.lines
+            lines = tuple(merged)
+        if len(lines) > self.history_limit:
+            lines = lines[-self.history_limit:]
+        return replace(incoming, lines=tuple(lines))
+
+    def _remember_content(
+        self, snapshot: HistorySnapshot,
+    ) -> HistorySnapshot:
         assert snapshot.pane_id is not None
+        previous = self.content_cache.get(snapshot.pane_id)
+        stored = (
+            self._merge_content(previous, snapshot)
+            if previous is not None
+            else snapshot
+        )
         # Reinsert an existing pane to keep insertion order as recency order.
         self.content_cache.pop(snapshot.pane_id, None)
-        self.content_cache[snapshot.pane_id] = snapshot
+        self.content_cache[snapshot.pane_id] = stored
         while len(self.content_cache) > _HISTORY_CONTENT_PANES:
             del self.content_cache[next(iter(self.content_cache))]
+        return stored
 
     def invalidate_routes(self) -> bool:
         """Drop pointer authority without discarding bounded pane content."""
@@ -1115,6 +1197,10 @@ class LocalHistoryView:
             cached,
             min(maximum, scroll_lines),
             loaded_limit,
+            exhausted=(
+                not cached.more_available
+                and loaded_limit >= _HISTORY_INITIAL_LINES
+            ),
         )
         self.viewports[route.pane_id] = viewport
         target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
@@ -1290,13 +1376,15 @@ class LocalHistoryView:
             ):
                 viewport.top_notified = True
                 info_message = (
-                    (
+                    f"History top · {self.history_limit:,}-line local limit"
+                    if viewport.loaded_limit >= self.history_limit
+                    else (
                         "History top · complete read-only session transcript loaded"
                         if viewport.snapshot.transcript_backed
                         else "History top · complete session history loaded"
                     )
                     if viewport.exhausted
-                    else f"History top · {self.history_limit:,}-line local limit"
+                    else None
                 )
             return HistoryAction(
                 protocol_frame=protocol_frame,
@@ -1425,12 +1513,13 @@ class LocalHistoryView:
         )
         if route is None or not self._same_geometry(route, snapshot):
             return HistoryAction()
-        self._remember_content(snapshot)
         viewport = self.viewports.get(pending.pane_id)
         if viewport is None:
+            self._remember_content(snapshot)
             return HistoryAction()
         maximum = max(0, len(snapshot.lines) - snapshot.height)
         if maximum == 0:
+            self._remember_content(snapshot)
             self.cancel_pane(pending.pane_id)
             return HistoryAction(restore_live=True)
         anchor = self._visible_lines(viewport)
@@ -1440,9 +1529,18 @@ class LocalHistoryView:
             # unique exact visible anchor survived. Keep the immutable hot
             # snapshot instead of jumping to newer or unrelated text.
             return HistoryAction()
-        viewport.snapshot = snapshot
-        viewport.offset = aligned_offset
-        viewport.loaded_limit = pending.target_lines
+        stored = self._remember_content(snapshot)
+        stored_offset = self._aligned_offset(stored, anchor)
+        if stored_offset is None:
+            # The raw response was valid, so this can only be an ambiguous
+            # cache merge. Preserve the user's frozen viewport and retry later.
+            return HistoryAction()
+        viewport.snapshot = stored
+        viewport.offset = stored_offset
+        viewport.loaded_limit = min(
+            self.history_limit,
+            max(pending.target_lines, len(stored.lines)),
+        )
         viewport.exhausted = not snapshot.more_available
         return HistoryAction(
             protocol_frame=self._extend_history(viewport),

@@ -91,7 +91,26 @@ def apply_claude_history_choice(
         if persistent
         else True
     )
-    return applied, policy if applied else current_override
+    if not applied:
+        return False, current_override
+    # A persistent choice must leave the settings file authoritative so an
+    # Options edit in the running Railmux UI takes effect on the next capture.
+    return True, None if persistent else policy
+
+
+def refresh_claude_history_override(
+    current_override: str | None,
+    persisted_at_choice: str | None,
+    current_persisted: str,
+) -> tuple[str | None, str | None]:
+    """Clear a one-connection choice after Options changes its baseline."""
+    if (
+        current_override is not None
+        and persisted_at_choice is not None
+        and current_persisted != persisted_at_choice
+    ):
+        return None, None
+    return current_override, persisted_at_choice
 
 
 _WATCHDOG_INTERVAL = 5.0
@@ -1681,6 +1700,7 @@ def _serve_attached(
     control_packets: deque[bytes] = deque()
     clipboard_decoder = _Osc52ClipboardDecoder()
     claude_history_override: str | None = None
+    claude_history_persisted_at_override: str | None = None
     input_closed = False
     last_input = time.monotonic()
     watchdog = tmux_health.FailureWatchdog.starting(
@@ -1841,6 +1861,15 @@ def _serve_attached(
                         continue
                     if message.kind is InputKind.REQUEST_HISTORY:
                         if len(control_packets) < 4:
+                            if claude_history_override is not None:
+                                (
+                                    claude_history_override,
+                                    claude_history_persisted_at_override,
+                                ) = refresh_claude_history_override(
+                                    claude_history_override,
+                                    claude_history_persisted_at_override,
+                                    Settings().claude_history_policy,
+                                )
                             try:
                                 request = decode_history_request(message.data)
                             except ValueError:
@@ -1857,6 +1886,15 @@ def _serve_attached(
                         continue
                     if message.kind is InputKind.PREFETCH_HISTORY:
                         if len(control_packets) < 4:
+                            if claude_history_override is not None:
+                                (
+                                    claude_history_override,
+                                    claude_history_persisted_at_override,
+                                ) = refresh_claude_history_override(
+                                    claude_history_override,
+                                    claude_history_persisted_at_override,
+                                    Settings().claude_history_policy,
+                                )
                             try:
                                 request_id, max_lines = decode_history_prefetch(
                                     message.data
@@ -1885,6 +1923,11 @@ def _serve_attached(
                                 persistent=persistent,
                                 current_override=claude_history_override,
                             )
+                        )
+                        claude_history_persisted_at_override = (
+                            Settings().claude_history_policy
+                            if applied and not persistent
+                            else None
                         )
                         queue_control_packet(
                             encode_claude_history_policy_result(

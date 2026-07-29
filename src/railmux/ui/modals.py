@@ -653,7 +653,7 @@ class _OptionRow(urwid.WidgetWrap):
 
 
 class OptionsModal(urwid.WidgetWrap):
-    """Full-sidebar product settings with immediate, persistent choices."""
+    """Full-sidebar product settings with explicit application timing."""
 
     _NAV_KEYS = {"up", "down", "page up", "page down", "home", "end"}
     _POLICY_LABELS = (
@@ -692,8 +692,8 @@ class OptionsModal(urwid.WidgetWrap):
         rows: list[urwid.Widget] = [
             urwid.Text(("title", "Layout retention")),
             urwid.Text(
-                "Choose whether custom pane proportions are saved when "
-                "Railmux exits. This does not resize the current workspace."
+                "Saved when Railmux exits; the current workspace is not "
+                "resized. No restart needed."
             ),
         ]
         rows.extend(self._build_group(
@@ -708,8 +708,8 @@ class OptionsModal(urwid.WidgetWrap):
             urwid.Divider(),
             urwid.Text(("title", "Codex auto-run (YOLO)")),
             urwid.Text(
-                "Controls new Codex launches. Running agents are unchanged. "
-                "Always bypasses approval prompts and sandboxing."
+                "Applies to future Codex launches; running agents are "
+                "unchanged. Always bypasses approvals and sandboxing."
             ),
         ])
         rows.extend(self._build_group(
@@ -724,8 +724,8 @@ class OptionsModal(urwid.WidgetWrap):
             urwid.Divider(),
             urwid.Text(("title", "Railmux updates")),
             urwid.Text(
-                "Checks PyPI once when the outer Railmux launcher starts. "
-                "Offline or failed checks never prevent startup."
+                "Applies on the next outer Railmux launch. Offline or failed "
+                "checks never block startup; no restart is needed now."
             ),
         ])
         rows.extend(self._build_group(
@@ -740,8 +740,8 @@ class OptionsModal(urwid.WidgetWrap):
             urwid.Divider(),
             urwid.Text(("title", "Claude history in railmux ssh")),
             urwid.Text(
-                "Choose smooth read-only local transcript scrolling or "
-                "Claude Code's native clickable history."
+                "Choose smooth local or Claude's clickable history. Current "
+                "railmux ssh connections adopt it on the next refresh."
             ),
         ])
         rows.extend(self._build_group(

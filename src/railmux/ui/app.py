@@ -4585,7 +4585,8 @@ class App:
                 return False
             self._layout_profile = profile
             self._set_status(
-                f"Layout retention: {self._policy_label(policy)}.")
+                f"Layout retention: {self._policy_label(policy)}; "
+                "applies when exiting.")
             return True
 
         def set_yolo(policy: str) -> bool:
@@ -4598,7 +4599,8 @@ class App:
             self._codex_yolo_runtime = False
             self._codex_yolo_prompt_handled = policy != "ask"
             self._set_status(
-                f"Codex auto-run: {self._policy_label(policy)}.")
+                f"Codex auto-run: {self._policy_label(policy)}; "
+                "applies to future launches.")
             return True
 
         def set_update(policy: str) -> bool:
@@ -4609,7 +4611,8 @@ class App:
                 )
                 return False
             self._set_status(
-                f"Railmux updates: {self._policy_label(policy)}.")
+                f"Railmux updates: {self._policy_label(policy)}; "
+                "applies on the next launch.")
             return True
 
         def set_claude_history(policy: str) -> bool:
@@ -4619,7 +4622,9 @@ class App:
                     "error",
                 )
                 return False
-            self._set_status(f"Claude SSH history: {policy}.")
+            self._set_status(
+                f"Claude SSH history: {policy}; active SSH connections "
+                "refresh automatically.")
             return True
 
         modal = OptionsModal(

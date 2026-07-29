@@ -82,10 +82,16 @@ state whenever that advertised capability boundary changes.
 Local SSH history is an overlay, not a pause in the live screen model. Each
 visible agent pane may own one immutable snapshot and offset; incoming live
 rows are painted first and every intersecting frozen rectangle is repainted in
-the same terminal write. Periodic prefetch may refresh routing and bounded
-cache content but must not move an existing viewport. Deep history begins with
-2000 physical lines and requests cumulative 2000-line expansions only as the
-viewport approaches the oldest loaded content. Expansion stops at the local
+the same terminal write. Periodic prefetch may refresh routing but must not
+move an existing viewport or replace a deeper cached timeline with its
+300-line hot suffix. For a stable pane, geometry, and history source, uniquely
+aligned snapshots are merged into one newest-bounded timeline; an unaligned
+full-screen redraw may replace only the mutable live viewport. Native Claude,
+local transcript, and undecided history are separate sources and are never
+merged. A rejected deep response does not mutate the reusable cache. Deep
+history begins with 2000 physical lines and requests cumulative 2000-line
+expansions only as the viewport approaches the oldest loaded content.
+Expansion stops at the local
 `[ssh].history_lines`/CLI cap (default 10000, bounded to 2000-20000) or when the
 server returns fewer lines than requested. This setting is local-only and is
 not an in-TUI Options authority. A deep response may replace its previous
@@ -109,10 +115,13 @@ the ordinary history overlay, and `native` forwards wheel input to Claude Code.
 The dialog offers persistent and current-invocation variants for both routes.
 The client waits for the helper's applied-success response before changing
 wheel ownership; a current-invocation choice is replayed after automatic
-reconnect without changing the settings file. The wait is bounded; on timeout
-the client refreshes the authoritative remote policy without clearing another
-pane's frozen viewport. The dialog, paired mouse press/release suppression,
-and status never enter tmux or alter another attached client.
+reconnect without changing the settings file. A later persistent Options
+change supersedes that connection override and becomes authoritative on the
+next history capture; it does not require a Railmux restart. The wait is
+bounded; on timeout the client refreshes the authoritative remote policy
+without clearing another pane's frozen viewport. The dialog, paired
+mouse press/release suppression, and status never enter tmux or alter another
+attached client.
 
 The SSH compatibility handshake precedes every tmux lookup, session creation,
 lock, PTY allocation, or attach. The remote reports a bounded package version,

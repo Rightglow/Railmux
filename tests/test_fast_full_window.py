@@ -320,7 +320,7 @@ def test_server_claude_history_choice_persists_only_when_requested():
         current_override="native",
         settings=settings,
     )
-    assert (applied, override) == (True, "local")
+    assert (applied, override) == (True, None)
     settings.set_claude_history_policy.assert_called_once_with("local")
 
     settings.reset_mock()
@@ -344,6 +344,18 @@ def test_server_failed_persistent_history_choice_keeps_previous_override():
         current_override="native",
         settings=settings,
     ) == (False, "native")
+
+
+def test_server_options_change_clears_only_a_this_time_history_override():
+    assert fast_display_server.refresh_claude_history_override(
+        "native", "local", "native"
+    ) == (None, None)
+    assert fast_display_server.refresh_claude_history_override(
+        "native", "local", "local"
+    ) == ("native", "local")
+    assert fast_display_server.refresh_claude_history_override(
+        None, None, "native"
+    ) == (None, None)
 
 
 def test_clipboard_payload_round_trips_and_surface_reencodes_osc52():
@@ -2141,7 +2153,131 @@ def test_periodic_prefetch_never_moves_an_existing_frozen_viewport():
 
     assert action == HistoryAction()
     assert view.overlays() == before
-    assert view.content_cache["%8"] == advanced
+    # A redraw without safe anchors updates only the mutable live viewport;
+    # it must not erase already captured history behind the frozen view.
+    assert view.content_cache["%8"].lines == (
+        b"old-0", b"old-1", b"old-2", b"old-3", b"old-4",
+        b"new-5", b"new-6", b"new-7",
+    )
+
+
+def test_periodic_hot_prefetch_does_not_shrink_a_reusable_deep_snapshot():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    hot_lines = tuple(f"line-{index}".encode() for index in range(300))
+    hot = HistorySnapshot(
+        first_id, "%8", 30, 0, 30, 3, hot_lines,
+        more_available=True,
+    )
+    view.accept_prefetch(HistoryBatch(first_id, (hot,)))
+    wheel = SgrMouseEvent(b"up", 64, 40, 2, True)
+    deep_action = view.wheel(wheel)
+    deep_id = decode_history_request(
+        InputFrameDecoder().feed(deep_action.protocol_frame)[0].data
+    )[0]
+    deep_lines = (
+        *(f"older-{index}".encode() for index in range(1700)),
+        *hot_lines,
+    )
+    view.accept(HistorySnapshot(
+        deep_id, "%8", 30, 0, 30, 3, deep_lines,
+        more_available=True,
+    ))
+    view.cancel_pane("%8")
+
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    advanced = HistorySnapshot(
+        second_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        (*hot_lines[25:], *(f"new-{index}".encode() for index in range(25))),
+        more_available=True,
+    )
+    view.accept_prefetch(HistoryBatch(second_id, (advanced,)))
+
+    assert len(view.content_cache["%8"].lines) == 2000
+    assert view.content_cache["%8"].lines[-1] == b"new-24"
+    reopened = view.wheel(wheel)
+    assert reopened.protocol_frame == b""
+    assert len(view.viewports["%8"].snapshot.lines) == 2000
+
+
+def test_local_history_cache_survives_remote_scrollback_shrinking():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    old = tuple(f"old-{index}".encode() for index in range(1000))
+    view.accept_prefetch(HistoryBatch(first_id, (
+        HistorySnapshot(first_id, "%8", 30, 0, 30, 3, old),
+    )))
+
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    # tmux retained only a short suffix after an alternate-screen redraw.
+    short = (*old[-100:], *(f"new-{index}".encode() for index in range(20)))
+    view.accept_prefetch(HistoryBatch(second_id, (
+        HistorySnapshot(second_id, "%8", 30, 0, 30, 3, short),
+    )))
+
+    stored = view.content_cache["%8"].lines
+    assert stored[:3] == old[:3]
+    assert stored[-20:] == tuple(f"new-{index}".encode() for index in range(20))
+    assert len(stored) == 1020
+
+
+def test_rolling_claude_transcript_retains_older_cached_rows():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    previous = tuple(f"turn-{index}".encode() for index in range(1000))
+    view.accept_prefetch(HistoryBatch(first_id, (
+        HistorySnapshot(
+            first_id, "%8", 30, 0, 30, 3, previous,
+            transcript_backed=True, transcript_available=True,
+        ),
+    )))
+
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    rolled = tuple(f"turn-{index}".encode() for index in range(250, 1100))
+    view.accept_prefetch(HistoryBatch(second_id, (
+        HistorySnapshot(
+            second_id, "%8", 30, 0, 30, 3, rolled,
+            transcript_backed=True, transcript_available=True,
+        ),
+    )))
+
+    assert view.content_cache["%8"].lines == tuple(
+        f"turn-{index}".encode() for index in range(1100)
+    )
+
+
+def test_unaligned_rejected_deep_response_does_not_replace_history_cache():
+    view = LocalHistoryView()
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    cached = HistorySnapshot(
+        first_id, "%8", 30, 0, 30, 3,
+        tuple(f"cached-{index}".encode() for index in range(10)),
+    )
+    view.accept_prefetch(HistoryBatch(first_id, (cached,)))
+    request = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+    request_id = decode_history_request(
+        InputFrameDecoder().feed(request.protocol_frame)[0].data
+    )[0]
+
+    action = view.accept(HistorySnapshot(
+        request_id, "%8", 30, 0, 30, 3,
+        tuple(f"unrelated-{index}".encode() for index in range(20)),
+    ))
+
+    assert action == HistoryAction()
+    assert view.content_cache["%8"] == cached
 
 
 def test_history_generations_reject_prefetch_and_deep_responses_after_invalidation():
