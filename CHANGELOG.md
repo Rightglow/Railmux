@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.16.dev202607290] - 2026-07-29
+
 ### Added
 
 - Let `railmux ssh` users drag within one visible agent pane to highlight and
@@ -1114,7 +1116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.15...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...HEAD
+[0.2.16.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16.dev202607290
 [0.2.15]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15
 [0.2.15.dev202607284]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...v0.2.15.dev202607284
 [0.2.15.dev202607283]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...v0.2.15.dev202607283
