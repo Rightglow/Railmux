@@ -89,6 +89,36 @@ def test_missing_provider_binary_warning_never_echoes_configured_path(
     assert secret_path not in message
 
 
+def test_cold_codex_index_sets_and_clears_sidebar_loading(monkeypatch):
+    class _Index:
+        def __init__(self):
+            self.has_snapshot = False
+            self.is_unavailable = False
+
+    monkeypatch.setattr("railmux.ui.app.BackgroundCodexIndex", _Index)
+    app = App.__new__(App)
+    app._codex_index = _Index()
+    app._projects_pane = MagicMock()
+    app._sessions_pane = MagicMock()
+
+    app._set_index_loading(CODEX_MODE)
+
+    app._projects_pane.set_loading.assert_called_once_with(True)
+    app._sessions_pane.set_loading.assert_called_once_with(True)
+
+    app._codex_index.has_snapshot = True
+    app._set_index_loading(CODEX_MODE)
+
+    app._projects_pane.set_loading.assert_called_with(False)
+    app._sessions_pane.set_loading.assert_called_with(False)
+
+    app._codex_index.has_snapshot = False
+    app._set_index_loading(CLAUDE_MODE)
+
+    app._projects_pane.set_loading.assert_called_with(False)
+    app._sessions_pane.set_loading.assert_called_with(False)
+
+
 def test_empty_codex_refresh_then_claude_restores_previous_project(monkeypatch):
     claude = _project("claude-a")
     app = _mode_app(monkeypatch, [claude], [])

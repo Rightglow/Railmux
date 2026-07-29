@@ -6369,6 +6369,11 @@ class App:
                     projects,
                     allow_missing_codex_metadata=(
                         allow_missing_codex_metadata),
+                    # Generation 0 cannot yet prove that Codex's current
+                    # rollout UUID is a rewind descendant of this resolved
+                    # marker. Immutable tmux identity was validated above;
+                    # defer only that metadata veto until generation 1.
+                    probe_live_writer=not allow_missing_codex_metadata,
                 )
             if running is None:
                 pre_launch_ids: frozenset[str] = frozenset()
@@ -6950,6 +6955,23 @@ class App:
                 self._current_mode_view_state().running_filter,
                 capture_focus=False,
             )
+        self._set_index_loading(mode)
+
+    def _set_index_loading(self, mode: AgentMode) -> None:
+        """Publish cold Codex generation state without inventing empty data."""
+        index = getattr(self, "_codex_index", None)
+        loading = (
+            mode.project_source == ProjectSource.CODEX
+            and isinstance(index, BackgroundCodexIndex)
+            and not index.has_snapshot
+            and not index.is_unavailable
+        )
+        projects_pane = getattr(self, "_projects_pane", None)
+        sessions_pane = getattr(self, "_sessions_pane", None)
+        if projects_pane is not None:
+            projects_pane.set_loading(loading)
+        if sessions_pane is not None:
+            sessions_pane.set_loading(loading)
 
     def _configured_mode_binary(self, mode: AgentMode) -> str:
         config = getattr(self, "_config", Config())
@@ -7414,6 +7436,7 @@ class App:
         self._consume_mode_refresh()
         mode_refresh_pending = self._mode_refresh_pending()
         mode = self._active_mode()
+        self._set_index_loading(mode)
         needs_liveness = (
             any(slot.pane_id is not None
                 for slot in self._agent_workspace().slots)

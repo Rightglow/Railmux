@@ -50,6 +50,23 @@ def test_empty_state_updates_on_empty_to_empty_provider_switch():
     assert "+ New project" in pane._walker[0].text
 
 
+def test_cold_index_is_not_rendered_as_empty_or_no_matches():
+    pane = ProjectsPane(
+        [], on_select=lambda _project: None, provider_label="Codex")
+    pane.set_filter("saved")
+
+    pane.set_loading(True)
+
+    assert "Indexing Codex sessions" in pane._walker[0].text
+    assert "no matches" not in pane._walker[0].text.lower()
+    assert pane.section_count == "…"
+
+    pane.set_loading(False)
+
+    assert "no matches" in pane._walker[0].text.lower()
+    assert pane.section_count == "0/0"
+
+
 # ── click vs double-click dispatch ──────────────────────────────────────
 
 def test_single_click_fires_on_select():

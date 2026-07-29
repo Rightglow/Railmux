@@ -1622,6 +1622,67 @@ def test_generation_zero_keeps_exact_codex_stamp_visible(monkeypatch):
     assert app._running[session_id].status == "busy"
 
 
+def test_generation_zero_keeps_resolved_rewind_marker_resolved(monkeypatch):
+    """A cold index cannot mistake a rewind descendant for another writer."""
+    cwd = Path("/tmp/codex-only")
+    root_id = "12345678-1234-1234-1234-1234567890ab"
+    leaf_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmux_name = "cx-new---abcdef-1"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.all_cwds.return_value = {}
+    app._codex_index.get.return_value = None
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    marker = orphan_marker.Marker(
+        mode_key="codex",
+        placeholder_key="__new__-abcdef-1",
+        tmux_name=tmux_name,
+        tmux_session_id="$42",
+        tmux_pane_id="%9",
+        owner=app._restart_identity,
+        cwd=cwd,
+        created_at=100.0,
+        creation_token="c" * 32,
+        phase="resolved",
+        session_id=root_id,
+    )
+    pane = tmux_ctl.PaneIdentity(
+        pane_id="%9",
+        pane_pid=999,
+        session_name=tmux_name,
+        session_id="$42",
+        window_id="@42",
+        dead=False,
+        width=80,
+        height=24,
+    )
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane_id: pane)
+    rollout_probe = MagicMock(return_value={leaf_id})
+    monkeypatch.setattr(tmux_ctl, "session_rollout_ids", rollout_probe)
+    exact_arg_probe = MagicMock(return_value=False)
+    monkeypatch.setattr(
+        tmux_ctl, "session_process_has_exact_arg", exact_arg_probe)
+    row = (
+        f"{tmux_name}\t{cwd}\t100\t$42\t%9\t"
+        f"{orphan_marker.encode(marker)}\t\n"
+    )
+
+    with patch("subprocess.check_output", return_value=row), patch(
+            "railmux.ui.app.list_projects", return_value=[]):
+        complete = app._discover_orphans(
+            allow_missing_codex_metadata=True)
+
+    assert complete is True
+    running = app._running[root_id]
+    assert running.tmux_name == tmux_name
+    assert running.key == root_id
+    assert running.status == "busy"
+    assert not running.is_placeholder
+    assert running.orphan == marker
+    rollout_probe.assert_not_called()
+    exact_arg_probe.assert_not_called()
+
+
 def test_first_codex_generation_revalidates_provisional_recovery():
     session_id = "12345678-1234-1234-1234-1234567890ab"
     app = _minimal_app()

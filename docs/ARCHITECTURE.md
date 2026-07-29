@@ -347,13 +347,21 @@ published snapshot.
 Compound operations pin one generation, including both query methods and
 `current_snapshot()`. Startup requests the first scan before recovery, but an
 exact live tmux marker/stamp must remain visible in Running even while the
-index is still at generation zero. Such an entry is provisional: the first
-coherent generation removes and re-adopts it so metadata can refine its label
-or reject a wrong cwd. A failed tmux probe, a generation with transient errors,
-an unavailable initial source, or clean metadata that has not exposed the
-actively-written rollout yet retains the provisional entry and instance
-recovery file for a later generation; it must never publish a temporary empty
-Running view.
+index is still at generation zero. In particular, a resolved marker whose
+immutable tmux session/pane identity validates stays resolved: live-writer UUID
+and rewind-lineage checks require the first coherent index generation and may
+not temporarily demote it to an unresolved placeholder. Such an entry is
+provisional: the first coherent generation removes and strictly re-adopts it so
+metadata can refine its label or reject a wrong cwd or writer.
+
+While that first generation is pending, Codex Projects and Sessions display an
+explicit `Indexing…` state with indeterminate section counts. Generation zero
+must never be rendered as an authoritative empty list, filtered no-match, or
+temporary empty Running view. This remains an in-memory startup state rather
+than a persistent metadata cache. A failed tmux probe, a generation with
+transient errors, an unavailable initial source, or clean metadata that has not
+exposed the actively-written rollout yet retains the provisional entry and
+instance recovery file for a later generation.
 
 A failed or incomplete tree walk retains the last known-good generation. A
 transient per-file error retains that file's cached metadata, publishes the

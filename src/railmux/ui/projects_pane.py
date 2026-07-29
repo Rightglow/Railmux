@@ -72,6 +72,7 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._provider_label = provider_label
         self._boxed = boxed
         self._filter = ""
+        self._loading = False
         self._selected_encoded_name: str | None = None
 
         self._new_row = _NewProjectRow(on_click=lambda: self._on_select(None))
@@ -110,7 +111,9 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         ]
         if not rows:
             text = (
-                "  (no matches — press / to edit, Ctrl-U to clear)"
+                f"Indexing {self._provider_label} sessions…"
+                if self._loading
+                else "  (no matches — press / to edit, Ctrl-U to clear)"
                 if self._filter
                 else (
                     f"No {self._provider_label} projects yet\n"
@@ -144,6 +147,13 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._all_projects = projects
         self._refresh_rows()
 
+    def set_loading(self, loading: bool) -> None:
+        """Distinguish an unpublished provider index from a real empty list."""
+        if self._loading == loading:
+            return
+        self._loading = loading
+        self._refresh_rows()
+
     def set_selected(self, encoded_name: str | None) -> None:
         if self._selected_encoded_name == encoded_name:
             return
@@ -169,6 +179,8 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
 
     @property
     def section_count(self) -> str:
+        if self._loading:
+            return "…"
         total = len(self._all_projects)
         if not self._filter:
             return str(total)

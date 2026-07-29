@@ -76,6 +76,27 @@ def test_empty_state_updates_for_current_provider():
     assert "Press n to start one" in pane._walker[0].text
 
 
+def test_cold_index_is_not_rendered_as_empty_sessions():
+    pane = SessionsPane(
+        on_select=lambda _session: None, provider_label="Codex")
+    project = _project()
+
+    pane.set_loading(True)
+    assert "Indexing Codex sessions" in pane._walker[0].text
+
+    pane.set_sessions(
+        project, [], running_ids=set(), favorite_ids=set())
+
+    assert "Indexing Codex sessions" in pane._walker[0].text
+    assert "No Codex sessions" not in pane._walker[0].text
+    assert pane.section_count == "…"
+
+    pane.set_loading(False)
+
+    assert "No Codex sessions yet" in pane._walker[0].text
+    assert pane.section_count == "0"
+
+
 def test_wheel_over_pinned_new_row_scrolls_session_list():
     project = _project()
     sessions = [

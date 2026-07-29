@@ -204,6 +204,7 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._sessions: list[SessionMeta] = []
         self._project: Project | None = None
         self._filter = ""
+        self._loading = False
         self._running_ids: set[str] = set()
         self._favorite_ids: set[str] = set()
         self._active_session_id: str | None = None
@@ -245,6 +246,8 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
 
     @property
     def section_count(self) -> str:
+        if self._loading:
+            return "…"
         total = len(self._sessions)
         if not self._filter:
             return str(total)
@@ -305,10 +308,24 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._restore_focus(prior_focus)
 
     def _no_project_text(self) -> str:
+        if self._loading:
+            return f"Indexing {self._provider_label} sessions…"
         return (
             f"Select a {self._provider_label} project above\n"
             "or choose + New project"
         )
+
+    def set_loading(self, loading: bool) -> None:
+        """Distinguish an unpublished provider index from a real empty list."""
+        if self._loading == loading:
+            return
+        self._loading = loading
+        self._rendered_data = None
+        if self._project is None:
+            self._walker[:] = [
+                urwid.Text(self._no_project_text(), align="center")]
+        else:
+            self._rerender_preserving_focus()
 
     def set_provider_label(self, label: str) -> None:
         """Repaint provider-aware onboarding text without losing pane state."""
@@ -401,7 +418,9 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
             ))
         if not rows:
             text = (
-                "  (no matches — press / to edit, Ctrl-U to clear)"
+                f"Indexing {self._provider_label} sessions…"
+                if self._loading
+                else "  (no matches — press / to edit, Ctrl-U to clear)"
                 if self._filter
                 else (
                     f"No {self._provider_label} sessions yet\n"

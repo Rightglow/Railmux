@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18.dev202607291] - 2026-07-29
+
+### Fixed
+
+- Keep exact live Codex sessions resolved during the cold startup index instead
+  of briefly showing rewind descendants as `unresolved`, then strictly
+  revalidate them against the first complete index generation.
+- Show an explicit Codex `Indexing…` state instead of temporarily empty
+  Projects and Sessions panes while the initial background scan is pending.
+
 ## [0.2.18.dev202607290] - 2026-07-29
 
 ### Changed
@@ -1195,7 +1205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607290...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607291...HEAD
+[0.2.18.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607290...v0.2.18.dev202607291
 [0.2.18.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18.dev202607290
 [0.2.17]: https://github.com/Rightglow/Railmux/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16
