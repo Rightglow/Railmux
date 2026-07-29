@@ -1,7 +1,25 @@
+import { useEffect } from "react";
+
 import CopyCommand from "./components/CopyCommand";
 import TerminalRecording from "./components/TerminalRecording";
 
 export default function Home() {
+  useEffect(() => {
+    const scrollToHash = () => {
+      const targetId = window.location.hash.slice(1);
+      if (!targetId) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        document.getElementById(targetId)?.scrollIntoView({ block: "start" });
+      });
+    };
+
+    scrollToHash();
+    window.addEventListener("hashchange", scrollToHash);
+    return () => window.removeEventListener("hashchange", scrollToHash);
+  }, []);
+
   return (
     <div className="site-shell">
       <header className="site-nav">

@@ -10,6 +10,22 @@ test.beforeAll(async () => {
   await mkdir(outputDir, { recursive: true });
 });
 
+test("honor direct section links after React mounts", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1280, height: 800 });
+
+  await page.goto("./#install");
+
+  const install = page.locator("#install");
+  await expect(install).toBeVisible();
+  await expect
+    .poll(async () => install.evaluate((element) => {
+      const top = element.getBoundingClientRect().top;
+      return top >= 70 && top < window.innerHeight;
+    }))
+    .toBe(true);
+});
+
 test("reserve compact projection for the mobile recording", async () => {
   const headers = await Promise.all(
     [

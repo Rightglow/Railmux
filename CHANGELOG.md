@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Make the website's session-resume cue visibly animate both clicks, and stop
   presenting keyboard-only Quit confirmations as mouse-clickable actions.
+- Streamline the README quick start around prerequisites, installation, and
+  SSH; add macOS-friendly user-script `PATH` recovery and explain that
+  persistent first-run choices remain editable in **Options**.
+
+### Fixed
+
+- Collapse same-project Codex rewind forks into one current session row while
+  retaining every provider UUID for exact recovery, resume, status, rename,
+  favorite, and deletion operations.
+- Treat a live Codex writer's newest rewind fork as the same persisted running
+  session during soft restart, instead of degrading a resolved binding to
+  `unresolved` or allowing a duplicate process to start.
+- Honor direct website section links such as `/#install` after the React
+  application mounts, with fixed-navigation spacing and browser regression
+  coverage.
 
 ## [0.2.15] - 2026-07-28
 

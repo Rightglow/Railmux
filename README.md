@@ -47,46 +47,50 @@ agents without losing their context.
 
 ## Quick start
 
+Railmux requires Python 3.9+, `tmux`, `less`, and Claude Code or Codex on
+`PATH`. The two agent CLIs are independent, so either one is enough to start.
+
 ```bash
 pip install railmux
 # or: pip3 install railmux
 railmux
 ```
 
-To open Railmux on a remote machine through its latest-state SSH display:
+If installation succeeds but your shell says `railmux: command not found`,
+the Python user scripts directory is not on `PATH`—this is especially common
+with user-level Python installs on macOS. Add it for the current shell, then
+put the same line in `~/.zshrc` (macOS default) or `~/.bashrc`:
 
 ```bash
-pip install railmux            # on the local machine
+export PATH="$(python3 -m site --user-base)/bin:$PATH"
+```
+
+If `tmux` is missing, an interactive Railmux launch can offer to install it
+with Homebrew on macOS or `apt-get` on Debian/Ubuntu/WSL, always after showing
+the exact command and asking for confirmation. See
+[FAQ 5](#5-pip-reports-externally-managed-environment) when system Python
+requires a virtual environment.
+
+Preference prompts appear only when relevant—for updates, Codex auto-run,
+layout retention, or Claude history over `railmux ssh`. Persistent choices are
+not permanent traps: press `o`, or choose **More → Options**, to change them
+later. One-time safety confirmations such as dependency installation and
+session deletion are intentionally asked at the action itself.
+
+For the responsive, locally cached SSH display, install Railmux on your local
+machine and connect with:
+
+```bash
 railmux ssh your-server
 ```
 
-The remote machine needs Python 3.9+ and `tmux`. If Railmux or its SSH display
-dependency is missing remotely, the local client asks before installing the
-matching version into the remote user environment; it never uses `sudo`.
-
-Requires Python 3.9+, `tmux`, `less`, and at least one supported agent CLI on
-`PATH`. Claude Code and Codex are independent: a missing provider does not stop
-you from using the other one.
-
-If `tmux` is missing, an interactive Railmux launch can offer to install it
-with Homebrew on macOS or `apt-get` on Debian/Ubuntu/WSL. Railmux shows the
-exact command and requires explicit confirmation (default: no); it never
-installs Homebrew itself or modifies the system during non-interactive runs.
-Other common Linux package managers receive a copyable installation command.
-
-Railmux always launches or attaches its workspace on a dedicated tmux socket,
-including when invoked from inside another tmux client. This isolates Railmux's
-sessions, bindings, hooks, and SSH display traffic from the
-default tmux server. Sessions left on the historical default socket by an older
-Railmux release remain visible in the same Running sidebar with a `legacy ·
-restart recommended` label. Opening one does not resize it; automatic exit
-cleanup preserves it, while an explicit Kill still works after exact identity
-validation. It does not move, delete, or rewrite provider session files under
-`~/.codex` or `~/.claude`; sessions can still be resumed normally. Run
-`railmux doctor` for a privacy-safe dependency and environment report when
-setup does not behave as expected. Multiple terminal windows may share one
-managed workspace; see the important shared-focus and shared-layout limits in
-[FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows).
+The remote needs Python 3.9+ and `tmux`. With permission, the local client can
+install a matching Railmux into the remote user environment; it never uses
+`sudo`. Railmux keeps its managed tmux workspace isolated from your default
+tmux server and never rewrites provider histories under `~/.codex` or
+`~/.claude`. Run `railmux doctor` for a privacy-safe setup report. Multiple
+terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
+for focus and layout limits.
 
 ## Keys
 
