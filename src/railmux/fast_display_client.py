@@ -548,6 +548,7 @@ class TerminalSurface:
         self.stream = stream
         self.mouse = mouse
         self.active = False
+        self.interaction_active = False
         self.mouse_active = False
         self.cursor_hidden = False
         self.terminal_modes = TerminalMode.NONE
@@ -595,13 +596,41 @@ class TerminalSurface:
     def show_startup(self, size: os.terminal_size) -> None:
         """Paint startup feedback only on the recoverable alternate screen."""
         self.set_physical_size(size)
-        if self.active:
+        if self.active and not self.interaction_active:
             return
         self.start(interactive=False)
         self.stream.write(
             render_startup_surface(size.columns, size.lines).encode("utf-8")
         )
         self.stream.flush()
+        self.interaction_active = False
+
+    def begin_interaction(self) -> None:
+        """Reveal cooked-mode setup prompts without leaving startup cleanup.
+
+        Keeping prompts on the same alternate screen avoids a terminal race
+        where restoring the primary screen can leave the startup curtain
+        visible over ``input()``.  The complete setup transcript remains
+        visible until attach succeeds, then ``show_startup`` replaces it; an
+        error or cancellation still restores the untouched primary screen.
+        """
+        self.start(interactive=False)
+        if self.interaction_active:
+            return
+        controls: list[bytes] = [b"\033[0m\033[?7h\033[?25h"]
+        if self.terminal_modes & TerminalMode.BRACKETED_PASTE:
+            controls.append(b"\033[?2004l")
+        if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
+            controls.append(b"\033[?1004l")
+        if self.mouse_active:
+            controls.append(b"\033[?1002l\033[?1006l")
+        controls.append(b"\033[2J\033[H")
+        self.stream.write(b"".join(controls))
+        self.stream.flush()
+        self.terminal_modes = TerminalMode.NONE
+        self.mouse_active = False
+        self.cursor_hidden = False
+        self.interaction_active = True
 
     def show_local_status(self, message: str, *, level: str = "info") -> None:
         """Show local feedback without erasing Railmux's status-left brand."""
@@ -954,6 +983,7 @@ class TerminalSurface:
         self.mouse_active = False
         self.cursor_hidden = False
         self.active = False
+        self.interaction_active = False
 
 
 def _remote_server_args(
@@ -1572,6 +1602,7 @@ def prepare_remote_process(
     current_size: os.terminal_size,
     *,
     before_interaction: Callable[[], None] | None = None,
+    before_local_restart: Callable[[], None] | None = None,
 ) -> subprocess.Popen:
     """Resolve compatibility and consent before the remote attaches to tmux."""
 
@@ -1629,6 +1660,8 @@ def prepare_remote_process(
             if decision.action == "upgrade_local":
                 _stop_unstarted_remote(process)
                 assert decision.install_version is not None
+                if before_local_restart is not None:
+                    before_local_restart()
                 _upgrade_local_and_restart(decision.install_version, args.raw_argv)
             if decision.action == "prompt" and decision.prompt == "remote_install":
                 assert decision.reason is not None
@@ -1827,8 +1860,14 @@ def run(args: argparse.Namespace) -> int:
         process = prepare_remote_process(
             args,
             current_size,
-            before_interaction=surface.close,
+            before_interaction=surface.begin_interaction,
+            before_local_restart=surface.close,
         )
+    except KeyboardInterrupt:
+        surface.close()
+        recorder.finish("startup_failed", SshDisplayStats())
+        print("\nrailmux ssh: cancelled during remote setup", file=sys.stderr)
+        return 130
     except BaseException:
         surface.close()
         recorder.finish("startup_failed", SshDisplayStats())

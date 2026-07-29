@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607291] - 2026-07-29
+
+### Fixed
+
+- Keep `railmux ssh` compatibility and update prompts visibly on the
+  recoverable startup screen instead of switching terminal buffers underneath
+  `Restoring your workspace`.
+- Show installation output after consent, restore the primary terminal before
+  restarting an upgraded local client, and repaint the startup screen only
+  when setup has finished.
+- Let `Ctrl-C` cancel a stalled remote setup cleanly while restoring the local
+  terminal and leaving the remote Railmux session and agents intact.
+
 ## [0.2.19.dev202607290] - 2026-07-29
 
 ### Added
@@ -1295,7 +1308,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607290...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607291...HEAD
+[0.2.19.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607290...v0.2.19.dev202607291
 [0.2.19.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19.dev202607290
 [0.2.18]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18
 [0.2.18.dev202607293]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607292...v0.2.18.dev202607293

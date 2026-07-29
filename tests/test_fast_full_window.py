@@ -1086,9 +1086,16 @@ def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
         lambda _self: events.append(("close", None)),
     )
 
-    def fail_after_surface(_args, size, *, before_interaction):
+    def fail_after_surface(
+        _args,
+        size,
+        *,
+        before_interaction,
+        before_local_restart,
+    ):
         events.append(("preflight", size))
         assert callable(before_interaction)
+        assert callable(before_local_restart)
         raise fast_display_client.ProbeError("stop")
 
     monkeypatch.setattr(
@@ -1103,6 +1110,48 @@ def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
         ("preflight", os.terminal_size((105, 22))),
         ("close", None),
     ]
+
+
+def test_ctrl_c_during_masked_remote_setup_restores_terminal(
+    monkeypatch,
+    capsys,
+):
+    events = []
+    stdin = MagicMock()
+    stdout = MagicMock()
+    stdin.isatty.return_value = True
+    stdout.isatty.return_value = True
+    stdout.fileno.return_value = 9
+    monkeypatch.setattr(fast_display_client.sys, "stdin", stdin)
+    monkeypatch.setattr(fast_display_client.sys, "stdout", stdout)
+    monkeypatch.setattr(fast_display_client, "load_config", lambda: MagicMock())
+    monkeypatch.setattr(
+        fast_display_client.shutil, "which", lambda _name: "/usr/bin/ssh"
+    )
+    monkeypatch.setattr(
+        fast_display_client,
+        "wait_for_usable_terminal_size",
+        lambda _fd: os.terminal_size((105, 22)),
+    )
+    monkeypatch.setattr(
+        TerminalSurface,
+        "show_startup",
+        lambda _self, _size: events.append("surface"),
+    )
+    monkeypatch.setattr(
+        TerminalSurface,
+        "close",
+        lambda _self: events.append("close"),
+    )
+    monkeypatch.setattr(
+        fast_display_client,
+        "prepare_remote_process",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt),
+    )
+
+    assert fast_display_client.run(parse_client_args(["server"])) == 130
+    assert events == ["surface", "close"]
+    assert "cancelled during remote setup" in capsys.readouterr().err
 
 
 def test_same_width_short_resize_is_only_a_local_projection():
@@ -3332,6 +3381,48 @@ def test_startup_surface_uses_alternate_screen_and_restores_primary():
     assert painted.endswith(b"\033[?1049l")
 
 
+def test_startup_interaction_stays_visible_and_returns_to_restoring():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    size = os.terminal_size((80, 24))
+
+    surface.show_startup(size)
+    output.seek(0)
+    output.truncate()
+    surface.begin_interaction()
+    output.write(b"Upgrade local Railmux? [y/N] y\r\n")
+    surface.show_startup(size)
+
+    painted = output.getvalue()
+    assert b"\033[?1049l" not in painted
+    assert b"\033[2J\033[H" in painted
+    assert b"\033[?25h" in painted
+    assert b"Upgrade local Railmux? [y/N] y" in painted
+    assert painted.endswith(
+        fast_display_client.render_startup_surface(
+            size.columns, size.lines
+        ).encode("utf-8")
+    )
+    assert not surface.interaction_active
+
+
+def test_repeated_startup_prompt_keeps_previous_install_output_visible():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    size = os.terminal_size((80, 24))
+
+    surface.show_startup(size)
+    surface.begin_interaction()
+    output.seek(0)
+    output.truncate()
+    output.write(b"Remote user-site install failed\r\n")
+    surface.begin_interaction()
+
+    painted = output.getvalue()
+    assert painted == b"Remote user-site install failed\r\n"
+    assert surface.interaction_active
+
+
 def test_first_interactive_paint_activates_mouse_after_startup():
     output = io.BytesIO()
     surface = TerminalSurface(output)
@@ -3728,6 +3819,48 @@ def test_newer_remote_protocol_can_upgrade_and_restart_local_client(monkeypatch)
     with pytest.raises(Restarted):
         prepare_remote_process(args, os.terminal_size((120, 40)))
 
+    assert process.terminated
+
+
+def test_local_upgrade_reveals_prompt_then_restores_primary_before_exec(
+    monkeypatch,
+):
+    process = _PreflightProcess()
+    args = parse_client_args(["server"])
+    events = []
+    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
+    monkeypatch.setattr(
+        fast_display_client,
+        "await_remote_startup",
+        lambda _process: RemoteStartup(
+            RemoteStartKind.HELLO,
+            RemoteHello("999.0", PROTOCOL_VERSION + 1, True),
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_client,
+        "_confirm",
+        lambda _question: events.append("confirm") or True,
+    )
+
+    class Restarted(Exception):
+        pass
+
+    def restart(_version, _raw_args):
+        events.append("restart")
+        raise Restarted
+
+    monkeypatch.setattr(fast_display_client, "_upgrade_local_and_restart", restart)
+
+    with pytest.raises(Restarted):
+        prepare_remote_process(
+            args,
+            os.terminal_size((120, 40)),
+            before_interaction=lambda: events.append("reveal"),
+            before_local_restart=lambda: events.append("restore"),
+        )
+
+    assert events == ["reveal", "confirm", "restore", "restart"]
     assert process.terminated
 
 
