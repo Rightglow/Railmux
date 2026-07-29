@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.16.dev202607291] - 2026-07-29
+
 ### Fixed
 
 - Keep local `railmux ssh` drag-copy feedback in status-right so it no longer
