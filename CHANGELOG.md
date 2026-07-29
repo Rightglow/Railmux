@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607290] - 2026-07-29
+
+### Added
+
+- Include a privacy-safe summary of the most recent `railmux ssh` connection
+  in `railmux doctor`, with bounded frame, transfer, reconnect, and local
+  history counters but no host, session, path, content, or raw-error data.
+- Declare shared setting validation and activation boundaries for local SSH
+  history, Claude history ownership, update policy, Codex auto-run, and layout
+  retention.
+
+### Changed
+
+- Split terminal input, pane-bounded selection, and local history state out of
+  the SSH client lifecycle so each state machine can be tested independently.
+- Resolve SSH package/protocol compatibility through a pure, re-entrant
+  decision layer while retaining exact protocol equality as the compatibility
+  authority.
+- Stop repeating the 300-line periodic history capture after an accepted
+  snapshot until newer screen output can have made it stale; route changes,
+  reconnects, and policy recovery still refresh immediately.
+
+### Fixed
+
+- Verify that a fresh process using the current Python actually imports an
+  accepted update before restarting, avoiding restarts into the wrong
+  `site-packages`.
+- Prevent an older failed SSH startup from overwriting diagnostics owned by a
+  newer attached client.
+
 ## [0.2.18] - 2026-07-29
 
 ### Added
@@ -1265,7 +1295,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607290...HEAD
+[0.2.19.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19.dev202607290
 [0.2.18]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18
 [0.2.18.dev202607293]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607292...v0.2.18.dev202607293
 [0.2.18.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607291...v0.2.18.dev202607292

@@ -7,6 +7,10 @@ from railmux.diagnostics import (
     _tool_diagnostic,
     run_doctor,
 )
+from railmux.ssh_display_diagnostics import (
+    SshDisplayDiagnostic,
+    SshDisplayStats,
+)
 from railmux.tmux_health import TmuxIncident
 
 
@@ -68,6 +72,26 @@ def test_doctor_report_is_useful_and_redacts_user_values(
         "railmux.diagnostics.tmux_health.incident_age",
         lambda _recorded: "2 minutes ago",
     )
+    monkeypatch.setattr(
+        "railmux.diagnostics.read_ssh_display_diagnostic",
+        lambda: SshDisplayDiagnostic(
+            status="recorded",
+            client_version="0.2.18",
+            protocol=12,
+            phase="finished",
+            outcome="remote_detach",
+            age="2_minutes",
+            stats=SshDisplayStats(
+                frames=8,
+                painted_rows=20,
+                wire_bytes=1234,
+                reconnect_attempts=2,
+                reconnect_successes=1,
+                history_prefetch_requests=3,
+                history_deep_requests=1,
+            ),
+        ),
+    )
     output = StringIO()
 
     assert run_doctor(
@@ -94,6 +118,10 @@ def test_doctor_report_is_useful_and_redacts_user_values(
     assert "true-colour=no" in report
     assert "Config: ~/.config/railmux/config.toml; valid=yes" in report
     assert "Preferred agent display: swap" in report
+    assert "Most recent railmux ssh (host not recorded)" in report
+    assert "remote_detach" in report
+    assert "frames=8" in report
+    assert "reconnects=1/2" in report
     assert "Claude data: <custom>" in report
     assert "Privacy:" in report
     assert "review before sharing" in report
@@ -184,6 +212,18 @@ def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
         "railmux.diagnostics.tmux_health.incident_age",
         lambda _recorded: "2 minutes ago",
     )
+    monkeypatch.setattr(
+        "railmux.diagnostics.read_ssh_display_diagnostic",
+        lambda: SshDisplayDiagnostic(
+            status="recorded",
+            client_version="0.2.18",
+            protocol=12,
+            phase="finished",
+            outcome="local_disconnect",
+            age="under_1_minute",
+            stats=SshDisplayStats(frames=5, wire_bytes=900),
+        ),
+    )
     output = StringIO()
 
     assert run_doctor(
@@ -199,7 +239,33 @@ def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
     ) == 0
 
     payload = json.loads(output.getvalue())
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
+    assert set(payload["ssh_display"]) == {
+        "age",
+        "client_version",
+        "outcome",
+        "phase",
+        "protocol",
+        "stats",
+        "status",
+    }
+    assert set(payload["ssh_display"]["stats"]) == {
+        "duration_ms",
+        "first_frame_ms",
+        "frames",
+        "history_anchor_rejects",
+        "history_deep_requests",
+        "history_prefetch_requests",
+        "history_timeouts",
+        "keyframes",
+        "painted_rows",
+        "patches",
+        "reached_first_frame",
+        "reconnect_attempts",
+        "reconnect_successes",
+        "wire_bytes",
+    }
+    assert payload["ssh_display"]["outcome"] == "local_disconnect"
     assert payload["dedicated_tmux"] == {
         "candidate_count": None,
         "context": "outside",

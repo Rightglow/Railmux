@@ -403,7 +403,9 @@ The doctor command works even when `tmux` is missing. It reports component versi
 hints, configuration health, dedicated-server reachability, watchdog state,
 the number of legacy candidates on the default server, the age and bounded
 category of the last recorded tmux incident, and whether provider data
-directories are accessible. Its output is designed for issue
+directories are accessible. When available, it also summarizes the most recent
+`railmux ssh` connection with bounded frame, reconnect, transfer, and history
+counters; the host is deliberately not recorded. Its output is designed for issue
 reports: it does not include hostnames, usernames, session IDs, transcripts,
 credentials, environment values, configured commands, socket paths, or raw
 custom paths.
@@ -556,7 +558,9 @@ The default remote session is started automatically when absent. `Ctrl-B d`
 detaches normally; `Ctrl-]` is an emergency local disconnect. Mouse forwarding
 is on by default. The client refreshes a 300-line hot cache for each agent pane;
 wheel-up displays it immediately and loads the first 2000 lines in the
-background. When scrolling approaches the oldest loaded content, Railmux
+background. Once that periodic cache is current, Railmux waits for new screen
+output before capturing it again; reconnects and route changes still refresh
+immediately. When scrolling approaches the oldest loaded content, Railmux
 fetches another 2000-line cumulative page until it reaches the local history
 cap. The default cap is 10000 lines; set `history_lines` under `[ssh]` in
 `~/.config/railmux/config.toml`, or override it for one connection:

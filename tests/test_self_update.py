@@ -121,6 +121,7 @@ def test_ask_this_time_updates_without_persisting(monkeypatch):
             returncode=0
         )
     )
+    monkeypatch.setattr(self_update, "installed_version_matches", lambda _v: True)
 
     class Restarted(Exception):
         pass
@@ -147,6 +148,7 @@ def test_ssh_upgrade_restarts_the_full_user_command(monkeypatch):
             returncode=0
         )
     )
+    monkeypatch.setattr(self_update, "installed_version_matches", lambda _v: True)
 
     class Restarted(Exception):
         pass
@@ -266,3 +268,37 @@ def test_upgrade_argv_uses_user_site_only_outside_venv(monkeypatch):
         "/usr/bin/python3", "-m", "pip", "install", "--upgrade",
         "railmux==2.0",
     ]
+
+
+def test_fresh_process_version_uses_same_interpreter_and_import_rules(monkeypatch):
+    run = MagicMock(
+        return_value=MagicMock(returncode=0, stdout="noise\n2.0\n")
+    )
+    monkeypatch.setattr(self_update.sys, "executable", "/python/current")
+    monkeypatch.setattr(self_update.subprocess, "run", run)
+
+    assert self_update.fresh_process_version() == "2.0"
+    argv = run.call_args.args[0]
+    assert argv[:2] == ["/python/current", "-c"]
+    assert not any(flag in argv for flag in ("-I", "-E", "-S"))
+
+
+def test_successful_pip_without_matching_fresh_import_does_not_restart(
+    monkeypatch, capsys,
+):
+    settings = MagicMock(update_policy="always")
+    monkeypatch.setattr(self_update, "latest_release", lambda: "9.0")
+    monkeypatch.setattr(self_update, "installation_is_editable", lambda: False)
+    monkeypatch.setattr(
+        self_update.subprocess,
+        "run",
+        lambda *_args, **_kwargs: MagicMock(returncode=0),
+    )
+    monkeypatch.setattr(self_update, "installed_version_matches", lambda _v: False)
+    restart = MagicMock()
+    monkeypatch.setattr(self_update, "_restart", restart)
+
+    self_update.maybe_upgrade_before_launch((), settings)
+
+    restart.assert_not_called()
+    assert "fresh Railmux process did not import version 9.0" in capsys.readouterr().err

@@ -69,6 +69,14 @@ versions and counts, booleans, coarse incident age, home-relative paths, or the
 literal `<custom>`. Neither renderer may expose hostnames, usernames, session
 or pane IDs, transcripts, environment values, configured commands, socket
 paths, credentials, or raw custom paths.
+The same snapshot includes one optional, local `railmux ssh` record from the
+private runtime directory. A stable lock file protects atomic replacement;
+the newest attach owns an opaque internal token, so an older client's final
+write cannot overwrite it. Doctor exposes only package/protocol versions,
+coarse age, bounded counters, and a fixed outcome. It never records the SSH
+destination, arguments, session/pane identity, content, paths, or raw errors.
+An `in_progress` record is not treated as a lifecycle authority: it may denote
+a live connection or one that ended before recording its outcome.
 
 The SSH display's headless terminal must implement every screen-content
 operation that its private tmux client advertises through `TERM`; sending a
@@ -84,7 +92,10 @@ visible agent pane may own one immutable snapshot and offset; incoming live
 rows are painted first and every intersecting frozen rectangle is repainted in
 the same terminal write. Periodic prefetch may refresh routing but must not
 move an existing viewport or replace a deeper cached timeline with its
-300-line hot suffix. For a stable pane, geometry, and history source, uniquely
+300-line hot suffix. After a periodic snapshot is accepted, further periodic
+captures are suppressed until a newer screen update can have made that cache
+stale; route changes, reconnect, and bounded policy-recovery refreshes remain
+immediate. For a stable pane, geometry, and history source, uniquely
 aligned snapshots are merged into one newest-bounded timeline; an unaligned
 full-screen redraw may replace only the mutable live viewport. Native Claude,
 local transcript, and undecided history are separate sources and are never
@@ -143,8 +154,9 @@ may create the fixed `~/.local/share/railmux/ssh-venv` and install there. The
 bootstrap probes that path without PATH changes; failed setup never deletes or
 replaces an existing environment.
 The local upgrade uses its current Python environment and re-execs the original
-`railmux ssh` invocation only after pip succeeds. Failure leaves tmux untouched
-and prints a reproducible manual command.
+`railmux ssh` invocation only after pip succeeds and a fresh process using that
+same interpreter imports the requested exact version. Failure or an import
+mismatch leaves tmux untouched and prints a reproducible manual command.
 
 Before that cooked-mode handshake begins, the local client paints the same
 terminal-native workspace-restoration surface as a direct launch. It is local
@@ -239,6 +251,11 @@ change for layout retention. Changing either policy never mutates a running
 agent or the current pane geometry. A current-run YOLO choice remains in memory;
 a next-launch-only layout profile is removed from the same TOML file only after
 successful application.
+Legal policy sets and activation boundaries are declared once in
+`setting_contracts.py`: SSH history capacity applies to the next local SSH
+invocation, persistent Claude history applies to the next remote history
+refresh (and subsequent connections), and the remaining saved policies apply
+only at their documented launch/exit boundary.
 
 The three lists use horizontal labelled rules instead of independent boxes, so
 adjacent section borders do not consume duplicate terminal rows. The sidebar is

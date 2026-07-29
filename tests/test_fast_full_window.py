@@ -54,37 +54,44 @@ from railmux.fast_display_server import terminal_modes_for_screen
 from railmux import fast_display_client, fast_display_server
 from railmux.fast_display_client import (
     AppliedScreen,
-    HistoryAction,
     LOCAL_ESCAPE,
-    LocalHistoryView,
-    LocalTextSelection,
     RemoteHello,
     RemoteAttachKind,
     RemoteStartKind,
     RemoteStartup,
     ScreenModel,
-    SelectionSource,
-    SgrMouseEvent,
-    TerminalInputDecoder,
     TerminalSurface,
     UpdateKind as ClientUpdateKind,
     build_ssh_argv,
     build_ssh_install_argv,
     build_ssh_private_venv_install_argv,
     await_remote_startup,
-    coalesce_forwarded_wheel,
     encode_input as encode_client_input,
     encode_keyframe_request as encode_client_keyframe_request,
     encode_resize as encode_client_resize,
-    input_may_change_routes,
-    page_key_direction,
     parse_args as parse_client_args,
     parse_remote_hello,
     prepare_remote_process,
     remote_install_help,
     screen_input_may_change_routes,
-    split_page_key_input,
     split_local_escape,
+)
+from railmux import fast_display_history
+from railmux.fast_display_history import (
+    HistoryAction,
+    LocalHistoryView,
+    PeriodicPrefetchGate,
+    coalesce_forwarded_wheel,
+    input_may_change_routes,
+)
+from railmux.fast_display_input import (
+    LocalTextSelection,
+    SelectionAction,
+    SelectionSource,
+    SgrMouseEvent,
+    TerminalInputDecoder,
+    page_key_direction,
+    split_page_key_input,
 )
 
 
@@ -454,7 +461,7 @@ def test_local_text_selection_copies_and_highlights_one_visible_pane():
     drag = selection.pointer_event(SgrMouseEvent(b"drag", 32, 8, 1, True), None)
     release = selection.pointer_event(SgrMouseEvent(b"up", 0, 8, 1, False), None)
 
-    assert drag == fast_display_client.SelectionAction(handled=True, repaint=True)
+    assert drag == SelectionAction(handled=True, repaint=True)
     assert release.copy_data == b"Hello"
     assert selection.segments() == ((0, 3, b"Hello"),)
     assert selection.active is True
@@ -767,7 +774,7 @@ def test_terminal_surface_projects_short_local_viewport_from_logical_bottom():
         os.terminal_size((105, 22)),
     )
     assert screen is not None
-    screen = fast_display_client.replace(screen, cursor_x=7, cursor_y=20, clear=True)
+    screen = replace(screen, cursor_x=7, cursor_y=20, clear=True)
     stream = io.BytesIO()
     surface = TerminalSurface(stream)
     surface.set_physical_size(os.terminal_size((105, 4)))
@@ -791,7 +798,7 @@ def test_terminal_surface_clips_projected_patches_overlays_and_cursor():
         os.terminal_size((20, 15)),
     )
     assert screen is not None
-    screen = fast_display_client.replace(
+    screen = replace(
         screen, cursor_y=2, changed_rows=(2, 11, 14), clear=False
     )
     overlay = HistorySnapshot(
@@ -847,7 +854,7 @@ def test_compact_status_row_finds_styled_top_or_bottom_bar():
 
     assert (
         fast_display_client.compact_status_row(
-            fast_display_client.replace(
+            replace(
                 screen,
                 rows=(compact, b"", b"", b""),
             )
@@ -856,7 +863,7 @@ def test_compact_status_row_finds_styled_top_or_bottom_bar():
     )
     assert (
         fast_display_client.compact_status_row(
-            fast_display_client.replace(
+            replace(
                 screen,
                 rows=(b"", b"", b"", compact),
             )
@@ -2154,7 +2161,7 @@ def test_lost_deep_history_request_retries_after_a_bounded_timeout():
 
     retry = view.wheel(
         wheel_up,
-        now=2.0 + fast_display_client._HISTORY_DEEP_TIMEOUT,
+        now=2.0 + fast_display_history._HISTORY_DEEP_TIMEOUT,
     )
     retry_request = decode_history_request(
         InputFrameDecoder().feed(retry.protocol_frame)[0].data
@@ -2176,6 +2183,25 @@ def test_lost_deep_history_request_retries_after_a_bounded_timeout():
         == HistoryAction()
     )
     assert retry_request[0] in view._deep_pending
+
+
+def test_periodic_prefetch_waits_for_new_screen_content_after_accept():
+    gate = PeriodicPrefetchGate()
+
+    assert gate.should_request()
+    gate.sent(7)
+    gate.accepted(7, 7)
+    assert not gate.should_request()
+
+    gate.screen_updated()
+    assert gate.should_request()
+    gate.sent(8)
+    # A stale or overwritten response cannot quiet future prefetches.
+    gate.accepted(8, 9)
+    assert gate.should_request()
+
+    gate.reset()
+    assert gate.should_request()
 
 
 def test_deep_history_response_without_anchor_does_not_jump_viewport():
@@ -2783,8 +2809,8 @@ def test_screen_input_route_detection_distinguishes_sidebar_and_agent_cursor():
         os.terminal_size((80, 4)),
     )
     assert screen is not None
-    sidebar = fast_display_client.replace(screen, cursor_x=5, cursor_y=1)
-    agent = fast_display_client.replace(screen, cursor_x=40, cursor_y=1)
+    sidebar = replace(screen, cursor_x=5, cursor_y=1)
+    agent = replace(screen, cursor_x=40, cursor_y=1)
 
     assert screen_input_may_change_routes(b"\x1b[B", view, sidebar)
     assert not screen_input_may_change_routes(b"\x1b[B", view, agent)
@@ -3776,6 +3802,9 @@ def test_local_upgrade_uses_current_python_user_site_and_restarts(monkeypatch):
     monkeypatch.setattr(fast_display_client.sys, "base_prefix", "/usr")
     run = MagicMock(return_value=subprocess.CompletedProcess([], 0))
     monkeypatch.setattr(fast_display_client.subprocess, "run", run)
+    monkeypatch.setattr(
+        "railmux.self_update.installed_version_matches", lambda _version: True
+    )
 
     class Restarted(Exception):
         pass

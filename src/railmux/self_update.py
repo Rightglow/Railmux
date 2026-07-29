@@ -77,6 +77,33 @@ def upgrade_argv(version: str) -> list[str]:
     return argv
 
 
+def fresh_process_version(*, timeout: float = 10.0) -> str | None:
+    """Import Railmux in a fresh copy of the launching interpreter."""
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import railmux; print(railmux.__version__)",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    lines = result.stdout.splitlines()
+    return lines[-1].strip() if lines and lines[-1].strip() else None
+
+
+def installed_version_matches(expected: str) -> bool:
+    """Return whether a fresh process imports exactly the requested build."""
+    return fresh_process_version() == expected
+
+
 def _prompt(current: str, latest: str) -> str:
     print(
         f"Railmux {latest} is available (installed: {current}).",
@@ -166,6 +193,14 @@ def maybe_upgrade_before_launch(
         print(
             "warning: Railmux update failed; continuing with the installed "
             f"version.\nUpdate manually:\n  {shlex.join(argv)}",
+            file=sys.stderr,
+        )
+        return
+    if not installed_version_matches(latest):
+        print(
+            "warning: pip reported success, but a fresh Railmux process did "
+            f"not import version {latest}; continuing without restarting.\n"
+            f"Update manually:\n  {shlex.join(argv)}",
             file=sys.stderr,
         )
         return

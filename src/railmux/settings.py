@@ -17,10 +17,7 @@ from tomlkit.exceptions import TOMLKitError
 
 from railmux.atomic_file import atomic_write_text
 from railmux.config import default_config_path
-
-
-OPTION_POLICIES = frozenset({"always", "ask", "never"})
-CLAUDE_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
+from railmux.setting_contracts import choices_for
 
 
 def _config_path() -> Path:
@@ -163,10 +160,12 @@ class Settings:
     @property
     def codex_yolo_policy(self) -> str:
         policy = self._get("codex", "auto_run")
-        return policy if policy in OPTION_POLICIES else "ask"
+        return (
+            policy if policy in choices_for("codex.auto_run") else "ask"
+        )
 
     def set_codex_yolo_policy(self, policy: str) -> bool:
-        if policy not in OPTION_POLICIES:
+        if policy not in choices_for("codex.auto_run"):
             return False
         return self._update_section("codex", {"auto_run": policy})
 
@@ -174,10 +173,12 @@ class Settings:
     @property
     def update_policy(self) -> str:
         policy = self._get("updates", "auto_update")
-        return policy if policy in OPTION_POLICIES else "ask"
+        return (
+            policy if policy in choices_for("updates.auto_update") else "ask"
+        )
 
     def set_update_policy(self, policy: str) -> bool:
-        if policy not in OPTION_POLICIES:
+        if policy not in choices_for("updates.auto_update"):
             return False
         return self._update_section("updates", {"auto_update": policy})
 
@@ -192,12 +193,12 @@ class Settings:
         return (
             policy
             if isinstance(policy, str)
-            and policy in CLAUDE_HISTORY_POLICIES
+            and policy in choices_for("ssh.claude_history")
             else "ask"
         )
 
     def set_claude_history_policy(self, policy: str) -> bool:
-        if policy not in CLAUDE_HISTORY_POLICIES:
+        if policy not in choices_for("ssh.claude_history"):
             return False
         return self._update_section("ssh", {"claude_history": policy})
 
@@ -205,7 +206,9 @@ class Settings:
     @property
     def layout_save_policy(self) -> str:
         policy = self._get("ui", "layout_retention")
-        return policy if policy in OPTION_POLICIES else "ask"
+        return (
+            policy if policy in choices_for("ui.layout_retention") else "ask"
+        )
 
     @property
     def layout_profile(self) -> LayoutProfile | None:
@@ -216,7 +219,7 @@ class Settings:
         policy: str,
         profile: LayoutProfile | None = None,
     ) -> bool:
-        if policy not in OPTION_POLICIES:
+        if policy not in choices_for("ui.layout_retention"):
             return False
         if profile is not None:
             decoded = _decode_layout_profile(profile.to_toml())

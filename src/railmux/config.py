@@ -9,15 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from railmux.setting_contracts import (
+    SSH_HISTORY_DEFAULT_LINES,
+    SSH_HISTORY_MAX_LINES,
+    SSH_HISTORY_MIN_LINES,
+    bounds_for,
+    choices_for,
+)
+
 
 class ConfigError(ValueError):
     """A safe, user-facing configuration error without file contents."""
-
-
-SSH_HISTORY_MIN_LINES = 2000
-SSH_HISTORY_MAX_LINES = 20000
-SSH_HISTORY_DEFAULT_LINES = 10000
-SSH_CLAUDE_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
 
 
 @dataclass(frozen=True)
@@ -102,10 +104,11 @@ def load_config(config_path: Path | None = None) -> Config:
             'live.agent_transport must be either "nested" or "swap"')
 
     history_lines = ssh.get("history_lines", SSH_HISTORY_DEFAULT_LINES)
+    history_min, history_max = bounds_for("ssh.history_lines")
     if (
         not isinstance(history_lines, int)
         or isinstance(history_lines, bool)
-        or not SSH_HISTORY_MIN_LINES <= history_lines <= SSH_HISTORY_MAX_LINES
+        or not history_min <= history_lines <= history_max
     ):
         raise ConfigError(
             "ssh.history_lines must be an integer between "
@@ -114,7 +117,7 @@ def load_config(config_path: Path | None = None) -> Config:
     claude_history = ssh.get("claude_history", "ask")
     if (
         not isinstance(claude_history, str)
-        or claude_history not in SSH_CLAUDE_HISTORY_POLICIES
+        or claude_history not in choices_for("ssh.claude_history")
     ):
         raise ConfigError(
             'ssh.claude_history must be "ask", "local", or "native"'

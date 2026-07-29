@@ -15,12 +15,16 @@ from typing import TextIO
 from railmux import __version__
 from railmux import legacy_sessions, tmux_health, tmux_server
 from railmux.config import Config, ConfigError, default_config_path, load_config
+from railmux.ssh_display_diagnostics import (
+    SshDisplayDiagnostic,
+    read_diagnostic as read_ssh_display_diagnostic,
+)
 
 
 _VERSION_RE = re.compile(
     r"(?<![A-Za-z0-9])v?(\d+(?:\.\d+){1,3}(?:[A-Za-z]|[-+][0-9A-Za-z.-]+)?)"
 )
-DOCTOR_SCHEMA_VERSION = 1
+DOCTOR_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ class DoctorSnapshot:
     config: ConfigDiagnostic
     preferred_agent_display: str
     data_directories: dict[str, DirectoryDiagnostic]
+    ssh_display: SshDisplayDiagnostic
 
 
 def is_ssh_session(environ: dict[str, str] | None = None) -> bool:
@@ -270,6 +275,7 @@ def collect_doctor_snapshot(
                 Path(config.codex_home).expanduser()
             ),
         },
+        ssh_display=read_ssh_display_diagnostic(),
     )
 
 
@@ -355,6 +361,33 @@ def _directory_text(diagnostic: DirectoryDiagnostic) -> str:
     )
 
 
+def _ssh_display_text(diagnostic: SshDisplayDiagnostic) -> str:
+    if diagnostic.status == "none":
+        return "none recorded"
+    if diagnostic.status != "recorded":
+        return "unavailable"
+    identity = (
+        f"client {diagnostic.client_version or 'unknown'}, "
+        f"protocol v{diagnostic.protocol if diagnostic.protocol is not None else 'unknown'}"
+    )
+    if diagnostic.outcome == "in_progress_or_ended_without_outcome":
+        result = "may still be active or ended without a recorded outcome"
+    else:
+        result = diagnostic.outcome or "unknown outcome"
+    stats = diagnostic.stats or SshDisplayDiagnostic("none").stats
+    if stats is None:
+        return f"{identity}; {result}; age={diagnostic.age or 'unknown'}"
+    return (
+        f"{identity}; {result}; age={diagnostic.age or 'unknown'}; "
+        f"frames={stats.frames}, rows={stats.painted_rows}, "
+        f"wire_bytes={stats.wire_bytes}, reconnects={stats.reconnect_successes}/"
+        f"{stats.reconnect_attempts}, history_prefetch={stats.history_prefetch_requests}, "
+        f"history_deep={stats.history_deep_requests}, "
+        f"history_timeouts={stats.history_timeouts}, "
+        f"anchor_rejects={stats.history_anchor_rejects}"
+    )
+
+
 def render_doctor_text(snapshot: DoctorSnapshot) -> str:
     """Render the stable human report from the structured authority."""
     lines = (
@@ -381,6 +414,10 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
         ),
         f"Config: {_config_text(snapshot.config)}",
         f"Preferred agent display: {snapshot.preferred_agent_display}",
+        (
+            "Most recent railmux ssh (host not recorded): "
+            f"{_ssh_display_text(snapshot.ssh_display)}"
+        ),
         f"Claude data: {_directory_text(snapshot.data_directories['claude'])}",
         f"Codex data: {_directory_text(snapshot.data_directories['codex'])}",
         (
