@@ -570,6 +570,9 @@ make deep background captures more expensive, but do not change the remote
 tmux history limit. On the first wheel gesture that reaches the complete
 history or the configured local cap, the client shows a one-time local
 `History top` message; scrolling down rearms that notification.
+With the keyboard cursor inside an agent pane, `Page Up` and `Page Down` move
+through this same local cache by one visible page. In the sidebar and dialogs,
+the keys remain ordinary Railmux navigation.
 
 Agent panes with tmux scrollback are handled locally. Claude Code normally uses
 an alternate screen with no tmux history. On the first upward scroll in a

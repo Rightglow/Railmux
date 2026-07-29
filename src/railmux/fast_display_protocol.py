@@ -1,4 +1,4 @@
-"""Private v11 framing for the coalesced full-window SSH display."""
+"""Private v12 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD11\x00"
-INPUT_MAGIC = b"RMUXK11\x00"
-PROTOCOL_VERSION = 11
+DISPLAY_MAGIC = b"RMUXD12\x00"
+INPUT_MAGIC = b"RMUXK12\x00"
+PROTOCOL_VERSION = 12
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
 REMOTE_START = b"RAILMUX-START/1\n"
@@ -678,7 +678,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v11 history response messages."""
+    """Compatibility view which ignores v12 history response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()

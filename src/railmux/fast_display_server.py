@@ -1043,6 +1043,7 @@ def _capture_pane_history(
                 "capture-pane",
                 "-p",
                 "-e",
+                "-N",
                 "-t",
                 pane.history_pane_id,
                 "-S",
@@ -1053,6 +1054,7 @@ def _capture_pane_history(
                 "capture-pane",
                 "-p",
                 "-e",
+                "-N",
                 "-t",
                 pane.pane_id,
                 "-S",
@@ -1551,7 +1553,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v11 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v12 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE

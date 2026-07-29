@@ -260,7 +260,7 @@ path:
 railmux ssh your-server
 ```
 
-Protocol v11 begins with a bounded remote hello containing package version,
+Protocol v12 begins with a bounded remote hello containing package version,
 protocol version, SSH dependency readiness, and tmux availability. The server
 does not inspect or mutate tmux until the compatible client returns the exact
 start acknowledgement. Missing Railmux or its optional dependency can be
@@ -281,7 +281,7 @@ across differing package versions.
 
 If the default `railmux` tmux session is absent, the server starts Railmux in a
 detached tmux session using the same installed Python environment. A custom
-`--session` is never auto-created. Multiple protocol-v11 helpers may attach to
+`--session` is never auto-created. Multiple protocol-v12 helpers may attach to
 the same managed session. A short flock covers only validation and attachment;
 the helper confirms its own child by matching tmux's `#{client_pid}` before it
 releases that boundary. The shared window is set to `window-size=smallest`, so
@@ -344,7 +344,7 @@ A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
 
-Display protocol v11 uses monotonically sequenced, zlib-compressed keyframes and
+Display protocol v12 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
@@ -355,14 +355,19 @@ finish, while a wholly unsent old update can be replaced by the latest screen.
 The diff base advances only after a complete packet is written, so replacement
 is recalculated from the last successfully sent rows, cursor, and terminal
 modes. Slow SSH output therefore does not stop the helper from draining the
-tmux PTY. Different protocol versions fail before attach and enter the explicit
+tmux PTY. The agent process owns a separate tmux pane PTY: display
+backpressure, frame replacement, and local history state belong to the private
+viewer and never pause, enter copy-mode, or otherwise flow-control the agent
+pane. Different protocol versions fail before attach and enter the explicit
 upgrade flow instead of attempting wire compatibility.
 
 History is a separate bounded response in that same ordered output stream. The
 server resolves the pane from current tmux geometry, excludes the controller,
-and uses `capture-pane -e` without entering copy-mode or sending keys. Raw tmux
-control sequences are parsed through `pyte`; reconstructed text and allowlisted
-SGR character styles cross the screen protocol. One bounded, validated OSC 52
+and uses `capture-pane -e -N` without entering copy-mode or sending keys. `-N`
+retains styled trailing cells so a red, green, gray, or other background can
+reach the pane boundary. Raw tmux control sequences are parsed through `pyte`;
+reconstructed text and allowlisted SGR character styles cross the screen
+protocol. One bounded, validated OSC 52
 clipboard payload may cross as a separate explicit message; other OSC and
 terminal actions are not forwarded. The local client consumes that explicit
 copy request with a native clipboard writer when available (`pbcopy`,
@@ -378,9 +383,9 @@ a persistent or current-invocation answer only after helper acknowledgement.
 This capability is explicit on the
 wire: an unrelated mouse-aware TUI retains application-level wheel input, while
 locally transcript-backed wheel input never opens Claude Code's
-provider-managed history view. Protocol v11 also
+provider-managed history view. Protocol v12 also
 reports whether older rows remain, instead of inferring exhaustion from a
-short compressed page. Protocol v11 permits at most 20000 physical lines;
+short compressed page. Protocol v12 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from
 2000 lines up to its configured 2000-20000 cap. A server-side styled-byte
 budget may return a shorter newest suffix rather than fail the display helper.

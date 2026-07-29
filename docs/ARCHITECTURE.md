@@ -97,7 +97,10 @@ server returns fewer lines than requested. This setting is local-only and is
 not an in-TUI Options authority. A deep response may replace its previous
 snapshot only when the visible multi-line anchor has one exact match, so both
 live output and newly prepended history leave the viewport stationary. The
-server retains the newest suffix if styled history reaches the protocol byte
+unmodified terminal Page Up/Down sequences move one visible page only when the
+keyboard cursor resolves to a verified agent route; sidebar and modal
+navigation remains remote. The server retains the newest suffix if styled
+history reaches the protocol byte
 budget; a byte-bound truncation is an effective end, never a helper failure.
 Input or bottom restores only the routed pane; layout uncertainty, resize,
 sidebar input, and `Esc` fail closed by removing every incompatible overlay.
@@ -149,7 +152,7 @@ feedback only: it grants no protocol authority and is replaced by the first
 validated display keyframe. Authentication, compatibility, installation, and
 attach prompts remain cooked-mode interactions.
 
-Protocol v11 reports a second bounded status after the attach boundary and
+Protocol v12 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-07-29
+
+### Added
+
+- Let `Page Up` and `Page Down` move one visible page through the smooth local
+  `railmux ssh` history when the keyboard cursor is inside an agent pane,
+  without taking over sidebar or dialog navigation.
+
+### Changed
+
+- Advance the private SSH display protocol to v12 so local and remote helpers
+  agree on full-width styled history semantics.
+- Persist signature-validated Codex metadata in a private atomic cache, show
+  explicit startup/indexing feedback, and avoid reparsing unchanged rollouts.
+- Move touchpad and wheel history by exactly one row per terminal event while
+  retaining cumulative 2,000-line background expansion up to the configured
+  local limit.
+
+### Fixed
+
+- Preserve red, green, gray, and other styled backgrounds through the full
+  width of captured history rows instead of ending them after the last visible
+  character.
+- Preserve bounded deep history across periodic prefetches and safe automatic
+  reconnects, while removing obsolete blank tails left by temporary
+  full-screen Codex `/btw` views.
+- Prevent automatic reconnect from recreating a workspace that was Soft Quit,
+  and require a fresh painted frame before another reconnect attempt.
+- Keep live Codex sessions resolved throughout cold indexing, apply persistent
+  Claude history changes immediately, and keep remote prompts separate from
+  the local startup surface.
+
 ## [0.2.18.dev202607293] - 2026-07-29
 
 ### Changed
@@ -1233,7 +1265,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607293...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18...HEAD
+[0.2.18]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18
 [0.2.18.dev202607293]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607292...v0.2.18.dev202607293
 [0.2.18.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607291...v0.2.18.dev202607292
 [0.2.18.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607290...v0.2.18.dev202607291

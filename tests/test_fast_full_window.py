@@ -77,11 +77,13 @@ from railmux.fast_display_client import (
     encode_keyframe_request as encode_client_keyframe_request,
     encode_resize as encode_client_resize,
     input_may_change_routes,
+    page_key_direction,
     parse_args as parse_client_args,
     parse_remote_hello,
     prepare_remote_process,
     remote_install_help,
     screen_input_may_change_routes,
+    split_page_key_input,
     split_local_escape,
 )
 
@@ -1139,6 +1141,34 @@ def test_terminal_input_decoder_releases_ambiguous_escape_after_short_timeout():
     assert decoder.flush_pending(delay=0) == []
 
 
+def test_terminal_input_decoder_retains_split_page_key_until_complete():
+    decoder = TerminalInputDecoder()
+
+    assert decoder.feed(b"before\x1b[5") == [b"before"]
+    assert decoder.feed(b"~after") == [b"\x1b[5~after"]
+    assert split_page_key_input(b"\x1b[5~after") == (b"\x1b[5~", b"after")
+
+
+def test_page_key_input_splits_repeated_keys_and_preserves_order():
+    data = b"a\x1b[5~\x1b[6~b"
+
+    assert split_page_key_input(data) == (
+        b"a",
+        b"\x1b[5~",
+        b"\x1b[6~",
+        b"b",
+    )
+    assert page_key_direction(b"\x1b[5~") == 1
+    assert page_key_direction(b"\x1b[6~") == -1
+    assert page_key_direction(b"\x1b[5;2~") == 0
+
+
+def test_page_key_input_does_not_intercept_alt_modified_page_key():
+    data = b"\x1b\x1b[5~\x1b[6~"
+
+    assert split_page_key_input(data) == (b"\x1b\x1b[5~", b"\x1b[6~")
+
+
 def test_terminal_input_decoder_forwards_invalid_or_nonwheel_mouse_unchanged():
     decoder = TerminalInputDecoder()
     parts = decoder.feed(b"\x1b[<brokenM\x1b[<0;2;3M")
@@ -1228,6 +1258,59 @@ def test_local_history_wheel_events_remain_one_row_during_a_burst():
     wheel_down = SgrMouseEvent(b"down", 65, 40, 2, True)
     view.wheel(wheel_down, now=1.31)
     assert view.viewports["%8"].offset == 9
+
+
+def test_local_history_page_keys_move_one_visible_page_and_restore():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        x=30,
+        y=0,
+        width=40,
+        height=6,
+        lines=tuple(f"line-{index}".encode() for index in range(40)),
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    page_up = view.page(b"\x1b[5~", 40, 2, now=1.0)
+
+    assert page_up.render_history is True
+    assert view.viewports["%8"].offset == 5
+    view.page(b"\x1b[5~", 40, 2, now=1.1)
+    assert view.viewports["%8"].offset == 10
+
+    page_down = view.page(b"\x1b[6~", 40, 2, now=1.2)
+    assert page_down.render_history is True
+    assert view.viewports["%8"].offset == 5
+    restored = view.page(b"\x1b[6~", 40, 2, now=1.3)
+    assert restored.restore_live is True
+    assert view.active is False
+
+
+def test_local_history_page_keys_only_intercept_known_agent_cursor():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        x=30,
+        y=0,
+        width=40,
+        height=6,
+        lines=(b"old",) * 20,
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+
+    assert view.page(b"\x1b[5~", 4, 2) == HistoryAction(
+        forwarded_input=b"\x1b[5~"
+    )
+    assert view.page(b"ordinary", 40, 2) == HistoryAction(
+        forwarded_input=b"ordinary"
+    )
 
 
 def test_local_history_wheel_state_does_not_cross_panes():
@@ -4717,7 +4800,13 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
 
     def fake_check_output(argv, **kwargs):
         calls.append((argv, kwargs))
-        return b"old\n\x1b[31mred\x1b[0m\n\x1b]52;c;evil\x07visible\n"
+        return (
+            b"old\n"
+            + b"\x1b[31;41mred"
+            + b" " * 46
+            + b"\x1b[0m\n"
+            + b"\x1b]52;c;evil\x07visible\n"
+        )
 
     monkeypatch.setattr(subprocess, "check_output", fake_check_output)
 
@@ -4728,6 +4817,10 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
     assert b"old" in snapshot.lines[0]
     assert b"red" in snapshot.lines[1]
     assert b";31;" in snapshot.lines[1]
+    pyte = __import__("pyte")
+    styled = pyte.Screen(49, 1)
+    pyte.ByteStream(styled).feed(snapshot.lines[1])
+    assert styled.buffer[0][48].bg == "red"
     assert b"]52" not in snapshot.lines[2]
     assert b"visible" in snapshot.lines[2]
     assert calls[0][0] == [
@@ -4737,6 +4830,7 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
         "capture-pane",
         "-p",
         "-e",
+        "-N",
         "-t",
         "%8",
         "-S",
@@ -4987,6 +5081,7 @@ def test_server_captures_nested_history_from_real_pane_without_resizing(
             "capture-pane",
             "-p",
             "-e",
+            "-N",
             "-t",
             "%2",
             "-S",

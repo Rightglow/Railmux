@@ -82,6 +82,8 @@ _HISTORY_DEEP_TIMEOUT = 10.0
 _HISTORY_INFO_SECONDS = 2.0
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
 _HISTORY_CONTENT_PANES = 8
+_PAGE_UP = b"\x1b[5~"
+_PAGE_DOWN = b"\x1b[6~"
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
 _REMOTE_ATTACH_TIMEOUT = 30.0
@@ -408,7 +410,7 @@ class SgrMouseEvent:
 
 
 class TerminalInputDecoder:
-    """Split bounded SGR mouse reports from otherwise opaque terminal bytes."""
+    """Split bounded SGR mouse reports while retaining partial terminal keys."""
 
     def __init__(self) -> None:
         self._buffer = bytearray()
@@ -441,11 +443,13 @@ class TerminalInputDecoder:
             marker = self._buffer.find(_SGR_MOUSE_PREFIX)
             if marker < 0:
                 keep = 0
-                for size in range(
-                    1, min(len(self._buffer), len(_SGR_MOUSE_PREFIX) - 1) + 1
-                ):
-                    if self._buffer[-size:] == _SGR_MOUSE_PREFIX[:size]:
-                        keep = size
+                for prefix in (_SGR_MOUSE_PREFIX, _PAGE_UP, _PAGE_DOWN):
+                    for size in range(
+                        1,
+                        min(len(self._buffer), len(prefix) - 1) + 1,
+                    ):
+                        if self._buffer[-size:] == prefix[:size]:
+                            keep = max(keep, size)
                 emit = len(self._buffer) - keep
                 self._append_bytes(parts, bytes(self._buffer[:emit]))
                 del self._buffer[:emit]
@@ -1168,6 +1172,8 @@ class LocalHistoryView:
         route: HistorySnapshot,
         event: SgrMouseEvent,
         now: float | None,
+        *,
+        initial_offset: int = _HISTORY_SCROLL_BASE_LINES,
     ) -> HistoryAction:
         assert route.pane_id is not None
         cached = self.content_cache.get(route.pane_id, route)
@@ -1208,7 +1214,7 @@ class LocalHistoryView:
         loaded_limit = min(len(cached.lines), self.history_limit)
         viewport = _HistoryViewport(
             cached,
-            min(maximum, _HISTORY_SCROLL_BASE_LINES),
+            min(maximum, max(1, initial_offset)),
             loaded_limit,
             exhausted=(
                 not cached.more_available and loaded_limit >= _HISTORY_INITIAL_LINES
@@ -1283,28 +1289,15 @@ class LocalHistoryView:
             target_lines,
         )
 
-    def wheel(
+    def _scroll_route(
         self,
+        route: HistorySnapshot,
         event: SgrMouseEvent,
+        direction: int,
+        distance: int,
         *,
         now: float | None = None,
     ) -> HistoryAction:
-        direction = event.wheel_direction
-        if direction == 0:
-            return HistoryAction(forwarded_input=event.raw)
-        route = self._route_at(event)
-        if route is None:
-            # Stock tmux WheelUpPane enters copy-mode. Until the current
-            # prefetch establishes exact pane geometry, or on the one-cell
-            # border around a known agent, dropping a wheel tick is safer than
-            # leaking it to tmux and freezing both dual-agent panes through
-            # selection isolation. A valid empty route set still forwards
-            # modal/sidebar scrolling normally.
-            if not self._routes_ready:
-                return HistoryAction(refresh_routes=True)
-            if self._near_agent_route(event):
-                return HistoryAction()
-            return HistoryAction(forwarded_input=event.raw)
         assert route.pane_id is not None
         if direction > 0 and route.history_choice_required:
             return HistoryAction(claude_history_prompt=event.raw)
@@ -1315,7 +1308,7 @@ class LocalHistoryView:
                 0,
                 min(
                     maximum,
-                    viewport.offset + direction * _HISTORY_SCROLL_BASE_LINES,
+                    viewport.offset + direction * max(1, distance),
                 ),
             )
             if direction < 0:
@@ -1367,7 +1360,70 @@ class LocalHistoryView:
             return HistoryAction(
                 forwarded_input=event.raw if route.mouse_forwardable else b""
             )
-        return self._start_history(route, event, now)
+        return self._start_history(
+            route,
+            event,
+            now,
+            initial_offset=distance,
+        )
+
+    def wheel(
+        self,
+        event: SgrMouseEvent,
+        *,
+        now: float | None = None,
+    ) -> HistoryAction:
+        direction = event.wheel_direction
+        if direction == 0:
+            return HistoryAction(forwarded_input=event.raw)
+        route = self._route_at(event)
+        if route is None:
+            # Stock tmux WheelUpPane enters copy-mode. Until the current
+            # prefetch establishes exact pane geometry, or on the one-cell
+            # border around a known agent, dropping a wheel tick is safer than
+            # leaking it to tmux and freezing both dual-agent panes through
+            # selection isolation. A valid empty route set still forwards
+            # modal/sidebar scrolling normally.
+            if not self._routes_ready:
+                return HistoryAction(refresh_routes=True)
+            if self._near_agent_route(event):
+                return HistoryAction()
+            return HistoryAction(forwarded_input=event.raw)
+        return self._scroll_route(
+            route,
+            event,
+            direction,
+            _HISTORY_SCROLL_BASE_LINES,
+            now=now,
+        )
+
+    def page(
+        self,
+        data: bytes,
+        x: int,
+        y: int,
+        *,
+        now: float | None = None,
+    ) -> HistoryAction:
+        """Page locally when the keyboard cursor is inside a known agent pane."""
+        direction = page_key_direction(data)
+        route = self._route_at_position(x, y)
+        if direction == 0 or route is None:
+            return HistoryAction(forwarded_input=data)
+        event = SgrMouseEvent(
+            data,
+            64 if direction > 0 else 65,
+            x + 1,
+            y + 1,
+            True,
+        )
+        return self._scroll_route(
+            route,
+            event,
+            direction,
+            max(1, route.height - 1),
+            now=now,
+        )
 
     def pointer_event(
         self,
@@ -1635,6 +1691,38 @@ def input_may_change_routes(
     if routes_visible and not cursor_in_agent:
         return True
     return not routes_visible and data in (b"\x1b", b"\r", b"\n")
+
+
+def page_key_direction(data: bytes) -> int:
+    """Return local-history direction for an unmodified terminal page key."""
+    if data == _PAGE_UP:
+        return 1
+    if data == _PAGE_DOWN:
+        return -1
+    return 0
+
+
+def split_page_key_input(data: bytes) -> tuple[bytes, ...]:
+    """Split complete page keys from adjacent opaque terminal input."""
+    parts: list[bytes] = []
+    start = 0
+    while start < len(data):
+        matches: list[tuple[int, bytes]] = []
+        for key in (_PAGE_UP, _PAGE_DOWN):
+            position = data.find(key, start)
+            while position > 0 and data[position - 1] == 0x1B:
+                position = data.find(key, position + len(key))
+            if position >= 0:
+                matches.append((position, key))
+        if not matches:
+            parts.append(data[start:])
+            break
+        position, key = min(matches, key=lambda item: item[0])
+        if position > start:
+            parts.append(data[start:position])
+        parts.append(key)
+        start = position + len(key)
+    return tuple(part for part in parts if part)
 
 
 def screen_input_may_change_routes(
@@ -1937,7 +2025,7 @@ class TerminalSurface:
         self,
         requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v11."""
+        """Mirror only input-affecting modes explicitly carried by protocol v12."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -2717,7 +2805,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v11 helper holds the mutex only while registering its exact tmux
+    # A current v12 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)
@@ -3269,6 +3357,24 @@ def run(args: argparse.Namespace) -> int:
                 full_repaint(latest_screen),
                 history.overlays(),
             )
+        if (
+            latest_screen is not None
+            and page_key_direction(part)
+            and history.pane_id_at_position(
+                latest_screen.cursor_x,
+                latest_screen.cursor_y,
+            )
+            is not None
+        ):
+            apply_history_action(
+                history.page(
+                    part,
+                    latest_screen.cursor_x,
+                    latest_screen.cursor_y,
+                    now=time.monotonic(),
+                )
+            )
+            return
         may_change_routes = screen_input_may_change_routes(
             part,
             history,
@@ -3493,12 +3599,17 @@ def run(args: argparse.Namespace) -> int:
                             local_exit = True
                         forwarded_wheels: set[int] = set()
                         for part in terminal_input.feed(data):
-                            handle_terminal_part(part, forwarded_wheels)
+                            if isinstance(part, bytes):
+                                for key_part in split_page_key_input(part):
+                                    handle_terminal_part(key_part, forwarded_wheels)
+                            else:
+                                handle_terminal_part(part, forwarded_wheels)
                         if local_exit:
                             break
                 if not local_exit:
                     for part in terminal_input.flush_pending():
-                        handle_terminal_part(part, set())
+                        for key_part in split_page_key_input(part):
+                            handle_terminal_part(key_part, set())
                 now = time.monotonic()
                 restore_local_status = (
                     history_info_until is not None and now >= history_info_until
