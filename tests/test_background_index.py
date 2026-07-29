@@ -9,7 +9,12 @@ from railmux.codex_index import ScanReport
 from railmux.models import Project, SessionMeta
 
 
-def _meta(session_id: str, mtime: float = 1.0) -> SessionMeta:
+def _meta(
+    session_id: str,
+    mtime: float = 1.0,
+    *,
+    forked_from_id: str | None = None,
+) -> SessionMeta:
     project = Project(Path("/project"), "-project", Path(), 0, 0.0)
     return SessionMeta(
         project=project,
@@ -20,6 +25,7 @@ def _meta(session_id: str, mtime: float = 1.0) -> SessionMeta:
         token_total=3,
         last_mtime=mtime,
         session_type="codex",
+        forked_from_id=forked_from_id,
     )
 
 
@@ -294,6 +300,30 @@ def test_delete_tombstone_hides_stale_generation_until_refresh() -> None:
         index.close()
 
 
+def test_delete_tombstones_hide_complete_lineage_during_refresh() -> None:
+    root = _meta("root", 1.0)
+    leaf = _meta("leaf", 2.0, forked_from_id="root")
+    scanner = _EventScanner([root, leaf])
+    scanner.block = True
+    scanner.release.set()
+    index = BackgroundCodexIndex(
+        Path("/unused"), scanner=scanner, min_interval_s=0)
+    try:
+        index.refresh()
+        assert index.wait_for_generation(1)
+        scanner.release.clear()
+        scanner.started.clear()
+        index.invalidate(tombstones={"root", "leaf"})
+        assert scanner.started.wait(2.0)
+        assert index.sessions_for_cwd(
+            Path("/project"), refresh=False) == []
+        scanner.sessions = ()
+        scanner.release.set()
+        assert index.wait_for_generation(2)
+    finally:
+        index.close()
+
+
 def test_shutdown_is_bounded_and_cannot_publish_after_close() -> None:
     scanner = _EventScanner([_meta("one")])
     scanner.block = True
@@ -316,5 +346,28 @@ def test_snapshot_queries_preserve_all_session_fields() -> None:
         index.refresh()
         assert index.wait_for_generation(1)
         assert index.get("one", refresh=False) == original
+    finally:
+        index.close()
+
+
+def test_snapshot_queries_collapse_rewind_lineage_but_keep_exact_lookup() -> None:
+    root = _meta("root", 1.0)
+    middle = _meta("middle", 2.0, forked_from_id="root")
+    leaf = _meta("leaf", 3.0, forked_from_id="middle")
+    scanner = _EventScanner([root, middle, leaf])
+    index = BackgroundCodexIndex(
+        Path("/unused"), scanner=scanner, min_interval_s=0)
+    try:
+        index.refresh()
+        assert index.wait_for_generation(1)
+
+        assert [meta.session_id for meta in index.sessions_for_cwd(
+            Path("/project"), refresh=False)] == ["leaf"]
+        assert index.all_cwds(refresh=False) == {Path("/project"): 1}
+        assert index.lineage_ids(
+            "root", refresh=False) == frozenset({"root", "middle", "leaf"})
+        assert index.representative_for(
+            "root", refresh=False).session_id == "leaf"
+        assert index.get("root", refresh=False) == root
     finally:
         index.close()

@@ -70,3 +70,15 @@ class Renames:
         if session_id in self._titles:
             del self._titles[session_id]
             self._save()
+
+    def clear_many(self, session_ids: set[str]) -> None:
+        """Drop rename aliases for one logical provider conversation."""
+        updated = {
+            session_id: title
+            for session_id, title in self._titles.items()
+            if session_id not in session_ids
+        }
+        if updated == self._titles:
+            return
+        self._titles = updated
+        self._save()

@@ -87,6 +87,93 @@ class HiddenCodexStatus:
     pending_tool: bool
 
 
+def _path_key(path: Path) -> Path:
+    """Resolve a path for identity comparisons without requiring it to exist."""
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
+def _lineage_members(
+    sessions: tuple[SessionMeta, ...] | list[SessionMeta],
+) -> dict[str, tuple[SessionMeta, ...]]:
+    """Map every Codex UUID to its same-project fork lineage.
+
+    Codex rewind creates a new rollout whose ``forked_from_id`` points at the
+    previous rollout.  Those files are checkpoints of one user-visible
+    conversation, not six independent rows.  Links are joined only when both
+    endpoints are present in the same cwd: a deliberate ``resume -C`` into a
+    different project must not make a conversation disappear from either
+    project's sidebar.
+
+    A tiny union-find keeps malformed cycles and branching histories bounded
+    and deterministic.  Distinct branches are retained on disk; the newest
+    member is merely chosen as the current UI representative.
+    """
+    by_id = {meta.session_id: meta for meta in sessions}
+    parent = {session_id: session_id for session_id in by_id}
+
+    def find(session_id: str) -> str:
+        root = session_id
+        while parent[root] != root:
+            root = parent[root]
+        while parent[session_id] != session_id:
+            next_id = parent[session_id]
+            parent[session_id] = root
+            session_id = next_id
+        return root
+
+    def union(left: str, right: str) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            # The lexical tie-break makes corrupt cycles/walk order harmless.
+            low, high = sorted((left_root, right_root))
+            parent[high] = low
+
+    for meta in by_id.values():
+        parent_id = meta.forked_from_id
+        ancestor = by_id.get(parent_id) if parent_id else None
+        if (ancestor is not None
+                and _path_key(ancestor.project.real_path)
+                == _path_key(meta.project.real_path)):
+            union(meta.session_id, ancestor.session_id)
+
+    grouped: dict[str, list[SessionMeta]] = {}
+    for meta in by_id.values():
+        grouped.setdefault(find(meta.session_id), []).append(meta)
+    result: dict[str, tuple[SessionMeta, ...]] = {}
+    for members in grouped.values():
+        ordered = tuple(sorted(
+            members,
+            key=lambda item: (
+                item.last_mtime, str(item.jsonl_path), item.session_id),
+            reverse=True,
+        ))
+        for meta in members:
+            result[meta.session_id] = ordered
+    return result
+
+
+def _lineage_representatives(
+    sessions: tuple[SessionMeta, ...] | list[SessionMeta],
+) -> tuple[SessionMeta, ...]:
+    """Return the newest visible member of each same-project fork lineage."""
+    members_by_id = _lineage_members(sessions)
+    representatives = {
+        members[0].session_id: members[0]
+        for members in members_by_id.values()
+        if members
+    }
+    return tuple(sorted(
+        representatives.values(),
+        key=lambda item: (
+            item.last_mtime, str(item.jsonl_path), item.session_id),
+        reverse=True,
+    ))
+
+
 class CodexIndex:
     """mtime-keyed cache of all Codex sessions under ``codex_home/sessions/``."""
 
@@ -109,12 +196,19 @@ class CodexIndex:
         # User-assigned titles, overlaid at read time (see railmux.renames).
         self._renames = renames
 
-    def _with_override(self, meta: SessionMeta) -> SessionMeta:
-        """Overlay a user rename onto *meta*'s title, if one exists."""
+    def _with_override(
+        self,
+        meta: SessionMeta,
+        lineage: tuple[SessionMeta, ...] | None = None,
+    ) -> SessionMeta:
+        """Overlay the newest rename in *meta*'s logical lineage, if any."""
         if self._renames is None:
             return meta
-        override = self._renames.get(meta.session_id)
-        return replace(meta, title=override) if override else meta
+        for member in lineage or (meta,):
+            override = self._renames.get(member.session_id)
+            if override:
+                return replace(meta, title=override)
+        return meta
 
     def _canonical(self) -> dict[str, SessionMeta]:
         """Map ``session_id -> newest cached entry`` for that id.
@@ -155,6 +249,28 @@ class CodexIndex:
             reverse=True,
         ))
 
+    def lineage_ids(
+        self, session_id: str, *, refresh: bool = True,
+    ) -> frozenset[str]:
+        """UUID aliases belonging to *session_id*'s logical conversation."""
+        if refresh:
+            self._refresh()
+        sessions = tuple(self._canonical().values())
+        members = _lineage_members(sessions).get(session_id, ())
+        return frozenset(meta.session_id for meta in members)
+
+    def representative_for(
+        self, session_id: str, *, refresh: bool = True,
+    ) -> SessionMeta | None:
+        """Newest UI representative for the lineage containing *session_id*."""
+        if refresh:
+            self._refresh()
+        sessions = tuple(self._canonical().values())
+        members = _lineage_members(sessions).get(session_id)
+        if not members:
+            return None
+        return self._with_override(members[0], members)
+
     def hidden_statuses(self) -> dict[str, str]:
         """Newest status for each filtered subagent rollout UUID."""
         newest: dict[str, HiddenCodexStatus] = {}
@@ -180,7 +296,8 @@ class CodexIndex:
         if refresh:
             self._refresh()
         counts: dict[Path, int] = {}
-        for meta in self._canonical().values():
+        for meta in _lineage_representatives(
+                tuple(self._canonical().values())):
             cwd = meta.project.real_path
             counts[cwd] = counts.get(cwd, 0) + 1
         return counts
@@ -195,14 +312,17 @@ class CodexIndex:
             target = cwd.resolve()
         except OSError:
             target = cwd
+        canonical = tuple(self._canonical().values())
+        members_by_id = _lineage_members(canonical)
         results: list[SessionMeta] = []
-        for meta in self._canonical().values():
+        for meta in _lineage_representatives(canonical):
             try:
                 mc = meta.project.real_path.resolve()
             except OSError:
                 mc = meta.project.real_path
             if mc == target:
-                results.append(self._with_override(meta))
+                results.append(self._with_override(
+                    meta, members_by_id.get(meta.session_id)))
         results.sort(key=lambda s: s.last_mtime, reverse=True)
         return results
 
@@ -506,6 +626,12 @@ def _parse_codex_session(
     if not isinstance(cwd_str, str) or not cwd_str.strip():
         return None
     cwd = Path(cwd_str)
+    forked_from = payload.get("forked_from_id")
+    forked_from_id = (
+        forked_from
+        if isinstance(forked_from, str) and forked_from.strip()
+        else None
+    )
 
     # -- scan remaining lines for messages, events -------------------
     title: str | None = None
@@ -703,6 +829,7 @@ def _parse_codex_session(
         pending_tool=pending_tool,
         session_type="codex",
         attention=attention,
+        forked_from_id=forked_from_id,
     )
     if hidden_subagent:
         return HiddenCodexStatus(

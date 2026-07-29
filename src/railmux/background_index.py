@@ -8,7 +8,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from railmux.codex_index import CodexIndex, ScanReport
+from railmux.codex_index import (
+    CodexIndex,
+    ScanReport,
+    _lineage_members,
+    _lineage_representatives,
+)
 from railmux.models import SessionMeta
 from railmux.renames import Renames
 
@@ -155,11 +160,17 @@ class BackgroundCodexIndex:
                 self._condition.wait(remaining)
             return self._snapshot.generation >= generation
 
-    def invalidate(self, *, tombstone: str | None = None) -> None:
+    def invalidate(
+        self,
+        *,
+        tombstone: str | None = None,
+        tombstones: set[str] | frozenset[str] = frozenset(),
+    ) -> None:
         """Invalidate worker state without clearing the last-good snapshot."""
         with self._condition:
             if tombstone:
                 self._tombstones.add(tombstone)
+            self._tombstones.update(tombstones)
             if self._closed:
                 return
             self._invalidate_requested = True
@@ -180,7 +191,7 @@ class BackgroundCodexIndex:
         if refresh:
             self.refresh()
         counts: dict[Path, int] = {}
-        for meta in self._visible_sessions():
+        for meta in _lineage_representatives(self._visible_sessions()):
             cwd = meta.project.real_path
             counts[cwd] = counts.get(cwd, 0) + 1
         return counts
@@ -191,13 +202,37 @@ class BackgroundCodexIndex:
         if refresh:
             self.refresh()
         target = self._path_key(cwd)
+        visible = self._visible_sessions()
+        members_by_id = _lineage_members(visible)
         results = [
-            self._with_override(meta)
-            for meta in self._visible_sessions()
+            self._with_override(meta, members_by_id.get(meta.session_id))
+            for meta in _lineage_representatives(visible)
             if self._path_key(meta.project.real_path) == target
         ]
         results.sort(key=lambda meta: meta.last_mtime, reverse=True)
         return results
+
+    def lineage_ids(
+        self, session_id: str, *, refresh: bool = True,
+    ) -> frozenset[str]:
+        """UUID aliases belonging to *session_id*'s logical conversation."""
+        if refresh:
+            self.refresh()
+        members = _lineage_members(
+            self._visible_sessions()).get(session_id, ())
+        return frozenset(meta.session_id for meta in members)
+
+    def representative_for(
+        self, session_id: str, *, refresh: bool = True,
+    ) -> SessionMeta | None:
+        """Newest UI representative for the lineage containing *session_id*."""
+        if refresh:
+            self.refresh()
+        visible = self._visible_sessions()
+        members = _lineage_members(visible).get(session_id)
+        if not members:
+            return None
+        return self._with_override(members[0], members)
 
     def get(self, session_id: str, *, refresh: bool = True) -> SessionMeta | None:
         if refresh:
@@ -239,11 +274,18 @@ class BackgroundCodexIndex:
             if meta.session_id not in tombstones
         )
 
-    def _with_override(self, meta: SessionMeta) -> SessionMeta:
+    def _with_override(
+        self,
+        meta: SessionMeta,
+        lineage: tuple[SessionMeta, ...] | None = None,
+    ) -> SessionMeta:
         if self._renames is None:
             return meta
-        title = self._renames.get(meta.session_id)
-        return replace(meta, title=title) if title else meta
+        for member in lineage or (meta,):
+            title = self._renames.get(member.session_id)
+            if title:
+                return replace(meta, title=title)
+        return meta
 
     @staticmethod
     def _path_key(path: Path) -> Path:

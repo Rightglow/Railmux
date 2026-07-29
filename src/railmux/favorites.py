@@ -55,5 +55,16 @@ class Favorites:
             self._save()
             return True
 
+    def set_many(self, session_ids: set[str], favorite: bool) -> None:
+        """Set one logical session's provider aliases with a single write."""
+        if favorite:
+            updated = self._ids | session_ids
+        else:
+            updated = self._ids - session_ids
+        if updated == self._ids:
+            return
+        self._ids = updated
+        self._save()
+
     def get_ids(self) -> set[str]:
         return set(self._ids)

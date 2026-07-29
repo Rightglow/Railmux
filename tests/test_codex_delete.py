@@ -139,6 +139,48 @@ def test_cleanup_codex_failure_keeps_registry_and_index(monkeypatch):
     assert "failed" in statuses[-1][0]
 
 
+def test_cleanup_codex_deletes_complete_rewind_lineage(monkeypatch):
+    running = {UUID: _Running(
+        key=UUID, tmux_name="cx-abc", label="p/Chat",
+        session_type="codex")}
+    app, statuses, refreshed = _cleanup_app(monkeypatch, running)
+    app._codex_index.lineage_ids.return_value = frozenset(
+        {UUID, "fork-one", "fork-two"})
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        app, "_codex_delete",
+        lambda session_id: deleted.append(session_id) or True,
+    )
+
+    app._cleanup_codex_session(UUID, "cx-abc", "p/Chat")
+
+    assert deleted[0] == UUID
+    assert set(deleted) == {UUID, "fork-one", "fork-two"}
+    assert UUID not in app._running
+    app._codex_index.invalidate.assert_called_once()
+    assert refreshed == [True]
+    assert statuses[-1] == (
+        "Deleted: p/Chat (3 rewind records)", "info")
+
+
+def test_cleanup_codex_partial_lineage_failure_is_reported(monkeypatch):
+    running = {UUID: _Running(
+        key=UUID, tmux_name="cx-abc", label="p/Chat",
+        session_type="codex")}
+    app, statuses, refreshed = _cleanup_app(monkeypatch, running)
+    app._codex_index.lineage_ids.return_value = frozenset(
+        {UUID, "fork-one"})
+    monkeypatch.setattr(
+        app, "_codex_delete", lambda session_id: session_id == UUID)
+
+    app._cleanup_codex_session(UUID, "cx-abc", "p/Chat")
+
+    assert UUID not in app._running
+    assert refreshed == [True]
+    assert statuses[-1][1] == "error"
+    assert "Deleted 1/2" in statuses[-1][0]
+
+
 def test_cleanup_codex_placeholder_is_killed_not_deleted(monkeypatch):
     running = {"__new__-1": _Running(key="__new__-1", tmux_name="cx-new",
                                      label="p/(new)", session_type="codex")}

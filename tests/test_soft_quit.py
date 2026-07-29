@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -1295,6 +1296,61 @@ def test_soft_restart_keeps_resumed_parent_with_open_background_rollout(
     assert running is not None
     assert running.tmux_name == tmux_name
     exact_arg.assert_called_once_with(tmux_name, session_id)
+
+
+def test_soft_restart_accepts_open_rewind_descendant_as_same_writer(
+    monkeypatch,
+):
+    """A new-session process keeps its original binding while Codex rewind
+    moves the live file descriptor to a fork UUID in the same lineage."""
+    cwd = Path("/tmp/codex-only")
+    project = _project("codex-only")
+    root_id = "12345678-1234-1234-1234-1234567890ab"
+    leaf_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    root = _codex_meta(project, root_id)
+    leaf = replace(
+        root,
+        session_id=leaf_id,
+        title="Latest rewind",
+        last_mtime=2000.0,
+        forked_from_id=root_id,
+    )
+    tmux_name = "cx-new---abcdef-1"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.get.side_effect = (
+        lambda candidate, refresh=False: (
+            root if candidate == root_id
+            else leaf if candidate == leaf_id
+            else None
+        )
+    )
+    app._codex_index.lineage_ids.return_value = frozenset(
+        {root_id, leaf_id})
+    app._codex_index.representative_for.return_value = leaf
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    monkeypatch.setattr(
+        tmux_ctl, "session_rollout_ids", lambda *_args: {leaf_id})
+    exact_arg = MagicMock(return_value=False)
+    monkeypatch.setattr(
+        tmux_ctl, "session_process_has_exact_arg", exact_arg)
+    binding = {
+        "key": root_id,
+        "tmux_name": tmux_name,
+        "session_type": "codex",
+        "cwd": str(cwd),
+    }
+
+    running = app._valid_running_binding(
+        binding,
+        {tmux_name: (cwd, 100)},
+        {app._path_key(cwd): project},
+    )
+
+    assert running is not None
+    assert running.key == root_id
+    assert running.label.endswith("/Latest rewind")
+    exact_arg.assert_not_called()
 
 
 @pytest.mark.parametrize("probe_result", [False, None, OSError("denied")])

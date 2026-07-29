@@ -1077,7 +1077,16 @@ class App:
         still leaves the prior :class:`AgentSlot` state available for rollback.
         """
         if slot.key == self._agent_workspace().target_slot_key:
-            self._sessions_pane.set_active_session(session_id)
+            display_session_id = session_id
+            running = self._by_tmux(tmux_name) if tmux_name else None
+            if (running is not None
+                    and getattr(running, "session_type", "claude") == "codex"
+                    and getattr(running, "logical_session_id", None) is not None):
+                representative = self._codex_representative(
+                    running.logical_session_id)
+                if representative is not None:
+                    display_session_id = representative.session_id
+            self._sessions_pane.set_active_session(display_session_id)
             self._running_pane.set_active(tmux_name)
 
     def _session_id_for_tmux_target(self, tmux_name: str) -> str | None:
@@ -1707,7 +1716,7 @@ class App:
         self._set_current_project(None, remember=False)
         self._sessions_pane.set_sessions(
             None, [], running_ids=self._running_session_ids(),
-            favorite_ids=self._favorites.get_ids())
+            favorite_ids=self._favorite_ids_for_view())
 
     def _on_project_select(self, project: Project | None) -> None:
         """Single-click / initial auto-select: show sessions, keep focus here."""
@@ -1720,7 +1729,7 @@ class App:
         sessions = self._pane_sessions(
             project, refresh=not self._mode_refresh_pending())
         self._sessions_pane.set_sessions(project, sessions, running_ids=self._running_session_ids(),
-                favorite_ids=self._favorites.get_ids())
+                favorite_ids=self._favorite_ids_for_view())
         self._set_status(f"Project: {project.real_path}  ({len(sessions)} sessions)")
 
     def _on_project_double_click(self, project: Project | None) -> None:
@@ -1821,7 +1830,7 @@ class App:
                     project,
                     sessions,
                     running_ids=self._running_session_ids(),
-                    favorite_ids=self._favorites.get_ids(),
+                    favorite_ids=self._favorite_ids_for_view(),
                 )
         if not self._show_attention_status(entry.attention):
             self._set_status(f"→ {entry.label}")
@@ -1993,7 +2002,7 @@ class App:
             project,
             sessions,
             running_ids=self._running_session_ids(),
-            favorite_ids=self._favorites.get_ids(),
+            favorite_ids=self._favorite_ids_for_view(),
         )
 
     # --- tmux integration (detached session per agent + display-pane attach) ---
@@ -3558,22 +3567,107 @@ class App:
                 return r
         return None
 
+    def _codex_representative(
+        self, session_id: str,
+    ) -> SessionMeta | None:
+        """Newest fork-lineage member, with compatibility for simple indexes."""
+        index = getattr(self, "_codex_index", None)
+        if index is None:
+            return None
+        representative_for = getattr(index, "representative_for", None)
+        if callable(representative_for):
+            try:
+                meta = representative_for(session_id, refresh=False)
+            except Exception:
+                meta = None
+            if isinstance(meta, SessionMeta):
+                return meta
+        get = getattr(index, "get", None)
+        if not callable(get):
+            return None
+        try:
+            meta = get(session_id, refresh=False)
+        except Exception:
+            return None
+        return meta if isinstance(meta, SessionMeta) else None
+
+    def _codex_lineage_ids(self, session_id: str) -> set[str]:
+        """Return known same-project rewind aliases, always including input."""
+        index = getattr(self, "_codex_index", None)
+        lineage_ids = getattr(index, "lineage_ids", None)
+        if not callable(lineage_ids):
+            return {session_id}
+        try:
+            aliases = lineage_ids(session_id, refresh=False)
+        except Exception:
+            return {session_id}
+        if not isinstance(aliases, (set, frozenset, tuple, list)):
+            return {session_id}
+        return {session_id, *(
+            alias for alias in aliases if isinstance(alias, str) and alias)}
+
+    def _session_identity_ids(self, session: SessionMeta) -> set[str]:
+        if session.session_type == "codex":
+            return self._codex_lineage_ids(session.session_id)
+        return {session.session_id}
+
+    def _codex_writer_matches(
+        self, session_id: str, open_ids: set[str],
+    ) -> bool:
+        """Whether a live Codex writer owns this logical rewind lineage."""
+        return bool(self._codex_lineage_ids(session_id) & open_ids)
+
+    def _favorite_ids_for_view(self) -> set[str]:
+        """Expand persisted Codex stars across their visible rewind lineage."""
+        favorites = self._favorites.get_ids()
+        expanded = set(favorites)
+        for session_id in favorites:
+            expanded.update(self._codex_lineage_ids(session_id))
+        return expanded
+
     def _by_session_id(self, session_id: str) -> "_Running | None":
-        """Prefer the dedicated instance, while still finding legacy-only ids."""
+        """Find a live provider session, including Codex rewind UUID aliases."""
+        running = tuple(getattr(self, "_running", {}).values())
         matches = [
             item for item in self._running.values()
             if item.logical_session_id == session_id
         ]
+        exact = next(
+            (item for item in matches if not item.is_legacy), None
+        ) or (matches[0] if matches else None)
+        if exact is not None:
+            return exact
+
+        # Codex changes rollout UUID after rewind while the owning process and
+        # Railmux running binding intentionally remain on the resume/root UUID.
+        # Treat every same-project fork UUID as an alias so clicking the newest
+        # Sessions row attaches the existing writer instead of spawning a
+        # second Codex process.
+        if getattr(self, "_codex_index", None) is None:
+            return None
+        for item in running:
+            logical_id = item.logical_session_id
+            if item.session_type != "codex" or logical_id is None:
+                continue
+            if session_id in self._codex_lineage_ids(logical_id):
+                matches.append(item)
         return next((item for item in matches if not item.is_legacy), None) or (
-            matches[0] if matches else None
-        )
+            matches[0] if matches else None)
 
     def _running_session_ids(self) -> set[str]:
-        return {
+        ids = {
             session_id
             for item in self._running.values()
             if (session_id := item.logical_session_id) is not None
         }
+        if getattr(self, "_codex_index", None) is None:
+            return ids
+        for item in self._running.values():
+            logical_id = item.logical_session_id
+            if item.session_type != "codex" or logical_id is None:
+                continue
+            ids.update(self._codex_lineage_ids(logical_id))
+        return ids
 
     def _agent_session_alive(
         self,
@@ -5635,7 +5729,7 @@ class App:
             # its completed parent rollout while keeping background rollouts
             # open; in that case the exact UUID remains an argv element and is
             # stronger evidence than the sibling rollout-fd mismatch.
-            if open_ids and key not in open_ids:
+            if open_ids and not self._codex_writer_matches(key, open_ids):
                 try:
                     resumed_key_matches = (
                         tmux_ctl.session_process_has_exact_arg(tmux_name, key)
@@ -5658,6 +5752,7 @@ class App:
                     status="busy",
                     session_type=session_type,
                 )
+            meta = self._codex_representative(key) or meta
         else:
             meta = self._session_cache.get(project, key)
             if meta is None:
@@ -6349,7 +6444,9 @@ class App:
                         name, self._codex_home_path() / "sessions")
                 except Exception:
                     writer_ids = None
-                if writer_ids and full_id not in writer_ids:
+                if (writer_ids
+                        and not self._codex_writer_matches(
+                            full_id, writer_ids)):
                     continue
             if full_id in self._running:
                 continue
@@ -7288,11 +7385,11 @@ class App:
                     child_probes=child_probes, server=server,
                     codex_rollout_probes=codex_rollout_probes)
                 self._sessions_pane.set_sessions(matched, sessions, running_ids=running_ids,
-                                                  favorite_ids=self._favorites.get_ids())
+                                                  favorite_ids=self._favorite_ids_for_view())
             else:
                 self._set_current_project(None, remember=False)
                 self._sessions_pane.set_sessions(None, [], running_ids=running_ids,
-                                                  favorite_ids=self._favorites.get_ids())
+                                                  favorite_ids=self._favorite_ids_for_view())
 
         self._update_running_pane(
             child_probes, server, codex_rollout_probes)
@@ -7575,8 +7672,8 @@ class App:
             session_type = (
                 registered_mode.session_type if registered_mode else r.session_type)
             if session_type == "codex":
-                meta = self._codex_index.get(
-                    r.logical_session_id or r.key, refresh=False)
+                meta = self._codex_representative(
+                    r.logical_session_id or r.key)
             else:
                 meta = self._session_cache.get(
                     r.project, r.logical_session_id or r.key)
@@ -7812,7 +7909,7 @@ class App:
         would build a relative path and miss (Info modal shows no metadata).
         Claude rows keep the on-disk scan scoped to the project (#16)."""
         if session_type == "codex":
-            return self._codex_index.get(session_id, refresh=False)
+            return self._codex_representative(session_id)
         if project is None:
             return None
         from railmux.session_index import _scan_session
@@ -7894,13 +7991,21 @@ class App:
                 self._set_status("No session selected to delete.")
                 return
             title = session.display_title
+            lineage_count = len(self._session_identity_ids(session))
+            detail = (
+                "The logical session and its "
+                f"{lineage_count} rewind records will be permanently "
+                "removed from disk.\n"
+                "Its background tmux session will also be killed."
+                if session.session_type == "codex" and lineage_count > 1
+                else
+                "The session file will be permanently removed from disk.\n"
+                "Its background tmux session will also be killed."
+            )
             modal = DeleteConfirmModal(
                 action="Delete session",
                 session_name=title,
-                detail=(
-                    "The session file will be permanently removed from disk.\n"
-                    "Its background tmux session will also be killed."
-                ),
+                detail=detail,
                 on_confirm=lambda: self._do_delete_session(session),
                 on_cancel=self._close_modal,
             )
@@ -7928,7 +8033,15 @@ class App:
             )
             project = r.project if r else None
             if session_id:
+                lineage_count = (
+                    len(self._codex_lineage_ids(session_id))
+                    if r is not None and r.session_type == "codex" else 1
+                )
                 detail = (
+                    "The detached tmux session will be killed.\n"
+                    f"All {lineage_count} rewind records will also be "
+                    "permanently deleted from disk."
+                    if lineage_count > 1 else
                     "The detached tmux session will be killed.\n"
                     "The session file will also be permanently deleted from disk."
                 )
@@ -8140,24 +8253,52 @@ class App:
                                tmux_name: str | None, label: str) -> None:
         """Codex arm of ``_cleanup_session`` (tmux already killed).
 
-        A real rollout is removed via ``codex delete --force``; on failure the
-        registry and index are left untouched and an error is shown, so the row
-        stays put and we never falsely report 'Deleted'. A placeholder (no
-        resolved UUID yet) has no rollout on disk, so killing the tmux session
-        is the whole operation."""
+        A real rollout and its rewind lineage are removed via
+        ``codex delete --force``. A total failure leaves the registry and index
+        untouched; a partial failure refreshes the surviving records and
+        reports exact counts. A placeholder (no resolved UUID yet) has no
+        rollout on disk, so killing the tmux session is the whole operation."""
         is_real = bool(session_id) and not session_id.startswith("__new__-")
-        if is_real and not self._codex_delete(session_id):
-            self._set_status(f"codex delete failed: {label}", "error")
-            return
+        lineage_ids = (
+            self._codex_lineage_ids(session_id)
+            if is_real and session_id is not None else set()
+        )
+        deleted_ids: set[str] = set()
+        failed_ids: set[str] = set()
+        if is_real:
+            # A collapsed row represents the complete rewind lineage. Delete
+            # every provider UUID so an older checkpoint cannot immediately
+            # reappear as a "new" session after the newest leaf is removed.
+            ordered = [session_id] + sorted(lineage_ids - {session_id})
+            for candidate in ordered:
+                if self._codex_delete(candidate):
+                    deleted_ids.add(candidate)
+                else:
+                    failed_ids.add(candidate)
+            if failed_ids and not deleted_ids:
+                self._set_status(f"codex delete failed: {label}", "error")
+                return
         self._forget_running(session_id, tmux_name)
         if isinstance(self._codex_index, BackgroundCodexIndex):
             self._codex_index.invalidate(
-                tombstone=session_id if is_real else None)
+                tombstones=deleted_ids)
         else:
             self._codex_index.invalidate()
         self._invalidate_project_snapshot()
         self._refresh()
-        self._set_status(f"{'Deleted' if is_real else 'Killed'}: {label}")
+        if failed_ids:
+            self._set_status(
+                f"Deleted {len(deleted_ids)}/{len(lineage_ids)} rewind "
+                f"records for {label}; {len(failed_ids)} failed",
+                "error",
+            )
+            return
+        suffix = (
+            f" ({len(deleted_ids)} rewind records)"
+            if len(deleted_ids) > 1 else ""
+        )
+        self._set_status(
+            f"{'Deleted' if is_real else 'Killed'}: {label}{suffix}")
 
     def _codex_delete(self, uuid: str) -> bool:
         """Run ``codex delete --force <UUID>`` against the resolved CODEX_HOME.
@@ -8261,7 +8402,7 @@ class App:
         self._close_modal()
         new_title = new_title.strip()
         if not new_title:
-            self._renames.clear(session.session_id)
+            self._renames.clear_many(self._session_identity_ids(session))
             self._session_cache.invalidate()
             self._codex_index.invalidate()
             self._invalidate_project_snapshot()
@@ -8299,7 +8440,9 @@ class App:
         if session is None:
             self._set_status("No session selected.")
             return
-        now_star = self._favorites.toggle(session.session_id)
+        identity_ids = self._session_identity_ids(session)
+        now_star = not bool(identity_ids & self._favorites.get_ids())
+        self._favorites.set_many(identity_ids, now_star)
         label = "★" if now_star else "unstarred"
         self._set_status(f"{label} {session.display_title}")
 
@@ -8379,7 +8522,8 @@ class App:
         self._sessions_pane.set_selected_session(session.session_id)
         r = self._by_session_id(session.session_id)
         is_alive = r is not None and not r.is_placeholder
-        is_starred = session.session_id in self._favorites.get_ids()
+        is_starred = bool(
+            self._session_identity_ids(session) & self._favorites.get_ids())
         items: list[tuple[str, Callable[[], None]]] = [
             (_context_menu_label("Open", "↵"),
              lambda s=session: self._do_context_open(s)),
@@ -8509,7 +8653,9 @@ class App:
                            click_outside_to_close=True)
 
     def _do_context_star(self, session: SessionMeta) -> None:
-        now_star = self._favorites.toggle(session.session_id)
+        identity_ids = self._session_identity_ids(session)
+        now_star = not bool(identity_ids & self._favorites.get_ids())
+        self._favorites.set_many(identity_ids, now_star)
         self._session_cache.invalidate()
         self._refresh()
         label = "★" if now_star else "unstarred"

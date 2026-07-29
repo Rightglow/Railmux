@@ -70,6 +70,11 @@ class SessionMeta:
     # intentionally independent from ``status`` (conversation activity) and
     # from tmux/process liveness, which is owned by App's running registry.
     attention: AttentionState | None = None
+    # Codex creates a new rollout UUID when a conversation is rewound/forked.
+    # The parent link lets the Codex index present that chain as one logical
+    # conversation without changing the provider-owned UUID used for resume.
+    # Always None for Claude sessions and older Codex rollouts.
+    forked_from_id: str | None = None
 
     @property
     def display_title(self) -> str:

@@ -23,7 +23,8 @@ def _write_codex_session(path: Path, session_id: str, cwd: str,
                           extra_lines: list[str] | None = None,
                           originator: str = "codex_cli_rs",
                           thread_source: str = "user",
-                          source="cli") -> None:
+                          source="cli",
+                          forked_from_id: str | None = None) -> None:
     """Write a minimal Codex rollout JSONL file for testing."""
     lines = [
         json.dumps({
@@ -38,6 +39,10 @@ def _write_codex_session(path: Path, session_id: str, cwd: str,
                 "source": source,
                 "thread_source": thread_source,
                 "model_provider": model_provider,
+                **(
+                    {"forked_from_id": forked_from_id}
+                    if forked_from_id is not None else {}
+                ),
             },
         }),
     ]
@@ -79,6 +84,23 @@ def test_scan_codex_session_basic(tmp_path: Path):
     assert meta.message_count == 2
     assert meta.status == "idle"
     assert meta.git_branch is None
+    assert meta.forked_from_id is None
+
+
+def test_scan_codex_session_reads_fork_parent(tmp_path: Path):
+    path = tmp_path / "rollout-fork.jsonl"
+    _write_codex_session(
+        path,
+        "019f4509-2908-7a70-a36b-9e1044cb7a89",
+        "/home/testuser/project",
+        messages=[{"role": "user", "text": "Hello"}],
+        forked_from_id="019f4509-2908-7a70-a36b-9e1044cb7a88",
+    )
+
+    meta = _scan_codex_session(path)
+
+    assert meta is not None
+    assert meta.forked_from_id == "019f4509-2908-7a70-a36b-9e1044cb7a88"
 
 
 def test_scan_codex_session_previews_latest_user_message(tmp_path: Path):
@@ -345,6 +367,76 @@ def test_codex_index_sessions_for_cwd(tmp_path: Path):
     sessions_b = idx.sessions_for_cwd(Path("/project-b"))
     assert len(sessions_b) == 1
     assert sessions_b[0].session_id == "b1111111-1111-7111-a36b-9e1044cb7a88"
+
+
+def test_codex_index_collapses_rewind_lineage_to_newest_rollout(
+    tmp_path: Path,
+):
+    sessions_dir = tmp_path / "sessions" / "2026" / "07" / "09"
+    root = "a1111111-1111-7111-a36b-9e1044cb7a88"
+    middle = "a2222222-2222-7222-a36b-9e1044cb7a88"
+    leaf = "a3333333-3333-7333-a36b-9e1044cb7a88"
+    paths = []
+    for index, (session_id, parent) in enumerate((
+        (root, None),
+        (middle, root),
+        (leaf, middle),
+    )):
+        path = sessions_dir / f"rollout-{index}.jsonl"
+        _write_codex_session(
+            path,
+            session_id,
+            "/project-a",
+            messages=[
+                {"role": "user", "text": "same conversation"},
+                {"role": "assistant", "text": str(index)},
+            ],
+            forked_from_id=parent,
+        )
+        timestamp = 100.0 + index
+        os.utime(path, (timestamp, timestamp))
+        paths.append(path)
+
+    idx = CodexIndex(tmp_path)
+
+    sessions = idx.sessions_for_cwd(Path("/project-a"))
+    assert [meta.session_id for meta in sessions] == [leaf]
+    assert idx.all_cwds() == {Path("/project-a"): 1}
+    assert idx.lineage_ids(root) == frozenset({root, middle, leaf})
+    assert idx.lineage_ids(leaf) == frozenset({root, middle, leaf})
+    assert idx.representative_for(root).session_id == leaf
+    # Exact lookup remains available for recovery and provider operations.
+    assert idx.get(root).session_id == root
+    # No provider-owned history was removed by the presentation collapse.
+    assert all(path.exists() for path in paths)
+
+
+def test_codex_index_does_not_collapse_forks_across_projects(tmp_path: Path):
+    sessions_dir = tmp_path / "sessions" / "2026" / "07" / "09"
+    root = "a1111111-1111-7111-a36b-9e1044cb7a88"
+    fork = "a2222222-2222-7222-a36b-9e1044cb7a88"
+    _write_codex_session(
+        sessions_dir / "rollout-root.jsonl",
+        root,
+        "/project-a",
+        messages=[{"role": "user", "text": "root"}],
+    )
+    _write_codex_session(
+        sessions_dir / "rollout-fork.jsonl",
+        fork,
+        "/project-b",
+        messages=[{"role": "user", "text": "fork"}],
+        forked_from_id=root,
+    )
+
+    idx = CodexIndex(tmp_path)
+
+    assert [s.session_id for s in idx.sessions_for_cwd(
+        Path("/project-a"))] == [root]
+    assert [s.session_id for s in idx.sessions_for_cwd(
+        Path("/project-b"))] == [fork]
+    assert idx.lineage_ids(root) == frozenset({root})
+    assert idx.lineage_ids(fork) == frozenset({fork})
 
 
 def test_codex_index_all_cwds(tmp_path: Path):

@@ -49,6 +49,19 @@ def test_clear_removes_and_persists(renames):
     store.clear("never-existed")
 
 
+def test_clear_many_removes_lineage_aliases_in_one_update(renames):
+    store, _ = renames
+    store.set("root", "Old name")
+    store.set("leaf", "New name")
+    store.set("other", "Keep")
+
+    store.clear_many({"root", "leaf"})
+
+    assert Renames().get("root") is None
+    assert Renames().get("leaf") is None
+    assert Renames().get("other") == "Keep"
+
+
 def test_load_ignores_malformed_file(tmp_path, monkeypatch):
     path = tmp_path / "renames.json"
     path.write_text("{ this is not json")
