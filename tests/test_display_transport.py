@@ -50,6 +50,7 @@ class FakeTmux:
         self.dead_panes: set[str] = set()
         self.respawned: list[tuple[str, str]] = []
         self.split_commands: list[str] = []
+        self.split_kwargs: list[dict] = []
         self.dual_calls: list[tuple[str, str, str, int, int]] = []
         self._patch(monkeypatch)
 
@@ -116,8 +117,9 @@ class FakeTmux:
         return tmux_ctl.SessionTopology(
             name, str(session["id"]), int(session["attached"]), windows, panes)
 
-    def split_window_h(self, command, **_kwargs):
+    def split_window_h(self, command, **kwargs):
         self.split_commands.append(command)
+        self.split_kwargs.append(kwargs)
         pane_id = f"%{self.next_pane}"
         self.next_pane += 1
         self.panes[pane_id] = tmux_ctl.PaneIdentity(
@@ -600,6 +602,20 @@ def test_create_primary_and_reset_slot_use_branded_empty_surface(rig):
     assert workspace.primary.pane_id == pane_id
     assert workspace.primary.agent_tmux_name is None
     assert "railmux.pane_surface --empty 1" in fake.respawned[-1][1]
+
+
+def test_create_primary_can_build_final_startup_width(rig):
+    fake, workspace, manager = rig
+
+    assert manager.create_primary(agent_width=126)
+
+    assert workspace.primary.pane_id is not None
+    assert fake.split_kwargs[-1] == {
+        "target": "%0",
+        "size_percent": None,
+        "size_cells": 126,
+        "detached": True,
+    }
 
 
 def test_create_dual_builds_both_empty_slots_with_one_transport_call(rig):

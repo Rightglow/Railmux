@@ -396,6 +396,14 @@ the old agent; an unusable split degrades to single while retaining a validated
 secondary agent in Running. Portable restoration deliberately remains a single
 stable Target display wish and never carries tmux identity or process authority.
 
+For a wide exact-owner restart with saved visible content, Railmux may create
+only its inert display panes at the final saved boundaries before Urwid paints
+the first frame. Provider validation, swap/attach, and focus restoration remain
+in the ordinary deferred recovery path. A failed prelayout is a no-op fallback;
+if deferred recovery produces no content, it removes only those owned empty
+panes and returns to the full-width sidebar. With no saved visible agent—or in
+compact presentation—the initial surface remains the sidebar.
+
 Ask Railmux is an explicit auxiliary display, not a provider-session recovery
 authority. Opening static Help performs no provider work. The Ask action
 materializes installed user documentation under the per-user XDG data tree and

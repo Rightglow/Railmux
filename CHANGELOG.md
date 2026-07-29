@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.16] - 2026-07-29
+
+### Added
+
+- Let `railmux ssh` users drag within one visible Claude Code or Codex pane to
+  highlight and automatically copy text on the local machine without entering
+  tmux copy-mode; ordinary clicks and double-clicks remain remote UI actions.
+- Add a real, non-destructive Codex session context-menu recording to the
+  product website, balance the existing Claude/Codex demonstrations, and
+  document local SSH selection across macOS, Linux, and WSL.
+
+### Changed
+
+- Establish saved wide single- or dual-agent pane boundaries at their final
+  proportions before Urwid's first frame, then fill them through the existing
+  validated restore path. Startups with no saved visible agent still open
+  directly into the full-width sidebar.
+- Make the website's session-resume cue visibly animate both clicks, and stop
+  presenting keyboard-only Quit confirmations as mouse-clickable actions.
+- Streamline the README quick start around prerequisites, installation, and
+  SSH; add macOS-friendly user-script `PATH` recovery and explain that
+  persistent first-run choices remain editable in **Options**.
+
+### Fixed
+
+- Collapse same-project Codex rewind forks into one current session row while
+  retaining every provider UUID for exact recovery, resume, status, rename,
+  favorite, and deletion operations.
+- Treat a live Codex writer's newest rewind fork as the same persisted running
+  session during soft restart, instead of degrading a resolved binding to
+  `unresolved` or allowing a duplicate process to start.
+- Keep local `railmux ssh` drag-copy feedback in status-right so it no longer
+  erases the Railmux, mode, and layout controls on the left.
+- Suppress transient full-width sidebar and row-focus flashes while a saved
+  agent workspace restores; failed prelayout removes only Railmux-owned empty
+  panes and retains the established recovery fallback.
+- Honor direct website section links such as `/#install` after the React
+  application mounts, with fixed-navigation spacing and browser regression
+  coverage.
+
 ## [0.2.16.dev202607291] - 2026-07-29
 
 ### Fixed
@@ -1125,7 +1165,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.16...HEAD
+[0.2.16]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16
+[0.2.16.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...v0.2.16.dev202607291
 [0.2.16.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16.dev202607290
 [0.2.15]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15
 [0.2.15.dev202607284]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...v0.2.15.dev202607284

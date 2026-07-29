@@ -999,6 +999,28 @@ def test_split_window_h_can_leave_focus_on_current_pane():
     assert "-l" in args
 
 
+def test_split_window_h_supports_exact_cell_width():
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         _mock_check_output("%9") as output:
+        assert split_window_h(
+            "cmd", target="%1", size_cells=143, detached=True,
+        ) == "%9"
+
+    args = output.call_args.args[0]
+    assert args[args.index("-l") + 1] == "143"
+    assert args[args.index("-t") + 1] == "%1"
+    assert "-p" not in args
+
+
+def test_split_window_h_rejects_conflicting_size_modes():
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         patch("subprocess.check_output") as output:
+        assert split_window_h(
+            "cmd", size_percent=70, size_cells=143,
+        ) is None
+    output.assert_not_called()
+
+
 def test_split_window_v_supports_equal_detached_layout():
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          patch("railmux.tmux_ctl.tmux_version", return_value=(2, 7)), \

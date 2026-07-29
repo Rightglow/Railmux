@@ -600,6 +600,125 @@ def test_restore_workspace_builds_final_dual_geometry_before_agent_content(
         workspace.secondary, saved["slots"]["secondary"], None)
 
 
+def test_startup_prelayout_builds_saved_dual_before_first_frame(monkeypatch):
+    app = _minimal_app()
+    app._pending_restore_state = {
+        "workspace": {
+            "layout": "side-by-side",
+            "slots": {
+                "primary": {"kind": "agent", "tmux": "cc-primary"},
+                "secondary": {"kind": "preview", "session": "history"},
+            },
+        },
+    }
+    app._prelayout_created = False
+    app._planned_dual_restore_geometry = MagicMock(return_value=(143, 57))
+    app._set_railmux_focus = MagicMock()
+    transport = MagicMock()
+    transport.create_dual.return_value = True
+    app._display_transport_manager = transport
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.session_exists",
+        lambda name: name == "cc-primary",
+    )
+
+    assert app._prelayout_pending_workspace()
+
+    transport.create_dual.assert_called_once_with(
+        WorkspaceLayout.SIDE_BY_SIDE,
+        agent_width=143,
+        secondary_extent=57,
+    )
+    transport.create_primary.assert_not_called()
+    app._set_railmux_focus.assert_called_once_with(
+        True, force_border=True)
+    assert app._prelayout_created
+
+
+def test_startup_prelayout_builds_saved_single_at_exact_width(monkeypatch):
+    app = _minimal_app()
+    app._pending_restore_state = {
+        "workspace": {
+            "layout": "single",
+            "slots": {
+                "primary": {"kind": "agent", "tmux": "cc-primary"},
+                "secondary": {"kind": "empty"},
+            },
+        },
+    }
+    app._planned_restore_agent_region = MagicMock(return_value=(126, 38))
+    app._set_railmux_focus = MagicMock()
+    transport = MagicMock()
+    transport.create_primary.return_value = True
+    app._display_transport_manager = transport
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.session_exists", lambda _name: True)
+
+    assert app._prelayout_pending_workspace()
+
+    transport.create_primary.assert_called_once_with(agent_width=126)
+    transport.create_dual.assert_not_called()
+
+
+def test_startup_prelayout_ignores_empty_dead_and_compact_state(monkeypatch):
+    app = _minimal_app()
+    app._pending_restore_state = {
+        "workspace": {
+            "layout": "side-by-side",
+            "slots": {
+                "primary": {"kind": "agent", "tmux": "cc-dead"},
+                "secondary": {"kind": "empty"},
+            },
+        },
+    }
+    transport = MagicMock()
+    app._display_transport_manager = transport
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.session_exists", lambda _name: False)
+
+    assert not app._prelayout_pending_workspace()
+    transport.create_dual.assert_not_called()
+
+    app._pending_restore_state["workspace"]["slots"]["primary"] = {
+        "kind": "preview", "session": "history",
+    }
+    app._agent_workspace().presentation = WorkspacePresentation.COMPACT
+    assert not app._prelayout_pending_workspace()
+    transport.create_dual.assert_not_called()
+
+
+def test_failed_startup_restore_closes_only_owned_empty_skeleton():
+    app = _minimal_app()
+    workspace = app._agent_workspace()
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    workspace.target_slot_key = AgentWorkspace.SECONDARY
+    app._prelayout_created = True
+    app._set_railmux_focus = MagicMock()
+    transport = MagicMock()
+    app._display_transport_manager = transport
+
+    app._finish_prelayout_restore(False)
+
+    transport.close_all.assert_called_once_with()
+    assert workspace.layout is WorkspaceLayout.SINGLE
+    assert workspace.target_slot_key == AgentWorkspace.PRIMARY
+    assert not app._prelayout_created
+
+
+def test_partial_startup_restore_keeps_prelayout_surface():
+    app = _minimal_app()
+    workspace = app._agent_workspace()
+    workspace.primary.agent_tmux_name = "cc-primary"
+    app._prelayout_created = True
+    transport = MagicMock()
+    app._display_transport_manager = transport
+
+    app._finish_prelayout_restore(False)
+
+    transport.close_all.assert_not_called()
+    assert not app._prelayout_created
+
+
 def test_restore_workspace_keeps_dual_layout_when_secondary_content_fails(
         monkeypatch):
     app = _minimal_app()

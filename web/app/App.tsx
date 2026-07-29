@@ -257,12 +257,14 @@ export default function Home() {
             <div className="feature-entrypoints">
               <div className="feature-entrypoints-heading">
                 <span>06 / ENTRY POINTS</span>
-                <h3>Start fresh. Or ask Railmux about Railmux.</h3>
+                <h3>Start fresh. Get help. Manage in place.</h3>
                 <p>
                   New Project opens a keyboard-and-mouse directory browser.
                   Help keeps shortcuts nearby and can launch a separate,
                   read-only support session in Railmux&apos;s own help
                   workspace against the installed guide—not in your project.
+                  Right-click any session for its complete, mouse-friendly
+                  action menu.
                 </p>
               </div>
               <div className="entrypoint-grid">
@@ -294,6 +296,23 @@ export default function Home() {
                   <div>
                     <span>HELP</span>
                     <small>Read-only Railmux support, outside your project.</small>
+                  </div>
+                </article>
+                <article>
+                  <div className="entrypoint-terminal-viewport">
+                    <TerminalRecording
+                      source="railmux-tour-demo.cast"
+                      className="entrypoint-recording"
+                      poster="npt:12.2"
+                      controls={false}
+                      dataDemo="session-menu-recording"
+                    />
+                  </div>
+                  <div>
+                    <span>SESSION MENU</span>
+                    <small>
+                      Manage Claude Code or Codex work from the same menu.
+                    </small>
                   </div>
                 </article>
               </div>
@@ -462,6 +481,12 @@ export default function Home() {
                 <li><span>↗</span> Reconnect without restarting remote agents</li>
                 <li><span>↗</span> Install a matching remote helper with consent</li>
               </ul>
+              <p className="ssh-selection-note">
+                Selection stays inside the visible agent pane and writes to
+                your local clipboard—without entering tmux copy-mode. It works
+                the same for Claude Code and Codex from supported macOS,
+                Linux, and WSL terminals.
+              </p>
               <CopyCommand command="railmux ssh your-server" />
             </div>
             <div className="ssh-visual" aria-hidden="true">

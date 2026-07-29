@@ -794,6 +794,10 @@ class App:
         self._outer_teardown_done: bool = False
         self._exit_in_progress: bool = False
         self._pending_restore_state: dict | None = None
+        # True only while startup owns inert display panes created before the
+        # first Urwid frame. Failed restoration may remove those panes without
+        # touching any provider session.
+        self._prelayout_created: bool = False
         # When a soft restart is restoring focus directly into an agent pane,
         # suppress the sidebar's focused-row decoration until that pane exists.
         # Otherwise the first two startup frames briefly paint the remembered
@@ -1622,9 +1626,11 @@ class App:
         self._pending_restore_state = None
         if state is None:
             return
+        restored = False
         try:
             restored = self._restore_right_pane(state)
         finally:
+            self._finish_prelayout_restore(restored)
             if getattr(
                 self, "_defer_startup_sidebar_focus_visual", False
             ):
@@ -2660,12 +2666,11 @@ class App:
             minimum, round(usable * ratio / 1000)))
         return tmux_ctl.resize_pane_height(primary, desired)
 
-    def _planned_dual_restore_geometry(
+    def _planned_restore_agent_region(
         self, layout: WorkspaceLayout,
     ) -> tuple[int, int] | None:
-        """Return exact empty-skeleton extents for a wide dual restore."""
-        if (layout is WorkspaceLayout.SINGLE
-                or self._agent_workspace().presentation
+        """Return the exact agent-region size for a wide startup restore."""
+        if (self._agent_workspace().presentation
                 is not WorkspacePresentation.WIDE):
             return None
         profile = getattr(self, "_layout_profile", None)
@@ -2688,6 +2693,17 @@ class App:
         region = (width - sidebar - 1, height)
         if not self._layout_fits(region, layout):
             return None
+        return region
+
+    def _planned_dual_restore_geometry(
+        self, layout: WorkspaceLayout,
+    ) -> tuple[int, int] | None:
+        """Return exact empty-skeleton extents for a wide dual restore."""
+        if layout is WorkspaceLayout.SINGLE:
+            return None
+        region = self._planned_restore_agent_region(layout)
+        if region is None:
+            return None
         usable = (
             region[0] - 1
             if layout is WorkspaceLayout.SIDE_BY_SIDE
@@ -2707,6 +2723,84 @@ class App:
             max(minimum, round(usable * ratio / 1000)),
         )
         return region[0], usable - primary
+
+    @staticmethod
+    def _saved_slot_needs_surface(saved: object) -> bool:
+        """Whether a saved slot can safely justify an inert startup pane."""
+        if not isinstance(saved, dict):
+            return False
+        if saved.get("kind") == "preview":
+            return True
+        tmux_name = saved.get("tmux")
+        return (
+            saved.get("kind") == "agent"
+            and isinstance(tmux_name, str)
+            and tmux_ctl.session_exists(tmux_name)
+        )
+
+    def _prelayout_pending_workspace(self) -> bool:
+        """Build saved pane boundaries before Urwid paints its first frame.
+
+        Only empty Railmux-owned display panes are created here. Provider
+        sessions are validated and attached later by the established deferred
+        restore path.
+        """
+        state = self._pending_restore_state
+        saved = state.get("workspace") if isinstance(state, dict) else None
+        slots = saved.get("slots") if isinstance(saved, dict) else None
+        if not isinstance(slots, dict):
+            return False
+        if not any(
+            self._saved_slot_needs_surface(slots.get(key))
+            for key in (AgentWorkspace.PRIMARY, AgentWorkspace.SECONDARY)
+        ):
+            return False
+        try:
+            layout = WorkspaceLayout(saved["layout"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        workspace = self._agent_workspace()
+        if workspace.presentation is not WorkspacePresentation.WIDE:
+            return False
+        transport = self._display_transport()
+        if layout is WorkspaceLayout.SINGLE:
+            region = self._planned_restore_agent_region(layout)
+            created = (
+                region is not None
+                and transport.create_primary(agent_width=region[0])
+            )
+        else:
+            planned = self._planned_dual_restore_geometry(layout)
+            created = (
+                planned is not None
+                and transport.create_dual(
+                    layout,
+                    agent_width=planned[0],
+                    secondary_extent=planned[1],
+                )
+            )
+        if not created:
+            return False
+        self._prelayout_created = True
+        self._set_railmux_focus(True, force_border=True)
+        return True
+
+    def _finish_prelayout_restore(self, restored: bool) -> None:
+        """Keep useful prelayout panes or discard an unused empty skeleton."""
+        if not getattr(self, "_prelayout_created", False):
+            return
+        self._prelayout_created = False
+        workspace = self._agent_workspace()
+        has_content = any(
+            slot.agent_tmux_name is not None or slot.in_history_mode
+            for slot in workspace.slots
+        )
+        if restored or has_content:
+            return
+        self._display_transport().close_all()
+        workspace.layout = WorkspaceLayout.SINGLE
+        workspace.target_slot_key = AgentWorkspace.PRIMARY
+        self._set_railmux_focus(True, force_border=True)
 
     def _restore_transient_layout_profile(
         self, profile: LayoutProfile | None,
@@ -9548,6 +9642,11 @@ class App:
             except Exception:
                 pass
             self._check_terminal_size()
+            # If a saved agent workspace is valid, establish its final empty
+            # tmux boundaries before Urwid emits the first sidebar frame. The
+            # deferred restore then fills those panes without a full-width
+            # sidebar flash or repeated window reflow.
+            self._prelayout_pending_workspace()
             # Intercept Ctrl-C as a regular keypress so we can show a confirm-quit
             # popup instead of slamming out via SIGINT. Ctrl-\ (quit) is left
             # active as an emergency hard-exit.

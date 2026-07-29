@@ -876,19 +876,26 @@ def fit_session_to_pane(session_name: str, pane_id: str) -> bool:
 
 def split_window_h(cmd: str = "", target: str | None = None,
                    size_percent: int | None = None,
+                   size_cells: int | None = None,
                    detached: bool = False) -> str | None:
     """Create a horizontal split (new pane to the right). Returns the new pane id.
 
     `size_percent` sets the new (right) pane's width as a percentage of the
     parent pane. E.g. size_percent=70 → Railmux on the left at 30%, agent
     pane on the right at 70%.
+    `size_cells` sets its exact width and is mutually exclusive with
+    `size_percent`.
     """
     if not in_tmux():
+        return None
+    if size_percent is not None and size_cells is not None:
         return None
     args = ["tmux", "split-window", "-h", "-P", "-F", "#{pane_id}"]
     if detached:
         args.append("-d")
-    if size_percent is not None:
+    if size_cells is not None:
+        args.extend(["-l", str(max(1, size_cells))])
+    elif size_percent is not None:
         # `-l <N>%` is only understood by tmux >= 3.1. Older tmux (e.g. 2.7,
         # shipped on many stable distros) rejects it with "size invalid" and
         # the split silently fails, so the agent pane never opens. Fall back

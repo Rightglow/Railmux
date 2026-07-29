@@ -33,7 +33,8 @@ responsive layout changes do not interrupt in-progress work.
 - **Leave without losing momentum** — detach one terminal or soft-quit the
   shared UI while detached agent sessions keep running.
 - **Use it comfortably over SSH** — `railmux ssh` coalesces superseded redraws
-  and provides responsive, locally cached history scrolling.
+  and provides responsive, locally cached history scrolling plus local
+  drag-to-copy inside either Claude Code or Codex panes.
 
 One-off non-resumable invocations such as `codex exec` are intentionally
 filtered from the sidebar.

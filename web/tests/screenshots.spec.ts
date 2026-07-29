@@ -249,7 +249,7 @@ test("show a native sidebar evidence frame", async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test("show real New Project and Help entry points", async ({ page }) => {
+test("show real New Project, Help, and session menu entry points", async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -275,6 +275,22 @@ test("show real New Project and Help entry points", async ({ page }) => {
     animations: "disabled",
     scale: "css",
   });
+
+  const sessionMenu = page.locator('[data-demo="session-menu-recording"]');
+  await expect(sessionMenu.locator(".ap-term")).toContainText("Copy title");
+  await expect(sessionMenu.locator(".ap-term")).toContainText("Rename");
+  await expect(sessionMenu.locator(".ap-term")).toContainText("Codex");
+  await expect(sessionMenu.locator(".ap-term")).toContainText(
+    "Explain workspace layout",
+  );
+  await sessionMenu.locator("xpath=..").screenshot({
+    path: join(outputDir, "session-menu.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+  await expect(
+    page.getByText("without entering tmux copy-mode", { exact: false }),
+  ).toBeVisible();
   expect(pageErrors).toEqual([]);
 });
 

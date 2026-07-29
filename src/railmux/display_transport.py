@@ -414,7 +414,7 @@ class AgentDisplayTransport:
         if topology is not None and topology.session_id == session_id:
             tmux_ctl.kill_session(name)
 
-    def create_primary(self) -> bool:
+    def create_primary(self, *, agent_width: int | None = None) -> bool:
         """Create the productized empty Pane 1 without attaching an agent."""
         primary = self.workspace.primary
         if (primary.pane_id is not None
@@ -422,7 +422,12 @@ class AgentDisplayTransport:
             return True
         primary.clear_display()
         pane_id = tmux_ctl.split_window_h(
-            _empty_slot_command(primary), size_percent=70, detached=True)
+            _empty_slot_command(primary),
+            target=self.owner_pane_id if agent_width is not None else None,
+            size_percent=70 if agent_width is None else None,
+            size_cells=agent_width,
+            detached=True,
+        )
         if pane_id is None:
             return False
         primary.pane_id = pane_id

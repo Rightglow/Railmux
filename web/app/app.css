@@ -815,7 +815,7 @@ code {
 .entrypoint-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
   background: rgba(255, 255, 255, 0.12);
 }
@@ -902,6 +902,17 @@ code {
   color: rgba(242, 240, 233, 0.62);
   font-size: 16px;
   line-height: 1.65;
+}
+
+.ssh-copy > .ssh-selection-note {
+  max-width: 620px;
+  margin: -12px 0 30px;
+  padding-left: 14px;
+  border-left: 2px solid rgba(200, 255, 98, 0.55);
+  color: rgba(242, 240, 233, 0.64);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
 }
 
 .ssh-copy code {
