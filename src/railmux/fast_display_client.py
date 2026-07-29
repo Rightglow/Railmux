@@ -24,6 +24,7 @@ import termios
 import time
 import tty
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 from functools import lru_cache
@@ -70,11 +71,6 @@ LOCAL_ESCAPE = b"\x1d"  # Ctrl-]
 _SGR_MOUSE_PREFIX = b"\x1b[<"
 _SGR_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
 _HISTORY_SCROLL_BASE_LINES = 1
-_HISTORY_SCROLL_ACCELERATED_LINES = 2
-_HISTORY_SCROLL_FAST_LINES = 3
-_HISTORY_SCROLL_BURST_INTERVAL = 0.075
-_HISTORY_SCROLL_ACCELERATE_AFTER = 5
-_HISTORY_SCROLL_FAST_AFTER = 9
 _HISTORY_PREFETCH_LINES = 300
 _HISTORY_INITIAL_LINES = 2000
 _HISTORY_PAGE_LINES = 2000
@@ -131,10 +127,13 @@ class ScreenModel:
         self.rows: list[bytes] = []
 
     def apply(
-        self, update: ScreenUpdate, expected_size: os.terminal_size,
+        self,
+        update: ScreenUpdate,
+        expected_size: os.terminal_size,
     ) -> AppliedScreen | None:
         if (update.width, update.height) != (
-            expected_size.columns, expected_size.lines
+            expected_size.columns,
+            expected_size.lines,
         ):
             return None
         if update.kind is UpdateKind.KEYFRAME:
@@ -264,9 +263,7 @@ def await_remote_attach_status(
         readers = [process.stdout.fileno()]
         if cancel_fd is not None:
             readers.append(cancel_fd)
-        readable, _writable, _exceptional = select.select(
-            readers, [], [], remaining
-        )
+        readable, _writable, _exceptional = select.select(readers, [], [], remaining)
         if not readable:
             return RemoteAttachKind.TIMEOUT
         if cancel_fd is not None and cancel_fd in readable:
@@ -293,7 +290,7 @@ def parse_remote_hello(line: bytes) -> RemoteHello:
     """Parse one bounded, untrusted compatibility line from the remote."""
     if not line.startswith(REMOTE_HELLO_PREFIX):
         raise ValueError("not a Railmux remote hello")
-    payload = line[len(REMOTE_HELLO_PREFIX):].rstrip(b"\r\n")
+    payload = line[len(REMOTE_HELLO_PREFIX) :].rstrip(b"\r\n")
     try:
         value = json.loads(payload)
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -346,9 +343,7 @@ def await_remote_startup(
         readers = [process.stdout.fileno()]
         if cancel_fd is not None:
             readers.append(cancel_fd)
-        readable, _writable, _exceptional = select.select(
-            readers, [], [], remaining
-        )
+        readable, _writable, _exceptional = select.select(readers, [], [], remaining)
         if not readable:
             return RemoteStartup(RemoteStartKind.TIMEOUT)
         if cancel_fd is not None and cancel_fd in readable:
@@ -359,9 +354,7 @@ def await_remote_startup(
         if not chunk:
             returncode = process.wait()
             kind = (
-                RemoteStartKind.MISSING
-                if returncode == 127
-                else RemoteStartKind.FAILED
+                RemoteStartKind.MISSING if returncode == 127 else RemoteStartKind.FAILED
             )
             return RemoteStartup(kind, returncode=returncode)
         received.extend(chunk)
@@ -410,11 +403,7 @@ class SgrMouseEvent:
             return self
         y = self.y + offset
         terminator = b"M" if self.pressed else b"m"
-        raw = (
-            _SGR_MOUSE_PREFIX
-            + f"{self.button};{self.x};{y}".encode()
-            + terminator
-        )
+        raw = _SGR_MOUSE_PREFIX + f"{self.button};{self.x};{y}".encode() + terminator
         return replace(self, raw=raw, y=y)
 
 
@@ -426,7 +415,8 @@ class TerminalInputDecoder:
         self._pending_since: float | None = None
 
     def _finish(
-        self, parts: list[bytes | SgrMouseEvent],
+        self,
+        parts: list[bytes | SgrMouseEvent],
     ) -> list[bytes | SgrMouseEvent]:
         if self._buffer:
             if self._pending_since is None:
@@ -451,7 +441,9 @@ class TerminalInputDecoder:
             marker = self._buffer.find(_SGR_MOUSE_PREFIX)
             if marker < 0:
                 keep = 0
-                for size in range(1, min(len(self._buffer), len(_SGR_MOUSE_PREFIX) - 1) + 1):
+                for size in range(
+                    1, min(len(self._buffer), len(_SGR_MOUSE_PREFIX) - 1) + 1
+                ):
                     if self._buffer[-size:] == _SGR_MOUSE_PREFIX[:size]:
                         keep = size
                 emit = len(self._buffer) - keep
@@ -464,7 +456,9 @@ class TerminalInputDecoder:
             end = next(
                 (
                     index
-                    for index, value in enumerate(self._buffer[len(_SGR_MOUSE_PREFIX):], len(_SGR_MOUSE_PREFIX))
+                    for index, value in enumerate(
+                        self._buffer[len(_SGR_MOUSE_PREFIX) :], len(_SGR_MOUSE_PREFIX)
+                    )
                     if value in (ord("M"), ord("m"))
                 ),
                 None,
@@ -475,9 +469,9 @@ class TerminalInputDecoder:
                 self._append_bytes(parts, bytes((self._buffer[0],)))
                 del self._buffer[0]
                 continue
-            raw = bytes(self._buffer[:end + 1])
-            del self._buffer[:end + 1]
-            fields = raw[len(_SGR_MOUSE_PREFIX):-1].split(b";")
+            raw = bytes(self._buffer[: end + 1])
+            del self._buffer[: end + 1]
+            fields = raw[len(_SGR_MOUSE_PREFIX) : -1].split(b";")
             try:
                 if len(fields) != 3:
                     raise ValueError
@@ -510,12 +504,10 @@ class TerminalInputDecoder:
 
 
 def claude_history_save_timed_out(
-    started_at: float | None, now: float,
+    started_at: float | None,
+    now: float,
 ) -> bool:
-    return (
-        started_at is not None
-        and now - started_at >= _CLAUDE_HISTORY_SAVE_TIMEOUT
-    )
+    return started_at is not None and now - started_at >= _CLAUDE_HISTORY_SAVE_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -546,9 +538,7 @@ def apply_claude_history_policy_result(
             runtime_choice=None,
             prefetch=False,
             forwarded_input=b"",
-            status_text=(
-                "Could not save Claude history choice; setting remains Ask"
-            ),
+            status_text=("Could not save Claude history choice; setting remains Ask"),
         )
     runtime_choice = None if result.persistent else result.policy
     if result.policy == "local":
@@ -557,9 +547,7 @@ def apply_claude_history_policy_result(
             runtime_choice=runtime_choice,
             prefetch=True,
             forwarded_input=b"",
-            status_text=(
-                "Smooth local Claude history enabled; scroll again"
-            ),
+            status_text=("Smooth local Claude history enabled; scroll again"),
         )
     return ClaudeHistoryPolicyAction(
         update_runtime=True,
@@ -574,8 +562,7 @@ def claude_history_reconnect_frame(runtime_choice: str | None) -> bytes:
     """Resend only a non-persistent policy after transport replacement."""
     if runtime_choice is None:
         return b""
-    return encode_claude_history_policy(
-        runtime_choice, persistent=False)
+    return encode_claude_history_policy(runtime_choice, persistent=False)
 
 
 @dataclass(frozen=True)
@@ -676,7 +663,8 @@ class LocalTextSelection:
         return was_active
 
     def validate_routes(
-        self, routes: tuple[HistorySnapshot, ...],
+        self,
+        routes: tuple[HistorySnapshot, ...],
     ) -> bool:
         """Cancel when a refreshed route set no longer matches the capture."""
         if self._route is None:
@@ -704,7 +692,8 @@ class LocalTextSelection:
 
     @staticmethod
     def _point(
-        event: SgrMouseEvent, route: HistorySnapshot,
+        event: SgrMouseEvent,
+        route: HistorySnapshot,
     ) -> tuple[int, int]:
         x = min(
             route.width - 1,
@@ -717,7 +706,9 @@ class LocalTextSelection:
         return x, y
 
     def _begin(
-        self, event: SgrMouseEvent, source: SelectionSource,
+        self,
+        event: SgrMouseEvent,
+        source: SelectionSource,
     ) -> None:
         route = source.route
         decoded: list[tuple[str | None, ...]] = []
@@ -726,10 +717,7 @@ class LocalTextSelection:
             line = source.rows[index] if index < len(source.rows) else b""
             cells = _plain_display_cells(line, decode_width)
             decoded.append(
-                cells[
-                    source.row_x_offset:
-                    source.row_x_offset + route.width
-                ]
+                cells[source.row_x_offset : source.row_x_offset + route.width]
             )
         self._press = event
         self._route = route
@@ -789,9 +777,7 @@ class LocalTextSelection:
 
     def _ordered_points(self) -> tuple[tuple[int, int], tuple[int, int]]:
         assert self._anchor is not None and self._head is not None
-        if (self._anchor[1], self._anchor[0]) <= (
-            self._head[1], self._head[0]
-        ):
+        if (self._anchor[1], self._anchor[0]) <= (self._head[1], self._head[0]):
             return self._anchor, self._head
         return self._head, self._anchor
 
@@ -808,7 +794,8 @@ class LocalTextSelection:
 
     @staticmethod
     def _adjust_wide_start(
-        cells: tuple[str | None, ...], start: int,
+        cells: tuple[str | None, ...],
+        start: int,
     ) -> int:
         while start > 0 and cells[start] is None:
             start -= 1
@@ -821,13 +808,11 @@ class LocalTextSelection:
         lines: list[str] = []
         for row in range(start[1], end[1] + 1):
             cells = self._rows[row]
-            start_x, end_x = self._row_span(
-                row, start, end, self._route.width
-            )
+            start_x, end_x = self._row_span(row, start, end, self._route.width)
             start_x = self._adjust_wide_start(cells, start_x)
-            text = "".join(
-                cell or "" for cell in cells[start_x:end_x + 1]
-            ).rstrip(" ")
+            text = "".join(cell or "" for cell in cells[start_x : end_x + 1]).rstrip(
+                " "
+            )
             lines.append(text)
         data = "\n".join(lines).encode("utf-8")
         if not data:
@@ -848,18 +833,16 @@ class LocalTextSelection:
         segments: list[SelectionSegment] = []
         for row in range(start[1], end[1] + 1):
             cells = self._rows[row]
-            start_x, end_x = self._row_span(
-                row, start, end, self._route.width
-            )
+            start_x, end_x = self._row_span(row, start, end, self._route.width)
             start_x = self._adjust_wide_start(cells, start_x)
-            text = "".join(
-                cell or "" for cell in cells[start_x:end_x + 1]
+            text = "".join(cell or "" for cell in cells[start_x : end_x + 1])
+            segments.append(
+                (
+                    self._route.y + row,
+                    self._route.x + start_x,
+                    text.encode("utf-8"),
+                )
             )
-            segments.append((
-                self._route.y + row,
-                self._route.x + start_x,
-                text.encode("utf-8"),
-            ))
         return tuple(segments)
 
 
@@ -886,7 +869,8 @@ class LocalHistoryView:
     """Keep bounded history content separate from visible pointer routes."""
 
     def __init__(
-        self, history_limit: int = SSH_HISTORY_DEFAULT_LINES,
+        self,
+        history_limit: int = SSH_HISTORY_DEFAULT_LINES,
     ) -> None:
         if not SSH_HISTORY_MIN_LINES <= history_limit <= SSH_HISTORY_MAX_LINES:
             raise ValueError("invalid local history limit")
@@ -899,14 +883,11 @@ class LocalHistoryView:
         self.visible_routes: tuple[HistorySnapshot, ...] = ()
         self._routes_ready = False
         self.content_cache: dict[str, HistorySnapshot] = {}
+        self._unverified_after_reconnect: set[str] = set()
         self.route_epoch = 1
         self._local_pointer_capture = False
         self._forwarded_pointer_capture = False
         self._suppress_forwarded_drag = False
-        self._wheel_pane_id: str | None = None
-        self._wheel_direction = 0
-        self._wheel_streak = 0
-        self._wheel_at: float | None = None
         self._next_request_id = 1
 
     @property
@@ -961,16 +942,15 @@ class LocalHistoryView:
         restore_live = False
         for pane_id, viewport in tuple(self.viewports.items()):
             route = routes.get(pane_id)
-            if route is None or not self._same_geometry(
-                viewport.snapshot, route
-            ):
+            if route is None or not self._same_geometry(viewport.snapshot, route):
                 self.cancel_pane(pane_id)
                 restore_live = True
         return HistoryAction(restore_live=restore_live)
 
     @staticmethod
     def _history_source_matches(
-        left: HistorySnapshot, right: HistorySnapshot,
+        left: HistorySnapshot,
+        right: HistorySnapshot,
     ) -> bool:
         """Do not combine native, transcript, and undecided history."""
         return (
@@ -980,7 +960,8 @@ class LocalHistoryView:
 
     @staticmethod
     def _timeline_delta(
-        previous: tuple[bytes, ...], incoming: tuple[bytes, ...],
+        previous: tuple[bytes, ...],
+        incoming: tuple[bytes, ...],
     ) -> int | None:
         """Locate incoming[0] in previous's coordinate space."""
         previous_positions: dict[bytes, list[int]] = {}
@@ -1007,16 +988,19 @@ class LocalHistoryView:
             return None
         return best[0]
 
+    @staticmethod
+    def _line_is_blank(line: bytes) -> bool:
+        return not _SGR_STYLE_RE.sub(b"", line).strip()
+
     def _merge_content(
         self,
         previous: HistorySnapshot,
         incoming: HistorySnapshot,
     ) -> HistorySnapshot:
         """Retain already-fetched history when a later hot capture shrinks."""
-        if (
-            not self._same_geometry(previous, incoming)
-            or not self._history_source_matches(previous, incoming)
-        ):
+        if not self._same_geometry(
+            previous, incoming
+        ) or not self._history_source_matches(previous, incoming):
             return incoming
         delta = self._timeline_delta(previous.lines, incoming.lines)
         if delta is None:
@@ -1025,32 +1009,57 @@ class LocalHistoryView:
             # viewport. Appending every unaligned 300-line prefetch would
             # duplicate a full screen every three seconds.
             live_count = min(incoming.height, len(incoming.lines))
-            retained = previous.lines[:-min(previous.height, len(previous.lines))]
+            retained = previous.lines[: -min(previous.height, len(previous.lines))]
             lines = retained + incoming.lines[-live_count:]
         else:
             start = min(0, delta)
-            end = max(len(previous.lines), delta + len(incoming.lines))
+            incoming_end = delta + len(incoming.lines)
+            end = max(len(previous.lines), incoming_end)
+            if (
+                0 <= incoming_end < len(previous.lines)
+                and all(
+                    self._line_is_blank(line)
+                    for line in previous.lines[incoming_end:]
+                )
+            ):
+                # A temporary full-screen view such as Codex /btw can append
+                # an almost-empty live viewport. Once a newer capture anchors
+                # before that suffix, the old blank tail is no longer a valid
+                # future point on the session timeline.
+                end = incoming_end
             merged = [b""] * (end - start)
             old_start = -start
-            merged[old_start:old_start + len(previous.lines)] = previous.lines
+            old_count = min(len(previous.lines), end)
+            merged[old_start : old_start + old_count] = previous.lines[:old_count]
             new_start = delta - start
             # Prefer the fresher capture for the overlapping live viewport.
-            merged[new_start:new_start + len(incoming.lines)] = incoming.lines
+            merged[new_start : new_start + len(incoming.lines)] = incoming.lines
             lines = tuple(merged)
         if len(lines) > self.history_limit:
-            lines = lines[-self.history_limit:]
+            lines = lines[-self.history_limit :]
         return replace(incoming, lines=tuple(lines))
 
     def _remember_content(
-        self, snapshot: HistorySnapshot,
+        self,
+        snapshot: HistorySnapshot,
     ) -> HistorySnapshot:
         assert snapshot.pane_id is not None
         previous = self.content_cache.get(snapshot.pane_id)
-        stored = (
-            self._merge_content(previous, snapshot)
-            if previous is not None
-            else snapshot
-        )
+        if previous is None:
+            stored = snapshot
+        elif snapshot.pane_id in self._unverified_after_reconnect:
+            # A reconnect can reach a restarted tmux server whose pane IDs
+            # happen to match the old server. Retain cached history only when
+            # the first fresh capture has a trustworthy timeline anchor.
+            anchored = (
+                self._same_geometry(previous, snapshot)
+                and self._history_source_matches(previous, snapshot)
+                and self._timeline_delta(previous.lines, snapshot.lines) is not None
+            )
+            stored = self._merge_content(previous, snapshot) if anchored else snapshot
+            self._unverified_after_reconnect.discard(snapshot.pane_id)
+        else:
+            stored = self._merge_content(previous, snapshot)
         # Reinsert an existing pane to keep insertion order as recency order.
         self.content_cache.pop(snapshot.pane_id, None)
         self.content_cache[snapshot.pane_id] = stored
@@ -1071,16 +1080,25 @@ class LocalHistoryView:
         self.prefetch_started = 0.0
         return was_active
 
+    def mark_reconnected(self) -> bool:
+        """Preserve bounded text but distrust it until fresh routes re-anchor."""
+        was_active = self.invalidate_routes()
+        self._unverified_after_reconnect = set(self.content_cache)
+        return was_active
+
     def clear_cache(self) -> None:
         self.invalidate_routes()
         self.content_cache.clear()
+        self._unverified_after_reconnect.clear()
 
     def _route_at(self, event: SgrMouseEvent) -> HistorySnapshot | None:
         return self._route_at_position(event.x - 1, event.y - 1)
 
     @staticmethod
     def _contains_position(
-        snapshot: HistorySnapshot, x: int, y: int,
+        snapshot: HistorySnapshot,
+        x: int,
+        y: int,
     ) -> bool:
         return (
             snapshot.x <= x < snapshot.x + snapshot.width
@@ -1131,7 +1149,7 @@ class LocalHistoryView:
         start = route.y
         return SelectionSource(
             route,
-            live_rows[start:start + route.height],
+            live_rows[start : start + route.height],
             route.x,
         )
 
@@ -1157,12 +1175,9 @@ class LocalHistoryView:
             cached = route
         maximum = max(0, len(cached.lines) - cached.height)
         if maximum == 0:
-            self._reset_wheel_gesture()
             if cached.more_available:
                 self.cancel_pane(route.pane_id)
-                target_lines = min(
-                    self.history_limit, _HISTORY_INITIAL_LINES
-                )
+                target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
                 self.viewports[route.pane_id] = _HistoryViewport(
                     cached,
                     0,
@@ -1190,17 +1205,13 @@ class LocalHistoryView:
                 forwarded_input=event.raw if cached.mouse_forwardable else b""
             )
         self.cancel_pane(route.pane_id)
-        scroll_lines = self._wheel_scroll_lines(
-            route.pane_id, event.wheel_direction, now
-        )
         loaded_limit = min(len(cached.lines), self.history_limit)
         viewport = _HistoryViewport(
             cached,
-            min(maximum, scroll_lines),
+            min(maximum, _HISTORY_SCROLL_BASE_LINES),
             loaded_limit,
             exhausted=(
-                not cached.more_available
-                and loaded_limit >= _HISTORY_INITIAL_LINES
+                not cached.more_available and loaded_limit >= _HISTORY_INITIAL_LINES
             ),
         )
         self.viewports[route.pane_id] = viewport
@@ -1239,8 +1250,7 @@ class LocalHistoryView:
             for request_id, pending in self._deep_pending.items()
             if (
                 pending.pane_id != snapshot.pane_id
-                or requested_at - pending.requested_at
-                < _HISTORY_DEEP_TIMEOUT
+                or requested_at - pending.requested_at < _HISTORY_DEEP_TIMEOUT
             )
         }
         if (
@@ -1257,8 +1267,7 @@ class LocalHistoryView:
             return b""
         target_lines = min(
             self.history_limit,
-            max(_HISTORY_INITIAL_LINES, viewport.loaded_limit)
-            + _HISTORY_PAGE_LINES,
+            max(_HISTORY_INITIAL_LINES, viewport.loaded_limit) + _HISTORY_PAGE_LINES,
         )
         request_id = self._allocate_request_id()
         self._deep_pending[request_id] = _PendingHistory(
@@ -1274,43 +1283,6 @@ class LocalHistoryView:
             target_lines,
         )
 
-    def _reset_wheel_gesture(self) -> None:
-        self._wheel_pane_id = None
-        self._wheel_direction = 0
-        self._wheel_streak = 0
-        self._wheel_at = None
-
-    def _wheel_scroll_lines(
-        self,
-        pane_id: str,
-        direction: int,
-        now: float | None,
-    ) -> int:
-        """Keep isolated ticks fine-grained while accelerating a wheel burst."""
-        if now is None:
-            self._reset_wheel_gesture()
-            return _HISTORY_SCROLL_BASE_LINES
-        elapsed = (
-            None if self._wheel_at is None else now - self._wheel_at
-        )
-        if (
-            pane_id == self._wheel_pane_id
-            and direction == self._wheel_direction
-            and elapsed is not None
-            and 0.0 <= elapsed <= _HISTORY_SCROLL_BURST_INTERVAL
-        ):
-            self._wheel_streak += 1
-        else:
-            self._wheel_streak = 1
-        self._wheel_pane_id = pane_id
-        self._wheel_direction = direction
-        self._wheel_at = now
-        if self._wheel_streak >= _HISTORY_SCROLL_FAST_AFTER:
-            return _HISTORY_SCROLL_FAST_LINES
-        if self._wheel_streak >= _HISTORY_SCROLL_ACCELERATE_AFTER:
-            return _HISTORY_SCROLL_ACCELERATED_LINES
-        return _HISTORY_SCROLL_BASE_LINES
-
     def wheel(
         self,
         event: SgrMouseEvent,
@@ -1319,11 +1291,9 @@ class LocalHistoryView:
     ) -> HistoryAction:
         direction = event.wheel_direction
         if direction == 0:
-            self._reset_wheel_gesture()
             return HistoryAction(forwarded_input=event.raw)
         route = self._route_at(event)
         if route is None:
-            self._reset_wheel_gesture()
             # Stock tmux WheelUpPane enters copy-mode. Until the current
             # prefetch establishes exact pane geometry, or on the one-cell
             # border around a known agent, dropping a wheel tick is safer than
@@ -1337,21 +1307,15 @@ class LocalHistoryView:
             return HistoryAction(forwarded_input=event.raw)
         assert route.pane_id is not None
         if direction > 0 and route.history_choice_required:
-            self._reset_wheel_gesture()
             return HistoryAction(claude_history_prompt=event.raw)
         viewport = self.viewports.get(route.pane_id)
         if viewport is not None:
-            scroll_lines = self._wheel_scroll_lines(
-                route.pane_id, direction, now
-            )
-            maximum = max(
-                0, len(viewport.snapshot.lines) - viewport.snapshot.height
-            )
+            maximum = max(0, len(viewport.snapshot.lines) - viewport.snapshot.height)
             viewport.offset = max(
                 0,
                 min(
                     maximum,
-                    viewport.offset + direction * scroll_lines,
+                    viewport.offset + direction * _HISTORY_SCROLL_BASE_LINES,
                 ),
             )
             if direction < 0:
@@ -1360,14 +1324,12 @@ class LocalHistoryView:
                 self.cancel_pane(route.pane_id)
                 return HistoryAction(restore_live=True)
             protocol_frame = (
-                self._extend_history(viewport, now=now)
-                if direction > 0 else b""
+                self._extend_history(viewport, now=now) if direction > 0 else b""
             )
             info_message = None
             at_loaded_top = viewport.offset == maximum
             cannot_extend = (
-                viewport.exhausted
-                or viewport.loaded_limit >= self.history_limit
+                viewport.exhausted or viewport.loaded_limit >= self.history_limit
             )
             if (
                 direction > 0
@@ -1400,7 +1362,6 @@ class LocalHistoryView:
         # first transcript snapshot is unavailable.
         # Non-mouse-aware panes stay isolated from tmux copy-mode.
         if direction < 0:
-            self._reset_wheel_gesture()
             if route.transcript_backed:
                 return HistoryAction()
             return HistoryAction(
@@ -1415,8 +1376,6 @@ class LocalHistoryView:
         status_row: int | None = None,
         now: float | None = None,
     ) -> HistoryAction:
-        if event.wheel_direction == 0 and event.pressed:
-            self._reset_wheel_gesture()
         if status_row is not None and event.y == status_row:
             # The tmux status line is navigation chrome, never agent history.
             # Forward it even if a prior local selection capture missed its
@@ -1424,9 +1383,7 @@ class LocalHistoryView:
             # A press can switch compact pages, so invalidate route geometry
             # immediately; the next prefetch repopulates the new visible pane.
             changes_page = (
-                event.pressed
-                and not event.button & 32
-                and not event.button & 64
+                event.pressed and not event.button & 32 and not event.button & 64
             )
             restore_live = self.invalidate_routes() if changes_page else False
             return HistoryAction(
@@ -1460,9 +1417,7 @@ class LocalHistoryView:
             (
                 viewport.snapshot
                 for viewport in self.viewports.values()
-                if self._contains_position(
-                    viewport.snapshot, event.x - 1, event.y - 1
-                )
+                if self._contains_position(viewport.snapshot, event.x - 1, event.y - 1)
             ),
             None,
         )
@@ -1499,10 +1454,7 @@ class LocalHistoryView:
         pending = self._deep_pending.pop(snapshot.request_id, None)
         if pending is None:
             return HistoryAction()
-        if (
-            pending.epoch != self.route_epoch
-            or snapshot.pane_id != pending.pane_id
-        ):
+        if pending.epoch != self.route_epoch or snapshot.pane_id != pending.pane_id:
             return HistoryAction()
         route = next(
             (
@@ -1560,7 +1512,8 @@ class LocalHistoryView:
 
     @staticmethod
     def _aligned_offset(
-        snapshot: HistorySnapshot, anchor: tuple[bytes, ...],
+        snapshot: HistorySnapshot,
+        anchor: tuple[bytes, ...],
     ) -> int | None:
         if not anchor or len(anchor) > len(snapshot.lines):
             return None
@@ -1569,7 +1522,7 @@ class LocalHistoryView:
         # change while the deeper capture was in flight.
         matched_offset: int | None = None
         for start in range(len(snapshot.lines) - len(anchor), -1, -1):
-            if snapshot.lines[start:start + len(anchor)] == anchor:
+            if snapshot.lines[start : start + len(anchor)] == anchor:
                 if matched_offset is not None:
                     return None
                 matched_offset = len(snapshot.lines) - (start + len(anchor))
@@ -1611,9 +1564,7 @@ class LocalHistoryView:
             return None
         required_votes = max(2, (len(unique_anchor_lines) + 1) // 2)
         best_votes = max(votes.values())
-        best_starts = [
-            start for start, count in votes.items() if count == best_votes
-        ]
+        best_starts = [start for start, count in votes.items() if count == best_votes]
         if best_votes < required_votes or len(best_starts) != 1:
             return None
         start = best_starts[0]
@@ -1629,8 +1580,6 @@ class LocalHistoryView:
 
     def cancel_pane(self, pane_id: str) -> bool:
         was_active = self.viewports.pop(pane_id, None) is not None
-        if self._wheel_pane_id == pane_id:
-            self._reset_wheel_gesture()
         self._deep_pending = {
             request_id: pending
             for request_id, pending in self._deep_pending.items()
@@ -1652,7 +1601,6 @@ class LocalHistoryView:
         self._local_pointer_capture = False
         self._forwarded_pointer_capture = False
         self._suppress_forwarded_drag = False
-        self._reset_wheel_gesture()
         return was_active
 
 
@@ -1697,9 +1645,7 @@ def screen_input_may_change_routes(
     """Fail closed when keyboard input originates outside an agent route."""
     cursor_in_agent = (
         screen is not None
-        and history.pane_id_at_position(
-            screen.cursor_x, screen.cursor_y
-        ) is not None
+        and history.pane_id_at_position(screen.cursor_x, screen.cursor_y) is not None
     )
     return input_may_change_routes(
         data,
@@ -1717,17 +1663,11 @@ def split_local_escape(data: bytes) -> tuple[bytes, bool]:
 
 
 def _terminal_size_is_usable(size: os.terminal_size) -> bool:
-    return (
-        size.columns >= _MIN_TERMINAL_COLUMNS
-        and size.lines >= _MIN_TERMINAL_LINES
-    )
+    return size.columns >= _MIN_TERMINAL_COLUMNS and size.lines >= _MIN_TERMINAL_LINES
 
 
 def _terminal_size_exceeds_limits(size: os.terminal_size) -> bool:
-    return (
-        size.columns > _MAX_TERMINAL_COLUMNS
-        or size.lines > _MAX_TERMINAL_LINES
-    )
+    return size.columns > _MAX_TERMINAL_COLUMNS or size.lines > _MAX_TERMINAL_LINES
 
 
 def wait_for_usable_terminal_size(fd: int) -> os.terminal_size:
@@ -1767,14 +1707,6 @@ def wait_for_usable_terminal_size(fd: int) -> os.terminal_size:
         time.sleep(_TERMINAL_SIZE_POLL_INTERVAL)
 
 
-def show_startup_surface(size: os.terminal_size) -> None:
-    """Paint immediate local feedback before SSH can deliver its first frame."""
-    if not sys.stdout.isatty():
-        return
-    sys.stdout.write(render_startup_surface(size.columns, size.lines))
-    sys.stdout.flush()
-
-
 def _is_soft_keyboard_projection(
     physical_size: os.terminal_size,
     logical_size: os.terminal_size,
@@ -1809,6 +1741,8 @@ class TerminalSurface:
         self.stream = stream
         self.mouse = mouse
         self.active = False
+        self.mouse_active = False
+        self.cursor_hidden = False
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
         self._last_screen: AppliedScreen | None = None
@@ -1834,17 +1768,33 @@ class TerminalSurface:
         top, _visible_height = self._projection(logical_height)
         return event.translated_y(top)
 
-    def start(self) -> None:
-        if self.active:
-            return
-        controls = [b"\033[?1049h\033[2J\033[H\033[?25l"]
-        if self.mouse:
+    def start(self, *, interactive: bool = True) -> None:
+        controls: list[bytes] = []
+        if not self.active:
+            controls.append(b"\033[?1049h\033[2J\033[H")
+            self.active = True
+        if interactive and not self.cursor_hidden:
+            controls.append(b"\033[?25l")
+            self.cursor_hidden = True
+        if interactive and self.mouse and not self.mouse_active:
             # Button-event tracking includes wheel and drag events. SGR mode
             # preserves coordinates beyond the legacy X10 limit.
             controls.append(b"\033[?1002h\033[?1006h")
-        self.stream.write(b"".join(controls))
+            self.mouse_active = True
+        if controls:
+            self.stream.write(b"".join(controls))
+            self.stream.flush()
+
+    def show_startup(self, size: os.terminal_size) -> None:
+        """Paint startup feedback only on the recoverable alternate screen."""
+        self.set_physical_size(size)
+        if self.active:
+            return
+        self.start(interactive=False)
+        self.stream.write(
+            render_startup_surface(size.columns, size.lines).encode("utf-8")
+        )
         self.stream.flush()
-        self.active = True
 
     def show_local_status(self, message: str, *, level: str = "info") -> None:
         """Show local feedback without erasing Railmux's status-left brand."""
@@ -1857,10 +1807,9 @@ class TerminalSurface:
         screen = self._last_screen
         if screen is None:
             if self.physical_size is not None:
-                safe = safe[:self.physical_size.columns]
+                safe = safe[: self.physical_size.columns]
             rendered = (
-                f"\033[0m\033[{max(1, height)};1H"
-                f"\033[2K{safe}\033[?25l"
+                f"\033[0m\033[{max(1, height)};1H\033[2K{safe}\033[?25l"
             ).encode("utf-8")
         else:
             width = screen.width
@@ -1874,21 +1823,19 @@ class TerminalSurface:
             safe = safe[:available]
             column = max(reserved + 1, width - len(safe) + 1)
             background = self._row_background_sgr(screen.rows[-1])
-            foreground = (
-                b"\033[1;38;5;17m"
-                if level == "success"
-                else b"\033[38;5;231m"
+            foreground = b"\033[1;38;5;17m" if level == "success" else b"\033[38;5;231m"
+            rendered = b"".join(
+                (
+                    b"\033[0m",
+                    f"\033[{max(1, height)};{reserved + 1}H".encode(),
+                    background,
+                    foreground,
+                    b"\033[K",
+                    f"\033[{max(1, height)};{column}H".encode(),
+                    safe.encode("utf-8"),
+                    b"\033[0m\033[?25l",
+                )
             )
-            rendered = b"".join((
-                b"\033[0m",
-                f"\033[{max(1, height)};{reserved + 1}H".encode(),
-                background,
-                foreground,
-                b"\033[K",
-                f"\033[{max(1, height)};{column}H".encode(),
-                safe.encode("utf-8"),
-                b"\033[0m\033[?25l",
-            ))
         self.stream.write(rendered)
         self.stream.flush()
 
@@ -1898,8 +1845,7 @@ class TerminalSurface:
         for match in _SGR_STYLE_RE.finditer(row):
             raw = match.group()[2:-1]
             try:
-                codes = [int(value) if value else 0
-                         for value in raw.split(b";")]
+                codes = [int(value) if value else 0 for value in raw.split(b";")]
             except ValueError:
                 continue
             for index, code in enumerate(codes):
@@ -1911,7 +1857,7 @@ class TerminalSurface:
                 count = 3 if mode == 5 else 5 if mode == 2 else 0
                 if count and index + count <= len(codes):
                     values = ";".join(
-                        str(value) for value in codes[index:index + count]
+                        str(value) for value in codes[index : index + count]
                     )
                     return f"\033[{values}m".encode()
         return b"\033[49m"
@@ -1947,14 +1893,13 @@ class TerminalSurface:
             padding = " " * (inner - len(plain))
             return (
                 f"{border}│{normal} {yellow}{shortcut}{normal} "
-                f"{text[:inner - len(shortcut) - 2]}{padding}{border}│"
+                f"{text[: inner - len(shortcut) - 2]}{padding}{border}│"
                 f"{normal}"
             )
 
         title = " Claude Code history "
         rows = (
-            f"{border}┌\033[1m{title}\033[22m"
-            f"{'─' * (inner - len(title))}┐{normal}",
+            f"{border}┌\033[1m{title}\033[22m{'─' * (inner - len(title))}┐{normal}",
             middle("[1]", "Always use smooth local history"),
             middle("[2]", "Use smooth local history this time"),
             middle("[3]", "Always use Claude native history"),
@@ -1971,7 +1916,8 @@ class TerminalSurface:
         self.stream.flush()
 
     def claude_history_prompt_choice(
-        self, event: SgrMouseEvent,
+        self,
+        event: SgrMouseEvent,
     ) -> tuple[str, bool] | None:
         """Resolve a press inside the local Claude-history dialog."""
         left, top, width = self._claude_history_prompt_geometry()
@@ -1988,7 +1934,8 @@ class TerminalSurface:
         return None
 
     def _reconcile_terminal_modes(
-        self, requested: TerminalMode,
+        self,
+        requested: TerminalMode,
     ) -> TerminalMode:
         """Mirror only input-affecting modes explicitly carried by protocol v11."""
         disabled = self.terminal_modes & ~requested
@@ -2033,22 +1980,19 @@ class TerminalSurface:
                 row = snapshot.y + index
                 if (
                     visible_height is not None
-                    and not projection_top
-                    <= row
-                    < projection_top + visible_height
+                    and not projection_top <= row < projection_top + visible_height
                 ):
                     continue
                 if changed_rows is not None and row not in changed_rows:
                     continue
                 line = lines[index] if index < len(lines) else b""
-                rendered.extend((
+                rendered.extend(
                     (
-                        f"\033[{row - projection_top + 1};"
-                        f"{snapshot.x + 1}H"
-                    ).encode(),
-                    f"\033[{snapshot.width}X".encode(),
-                    line,
-                ))
+                        (f"\033[{row - projection_top + 1};{snapshot.x + 1}H").encode(),
+                        f"\033[{snapshot.width}X".encode(),
+                        line,
+                    )
+                )
 
     @staticmethod
     def _append_selection_segments(
@@ -2061,17 +2005,17 @@ class TerminalSurface:
         for row, column, text in selection:
             if (
                 visible_height is not None
-                and not projection_top
-                <= row
-                < projection_top + visible_height
+                and not projection_top <= row < projection_top + visible_height
             ):
                 continue
-            rendered.extend((
-                f"\033[{row - projection_top + 1};{column + 1}H".encode(),
-                b"\033[0;7m",
-                text,
-                b"\033[0m",
-            ))
+            rendered.extend(
+                (
+                    f"\033[{row - projection_top + 1};{column + 1}H".encode(),
+                    b"\033[0;7m",
+                    text,
+                    b"\033[0m",
+                )
+            )
 
     @classmethod
     def _append_cursor(
@@ -2085,26 +2029,26 @@ class TerminalSurface:
     ) -> None:
         cursor_in_projection = (
             visible_height is None
-            or projection_top
-            <= screen.cursor_y
-            < projection_top + visible_height
+            or projection_top <= screen.cursor_y < projection_top + visible_height
         )
-        rendered.extend((
-            b"\033[0m\033[?7h",
+        rendered.extend(
             (
-                f"\033[{screen.cursor_y - projection_top + 1};"
-                f"{screen.cursor_x + 1}H"
-            ).encode()
-            if cursor_in_projection
-            else b"\033[1;1H",
-            (
-                b"\033[?25h"
-                if screen.cursor_visible
-                and cursor_in_projection
-                and not cls._cursor_is_covered(screen, overlays)
-                else b"\033[?25l"
-            ),
-        ))
+                b"\033[0m\033[?7h",
+                (
+                    f"\033[{screen.cursor_y - projection_top + 1};"
+                    f"{screen.cursor_x + 1}H"
+                ).encode()
+                if cursor_in_projection
+                else b"\033[1;1H",
+                (
+                    b"\033[?25h"
+                    if screen.cursor_visible
+                    and cursor_in_projection
+                    and not cls._cursor_is_covered(screen, overlays)
+                    else b"\033[?25l"
+                ),
+            )
+        )
 
     def paint(
         self,
@@ -2121,17 +2065,15 @@ class TerminalSurface:
         if screen.clear:
             rendered.append(b"\033[0m\033[2J")
         for row_index in screen.changed_rows:
-            if not (
-                projection_top
-                <= row_index
-                < projection_top + visible_height
-            ):
+            if not (projection_top <= row_index < projection_top + visible_height):
                 continue
-            rendered.extend((
-                f"\033[{row_index - projection_top + 1};1H".encode(),
-                b"\033[2K",
-                screen.rows[row_index],
-            ))
+            rendered.extend(
+                (
+                    f"\033[{row_index - projection_top + 1};1H".encode(),
+                    b"\033[2K",
+                    screen.rows[row_index],
+                )
+            )
         self._append_overlay_rows(
             rendered,
             overlays,
@@ -2196,12 +2138,14 @@ class TerminalSurface:
             controls.append(b"\033[?2004l")
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
-        if self.mouse:
+        if self.mouse_active:
             controls.append(b"\033[?1002l\033[?1006l")
         controls.append(b"\033[?1049l")
         self.stream.write(b"".join(controls))
         self.stream.flush()
         self.terminal_modes = TerminalMode.NONE
+        self.mouse_active = False
+        self.cursor_hidden = False
         self.active = False
 
 
@@ -2212,17 +2156,25 @@ def _remote_server_args(
     height: int,
     fps: float,
     replace_existing_client: bool = False,
+    existing_session_only: bool = False,
 ) -> list[str]:
     args = [
         "remote-server",
-        "--protocol", str(PROTOCOL_VERSION),
-        "--session", session,
-        "--width", str(width),
-        "--height", str(height),
-        "--fps", str(fps),
+        "--protocol",
+        str(PROTOCOL_VERSION),
+        "--session",
+        session,
+        "--width",
+        str(width),
+        "--height",
+        str(height),
+        "--fps",
+        str(fps),
     ]
     if replace_existing_client:
         args.append("--replace-existing-client")
+    if existing_session_only:
+        args.append("--existing-session-only")
     return args
 
 
@@ -2234,8 +2186,7 @@ def _remote_launch_command(server_args: Sequence[str]) -> str:
         f"if [ -x {managed_python} ] "
         f"&& {managed_python} -c 'import railmux' >/dev/null 2>&1; "
         f"then exec {managed_python} {managed_args}",
-        "elif command -v railmux >/dev/null 2>&1; "
-        f"then exec {direct}",
+        f"elif command -v railmux >/dev/null 2>&1; then exec {direct}",
     ]
     for python in ("python3", "python"):
         probe = shlex.join([python, "-c", "import railmux"])
@@ -2257,6 +2208,7 @@ def build_ssh_argv(
     fps: float,
     ssh_args: Sequence[str],
     replace_existing_client: bool = False,
+    existing_session_only: bool = False,
 ) -> list[str]:
     server_args = _remote_server_args(
         session=session,
@@ -2264,6 +2216,7 @@ def build_ssh_argv(
         height=height,
         fps=fps,
         replace_existing_client=replace_existing_client,
+        existing_session_only=existing_session_only,
     )
     command = _remote_launch_command(server_args)
     return ["ssh", "-T", *ssh_args, destination, command]
@@ -2285,9 +2238,15 @@ def build_ssh_install_argv(
     )
     requirement = f"railmux[ssh]=={version}"
     managed_python = f'"$HOME/{_REMOTE_VENV}/bin/python"'
-    managed_install = shlex.join([
-        "-m", "pip", "install", "--upgrade", requirement,
-    ])
+    managed_install = shlex.join(
+        [
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            requirement,
+        ]
+    )
     managed_launch = shlex.join(["-m", "railmux", *server_args])
     branches = [
         f"if [ -x {managed_python} ] "
@@ -2306,24 +2265,22 @@ def build_ssh_install_argv(
         runner_executable = runner[0]
         pip_probe = shlex.join([*installer, "--version"])
         condition = (
-            f"command -v {executable} >/dev/null 2>&1 "
-            f"&& {pip_probe} >/dev/null 2>&1"
+            f"command -v {executable} >/dev/null 2>&1 && {pip_probe} >/dev/null 2>&1"
         )
         if runner_executable != executable:
-            condition += (
-                f" && command -v {runner_executable} >/dev/null 2>&1"
-            )
-        install = shlex.join([
-            *installer,
-            "install",
-            "--user",
-            "--upgrade",
-            requirement,
-        ])
+            condition += f" && command -v {runner_executable} >/dev/null 2>&1"
+        install = shlex.join(
+            [
+                *installer,
+                "install",
+                "--user",
+                "--upgrade",
+                requirement,
+            ]
+        )
         launch = shlex.join([*runner, *server_args])
         branches.append(
-            f"elif {condition}; then {install} 1>&2 "
-            f"&& exec {launch}; exit $?"
+            f"elif {condition}; then {install} 1>&2 && exec {launch}; exit $?"
         )
     branches.append(
         "else echo 'error: no usable python/pip, python3/pip3, or pip was found' "
@@ -2349,9 +2306,15 @@ def build_ssh_private_venv_install_argv(
     requirement = f"railmux[ssh]=={version}"
     managed_dir = f'"$HOME/{_REMOTE_VENV}"'
     managed_python = f"{managed_dir}/bin/python"
-    install = shlex.join([
-        "-m", "pip", "install", "--upgrade", requirement,
-    ])
+    install = shlex.join(
+        [
+            "-m",
+            "pip",
+            "install",
+            "--upgrade",
+            requirement,
+        ]
+    )
     launch = shlex.join(["-m", "railmux", *server_args])
     branches = [
         f"if [ -x {managed_python} ] "
@@ -2434,6 +2397,7 @@ def _reap_remote(process: subprocess.Popen, *, terminate: bool = False) -> int:
 
 def _local_upgrade_argv(version: str) -> list[str]:
     from railmux.self_update import upgrade_argv
+
     return upgrade_argv(version)
 
 
@@ -2447,8 +2411,7 @@ def _upgrade_local_and_restart(version: str, raw_args: Sequence[str]) -> NoRetur
         result = subprocess.run(argv, check=False)
     except OSError as exc:
         raise ProbeError(
-            f"could not start local pip: {exc}\nRun manually:\n  "
-            f"{shlex.join(argv)}"
+            f"could not start local pip: {exc}\nRun manually:\n  {shlex.join(argv)}"
         ) from exc
     if result.returncode:
         raise ProbeError(
@@ -2530,7 +2493,11 @@ def _confirm_remote_install(
     args: argparse.Namespace,
     reason: str,
     version: str,
+    *,
+    before_interaction: Callable[[], None] | None = None,
 ) -> bool:
+    if before_interaction is not None:
+        before_interaction()
     return _confirm(
         f"{reason} Install Railmux {version} with SSH support into "
         f"the remote user environment on {args.destination}?"
@@ -2540,7 +2507,11 @@ def _confirm_remote_install(
 def _confirm_remote_private_venv_install(
     args: argparse.Namespace,
     version: str,
+    *,
+    before_interaction: Callable[[], None] | None = None,
 ) -> bool:
+    if before_interaction is not None:
+        before_interaction()
     return _confirm(
         "Remote user-site installation failed or timed out. Create the isolated "
         f"~/{_REMOTE_VENV} environment and install Railmux {version} there? "
@@ -2553,9 +2524,7 @@ def _send_start(process: subprocess.Popen) -> None:
         process.stdin.write(REMOTE_START)
         process.stdin.flush()
     except BrokenPipeError as exc:
-        raise ProbeError(
-            "remote Railmux exited before accepting the display"
-        ) from exc
+        raise ProbeError("remote Railmux exited before accepting the display") from exc
 
 
 def _reconnect_remote_attach(
@@ -2566,13 +2535,16 @@ def _reconnect_remote_attach(
     cancel_fd: int | None = None,
     timeout: float | None = None,
     noninteractive: bool = False,
+    existing_session_only: bool = False,
 ) -> tuple[subprocess.Popen, RemoteAttachKind]:
     """Start one already-negotiated helper and return its attach status."""
     ssh_args = list(args.ssh_arg)
     if noninteractive:
         ssh_args = [
-            "-o", "BatchMode=yes",
-            "-o", f"ConnectTimeout={max(1, int(timeout or 5))}",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            f"ConnectTimeout={max(1, int(timeout or 5))}",
             *ssh_args,
         ]
     argv = build_ssh_argv(
@@ -2583,6 +2555,7 @@ def _reconnect_remote_attach(
         fps=args.fps,
         ssh_args=ssh_args,
         replace_existing_client=replace_existing_client,
+        existing_session_only=existing_session_only,
     )
     process = _spawn_remote(argv)
     try:
@@ -2595,11 +2568,13 @@ def _reconnect_remote_attach(
                 cancel_fd=cancel_fd,
             )
         hello = startup.hello
-        if (startup.kind is not RemoteStartKind.HELLO
-                or hello is None
-                or hello.protocol != PROTOCOL_VERSION
-                or not hello.ready
-                or not hello.tmux):
+        if (
+            startup.kind is not RemoteStartKind.HELLO
+            or hello is None
+            or hello.protocol != PROTOCOL_VERSION
+            or not hello.ready
+            or not hello.tmux
+        ):
             raise ProbeError(
                 "reconnect could not start a compatible remote display; "
                 "the Railmux session and agents were left intact"
@@ -2654,8 +2629,7 @@ def _automatic_reconnect(
         if delay:
             wait_for = min(delay, remaining)
             surface.show_local_status(
-                "Connection lost; retrying in "
-                f"{wait_for:.1f}s (Ctrl-] or Ctrl-C stops)"
+                f"Connection lost; retrying in {wait_for:.1f}s (Ctrl-] or Ctrl-C stops)"
             )
             _wait_reconnect_delay(wait_for, cancel_fd)
         remaining = deadline - time.monotonic()
@@ -2674,6 +2648,7 @@ def _automatic_reconnect(
                 cancel_fd=cancel_fd,
                 timeout=timeout,
                 noninteractive=True,
+                existing_session_only=True,
             )
         except ReconnectCancelled:
             raise
@@ -2684,9 +2659,7 @@ def _automatic_reconnect(
                 return process
             _stop_unstarted_remote(process)
             if status is RemoteAttachKind.BUSY:
-                last_reason = (
-                    "the previous remote helper is still releasing its lease"
-                )
+                last_reason = "the previous remote helper is still releasing its lease"
             elif status is RemoteAttachKind.TIMEOUT:
                 last_reason = "the remote attach timed out"
             else:
@@ -2724,6 +2697,8 @@ def _finish_remote_attach(
     args: argparse.Namespace,
     current_size: os.terminal_size,
     process: subprocess.Popen,
+    *,
+    before_interaction: Callable[[], None] | None = None,
 ) -> subprocess.Popen:
     """Complete the cooked-mode attach handshake and one consented takeover."""
     try:
@@ -2747,7 +2722,8 @@ def _finish_remote_attach(
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)
     retry, retry_status = _reconnect_remote_attach(
-        args, current_size, replace_existing_client=False)
+        args, current_size, replace_existing_client=False
+    )
     if retry_status is RemoteAttachKind.ACCEPTED:
         return retry
     _stop_unstarted_remote(retry)
@@ -2756,6 +2732,8 @@ def _finish_remote_attach(
     if retry_status is not RemoteAttachKind.BUSY:
         raise ProbeError("remote display helper failed while retrying attach")
 
+    if before_interaction is not None:
+        before_interaction()
     if not _confirm(
         "Another display helper is persistently holding the attach lock. "
         "Replace "
@@ -2768,7 +2746,8 @@ def _finish_remote_attach(
         )
 
     replacement, replacement_status = _reconnect_remote_attach(
-        args, current_size, replace_existing_client=True)
+        args, current_size, replace_existing_client=True
+    )
     if replacement_status is not RemoteAttachKind.ACCEPTED:
         _stop_unstarted_remote(replacement)
         raise ProbeError(
@@ -2781,8 +2760,15 @@ def _finish_remote_attach(
 def prepare_remote_process(
     args: argparse.Namespace,
     current_size: os.terminal_size,
+    *,
+    before_interaction: Callable[[], None] | None = None,
 ) -> subprocess.Popen:
     """Resolve compatibility and consent before the remote attaches to tmux."""
+
+    def reveal_terminal() -> None:
+        if before_interaction is not None:
+            before_interaction()
+
     argv = build_ssh_argv(
         args.destination,
         session=args.session,
@@ -2815,17 +2801,15 @@ def prepare_remote_process(
         assert startup.hello is not None
         hello = startup.hello
         versions = _version_pair(hello.version)
-        remote_is_newer = bool(
-            versions is not None and versions[1] > versions[0]
-        )
-        remote_is_older = bool(
-            versions is not None and versions[1] < versions[0]
-        )
+        remote_is_newer = bool(versions is not None and versions[1] > versions[0])
+        remote_is_older = bool(versions is not None and versions[1] < versions[0])
         if remote_is_newer:
             protocol_note = (
                 f" and requires SSH protocol v{hello.protocol}"
-                if hello.protocol != PROTOCOL_VERSION else ""
+                if hello.protocol != PROTOCOL_VERSION
+                else ""
             )
+            reveal_terminal()
             if _confirm(
                 f"Remote Railmux {hello.version} is newer than local "
                 f"{__version__}{protocol_note}. Upgrade local "
@@ -2864,8 +2848,7 @@ def prepare_remote_process(
             raise ProbeError(remote_tmux_help(args.destination))
         elif not hello.ready:
             install_reason = (
-                f"Remote Railmux {hello.version} is missing its SSH display "
-                "dependency."
+                f"Remote Railmux {hello.version} is missing its SSH display dependency."
             )
         elif remote_is_older:
             install_reason = (
@@ -2876,29 +2859,44 @@ def prepare_remote_process(
             optional_compatible_upgrade = True
         else:
             if not remote_is_newer and hello.version != __version__:
+                reveal_terminal()
                 print(
                     f"warning: remote Railmux {hello.version} differs from "
                     f"local {__version__}, but SSH protocol "
                     f"v{PROTOCOL_VERSION} is compatible",
                     file=sys.stderr,
                 )
-            return _finish_remote_attach(args, current_size, process)
+            return _finish_remote_attach(
+                args,
+                current_size,
+                process,
+                before_interaction=before_interaction,
+            )
 
     assert install_reason is not None
-    if not _confirm_remote_install(args, install_reason, install_version):
+    if not _confirm_remote_install(
+        args,
+        install_reason,
+        install_version,
+        before_interaction=before_interaction,
+    ):
         if optional_compatible_upgrade:
+            reveal_terminal()
             print(
                 f"warning: continuing with compatible remote Railmux "
                 f"{startup.hello.version}",
                 file=sys.stderr,
             )
-            return _finish_remote_attach(args, current_size, process)
+            return _finish_remote_attach(
+                args,
+                current_size,
+                process,
+                before_interaction=before_interaction,
+            )
         _stop_unstarted_remote(process)
         raise ProbeError(remote_install_help(args.destination, install_version))
     _stop_unstarted_remote(process)
-    process, startup = _install_remote_and_start(
-        args, current_size, install_version
-    )
+    process, startup = _install_remote_and_start(args, current_size, install_version)
     if (
         startup.kind is RemoteStartKind.HELLO
         and startup.hello is not None
@@ -2912,7 +2910,11 @@ def prepare_remote_process(
         RemoteStartKind.TIMEOUT,
     ):
         _stop_unstarted_remote(process)
-        if not _confirm_remote_private_venv_install(args, install_version):
+        if not _confirm_remote_private_venv_install(
+            args,
+            install_version,
+            before_interaction=before_interaction,
+        ):
             raise ProbeError(
                 "remote user-site installation failed or timed out.\n"
                 f"{remote_install_help(args.destination, install_version)}"
@@ -2940,7 +2942,12 @@ def prepare_remote_process(
             "automatic remote installation did not produce a compatible "
             f"Railmux.\n{remote_install_help(args.destination, install_version)}"
         )
-    return _finish_remote_attach(args, current_size, process)
+    return _finish_remote_attach(
+        args,
+        current_size,
+        process,
+        before_interaction=before_interaction,
+    )
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -2948,8 +2955,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="railmux ssh",
         description=(
-            "Connect to Railmux with a version-negotiated latest-state SSH "
-            "display"
+            "Connect to Railmux with a version-negotiated latest-state SSH display"
         ),
         epilog=(
             "Before attaching, missing or incompatible remote packages can "
@@ -2960,7 +2966,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--session", default="railmux")
     parser.add_argument("--fps", type=float, default=20.0)
     parser.add_argument(
-        "--no-mouse", action="store_true",
+        "--no-mouse",
+        action="store_true",
         help="do not capture mouse events (allows ordinary terminal selection)",
     )
     parser.add_argument(
@@ -2983,7 +2990,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--ssh-arg", action="append", default=[],
+        "--ssh-arg",
+        action="append",
+        default=[],
         help="extra ssh argument; repeat and use --ssh-arg=VALUE",
     )
     args = parser.parse_args(raw_argv)
@@ -2992,9 +3001,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--fps must be between 1 and 60")
     if (
         args.history_lines is not None
-        and not SSH_HISTORY_MIN_LINES
-        <= args.history_lines
-        <= SSH_HISTORY_MAX_LINES
+        and not SSH_HISTORY_MIN_LINES <= args.history_lines <= SSH_HISTORY_MAX_LINES
     ):
         parser.error(
             "--history-lines must be between "
@@ -3009,9 +3016,7 @@ def run(args: argparse.Namespace) -> int:
     except ConfigError as exc:
         raise ProbeError(f"configuration error: {exc}") from exc
     history_limit = (
-        config.ssh_history_lines
-        if args.history_lines is None
-        else args.history_lines
+        config.ssh_history_lines if args.history_lines is None else args.history_lines
     )
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise ProbeError("stdin and stdout must both be interactive terminals")
@@ -3021,14 +3026,22 @@ def run(args: argparse.Namespace) -> int:
     try:
         current_size = wait_for_usable_terminal_size(sys.stdout.fileno())
     except KeyboardInterrupt:
-        print("\nrailmux ssh: cancelled while waiting for terminal size",
-              file=sys.stderr)
+        print(
+            "\nrailmux ssh: cancelled while waiting for terminal size", file=sys.stderr
+        )
         return 130
-    show_startup_surface(current_size)
-    process = prepare_remote_process(args, current_size)
-
     surface = TerminalSurface(sys.stdout.buffer, mouse=not args.no_mouse)
-    surface.set_physical_size(current_size)
+    surface.show_startup(current_size)
+    try:
+        process = prepare_remote_process(
+            args,
+            current_size,
+            before_interaction=surface.close,
+        )
+    except BaseException:
+        surface.close()
+        raise
+    surface.show_startup(current_size)
     local_size = current_size
     decoder = ServerMessageDecoder()
     model = ScreenModel()
@@ -3042,6 +3055,7 @@ def run(args: argparse.Namespace) -> int:
     next_history_prefetch = started
     next_heartbeat = started + _HEARTBEAT_INTERVAL
     frames = 0
+    frames_since_attach = 0
     painted_rows = 0
     wire_bytes = 0
     local_exit = False
@@ -3141,22 +3155,14 @@ def run(args: argparse.Namespace) -> int:
                 pending_wheel = claude_history_prompt_input
                 claude_history_prompt_input = None
                 if latest_screen is not None:
-                    surface.paint(
-                        full_repaint(latest_screen), history.overlays()
-                    )
-                claude_history_pending_choice = (
-                    policy, persistent, pending_wheel
-                )
+                    surface.paint(full_repaint(latest_screen), history.overlays())
+                claude_history_pending_choice = (policy, persistent, pending_wheel)
                 claude_history_pending_since = time.monotonic()
-                send_protocol_frame(encode_claude_history_policy(
-                    policy, persistent=persistent
-                ))
-                action = "Saving" if persistent else "Enabling"
-                label = (
-                    "smooth local"
-                    if policy == "local"
-                    else "Claude native"
+                send_protocol_frame(
+                    encode_claude_history_policy(policy, persistent=persistent)
                 )
+                action = "Saving" if persistent else "Enabling"
+                label = "smooth local" if policy == "local" else "Claude native"
                 surface.show_local_status(f"{action} {label} history…")
                 return
         if isinstance(part, SgrMouseEvent) and (
@@ -3184,9 +3190,7 @@ def run(args: argparse.Namespace) -> int:
                 if latest_screen is not None
                 else current_size.lines
             )
-            part = surface.translate_mouse_event(
-                part, logical_height=displayed_height
-            )
+            part = surface.translate_mouse_event(part, logical_height=displayed_height)
             # Keep a frozen viewport stable across reported clicks and drags.
             # Terminal-native selection overrides never arrive here.
             focused_pane_id = (
@@ -3218,7 +3222,8 @@ def run(args: argparse.Namespace) -> int:
                     focused_pane_id,
                     status_row=(
                         compact_status_row(latest_screen)
-                        if latest_screen is not None else None
+                        if latest_screen is not None
+                        else None
                     ),
                     now=time.monotonic(),
                 )
@@ -3232,20 +3237,14 @@ def run(args: argparse.Namespace) -> int:
             if selection_action.copy_data is not None:
                 surface.copy_to_clipboard(selection_action.copy_data)
                 character_count = len(
-                    selection_action.copy_data.decode(
-                        "utf-8", errors="replace"
-                    )
+                    selection_action.copy_data.decode("utf-8", errors="replace")
                 )
                 surface.show_local_status(
                     f"Copied {character_count:,} chars.",
                     level="success",
                 )
-                history_info_until = (
-                    time.monotonic() + _HISTORY_INFO_SECONDS
-                )
-                selection_clear_at = (
-                    time.monotonic() + _SELECTION_HIGHLIGHT_SECONDS
-                )
+                history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
+                selection_clear_at = time.monotonic() + _SELECTION_HIGHLIGHT_SECONDS
             if selection_action.handled:
                 return
             action = history.pointer_event(
@@ -3253,7 +3252,8 @@ def run(args: argparse.Namespace) -> int:
                 focused_pane_id,
                 status_row=(
                     compact_status_row(latest_screen)
-                    if latest_screen is not None else None
+                    if latest_screen is not None
+                    else None
                 ),
                 now=time.monotonic(),
             )
@@ -3270,7 +3270,9 @@ def run(args: argparse.Namespace) -> int:
                 history.overlays(),
             )
         may_change_routes = screen_input_may_change_routes(
-            part, history, latest_screen,
+            part,
+            history,
+            latest_screen,
         )
         if history.active or history.pending:
             if part == b"\x1b":
@@ -3287,22 +3289,22 @@ def run(args: argparse.Namespace) -> int:
                     )
                 else:
                     restore = history.cancel()
-                apply_history_action(HistoryAction(
-                    forwarded_input=part,
-                    restore_live=restore,
-                ))
+                apply_history_action(
+                    HistoryAction(
+                        forwarded_input=part,
+                        restore_live=restore,
+                    )
+                )
                 return
         if may_change_routes:
             history.invalidate_routes()
             route_refresh_needed = True
         send_protocol_frame(encode_input(part))
 
-    print(
-        "railmux ssh: Ctrl-] disconnects locally; Ctrl-B d detaches; "
-        f"mouse forwarding and local drag-copy are "
-        f"{'off' if args.no_mouse else 'on'}; "
-        f"automatic reconnect is {'on' if args.reconnect else 'off'}",
-        file=sys.stderr,
+    surface.show_local_status(
+        "Ctrl-] disconnects · Ctrl-B d detaches · "
+        f"mouse/copy {'off' if args.no_mouse else 'on'} · "
+        f"reconnect {'on' if args.reconnect else 'off'}"
     )
     try:
         with RawTerminal(sys.stdin.fileno()):
@@ -3318,9 +3320,7 @@ def run(args: argparse.Namespace) -> int:
                             "SSH display limits are "
                             f"{_MAX_TERMINAL_COLUMNS}x{_MAX_TERMINAL_LINES}"
                         )
-                    if _is_soft_keyboard_projection(
-                        observed_size, current_size
-                    ):
+                    if _is_soft_keyboard_projection(observed_size, current_size):
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if latest_screen is not None:
@@ -3342,9 +3342,7 @@ def run(args: argparse.Namespace) -> int:
                                     if claude_history_pending_choice[1]
                                     else "Enabling"
                                 )
-                                surface.show_local_status(
-                                    f"{action} {label} history…"
-                                )
+                                surface.show_local_status(f"{action} {label} history…")
                     elif not _terminal_size_is_usable(observed_size):
                         raise ProbeError(
                             "resized terminal reports "
@@ -3378,9 +3376,9 @@ def run(args: argparse.Namespace) -> int:
                             surface.show_claude_history_prompt()
                         history.clear_cache()
                         route_refresh_needed = True
-                        send_protocol_frame(encode_resize(
-                            observed_size.columns, observed_size.lines
-                        ))
+                        send_protocol_frame(
+                            encode_resize(observed_size.columns, observed_size.lines)
+                        )
                         current_size = observed_size
                         awaiting_keyframe = True
                 events = selector.select(timeout=terminal_input.next_timeout())
@@ -3398,18 +3396,13 @@ def run(args: argparse.Namespace) -> int:
                                 continue
                             if isinstance(message, HistoryBatch):
                                 action = history.accept_prefetch(message)
-                                selection_changed = (
-                                    selection.validate_routes(
-                                        history.visible_routes
-                                    )
+                                selection_changed = selection.validate_routes(
+                                    history.visible_routes
                                 )
                                 if selection_changed:
                                     selection_clear_at = None
                                 apply_history_action(action)
-                                if (
-                                    selection_changed
-                                    and latest_screen is not None
-                                ):
+                                if selection_changed and latest_screen is not None:
                                     surface.paint(
                                         full_repaint(latest_screen),
                                         history.overlays(),
@@ -3421,22 +3414,20 @@ def run(args: argparse.Namespace) -> int:
                             if isinstance(message, ClaudeHistoryPolicyResult):
                                 pending = claude_history_pending_choice
                                 action = apply_claude_history_policy_result(
-                                    pending, message)
+                                    pending, message
+                                )
                                 if action is None:
                                     continue
                                 claude_history_pending_choice = None
                                 claude_history_pending_since = None
                                 if action.status_text is not None:
-                                    surface.show_local_status(
-                                        action.status_text)
+                                    surface.show_local_status(action.status_text)
                                 if not action.update_runtime:
                                     history_info_until = (
-                                        time.monotonic()
-                                        + _HISTORY_INFO_SECONDS
+                                        time.monotonic() + _HISTORY_INFO_SECONDS
                                     )
                                     continue
-                                claude_history_runtime_choice = (
-                                    action.runtime_choice)
+                                claude_history_runtime_choice = action.runtime_choice
                                 if action.prefetch:
                                     prefetch = history.begin_prefetch(
                                         time.monotonic(), force=True
@@ -3459,9 +3450,7 @@ def run(args: argparse.Namespace) -> int:
                             applied = model.apply(update, current_size)
                             if applied is None:
                                 if not awaiting_keyframe:
-                                    send_protocol_frame(
-                                        encode_keyframe_request()
-                                    )
+                                    send_protocol_frame(encode_keyframe_request())
                                     awaiting_keyframe = True
                                 continue
                             saw_screen_update = True
@@ -3483,6 +3472,7 @@ def run(args: argparse.Namespace) -> int:
                                 # unfocused until the user changes windows.
                                 send_protocol_frame(encode_input(b"\033[I"))
                             frames += 1
+                            frames_since_attach += 1
                             painted_rows += len(applied.changed_rows)
                         if saw_screen_update and route_refresh_needed:
                             prefetch = history.begin_prefetch(time.monotonic())
@@ -3511,12 +3501,10 @@ def run(args: argparse.Namespace) -> int:
                         handle_terminal_part(part, set())
                 now = time.monotonic()
                 restore_local_status = (
-                    history_info_until is not None
-                    and now >= history_info_until
+                    history_info_until is not None and now >= history_info_until
                 )
                 clear_selection = (
-                    selection_clear_at is not None
-                    and now >= selection_clear_at
+                    selection_clear_at is not None and now >= selection_clear_at
                 )
                 if restore_local_status or clear_selection:
                     if clear_selection:
@@ -3533,9 +3521,7 @@ def run(args: argparse.Namespace) -> int:
                         selection_clear_at = None
                 if (
                     claude_history_pending_choice is not None
-                    and claude_history_save_timed_out(
-                        claude_history_pending_since, now
-                    )
+                    and claude_history_save_timed_out(claude_history_pending_since, now)
                 ):
                     claude_history_pending_choice = None
                     claude_history_pending_since = None
@@ -3557,7 +3543,7 @@ def run(args: argparse.Namespace) -> int:
                     _reap_remote(process)
                     if should_automatically_reconnect(
                         enabled=args.reconnect,
-                        painted_frames=frames,
+                        painted_frames=frames_since_attach,
                         local_exit=local_exit,
                         returncode=process.returncode,
                     ):
@@ -3586,7 +3572,7 @@ def run(args: argparse.Namespace) -> int:
                         decoder = ServerMessageDecoder()
                         model = ScreenModel()
                         terminal_input = TerminalInputDecoder()
-                        history = LocalHistoryView(history_limit)
+                        history.mark_reconnected()
                         selection = LocalTextSelection()
                         history_info_until = None
                         selection_clear_at = None
@@ -3600,12 +3586,14 @@ def run(args: argparse.Namespace) -> int:
                         awaiting_keyframe = False
                         route_refresh_needed = False
                         reconnect_policy = claude_history_reconnect_frame(
-                            claude_history_runtime_choice)
+                            claude_history_runtime_choice
+                        )
                         if reconnect_policy:
                             send_protocol_frame(reconnect_policy)
                         now = time.monotonic()
                         next_history_prefetch = now
                         next_heartbeat = now + _HEARTBEAT_INTERVAL
+                        frames_since_attach = 0
                         surface.show_local_status(
                             "Reconnected; waiting for a fresh screen"
                         )

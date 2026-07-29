@@ -531,7 +531,9 @@ visible. Press `Ctrl-]` or `Ctrl-C` while it is retrying to stop immediately.
 It starts only after the first screen has arrived and never retries an explicit
 detach, soft quit, hard quit, or local disconnect. Retries use non-interactive
 SSH authentication and never install, upgrade, replace, detach, or kill
-anything remotely. If the connection needs a new password or MFA interaction,
+anything remotely. A retry attaches only when the same managed Railmux session
+still exists, so it cannot recreate a workspace that was Soft Quit during a
+network race. If the connection needs a new password or MFA interaction,
 Railmux restores the terminal and asks you to rerun the ordinary command.
 
 Before the remote helper attaches to tmux, both ends exchange package and

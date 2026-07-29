@@ -168,14 +168,19 @@ Opt-in automatic reconnect is a narrower post-attach path. It becomes eligible
 only after at least one valid screen frame and only for an unexpected reaped
 process status; local EOF/escape, native detach, soft quit, and hard quit are
 terminal outcomes. A retry uses a fresh compatibility hello and ordinary
-`replace_existing_client=false` attach with non-interactive SSH authentication.
-It never enters install, upgrade, confirmation, or takeover paths and never
-detaches or kills a tmux client, session, pane, or provider. The bounded retry
-window exceeds the remote helper's 45-second half-open lease, while each hello,
-attach wait, and backoff also watches local stdin so `Ctrl-]`, `Ctrl-C`, or EOF
-restores the terminal immediately. The last valid frame may remain painted
-with a local reconnect status; a new decoder/model accepts only a fresh
-keyframe as the new display authority.
+`replace_existing_client=false`, `existing_session_only=true` attach with
+non-interactive SSH authentication. The internal existing-session boundary
+validates rather than creates the managed outer session, so a network failure
+racing with Soft Quit cannot resurrect the UI. It never enters install,
+upgrade, confirmation, or takeover paths and never detaches or kills a tmux
+client, session, pane, or provider. The bounded retry window exceeds the remote
+helper's 45-second half-open lease, while each hello, attach wait, and backoff
+also watches local stdin so `Ctrl-]`, `Ctrl-C`, or EOF restores the terminal
+immediately. Only frames painted by the current helper qualify another
+automatic retry. The last valid frame and bounded history cache may remain
+painted with a local reconnect status; a new decoder/model accepts only a fresh
+keyframe, and cached pane content is reusable only after a fresh multi-line
+timeline anchor, as the new display authority.
 
 ## Modes are registered providers, not a boolean
 

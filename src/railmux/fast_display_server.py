@@ -147,9 +147,7 @@ class _Osc52ClipboardDecoder:
                 break
             if start:
                 del self._buffer[:start]
-            selection_end = self._buffer.find(
-                b";", len(_OSC52_PREFIX)
-            )
+            selection_end = self._buffer.find(b";", len(_OSC52_PREFIX))
             if selection_end < 0:
                 if len(self._buffer) > len(_OSC52_PREFIX) + 16:
                     del self._buffer[0]
@@ -163,16 +161,13 @@ class _Osc52ClipboardDecoder:
                 if position >= 0
             ]
             if not endings:
-                if (
-                    len(self._buffer) - selection_end - 1
-                    > _OSC52_MAX_ENCODED
-                ):
+                if len(self._buffer) - selection_end - 1 > _OSC52_MAX_ENCODED:
                     del self._buffer[0]
                     continue
                 break
             end, terminator_length = min(endings)
-            payload = bytes(self._buffer[selection_end + 1:end])
-            del self._buffer[:end + terminator_length]
+            payload = bytes(self._buffer[selection_end + 1 : end])
+            del self._buffer[: end + terminator_length]
             if not payload or len(payload) > _OSC52_MAX_ENCODED:
                 continue
             try:
@@ -304,11 +299,13 @@ def _build_extended_pyte(pyte: object) -> object:
 
     class ExtendedByteStream(pyte.ByteStream):
         csi = dict(pyte.ByteStream.csi)
-        csi.update({
-            "S": "scroll_up",
-            "T": "scroll_down",
-            "b": "repeat_character",
-        })
+        csi.update(
+            {
+                "S": "scroll_up",
+                "T": "scroll_down",
+                "b": "repeat_character",
+            }
+        )
         events = frozenset(
             set(pyte.ByteStream.events)
             | {"scroll_up", "scroll_down", "repeat_character"}
@@ -366,13 +363,11 @@ class _TranscriptCacheEntry:
     more_available: bool
 
 
-_TRANSCRIPT_CACHE: OrderedDict[
-    tuple[str, int], _TranscriptCacheEntry
-] = OrderedDict()
+_TRANSCRIPT_CACHE: OrderedDict[tuple[str, int], _TranscriptCacheEntry] = OrderedDict()
 _TRANSCRIPT_CACHE_LIMIT = 4
-_INFERRED_TRANSCRIPTS: OrderedDict[
-    tuple[str, int], tuple[bool, str | None]
-] = OrderedDict()
+_INFERRED_TRANSCRIPTS: OrderedDict[tuple[str, int], tuple[bool, str | None]] = (
+    OrderedDict()
+)
 _INFERRED_TRANSCRIPT_LIMIT = 8
 _TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024
 _SESSION_BINDING_OPTION = "@railmux_binding_v1"
@@ -463,11 +458,17 @@ def _live_controller(session_id: str) -> str | None:
     """Return the controller pane only when both stored identities are live."""
     try:
         controller = _tmux_output(
-            "show-window-options", "-v", "-t", session_id,
+            "show-window-options",
+            "-v",
+            "-t",
+            session_id,
             "@railmux_controller_pane",
         )
         identity = _tmux_output(
-            "display-message", "-p", "-t", controller,
+            "display-message",
+            "-p",
+            "-t",
+            controller,
             "#{session_id}\t#{pane_id}",
         )
     except DisplayServerError:
@@ -503,9 +504,7 @@ def _ensure_railmux_session(session: str, timeout: float = 15.0) -> str:
     )
     try:
         result = subprocess.run(
-            tmux_server.tmux_argv(
-                "new-session", "-d", "-s", session, railmux_command
-            ),
+            tmux_server.tmux_argv("new-session", "-d", "-s", session, railmux_command),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
@@ -539,15 +538,19 @@ def _validate_railmux(session: str) -> str:
         raise DisplayServerError("tmux returned an invalid session identity")
 
     controller = _tmux_output(
-        "show-window-options", "-v", "-t", session_id,
+        "show-window-options",
+        "-v",
+        "-t",
+        session_id,
         "@railmux_controller_pane",
     )
     if not controller.startswith("%") or not controller[1:].isdigit():
-        raise DisplayServerError(
-            "the target is not a live managed Railmux window"
-        )
+        raise DisplayServerError("the target is not a live managed Railmux window")
     controller_identity = _tmux_output(
-        "display-message", "-p", "-t", controller,
+        "display-message",
+        "-p",
+        "-t",
+        controller,
         "#{session_id}\t#{pane_id}",
     )
     if controller_identity != f"{session_id}\t{controller}":
@@ -566,18 +569,21 @@ def _classify_remote_exit(session_id: str) -> RemoteExit:
 
 
 def _classify_observed_exit(
-    session_id: str, target: tmux_server.TmuxServerTarget,
+    session_id: str,
+    target: tmux_server.TmuxServerTarget,
 ) -> RemoteExit:
     """Distinguish an intentional hard quit from an abrupt tmux loss."""
     if tmux_health.soft_exit_intended(
-            server_pid=target.server_pid, session_id=session_id):
+        server_pid=target.server_pid, session_id=session_id
+    ):
         return RemoteExit.SOFT_QUIT
 
     exit_kind = _classify_remote_exit(session_id)
     if exit_kind is not RemoteExit.HARD_QUIT:
         return exit_kind
     if tmux_health.consume_clean_exit(
-            server_pid=target.server_pid, session_id=session_id):
+        server_pid=target.server_pid, session_id=session_id
+    ):
         return exit_kind
     tmux_health.record_incident(
         component="remote-display",
@@ -636,9 +642,7 @@ def _binding_transcript_source(raw: str) -> tuple[bool, str | None]:
     if isinstance(configured, str) and configured:
         candidates.append(Path(configured))
     else:
-        claude_root = Path(
-            os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")
-        )
+        claude_root = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
         projects = claude_root / "projects"
         try:
             candidates.extend(projects.glob(f"*/{session_id}.jsonl"))
@@ -646,9 +650,7 @@ def _binding_transcript_source(raw: str) -> tuple[bool, str | None]:
             pass
     markers: set[str] = set()
     for path in candidates:
-        marker = tmux_server.encode_transcript_source(
-            "claude", session_id, path
-        )
+        marker = tmux_server.encode_transcript_source("claude", session_id, path)
         if marker is None:
             continue
         opened = tmux_server.open_transcript_source(marker)
@@ -669,9 +671,7 @@ def _swap_binding_for_pane(
     matches: list[str] = []
     for option in _SWAP_OPTIONS:
         raw = _option_value(
-            tmux_server.tmux_argv(
-                "show-window-options", "-v", "-t", window_id, option
-            )
+            tmux_server.tmux_argv("show-window-options", "-v", "-t", window_id, option)
         )
         if not raw or len(raw) > 8192:
             continue
@@ -694,7 +694,10 @@ def _swap_binding_for_pane(
             continue
         binding = _option_value(
             tmux_server.tmux_argv(
-                "show-options", "-v", "-t", tmux_name,
+                "show-options",
+                "-v",
+                "-t",
+                tmux_name,
                 _SESSION_BINDING_OPTION,
             )
         )
@@ -722,14 +725,15 @@ def _inferred_transcript_source(
         binding = _option_value(
             tmux_server.target_argv(
                 history_server,
-                "show-options", "-v", "-t", history_pane_id,
+                "show-options",
+                "-v",
+                "-t",
+                history_pane_id,
                 _SESSION_BINDING_OPTION,
             )
         )
     else:
-        binding = _swap_binding_for_pane(
-            session_id, window_id, pane_id, pane_pid
-        )
+        binding = _swap_binding_for_pane(session_id, window_id, pane_id, pane_pid)
     result = _binding_transcript_source(binding)
     if not result[0] or result[1] is not None:
         _INFERRED_TRANSCRIPTS[cache_key] = result
@@ -760,7 +764,9 @@ def _pane_at_pointer(
 
 
 def _list_agent_panes(
-    session_id: str, *, claude_history_policy: str | None = None,
+    session_id: str,
+    *,
+    claude_history_policy: str | None = None,
 ) -> tuple[_PaneGeometry, ...]:
     """Return one coherent, fail-closed generation of visible agent panes."""
     controller = _live_controller(session_id)
@@ -769,8 +775,11 @@ def _list_agent_panes(
     try:
         output = subprocess.check_output(
             tmux_server.tmux_argv(
-                "list-panes", "-t", session_id,
-                "-F", "#{session_id}\t#{window_id}\t#{window_zoomed_flag}\t"
+                "list-panes",
+                "-t",
+                session_id,
+                "-F",
+                "#{session_id}\t#{window_id}\t#{window_zoomed_flag}\t"
                 "#{pane_active}\t#{pane_id}\t#{pane_pid}\t#{pane_left}\t"
                 "#{pane_top}\t#{pane_width}\t#{pane_height}\t"
                 "#{history_size}\t#{alternate_on}\t#{mouse_any_flag}\t"
@@ -829,21 +838,16 @@ def _list_agent_panes(
             if source is not None:
                 history_server, history_session_id = source
                 history_pane_id = tmux_server.target_single_pane_id(
-                    history_server, history_session_id, timeout=0.25)
+                    history_server, history_session_id, timeout=0.25
+                )
                 if history_pane_id is None:
                     history_server = None
         transcript_marker = fields[14] or None
         transcript_backed = (
             transcript_marker is not None
-            and tmux_server.decode_transcript_source(
-                transcript_marker
-            ) is not None
+            and tmux_server.decode_transcript_source(transcript_marker) is not None
         )
-        if (
-            not transcript_backed
-            and fields[11] == "1"
-            and fields[12] == "1"
-        ):
+        if not transcript_backed and fields[11] == "1" and fields[12] == "1":
             transcript_backed, transcript_marker = _inferred_transcript_source(
                 session_id=session_id,
                 window_id=window_id,
@@ -857,25 +861,27 @@ def _list_agent_panes(
             transcript_backed = opened is not None
             if opened is not None:
                 os.close(opened[1])
-        rows.append((
-            fields[2] == "1",
-            fields[3] == "1",
-            _PaneGeometry(
-                pane_id=pane_id,
-                x=left,
-                y=top,
-                width=width,
-                height=height,
-                history_server=history_server,
-                history_pane_id=history_pane_id,
-                mouse_forwardable=fields[12] == "1",
-                history_size=history_size,
-                alternate_on=fields[11] == "1",
-                transcript_source=transcript_marker,
-                transcript_backed=transcript_backed,
-                claude_history_policy=claude_history_policy,
-            ),
-        ))
+        rows.append(
+            (
+                fields[2] == "1",
+                fields[3] == "1",
+                _PaneGeometry(
+                    pane_id=pane_id,
+                    x=left,
+                    y=top,
+                    width=width,
+                    height=height,
+                    history_server=history_server,
+                    history_pane_id=history_pane_id,
+                    mouse_forwardable=fields[12] == "1",
+                    history_size=history_size,
+                    alternate_on=fields[11] == "1",
+                    transcript_source=transcript_marker,
+                    transcript_backed=transcript_backed,
+                    claude_history_policy=claude_history_policy,
+                ),
+            )
+        )
     if not rows or len({zoomed for zoomed, _active, _pane in rows}) != 1:
         return ()
     active = [pane for _zoomed, is_active, pane in rows if is_active]
@@ -912,13 +918,13 @@ def _read_transcript_tail(fd: int) -> tuple[str, bool]:
     raw = b"".join(chunks)
     if start:
         newline = raw.find(b"\n")
-        raw = b"" if newline < 0 else raw[newline + 1:]
+        raw = b"" if newline < 0 else raw[newline + 1 :]
     return raw.decode("utf-8", errors="replace"), start > 0
 
 
-def _wrap_transcript_rows(pyte: object, text: str, width: int) -> tuple[
-    tuple[bytes, ...], bool
-]:
+def _wrap_transcript_rows(
+    pyte: object, text: str, width: int
+) -> tuple[tuple[bytes, ...], bool]:
     """Wrap allowlisted transcript ANSI into independently paintable rows."""
     rows: deque[bytes] = deque(maxlen=MAX_HISTORY_LINES)
     row = bytearray(b"\033[0m")
@@ -940,20 +946,14 @@ def _wrap_transcript_rows(pyte: object, text: str, width: int) -> tuple[
             encoded = token.encode("ascii")
             params = token[2:-1].split(";")
             reset_at = max(
-                (
-                    index
-                    for index, param in enumerate(params)
-                    if param in ("", "0")
-                ),
+                (index for index, param in enumerate(params) if param in ("", "0")),
                 default=-1,
             )
             if reset_at >= 0:
                 active.clear()
-                remaining = params[reset_at + 1:]
+                remaining = params[reset_at + 1 :]
                 if remaining:
-                    active.append(
-                        f"\033[{';'.join(remaining)}m".encode("ascii")
-                    )
+                    active.append(f"\033[{';'.join(remaining)}m".encode("ascii"))
             else:
                 active.append(encoded)
             row.extend(encoded)
@@ -998,14 +998,11 @@ def _transcript_rows(
     source, fd = opened
     try:
         info = os.fstat(fd)
-        identity = (
-            info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size
-        )
+        identity = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
         key = (str(source.path), width)
         cached = _TRANSCRIPT_CACHE.get(key)
         if cached is not None and (
-            cached.identity == identity
-            or (allow_stale and bool(cached.rows))
+            cached.identity == identity or (allow_stale and bool(cached.rows))
         ):
             _TRANSCRIPT_CACHE.move_to_end(key)
             return cached
@@ -1039,18 +1036,27 @@ def _capture_pane_history(
 ) -> HistorySnapshot | None:
     try:
         if pane.history_server is not None and pane.history_pane_id is not None:
-            if not tmux_server.target_is_live(
-                    pane.history_server, timeout=0.25):
+            if not tmux_server.target_is_live(pane.history_server, timeout=0.25):
                 return None
             argv = tmux_server.target_argv(
                 pane.history_server,
-                "capture-pane", "-p", "-e", "-t", pane.history_pane_id,
-                "-S", f"-{max_lines}",
+                "capture-pane",
+                "-p",
+                "-e",
+                "-t",
+                pane.history_pane_id,
+                "-S",
+                f"-{max_lines}",
             )
         else:
             argv = tmux_server.tmux_argv(
-                "capture-pane", "-p", "-e", "-t", pane.pane_id,
-                "-S", f"-{max_lines}",
+                "capture-pane",
+                "-p",
+                "-e",
+                "-t",
+                pane.pane_id,
+                "-S",
+                f"-{max_lines}",
             )
         output = subprocess.check_output(
             argv,
@@ -1065,7 +1071,7 @@ def _capture_pane_history(
     # Retain the newest suffix when the styled representation reaches its byte
     # budget. Iterate backwards so an oversized response never sacrifices the
     # pane's current viewport merely to retain older scrollback.
-    current_raw = raw_lines[-pane.height:]
+    current_raw = raw_lines[-pane.height :]
     transcript_entry = None
     if (
         pane.transcript_backed
@@ -1081,16 +1087,15 @@ def _capture_pane_history(
             allow_stale=allow_stale_transcript,
         )
     source_lines: Sequence[tuple[bytes, bool]]
-    transcript_used = transcript_entry is not None and bool(
-        transcript_entry.rows
-    )
+    transcript_used = transcript_entry is not None and bool(transcript_entry.rows)
     if transcript_used:
         assert transcript_entry is not None
         transcript_lines = transcript_entry.rows
         history_count = max(0, max_lines - pane.height)
         source_lines = (
             tuple((line, True) for line in transcript_lines[-history_count:])
-            if history_count else ()
+            if history_count
+            else ()
         ) + tuple((line, False) for line in current_raw)
     else:
         source_lines = tuple((line, False) for line in raw_lines)
@@ -1125,8 +1130,7 @@ def _capture_pane_history(
         transcript_backed=transcript_used,
         transcript_available=pane.transcript_backed,
         history_choice_required=(
-            pane.transcript_backed
-            and pane.claude_history_policy == "ask"
+            pane.transcript_backed and pane.claude_history_policy == "ask"
         ),
         more_available=(
             budget_truncated
@@ -1169,9 +1173,7 @@ def capture_history_snapshot(
 
             pyte = pyte_module
         pyte = _extended_pyte(pyte)
-        snapshot = _capture_pane_history(
-            pyte, pane, request_id, max_lines
-        )
+        snapshot = _capture_pane_history(pyte, pane, request_id, max_lines)
     except (ImportError, ValueError, IndexError):
         return HistorySnapshot(request_id, None)
     return snapshot or HistorySnapshot(request_id, None)
@@ -1194,16 +1196,22 @@ def capture_history_batch(
         )
         if (
             snapshot := _capture_pane_history(
-                pyte, pane, request_id, max_lines,
+                pyte,
+                pane,
+                request_id,
+                max_lines,
                 allow_stale_transcript=True,
             )
-        ) is not None
+        )
+        is not None
     )
     return HistoryBatch(request_id, snapshots)
 
 
 def _acquire_display_lock(
-    session_id: str, *, timeout: float = _ATTACH_LOCK_TIMEOUT,
+    session_id: str,
+    *,
+    timeout: float = _ATTACH_LOCK_TIMEOUT,
 ) -> int:
     """Boundedly serialize the validation-and-attach boundary."""
     key = session_id[1:] if session_id.startswith("$") else "invalid"
@@ -1217,8 +1225,7 @@ def _acquire_display_lock(
             raise OSError("invalid tmux socket path")
         socket_key = hashlib.sha256(socket_path.encode()).hexdigest()[:16]
         path = (
-            restart_state.runtime_state_dir()
-            / f"fast-display-{socket_key}-{key}.lock"
+            restart_state.runtime_state_dir() / f"fast-display-{socket_key}-{key}.lock"
         )
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
@@ -1269,7 +1276,10 @@ def _set_winsize(fd: int, width: int, height: int) -> None:
 
 
 def _resize_tmux_client(
-    pid: int, master_fd: int, width: int, height: int,
+    pid: int,
+    master_fd: int,
+    width: int,
+    height: int,
 ) -> None:
     """Resize the private PTY and notify its tmux client process group.
 
@@ -1330,9 +1340,7 @@ def _spawn_tmux_client(session_id: str, width: int, height: int) -> tuple[int, i
             argv = tmux_server.tmux_argv(
                 *feature_args, "attach-session", "-t", session_id, env=env
             )
-            os.execvpe(
-                "tmux", argv, env
-            )
+            os.execvpe("tmux", argv, env)
         except BaseException:
             os._exit(127)
     os.close(slave_fd)
@@ -1421,8 +1429,11 @@ def _use_smallest_window_size(session_id: str) -> None:
         try:
             result = subprocess.run(
                 tmux_server.tmux_argv(
-                    "set-window-option", "-t", session_id,
-                    "window-size", "smallest",
+                    "set-window-option",
+                    "-t",
+                    session_id,
+                    "window-size",
+                    "smallest",
                 ),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -1468,7 +1479,9 @@ def _colour_codes(value: str, *, foreground: bool) -> list[str]:
     if len(value) == 6:
         try:
             red, green, blue = (
-                int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+                int(value[0:2], 16),
+                int(value[2:4], 16),
+                int(value[4:6], 16),
             )
         except ValueError:
             pass
@@ -1596,7 +1609,10 @@ def _remote_watchdog_tripped(
         return False
     try:
         raw_identity = _tmux_output(
-            "display-message", "-p", "-t", session_id,
+            "display-message",
+            "-p",
+            "-t",
+            session_id,
             "#{pid}\t#{session_id}",
         )
     except DisplayServerError:
@@ -1624,6 +1640,7 @@ def serve(
     fps: float,
     *,
     replace_existing_client: bool = False,
+    existing_session_only: bool = False,
 ) -> int:
     try:
         import pyte
@@ -1634,10 +1651,13 @@ def serve(
         ) from exc
     pyte = _extended_pyte(pyte)
 
-    if replace_existing_client:
+    if replace_existing_client or existing_session_only:
         initial_session_id = _validate_railmux(session)
-        _detach_session_clients(initial_session_id)
-        lock_timeout = _REPLACE_LOCK_TIMEOUT
+        if replace_existing_client:
+            _detach_session_clients(initial_session_id)
+            lock_timeout = _REPLACE_LOCK_TIMEOUT
+        else:
+            lock_timeout = _ATTACH_LOCK_TIMEOUT
     else:
         initial_session_id = _ensure_railmux_session(session)
         lock_timeout = _ATTACH_LOCK_TIMEOUT
@@ -1667,8 +1687,7 @@ def serve(
     finally:
         _release_display_lock(lock_fd)
     assert pid is not None and master_fd is not None
-    return _serve_attached(
-        pyte, modes, session_id, width, height, fps, pid, master_fd)
+    return _serve_attached(pyte, modes, session_id, width, height, fps, pid, master_fd)
 
 
 def _serve_attached(
@@ -1828,7 +1847,8 @@ def _serve_attached(
             activate_control_packet()
             now = time.monotonic()
             timeout = (
-                0.25 if pending_packet is not None
+                0.25
+                if pending_packet is not None
                 else max(0.0, min(0.25, next_frame - now))
             )
             timeout = min(
@@ -1880,9 +1900,7 @@ def _serve_attached(
                                 pyte=pyte,
                                 claude_history_policy=claude_history_override,
                             )
-                            queue_control_packet(
-                                encode_history_snapshot(snapshot)
-                            )
+                            queue_control_packet(encode_history_snapshot(snapshot))
                         continue
                     if message.kind is InputKind.PREFETCH_HISTORY:
                         if len(control_packets) < 4:
@@ -1917,12 +1935,10 @@ def _serve_attached(
                             )
                         except ValueError:
                             continue
-                        applied, claude_history_override = (
-                            apply_claude_history_choice(
-                                policy,
-                                persistent=persistent,
-                                current_override=claude_history_override,
-                            )
+                        applied, claude_history_override = apply_claude_history_choice(
+                            policy,
+                            persistent=persistent,
+                            current_override=claude_history_override,
                         )
                         claude_history_persisted_at_override = (
                             Settings().claude_history_policy
@@ -1992,9 +2008,7 @@ def _serve_attached(
             now = time.monotonic()
             if now - last_input >= _CLIENT_LEASE_TIMEOUT:
                 return 0
-            if _remote_watchdog_tripped(
-                watchdog, session_id, target.server_pid, now
-            ):
+            if _remote_watchdog_tripped(watchdog, session_id, target.server_pid, now):
                 raise DisplayServerError(
                     "dedicated tmux server stopped responding; run "
                     "'railmux doctor' for diagnostics"
@@ -2009,11 +2023,7 @@ def _serve_attached(
                 pending_packet = None
                 pending_state = None
                 schedule_latest_update(now)
-            elif (
-                pending_packet is None
-                and not control_packets
-                and now >= next_frame
-            ):
+            elif pending_packet is None and not control_packets and now >= next_frame:
                 schedule_latest_update(now)
         if input_closed:
             return 0
@@ -2025,7 +2035,7 @@ def _serve_attached(
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="railmux remote-server",
-        description="Internal coalesced full-window Railmux display server"
+        description="Internal coalesced full-window Railmux display server",
     )
     parser.add_argument("--protocol", type=int, required=True)
     parser.add_argument("--session", default="railmux")
@@ -2034,6 +2044,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=20.0)
     parser.add_argument(
         "--replace-existing-client",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--existing-session-only",
         action="store_true",
         help=argparse.SUPPRESS,
     )
@@ -2064,8 +2079,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if not ready:
         print(
-            "remote display: pyte is unavailable; install "
-            "'railmux[ssh]'",
+            "remote display: pyte is unavailable; install 'railmux[ssh]'",
             file=sys.stderr,
         )
         return 2
@@ -2077,6 +2091,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.height,
             args.fps,
             replace_existing_client=args.replace_existing_client,
+            existing_session_only=args.existing_session_only,
         )
     except DisplayServerBusy as exc:
         _emit_attach_status(REMOTE_ATTACH_BUSY)

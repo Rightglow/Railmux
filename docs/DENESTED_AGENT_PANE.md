@@ -392,7 +392,15 @@ input, or `Esc` restores all panes. A periodic prefetch refreshes routes and
 future cache content without moving a frozen viewport. Every cumulative
 response replaces its prior snapshot only when its visible multi-line anchor
 has one exact match, so repeated content, newly prepended history, or newly
-appended output cannot shift the user's view.
+appended output cannot shift the user's view. Each local wheel event advances
+exactly one row: macOS/Linux touchpad and terminal stacks already encode gesture
+speed as event frequency, so multiplying a burst again could skip a long code
+block. Codex tmux history and Claude transcript-backed local history share this
+fine-grained behavior; choosing Claude native history intentionally delegates
+scroll semantics to Claude Code instead. Anchored refreshes also discard an
+older all-blank suffix beyond the new timeline end. This keeps temporary
+full-screen views such as Codex `/btw` from leaving a near-empty page above the
+restored main conversation.
 
 The private tmux client advertises `xterm-256color`, whose terminfo uses
 parameterized scroll-up/down and repeat-character operations. pyte 0.8.2 does
