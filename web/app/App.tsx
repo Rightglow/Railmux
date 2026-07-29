@@ -302,8 +302,8 @@ export default function Home() {
                   <div className="entrypoint-terminal-viewport">
                     <TerminalRecording
                       source="railmux-tour-demo.cast"
-                      className="entrypoint-recording"
-                      poster="npt:12.2"
+                      className="entrypoint-recording entrypoint-recording-left"
+                      poster="npt:14.2"
                       controls={false}
                       dataDemo="session-menu-recording"
                     />

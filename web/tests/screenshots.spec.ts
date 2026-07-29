@@ -283,6 +283,9 @@ test("show real New Project, Help, and session menu entry points", async ({ page
   await expect(sessionMenu.locator(".ap-term")).toContainText(
     "Explain workspace layout",
   );
+  await expect(sessionMenu.locator(".ap-term")).toContainText(
+    "Read-only history preview",
+  );
   await sessionMenu.locator("xpath=..").screenshot({
     path: join(outputDir, "session-menu.png"),
     animations: "disabled",
@@ -291,6 +294,17 @@ test("show real New Project, Help, and session menu entry points", async ({ page
   await expect(
     page.getByText("without entering tmux copy-mode", { exact: false }),
   ).toBeVisible();
+  const terminalWidths = await page
+    .locator(".entrypoint-terminal-viewport")
+    .evaluateAll((items) =>
+      items.map((item) => item.getBoundingClientRect().width),
+    );
+  expect(Math.min(...terminalWidths)).toBeGreaterThan(600);
+  await page.locator(".feature-entrypoints").screenshot({
+    path: join(outputDir, "entrypoints-section.png"),
+    animations: "disabled",
+    scale: "css",
+  });
   expect(pageErrors).toEqual([]);
 });
 

@@ -784,13 +784,13 @@ code {
 .feature-entrypoints-heading {
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   padding: clamp(28px, 4vw, 52px);
   background: var(--paper);
 }
 
 .feature-entrypoints-heading > span {
-  margin-bottom: auto;
+  margin-bottom: 0;
   color: #89918f;
   font-family: var(--mono);
   font-size: 9px;
@@ -815,15 +815,17 @@ code {
 .entrypoint-grid {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 1px;
   background: rgba(255, 255, 255, 0.12);
 }
 
 .entrypoint-grid article {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(132px, 0.28fr);
+  align-items: center;
+  gap: 24px;
   padding: 26px;
   color: var(--paper);
   background: #090d0f;
@@ -837,6 +839,10 @@ code {
   border-radius: 3px;
   box-shadow: 0 20px 55px rgba(0, 0, 0, 0.28);
   transform: translateX(-18.75%);
+}
+
+.entrypoint-recording-left {
+  transform: translateX(0);
 }
 
 .entrypoint-terminal-viewport {
@@ -855,7 +861,7 @@ code {
 .entrypoint-grid article > div:last-child {
   display: grid;
   gap: 6px;
-  margin-top: 22px;
+  margin: 0;
   font-family: var(--mono);
 }
 
@@ -1662,6 +1668,14 @@ footer {
 
   .entrypoint-grid {
     grid-template-columns: 1fr;
+  }
+
+  .entrypoint-grid article {
+    grid-template-columns: 1fr;
+  }
+
+  .entrypoint-grid article > div:last-child {
+    margin-top: 18px;
   }
 
   .feature-support-grid article {

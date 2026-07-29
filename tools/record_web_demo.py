@@ -55,7 +55,7 @@ WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # A representative portrait phone geometry. Compact mode is selected by the
 # narrow width; the separately documented 105x21 Termux report was landscape.
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
-TOUR = RecordingProfile("tour", 160, 38, 15.0)
+TOUR = RecordingProfile("tour", 160, 38, 17.0)
 CONTROLS = RecordingProfile("controls", 180, 38, 27.0)
 STARTUP_HOLD_SECONDS = 2.4
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
@@ -935,6 +935,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "open-help",
                 "close-help",
                 "switch-codex",
+                "preview-codex",
                 "open-context-menu",
                 "context-menu-visible",
             },
@@ -1174,13 +1175,28 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         and b"Explain workspace layout" in raw_output
                     ):
                         cue_once(
-                            "context-menu-cue",
+                            "preview-codex-cue",
                             10.2,
-                            "mouse|10|12|Right-click a Codex session",
+                            "mouse|10|12|Preview a Codex session",
+                        )
+                        send_once(
+                            "preview-codex",
+                            10.8,
+                            b"\x1b[<0;10;12M\x1b[<0;10;12m",
+                            None,
+                        )
+                    if (
+                        "preview-codex" in sent
+                        and b"Read-only history preview" in raw_output
+                    ):
+                        cue_once(
+                            "context-menu-cue",
+                            12.2,
+                            "mouse|10|12|Right-click the Codex session",
                         )
                         send_once(
                             "open-context-menu",
-                            10.8,
+                            12.8,
                             b"\x1b[<2;10;12M\x1b[<2;10;12m",
                             None,
                         )

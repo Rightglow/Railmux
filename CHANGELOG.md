@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Enlarge the website's New Project, Help, and Session Menu recordings into
+  readable full-width rows, and demonstrate the session menu over a real Codex
+  history-preview pane instead of an empty full-width sidebar.
+
 ## [0.2.16] - 2026-07-29
 
 ### Added
