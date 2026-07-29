@@ -2731,6 +2731,38 @@ def test_local_reconnect_status_is_bounded_to_terminal_bottom_row():
     assert b"is-long" not in painted
 
 
+def test_local_status_preserves_painted_status_left_and_background():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.set_physical_size(os.terminal_size((40, 4)))
+    screen = AppliedScreen(
+        width=40,
+        height=4,
+        cursor_x=2,
+        cursor_y=2,
+        cursor_visible=True,
+        terminal_modes=TerminalMode.NONE,
+        rows=(
+            b"one", b"two", b"three",
+            b"\033[0;30;48;2;95;175;0m Railmux [R][1][2]"
+            b"                    \033[0m",
+        ),
+        changed_rows=(0, 1, 2, 3),
+        clear=True,
+    )
+    surface.paint(screen)
+    output.seek(0)
+    output.truncate()
+
+    surface.show_local_status("Copied 12 chars.", level="success")
+
+    painted = output.getvalue()
+    assert b"\033[4;1H\033[2K" not in painted
+    assert b"\033[4;21H" in painted
+    assert b"\033[48;2;95;175;0m\033[1;38;5;17m\033[K" in painted
+    assert b"Copied 12 chars." in painted
+
+
 def test_claude_history_prompt_is_local_bounded_and_mouse_selectable():
     output = io.BytesIO()
     surface = TerminalSurface(output)

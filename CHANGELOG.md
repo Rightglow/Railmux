@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep local `railmux ssh` drag-copy feedback in status-right so it no longer
+  erases the Railmux, mode, and layout controls on the left.
+- Suppress the transient sidebar row-focus flash while a soft restart restores
+  an agent-focused workspace.
+
 ## [0.2.16.dev202607290] - 2026-07-29
 
 ### Added

@@ -1903,6 +1903,23 @@ def test_pending_restore_retains_state_after_incomplete_running_recovery(
     assert state_path.exists()
 
 
+def test_completed_agent_restore_releases_deferred_sidebar_focus_visual():
+    app = _minimal_app()
+    app._pending_restore_state = {"right_kind": "empty"}
+    app._running_recovery_ok = True
+    app._restore_right_pane = MagicMock(return_value=True)
+    app._frame = MagicMock()
+    app._railmux_has_focus = False
+    app._defer_startup_sidebar_focus_visual = True
+    app._loaded_restart_state_path = None
+    app._loaded_restart_source = None
+
+    app._restore_pending_right_pane(None, None)
+
+    app._frame.set_window_active.assert_called_once_with(False)
+    assert app._defer_startup_sidebar_focus_visual is False
+
+
 def test_pending_index_allows_exact_running_target_restore(monkeypatch):
     state_path = Path("/tmp/not-used-state")
     app = _minimal_app()
@@ -2388,10 +2405,9 @@ def test_teardown_reverts_every_bar_option(monkeypatch):
             "status-style", "status-left"} <= reverted
 
 
-def test_run_teardown_reverts_bar_if_setup_raises(monkeypatch):
-    """Regression: run() applies the tmux status-bar overrides BEFORE building the
-    urwid Screen/MainLoop. If that construction raises, `finally` must still call
-    _teardown_tmux, or the user's outer bar keeps railmux's status/style/brand."""
+def test_run_defers_saved_agent_focus_and_reverts_bar_if_setup_raises(
+        monkeypatch):
+    """Startup hides a saved agent focus before drawing and always tears down."""
     import railmux.ui.app as app_mod
 
     app = _minimal_app()
@@ -2401,6 +2417,7 @@ def test_run_teardown_reverts_bar_if_setup_raises(monkeypatch):
     app._frame = MagicMock()
     app._hint_bar = MagicMock()
     app._set_railmux_focus = MagicMock()
+    app._defer_startup_sidebar_focus_visual = True
     teardown = MagicMock()
     app._teardown_tmux = teardown
 
@@ -2418,6 +2435,7 @@ def test_run_teardown_reverts_bar_if_setup_raises(monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         app.run()
 
+    app._frame.set_window_active.assert_called_once_with(False)
     assert app._tmux_status_enabled is True  # setup ran (bar was mutated)...
     teardown.assert_called_once_with()       # ...and teardown reverted it
 

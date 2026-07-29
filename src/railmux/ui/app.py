@@ -794,6 +794,11 @@ class App:
         self._outer_teardown_done: bool = False
         self._exit_in_progress: bool = False
         self._pending_restore_state: dict | None = None
+        # When a soft restart is restoring focus directly into an agent pane,
+        # suppress the sidebar's focused-row decoration until that pane exists.
+        # Otherwise the first two startup frames briefly paint the remembered
+        # session cursor as if the sidebar owned keyboard focus.
+        self._defer_startup_sidebar_focus_visual: bool = False
         self._loaded_restart_source: restart_state.OuterTmuxIdentity | None = None
         self._loaded_restart_state_path: Path | None = None
         self._pending_project: Project | None = None
@@ -993,6 +998,12 @@ class App:
         self._render_running_pane()
         # Re-open the right pane after MainLoop paints the sidebar's first frame.
         self._pending_restore_state = state
+        workspace_state = state.get("workspace") if state else None
+        self._defer_startup_sidebar_focus_visual = (
+            isinstance(workspace_state, dict)
+            and workspace_state.get("focus")
+            in {AgentWorkspace.PRIMARY, AgentWorkspace.SECONDARY}
+        )
 
     def _set_slot_active_target(
         self,
@@ -1611,7 +1622,14 @@ class App:
         self._pending_restore_state = None
         if state is None:
             return
-        restored = self._restore_right_pane(state)
+        try:
+            restored = self._restore_right_pane(state)
+        finally:
+            if getattr(
+                self, "_defer_startup_sidebar_focus_visual", False
+            ):
+                self._defer_startup_sidebar_focus_visual = False
+                self._frame.set_window_active(self._railmux_has_focus)
         if not restored or not getattr(self, "_running_recovery_ok", True):
             return
         path = getattr(self, "_loaded_restart_state_path", None)
@@ -9496,6 +9514,13 @@ class App:
                 self._set_status(
                     "Could not enable stable multi-terminal sizing.", "warn")
             self._set_railmux_focus(True, force_border=True)
+            if getattr(
+                self, "_defer_startup_sidebar_focus_visual", False
+            ):
+                # The process necessarily starts in the sidebar tmux pane, but
+                # a saved agent-focused workspace will replace that temporary
+                # topology shortly. Do not expose its misleading row focus.
+                self._frame.set_window_active(False)
             self._install_tmux_bindings()
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,

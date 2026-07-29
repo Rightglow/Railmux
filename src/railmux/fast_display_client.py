@@ -1704,6 +1704,7 @@ class TerminalSurface:
         self.active = False
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
+        self._last_screen: AppliedScreen | None = None
 
     def set_physical_size(self, size: os.terminal_size) -> None:
         """Set the local viewport without changing the remote screen geometry."""
@@ -1738,22 +1739,75 @@ class TerminalSurface:
         self.stream.flush()
         self.active = True
 
-    def show_local_status(self, message: str) -> None:
-        """Temporarily replace the bottom row without leaving alt-screen."""
+    def show_local_status(self, message: str, *, level: str = "info") -> None:
+        """Show local feedback without erasing Railmux's status-left brand."""
         self.start()
         height = 1 if self.physical_size is None else self.physical_size.lines
         safe = "".join(
             character if character.isprintable() and character != "\x1b" else " "
             for character in message
         )
-        if self.physical_size is not None:
-            safe = safe[:self.physical_size.columns]
-        self.stream.write(
-            f"\033[0m\033[{max(1, height)};1H\033[2K{safe}\033[?25l".encode(
-                "utf-8"
+        screen = self._last_screen
+        if screen is None:
+            if self.physical_size is not None:
+                safe = safe[:self.physical_size.columns]
+            rendered = (
+                f"\033[0m\033[{max(1, height)};1H"
+                f"\033[2K{safe}\033[?25l"
+            ).encode("utf-8")
+        else:
+            width = screen.width
+            if self.physical_size is not None:
+                width = min(width, self.physical_size.columns)
+            # The left half belongs to Railmux's persistent brand/mode/layout
+            # controls. Local-only SSH feedback is a transient status-right
+            # replacement and must never clear those controls.
+            reserved = width // 2
+            available = max(0, width - reserved)
+            safe = safe[:available]
+            column = max(reserved + 1, width - len(safe) + 1)
+            background = self._row_background_sgr(screen.rows[-1])
+            foreground = (
+                b"\033[1;38;5;17m"
+                if level == "success"
+                else b"\033[38;5;231m"
             )
-        )
+            rendered = b"".join((
+                b"\033[0m",
+                f"\033[{max(1, height)};{reserved + 1}H".encode(),
+                background,
+                foreground,
+                b"\033[K",
+                f"\033[{max(1, height)};{column}H".encode(),
+                safe.encode("utf-8"),
+                b"\033[0m\033[?25l",
+            ))
+        self.stream.write(rendered)
         self.stream.flush()
+
+    @staticmethod
+    def _row_background_sgr(row: bytes) -> bytes:
+        """Return the first explicit row background as a standalone SGR."""
+        for match in _SGR_STYLE_RE.finditer(row):
+            raw = match.group()[2:-1]
+            try:
+                codes = [int(value) if value else 0
+                         for value in raw.split(b";")]
+            except ValueError:
+                continue
+            for index, code in enumerate(codes):
+                if 40 <= code <= 47 or 100 <= code <= 107:
+                    return f"\033[{code}m".encode()
+                if code != 48 or index + 1 >= len(codes):
+                    continue
+                mode = codes[index + 1]
+                count = 3 if mode == 5 else 5 if mode == 2 else 0
+                if count and index + count <= len(codes):
+                    values = ";".join(
+                        str(value) for value in codes[index:index + count]
+                    )
+                    return f"\033[{values}m".encode()
+        return b"\033[49m"
 
     def copy_to_clipboard(self, data: bytes) -> None:
         """Copy one validated payload locally, with OSC 52 as fallback."""
@@ -1953,6 +2007,7 @@ class TerminalSurface:
     ) -> bool:
         """Paint a screen and report whether focus reporting was just enabled."""
         self.start()
+        self._last_screen = screen
         enabled_modes = self._reconcile_terminal_modes(screen.terminal_modes)
         projection_top, visible_height = self._projection(screen.height)
         rendered = [b"\033[?7l"]
@@ -2001,6 +2056,7 @@ class TerminalSurface:
         selection: tuple[SelectionSegment, ...] = (),
     ) -> None:
         self.start()
+        self._last_screen = screen
         projection_top, visible_height = self._projection(screen.height)
         rendered: list[bytes] = [b"\033[?7l"]
         self._append_overlay_rows(
@@ -3073,7 +3129,8 @@ def run(args: argparse.Namespace) -> int:
                     )
                 )
                 surface.show_local_status(
-                    f"Copied {character_count:,} characters locally"
+                    f"Copied {character_count:,} chars.",
+                    level="success",
                 )
                 history_info_until = (
                     time.monotonic() + _HISTORY_INFO_SECONDS

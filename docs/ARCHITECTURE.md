@@ -633,7 +633,11 @@ return secondary home before rebuilding primary or promoting the survivor; do
 not relabel slot-specific swap ownership in memory. A recovery ambiguity must
 leave the agent in Running rather than destroy a pane. Soft restart persists the
 full exact-owner workspace after bounded field validation; shared portable state
-continues to restore only one stable display wish into primary.
+continues to restore only one stable display wish into primary. When exact
+restart state says an agent owned keyboard focus, the first sidebar frame
+suppresses its temporary focused-row decoration until the target pane restore
+settles; a failed restore reveals the real sidebar focus instead of retaining a
+false inactive state.
 
 ## Global bindings preserve user tmux configuration
 
@@ -693,8 +697,10 @@ client pins the gesture to that one pane and immutable visible-row snapshot,
 clamps it at the pane border, paints a reverse-video selection, and copies the
 selected UTF-8 text to the initiating machine on release. The highlight clears
 after a short acknowledgement interval so immutable captured text cannot cover
-subsequent live output indefinitely. Native clipboard
-writers are preferred, with bounded OSC 52 as fallback. The first version is
+subsequent live output indefinitely. Its local copy acknowledgement temporarily
+replaces only status-right, retains the captured status background, and never
+erases the Railmux/mode/layout controls in status-left. Native clipboard writers
+are preferred, with bounded OSC 52 as fallback. The first version is
 deliberately physical-line and visible-viewport only: it does not autoscroll,
 join application soft wraps, or cross pane borders. Keyboard input, resize,
 reconnect, and changed route geometry invalidate the local selection.
