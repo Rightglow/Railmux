@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-07-29
+
 ### Changed
 
 - Enlarge the website's New Project, Help, and Session Menu recordings into
   readable full-width rows, and demonstrate the session menu over a real Codex
   history-preview pane instead of an empty full-width sidebar.
+
+### Fixed
+
+- Check for local Railmux updates before `railmux ssh` connects, preserving the
+  complete SSH command when an accepted update restarts the client. Internal
+  remote display servers remain non-interactive and never check for updates.
 
 ## [0.2.16] - 2026-07-29
 
@@ -1171,7 +1179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.16...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.17...HEAD
+[0.2.17]: https://github.com/Rightglow/Railmux/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16
 [0.2.16.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...v0.2.16.dev202607291
 [0.2.16.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16.dev202607290

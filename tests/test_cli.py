@@ -140,14 +140,24 @@ def test_legacy_doctor_flag_is_removed():
 
 
 def test_ssh_subcommand_dispatches_before_local_tmux_preflight(monkeypatch):
+    calls = []
     ssh_main = MagicMock(return_value=7)
     preflight = MagicMock(return_value=False)
+    update = MagicMock(side_effect=lambda *_args: calls.append("update"))
+    ssh_main.side_effect = lambda *_args: calls.append("connect") or 7
+    monkeypatch.setattr(
+        "railmux.self_update.maybe_upgrade_before_launch", update
+    )
     monkeypatch.setattr("railmux.fast_display_client.main", ssh_main)
     monkeypatch.setattr("railmux.cli.ensure_tmux_available", preflight)
 
     result = main(["ssh", "example", "--fps", "30"])
 
     assert result == 7
+    assert calls == ["update", "connect"]
+    raw_args, settings = update.call_args.args
+    assert raw_args == ["ssh", "example", "--fps", "30"]
+    assert settings.update_policy == "ask"
     ssh_main.assert_called_once_with(["example", "--fps", "30"])
     preflight.assert_not_called()
 
@@ -155,12 +165,17 @@ def test_ssh_subcommand_dispatches_before_local_tmux_preflight(monkeypatch):
 def test_remote_server_subcommand_dispatches_to_internal_helper(monkeypatch):
     server_main = MagicMock(return_value=9)
     preflight = MagicMock(return_value=False)
+    update = MagicMock()
+    monkeypatch.setattr(
+        "railmux.self_update.maybe_upgrade_before_launch", update
+    )
     monkeypatch.setattr("railmux.fast_display_server.main", server_main)
     monkeypatch.setattr("railmux.cli.ensure_tmux_available", preflight)
 
     result = main(["remote-server", "--protocol", "4"])
 
     assert result == 9
+    update.assert_not_called()
     server_main.assert_called_once_with(["--protocol", "4"])
     preflight.assert_not_called()
 

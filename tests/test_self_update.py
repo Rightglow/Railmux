@@ -138,6 +138,31 @@ def test_ask_this_time_updates_without_persisting(monkeypatch):
     settings.set_update_policy.assert_not_called()
 
 
+def test_ssh_upgrade_restarts_the_full_user_command(monkeypatch):
+    settings = MagicMock(update_policy="always")
+    monkeypatch.setattr(self_update, "latest_release", lambda: "9.0")
+    monkeypatch.setattr(self_update, "installation_is_editable", lambda: False)
+    monkeypatch.setattr(
+        self_update.subprocess, "run", lambda *_args, **_kwargs: MagicMock(
+            returncode=0
+        )
+    )
+
+    class Restarted(Exception):
+        pass
+
+    def restart(raw_args):
+        assert raw_args == ("ssh", "example", "--fps", "30")
+        raise Restarted
+
+    monkeypatch.setattr(self_update, "_restart", restart)
+
+    with pytest.raises(Restarted):
+        self_update.maybe_upgrade_before_launch(
+            ("ssh", "example", "--fps", "30"), settings
+        )
+
+
 def test_ask_always_persists_before_update(monkeypatch):
     calls = []
     settings = MagicMock(update_policy="ask")

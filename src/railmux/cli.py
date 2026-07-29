@@ -147,6 +147,13 @@ def _run_tmux_client_with_watchdog(
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if raw_args and raw_args[0] == "ssh":
+        # The SSH client is a user-facing launcher too. Check the local
+        # installation before connecting so an accepted upgrade can restart
+        # the exact ``railmux ssh ...`` command on the new version.
+        from railmux.self_update import maybe_upgrade_before_launch
+        from railmux.settings import Settings
+        maybe_upgrade_before_launch(raw_args, Settings())
+
         from railmux.fast_display_client import main as ssh_main
         return ssh_main(raw_args[1:])
     if raw_args and raw_args[0] == "remote-server":
