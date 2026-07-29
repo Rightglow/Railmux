@@ -616,6 +616,10 @@ stable; close the keyboard before rotating the device. A terminal narrower than
 40 columns is rejected immediately; hide the keyboard or reduce the terminal
 font size before connecting.
 
+The local client paints **Restoring your workspace** immediately while the SSH
+handshake and remote attach are still in progress; the first validated remote
+frame replaces it.
+
 Both the ordinary launcher and SSH display keep a low-frequency watchdog
 outside the attached tmux client. Three consecutive dedicated-server health
 failures restore the local terminal, end only that display client, and record a

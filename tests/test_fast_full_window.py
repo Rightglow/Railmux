@@ -1049,6 +1049,46 @@ def test_initial_terminal_size_rejects_a_terminal_that_is_too_narrow(
     sleep.assert_not_called()
 
 
+def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
+    events = []
+    stdin = MagicMock()
+    stdout = MagicMock()
+    stdin.isatty.return_value = True
+    stdout.isatty.return_value = True
+    stdout.fileno.return_value = 9
+    monkeypatch.setattr(fast_display_client.sys, "stdin", stdin)
+    monkeypatch.setattr(fast_display_client.sys, "stdout", stdout)
+    monkeypatch.setattr(
+        fast_display_client, "load_config", lambda: MagicMock())
+    monkeypatch.setattr(
+        fast_display_client.shutil, "which", lambda _name: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        fast_display_client,
+        "wait_for_usable_terminal_size",
+        lambda _fd: os.terminal_size((105, 22)),
+    )
+    monkeypatch.setattr(
+        fast_display_client,
+        "show_startup_surface",
+        lambda size: events.append(("surface", size)),
+    )
+
+    def fail_after_surface(_args, size):
+        events.append(("preflight", size))
+        raise fast_display_client.ProbeError("stop")
+
+    monkeypatch.setattr(
+        fast_display_client, "prepare_remote_process", fail_after_surface)
+
+    with pytest.raises(fast_display_client.ProbeError, match="stop"):
+        fast_display_client.run(parse_client_args(["server"]))
+
+    assert events == [
+        ("surface", os.terminal_size((105, 22))),
+        ("preflight", os.terminal_size((105, 22))),
+    ]
+
+
 def test_same_width_short_resize_is_only_a_local_projection():
     logical = os.terminal_size((105, 22))
 

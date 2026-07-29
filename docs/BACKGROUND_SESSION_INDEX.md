@@ -32,6 +32,16 @@ generation containing cached live metadata. The first injected failure exposed
 the bounded warning `Codex session scan skipped 1 transient file error(s)`;
 the immediately following equivalent permission warning was deduplicated.
 
+The production index also persists only signature-keyed parsed metadata across
+processes. The first run after installation or a cache-schema change remains a
+cold parse; later runs still enumerate and stat the entire tree but reopen only
+new or changed rollouts. On the development host on 2026-07-29, 69 rollout
+files totalled 539.5 MiB. A fresh process parsed all 69 in 6.064 seconds; the
+next fresh process validated all 69 signatures, reparsed one concurrently
+changing active rollout, and published in 0.349 seconds. This is real
+filesystem/provider data from that host, but not a claim about NFS, macOS, SSH,
+or other installations.
+
 Startup recovery is also generation-fenced. Exact tmux stamps are rendered as
 provisional Running entries if the first scan has not published yet, then
 revalidated against one pinned generation. Deterministic tests publish a newer

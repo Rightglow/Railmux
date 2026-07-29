@@ -13,6 +13,7 @@ from railmux.codex_index import (
     ScanReport,
     _lineage_members,
     _lineage_representatives,
+    persistent_cache_path,
 )
 from railmux.models import SessionMeta
 from railmux.renames import Renames
@@ -51,7 +52,10 @@ class BackgroundCodexIndex:
         clock=time.monotonic,
     ) -> None:
         self._renames = renames
-        self._scanner = scanner or CodexIndex(codex_home)
+        self._scanner = scanner or CodexIndex(
+            codex_home,
+            cache_path=persistent_cache_path(codex_home),
+        )
         self._min_interval_s = max(0.0, min_interval_s)
         self._force_interval_s = max(
             0.0, min(self._min_interval_s, force_interval_s))

@@ -143,6 +143,12 @@ The local upgrade uses its current Python environment and re-execs the original
 `railmux ssh` invocation only after pip succeeds. Failure leaves tmux untouched
 and prints a reproducible manual command.
 
+Before that cooked-mode handshake begins, the local client paints the same
+terminal-native workspace-restoration surface as a direct launch. It is local
+feedback only: it grants no protocol authority and is replaced by the first
+validated display keyframe. Authentication, compatibility, installation, and
+attach prompts remain cooked-mode interactions.
+
 Protocol v11 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
@@ -357,11 +363,20 @@ metadata can refine its label or reject a wrong cwd or writer.
 While that first generation is pending, Codex Projects and Sessions display an
 explicit `Indexing…` state with indeterminate section counts. Generation zero
 must never be rendered as an authoritative empty list, filtered no-match, or
-temporary empty Running view. This remains an in-memory startup state rather
-than a persistent metadata cache. A failed tmux probe, a generation with
-transient errors, an unavailable initial source, or clean metadata that has not
-exposed the actively-written rollout yet retains the provisional entry and
-instance recovery file for a later generation.
+temporary empty Running view. A failed tmux probe, a generation with transient
+errors, an unavailable initial source, or clean metadata that has not exposed
+the actively-written rollout yet retains the provisional entry and instance
+recovery file for a later generation.
+
+Cold parsing is accelerated by a versioned, private, atomic metadata cache
+under the user cache directory. It is an optimization, never a published
+generation or recovery authority: a new process still walks the complete tree,
+stats every rollout, and accepts a cached visible, hidden, or filtered result
+only when its relative path and nanosecond-mtime/size signature match. The
+cache is scoped to a hash of the resolved Codex sessions root; malformed,
+oversized, wrong-root, unsafe-permission, or unknown-schema data is ignored.
+Only a complete traversal may replace it, and changed/transient files retain
+the existing retry rules. Parser semantic changes must bump the cache schema.
 
 A failed or incomplete tree walk retains the last known-good generation. A
 transient per-file error retains that file's cached metadata, publishes the

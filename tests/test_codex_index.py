@@ -526,6 +526,121 @@ def test_codex_index_cache_mtime(tmp_path: Path):
     assert second[0].title == "changed"
 
 
+def test_codex_index_persistent_cache_reuses_validated_metadata(
+    tmp_path: Path, monkeypatch,
+):
+    import railmux.codex_index as index_module
+
+    sessions_dir = tmp_path / "sessions" / "2026" / "07" / "09"
+    visible = sessions_dir / "rollout-visible.jsonl"
+    hidden = sessions_dir / "rollout-hidden.jsonl"
+    filtered = sessions_dir / "rollout-filtered.jsonl"
+    cache_path = tmp_path / "private-cache" / "index.json"
+    sid = "a1111111-1111-7111-a36b-9e1044cb7a88"
+    _write_codex_session(
+        visible,
+        sid,
+        "/project-a",
+        originator="codex-tui",
+        messages=[{"role": "user", "text": "hello"}],
+        extra_lines=[
+            _event("task_started"),
+            _event("turn_aborted"),
+        ],
+    )
+    _write_codex_session(
+        hidden,
+        "b1111111-1111-7111-a36b-9e1044cb7a88",
+        "/project-a",
+        originator="codex-tui",
+        thread_source="subagent",
+        messages=[
+            {"role": "user", "text": "worker"},
+            {"role": "assistant", "text": "done"},
+        ],
+    )
+    _write_codex_session(
+        filtered,
+        "c1111111-1111-7111-a36b-9e1044cb7a88",
+        "/project-a",
+        originator="codex_exec",
+    )
+    first = CodexIndex(tmp_path, cache_path=cache_path)
+    first_report = first.refresh()
+    expected = first.get(sid, refresh=False)
+
+    assert first_report.parse_count == 3
+    assert expected is not None
+    assert expected.attention is not None
+    assert cache_path.is_file()
+    assert cache_path.stat().st_mode & 0o077 == 0
+
+    monkeypatch.setattr(
+        index_module,
+        "_scan_codex_rollout",
+        lambda _path: pytest.fail("validated persistent cache was reparsed"),
+    )
+    second = CodexIndex(tmp_path, cache_path=cache_path)
+    second_report = second.refresh()
+
+    assert second_report.parse_count == 0
+    assert second.get(sid, refresh=False) == expected
+    assert second.hidden_statuses() == first.hidden_statuses()
+
+
+def test_codex_index_persistent_cache_reparses_changed_rollout(
+    tmp_path: Path,
+):
+    sessions_dir = tmp_path / "sessions" / "2026" / "07" / "09"
+    path = sessions_dir / "rollout.jsonl"
+    cache_path = tmp_path / "private-cache" / "index.json"
+    sid = "a1111111-1111-7111-a36b-9e1044cb7a88"
+    _write_codex_session(
+        path,
+        sid,
+        "/project-a",
+        messages=[{"role": "user", "text": "before"}],
+    )
+    CodexIndex(tmp_path, cache_path=cache_path).refresh()
+    cached = CodexIndex(tmp_path, cache_path=cache_path)
+
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "after"}],
+            },
+        }) + "\n")
+
+    report = cached.refresh()
+
+    assert report.parse_count == 1
+    assert cached.get(sid, refresh=False).message_count == 2
+
+
+def test_codex_index_ignores_corrupt_persistent_cache(tmp_path: Path):
+    sessions_dir = tmp_path / "sessions" / "2026" / "07" / "09"
+    path = sessions_dir / "rollout.jsonl"
+    cache_path = tmp_path / "private-cache" / "index.json"
+    _write_codex_session(
+        path,
+        "a1111111-1111-7111-a36b-9e1044cb7a88",
+        "/project-a",
+        messages=[{"role": "user", "text": "hello"}],
+    )
+    cache_path.parent.mkdir(mode=0o700)
+    cache_path.write_text("{not-json", encoding="utf-8")
+    cache_path.chmod(0o600)
+
+    index = CodexIndex(tmp_path, cache_path=cache_path)
+    report = index.refresh()
+
+    assert report.parse_count == 1
+    assert len(index.snapshot()) == 1
+
+
 def test_codex_append_during_scan_forces_next_refresh(
     tmp_path: Path, monkeypatch,
 ):

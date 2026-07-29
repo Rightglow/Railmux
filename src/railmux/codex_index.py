@@ -9,12 +9,16 @@ Each file begins with a ``session_meta`` record, followed by ``response_item``
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
+import stat
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from railmux.atomic_file import atomic_write_text
 from railmux.models import (
     AttentionCategory,
     AttentionState,
@@ -32,6 +36,9 @@ _TOOL_BLOCK_AGE_S = 120
 
 
 FileSignature = tuple[int, int]  # (mtime_ns, size)
+_PERSISTENT_CACHE_SCHEMA = 1
+_PERSISTENT_CACHE_MAX_BYTES = 16 * 1024 * 1024
+_PERSISTENT_CACHE_MAX_RECORDS = 100_000
 
 
 @dataclass(frozen=True)
@@ -85,6 +92,202 @@ class HiddenCodexStatus:
     status: str
     last_mtime: float
     pending_tool: bool
+
+
+def persistent_cache_path(codex_home: Path) -> Path:
+    """Return a private cache path unique to one Codex sessions root."""
+    raw_base = os.environ.get("XDG_CACHE_HOME")
+    base = (
+        Path(raw_base).expanduser()
+        if raw_base and Path(raw_base).expanduser().is_absolute()
+        else Path.home() / ".cache"
+    )
+    try:
+        root = (codex_home / "sessions").resolve()
+    except OSError:
+        root = (codex_home / "sessions").absolute()
+    digest = hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:16]
+    return base / "railmux" / "codex-index" / f"{digest}.json"
+
+
+def _cache_attention(attention: AttentionState | None) -> dict | None:
+    if attention is None:
+        return None
+    return {
+        "category": attention.category.value,
+        "summary": attention.summary,
+        "retryable": attention.retryable,
+        "timestamp": attention.timestamp,
+        "event_order": attention.event_order,
+    }
+
+
+def _decode_cache_attention(raw: object) -> AttentionState | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or frozenset(raw) != frozenset({
+        "category", "summary", "retryable", "timestamp", "event_order",
+    }):
+        raise ValueError("invalid cached attention")
+    summary = raw["summary"]
+    retryable = raw["retryable"]
+    timestamp = raw["timestamp"]
+    event_order = raw["event_order"]
+    if (
+        not isinstance(summary, str)
+        or len(summary) > 1000
+        or (retryable is not None and not isinstance(retryable, bool))
+        or (
+            timestamp is not None
+            and (not isinstance(timestamp, str) or len(timestamp) > 64)
+        )
+        or not isinstance(event_order, int)
+        or isinstance(event_order, bool)
+        or event_order < 0
+    ):
+        raise ValueError("invalid cached attention")
+    try:
+        category = AttentionCategory(raw["category"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid cached attention category") from exc
+    return AttentionState(
+        category=category,
+        summary=summary,
+        retryable=retryable,
+        timestamp=timestamp,
+        event_order=event_order,
+    )
+
+
+def _cache_session(meta: SessionMeta) -> dict:
+    return {
+        "session_id": meta.session_id,
+        "cwd": str(meta.project.real_path),
+        "project_key": meta.project.encoded_name,
+        "title": meta.title,
+        "message_count": meta.message_count,
+        "token_total": meta.token_total,
+        "last_mtime": meta.last_mtime,
+        "size_bytes": meta.size_bytes,
+        "git_branch": meta.git_branch,
+        "last_user_message": meta.last_user_message,
+        "status": meta.status,
+        "pending_tool": meta.pending_tool,
+        "attention": _cache_attention(meta.attention),
+        "forked_from_id": meta.forked_from_id,
+    }
+
+
+def _decode_cache_session(path: Path, raw: object) -> SessionMeta:
+    keys = frozenset({
+        "session_id", "cwd", "project_key", "title", "message_count", "token_total",
+        "last_mtime", "size_bytes", "git_branch", "last_user_message",
+        "status", "pending_tool", "attention", "forked_from_id",
+    })
+    if not isinstance(raw, dict) or frozenset(raw) != keys:
+        raise ValueError("invalid cached session")
+    session_id = raw["session_id"]
+    cwd_raw = raw["cwd"]
+    project_key = raw["project_key"]
+    title = raw["title"]
+    git_branch = raw["git_branch"]
+    last_user_message = raw["last_user_message"]
+    forked_from_id = raw["forked_from_id"]
+    strings = (
+        (session_id, 256, False),
+        (cwd_raw, 4096, False),
+        (project_key, 256, False),
+        (title, 1000, True),
+        (git_branch, 4096, True),
+        (last_user_message, 1000, True),
+        (forked_from_id, 256, True),
+    )
+    if any(
+        (value is None and not nullable)
+        or (
+            value is not None
+            and (not isinstance(value, str) or not value or len(value) > limit)
+        )
+        for value, limit, nullable in strings
+    ):
+        raise ValueError("invalid cached session string")
+    counts = (raw["message_count"], raw["token_total"], raw["size_bytes"])
+    if any(
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > 10**21
+        for value in counts
+    ):
+        raise ValueError("invalid cached session count")
+    last_mtime = raw["last_mtime"]
+    if (
+        not isinstance(last_mtime, (int, float))
+        or isinstance(last_mtime, bool)
+        or not math.isfinite(float(last_mtime))
+        or float(last_mtime) < 0
+        or raw["status"] not in {"idle", "busy", "blocked"}
+        or not isinstance(raw["pending_tool"], bool)
+    ):
+        raise ValueError("invalid cached session state")
+    cwd = Path(cwd_raw)
+    if (
+        not cwd.is_absolute()
+        or Path(os.path.normpath(cwd_raw)) != cwd
+        or not project_key.startswith("-cx-")
+    ):
+        raise ValueError("invalid cached cwd")
+    project = Project(
+        real_path=cwd,
+        encoded_name=project_key,
+        claude_dir=Path(),
+        session_count=0,
+        last_activity_ts=0.0,
+    )
+    return SessionMeta(
+        project=project,
+        session_id=session_id,
+        jsonl_path=path,
+        title=title,
+        message_count=raw["message_count"],
+        token_total=raw["token_total"],
+        last_mtime=float(last_mtime),
+        size_bytes=raw["size_bytes"],
+        git_branch=git_branch,
+        last_user_message=last_user_message,
+        status=raw["status"],
+        pending_tool=raw["pending_tool"],
+        session_type="codex",
+        attention=_decode_cache_attention(raw["attention"]),
+        forked_from_id=forked_from_id,
+    )
+
+
+def _decode_cache_hidden(raw: object) -> HiddenCodexStatus:
+    if not isinstance(raw, dict) or frozenset(raw) != frozenset({
+        "session_id", "status", "last_mtime", "pending_tool",
+    }):
+        raise ValueError("invalid cached hidden status")
+    session_id = raw["session_id"]
+    last_mtime = raw["last_mtime"]
+    if (
+        not isinstance(session_id, str)
+        or not session_id
+        or len(session_id) > 256
+        or raw["status"] not in {"idle", "busy", "blocked"}
+        or not isinstance(last_mtime, (int, float))
+        or isinstance(last_mtime, bool)
+        or not math.isfinite(float(last_mtime))
+        or float(last_mtime) < 0
+        or not isinstance(raw["pending_tool"], bool)
+    ):
+        raise ValueError("invalid cached hidden status")
+    return HiddenCodexStatus(
+        session_id=session_id,
+        status=raw["status"],
+        last_mtime=float(last_mtime),
+        pending_tool=raw["pending_tool"],
+    )
 
 
 def _path_key(path: Path) -> Path:
@@ -177,9 +380,17 @@ def _lineage_representatives(
 class CodexIndex:
     """mtime-keyed cache of all Codex sessions under ``codex_home/sessions/``."""
 
-    def __init__(self, codex_home: Path, renames: Renames | None = None) -> None:
+    def __init__(
+        self,
+        codex_home: Path,
+        renames: Renames | None = None,
+        *,
+        cache_path: Path | None = None,
+    ) -> None:
         self._codex_home = codex_home
         self._sessions_dir = codex_home / "sessions"
+        self._cache_path = cache_path
+        self._cache_dirty = False
         # path -> (file signature captured before parsing, metadata)
         self._entries: dict[Path, tuple[FileSignature, SessionMeta]] = {}
         # Filtered subagent rollouts remain absent from the public session
@@ -195,6 +406,187 @@ class CodexIndex:
         self._negative: dict[Path, FileSignature] = {}
         # User-assigned titles, overlaid at read time (see railmux.renames).
         self._renames = renames
+        self._load_persistent_cache()
+
+    def _cache_relative_path(self, path: Path) -> str | None:
+        try:
+            relative = path.relative_to(self._sessions_dir)
+        except ValueError:
+            return None
+        value = relative.as_posix()
+        if (
+            not value
+            or value.startswith("/")
+            or len(value) > 4096
+            or any(part in ("", ".", "..") for part in relative.parts)
+        ):
+            return None
+        return value
+
+    def _cache_record_path(self, raw: object) -> Path:
+        if not isinstance(raw, str) or not raw or len(raw) > 4096:
+            raise ValueError("invalid cached path")
+        relative = Path(raw)
+        if (
+            relative.is_absolute()
+            or relative.as_posix() != raw
+            or any(part in ("", ".", "..") for part in relative.parts)
+        ):
+            raise ValueError("invalid cached path")
+        return self._sessions_dir / relative
+
+    @staticmethod
+    def _decode_cache_signature(raw: object) -> FileSignature:
+        if (
+            not isinstance(raw, list)
+            or len(raw) != 2
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                for value in raw
+            )
+        ):
+            raise ValueError("invalid cached signature")
+        return raw[0], raw[1]
+
+    def _load_persistent_cache(self) -> None:
+        path = self._cache_path
+        if path is None:
+            return
+        try:
+            info = path.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077
+                or info.st_size > _PERSISTENT_CACHE_MAX_BYTES
+            ):
+                return
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return
+        root = str(_path_key(self._sessions_dir))
+        if (
+            not isinstance(data, dict)
+            or frozenset(data) != frozenset({"schema", "root", "records"})
+            or data["schema"] != _PERSISTENT_CACHE_SCHEMA
+            or data["root"] != root
+            or not isinstance(data["records"], list)
+            or len(data["records"]) > _PERSISTENT_CACHE_MAX_RECORDS
+        ):
+            return
+        seen: set[Path] = set()
+        for raw in data["records"]:
+            try:
+                if (
+                    not isinstance(raw, dict)
+                    or frozenset(raw)
+                    != frozenset({"path", "signature", "kind", "value"})
+                ):
+                    raise ValueError("invalid cached record")
+                record_path = self._cache_record_path(raw["path"])
+                if record_path in seen:
+                    raise ValueError("duplicate cached path")
+                signature = self._decode_cache_signature(raw["signature"])
+                kind = raw["kind"]
+                if kind == "session":
+                    self._entries[record_path] = (
+                        signature,
+                        _decode_cache_session(record_path, raw["value"]),
+                    )
+                elif kind == "hidden":
+                    self._hidden_statuses[record_path] = (
+                        signature,
+                        _decode_cache_hidden(raw["value"]),
+                    )
+                elif kind == "negative" and raw["value"] is None:
+                    self._negative[record_path] = signature
+                else:
+                    raise ValueError("invalid cached kind")
+                seen.add(record_path)
+            except (TypeError, ValueError):
+                # One corrupt record does not discard independently validated
+                # signatures from the rest of the cache.
+                continue
+
+    def _prepare_cache_directory(self) -> bool:
+        path = self._cache_path
+        if path is None:
+            return False
+        parent = path.parent
+        try:
+            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            info = parent.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+                return False
+            if info.st_mode & 0o077:
+                os.chmod(parent, stat.S_IMODE(info.st_mode) & ~0o077)
+            return True
+        except OSError:
+            return False
+
+    def _save_persistent_cache(self) -> None:
+        path = self._cache_path
+        if path is None or not self._cache_dirty:
+            return
+        records: list[dict] = []
+        for record_path, (signature, meta) in self._entries.items():
+            relative = self._cache_relative_path(record_path)
+            if relative is not None:
+                records.append({
+                    "path": relative,
+                    "signature": list(signature),
+                    "kind": "session",
+                    "value": _cache_session(meta),
+                })
+        for record_path, (signature, hidden) in self._hidden_statuses.items():
+            relative = self._cache_relative_path(record_path)
+            if relative is not None:
+                records.append({
+                    "path": relative,
+                    "signature": list(signature),
+                    "kind": "hidden",
+                    "value": {
+                        "session_id": hidden.session_id,
+                        "status": hidden.status,
+                        "last_mtime": hidden.last_mtime,
+                        "pending_tool": hidden.pending_tool,
+                    },
+                })
+        for record_path, signature in self._negative.items():
+            relative = self._cache_relative_path(record_path)
+            if relative is not None:
+                records.append({
+                    "path": relative,
+                    "signature": list(signature),
+                    "kind": "negative",
+                    "value": None,
+                })
+        if len(records) > _PERSISTENT_CACHE_MAX_RECORDS:
+            return
+        records.sort(key=lambda record: record["path"])
+        payload = json.dumps(
+            {
+                "schema": _PERSISTENT_CACHE_SCHEMA,
+                "root": str(_path_key(self._sessions_dir)),
+                "records": records,
+            },
+            # ASCII escaping also keeps malformed provider surrogate escapes
+            # from turning this optional optimization into a worker failure.
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        if len(payload.encode("utf-8")) > _PERSISTENT_CACHE_MAX_BYTES:
+            return
+        if not self._prepare_cache_directory():
+            return
+        try:
+            atomic_write_text(path, payload)
+        except OSError:
+            return
+        self._cache_dirty = False
 
     def _with_override(
         self,
@@ -337,6 +729,7 @@ class CodexIndex:
         self._entries.clear()
         self._hidden_statuses.clear()
         self._negative.clear()
+        self._cache_dirty = True
 
     # -- internal ---------------------------------------------------------
 
@@ -349,6 +742,14 @@ class CodexIndex:
             # existing but inaccessible node is a scan failure and must not be
             # mistaken for a successful empty snapshot.
             missing = not sessions_dir.exists()
+            if missing and (
+                self._entries or self._hidden_statuses or self._negative
+            ):
+                self._entries.clear()
+                self._hidden_statuses.clear()
+                self._negative.clear()
+                self._cache_dirty = True
+                self._save_persistent_cache()
             return ScanReport(
                 complete=missing,
                 warning=None if missing else "Codex session directory is unavailable",
@@ -397,6 +798,7 @@ class CodexIndex:
                                 and now - meta.last_mtime > _TOOL_BLOCK_AGE_S):
                             self._entries[path] = (
                                 signature, replace(meta, status="blocked"))
+                            self._cache_dirty = True
                         continue
                     hidden_cached = self._hidden_statuses.get(path)
                     if (hidden_cached is not None
@@ -409,6 +811,7 @@ class CodexIndex:
                                 signature,
                                 replace(hidden, status="blocked"),
                             )
+                            self._cache_dirty = True
                         continue
                     elif cached is None:
                         # Negative cache: a file that previously scanned to
@@ -423,10 +826,12 @@ class CodexIndex:
                         self._entries[path] = (signature, result)
                         self._hidden_statuses.pop(path, None)
                         self._negative.pop(path, None)
+                        self._cache_dirty = True
                     elif isinstance(result, HiddenCodexStatus):
                         self._hidden_statuses[path] = (signature, result)
                         self._entries.pop(path, None)
                         self._negative.pop(path, None)
+                        self._cache_dirty = True
                     elif result is None:
                         # Deterministic skip (filtered codex_exec,
                         # missing cwd, empty, or malformed header): remember the
@@ -436,6 +841,7 @@ class CodexIndex:
                         self._negative[path] = signature
                         self._entries.pop(path, None)
                         self._hidden_statuses.pop(path, None)
+                        self._cache_dirty = True
                     else:
                         # SCAN_ERROR — a transient IO/parse error.  Do NOT
                         # negative-cache it: that would hide an otherwise-stable
@@ -454,12 +860,17 @@ class CodexIndex:
             for stale in list(self._entries):
                 if stale not in current_paths:
                     del self._entries[stale]
+                    self._cache_dirty = True
             for stale in list(self._negative):
                 if stale not in current_paths:
                     del self._negative[stale]
+                    self._cache_dirty = True
             for stale in list(self._hidden_statuses):
                 if stale not in current_paths:
                     del self._hidden_statuses[stale]
+                    self._cache_dirty = True
+
+            self._save_persistent_cache()
 
         warning = None
         if walk_failed:

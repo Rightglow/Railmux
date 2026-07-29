@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18.dev202607292] - 2026-07-29
+
+### Changed
+
+- Persist signature-validated Codex metadata in a private atomic cache so
+  subsequent Railmux processes stat the history tree but parse only new or
+  changed rollouts.
+- Paint `Restoring your workspace` locally as soon as `railmux ssh` starts,
+  instead of leaving the terminal apparently idle during remote preflight.
+
 ## [0.2.18.dev202607291] - 2026-07-29
 
 ### Fixed
@@ -1205,7 +1215,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607291...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607292...HEAD
+[0.2.18.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607291...v0.2.18.dev202607292
 [0.2.18.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.18.dev202607290...v0.2.18.dev202607291
 [0.2.18.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18.dev202607290
 [0.2.17]: https://github.com/Rightglow/Railmux/compare/v0.2.16...v0.2.17

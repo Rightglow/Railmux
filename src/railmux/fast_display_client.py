@@ -64,6 +64,7 @@ from railmux.fast_display_protocol import (
     encode_keyframe_request,
     encode_resize,
 )
+from railmux.pane_surface import render_startup_surface
 
 LOCAL_ESCAPE = b"\x1d"  # Ctrl-]
 _SGR_MOUSE_PREFIX = b"\x1b[<"
@@ -1766,6 +1767,14 @@ def wait_for_usable_terminal_size(fd: int) -> os.terminal_size:
         time.sleep(_TERMINAL_SIZE_POLL_INTERVAL)
 
 
+def show_startup_surface(size: os.terminal_size) -> None:
+    """Paint immediate local feedback before SSH can deliver its first frame."""
+    if not sys.stdout.isatty():
+        return
+    sys.stdout.write(render_startup_surface(size.columns, size.lines))
+    sys.stdout.flush()
+
+
 def _is_soft_keyboard_projection(
     physical_size: os.terminal_size,
     logical_size: os.terminal_size,
@@ -3015,6 +3024,7 @@ def run(args: argparse.Namespace) -> int:
         print("\nrailmux ssh: cancelled while waiting for terminal size",
               file=sys.stderr)
         return 130
+    show_startup_surface(current_size)
     process = prepare_remote_process(args, current_size)
 
     surface = TerminalSurface(sys.stdout.buffer, mouse=not args.no_mouse)
