@@ -85,6 +85,7 @@ _SELECTION_HIGHLIGHT_SECONDS = 2.0
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
 _REMOTE_ATTACH_TIMEOUT = 30.0
+_FIRST_FRAME_TIMEOUT = 30.0
 _REMOTE_ATTACH_RETRY_DELAY = 0.2
 _HEARTBEAT_INTERVAL = 5.0
 _DISPLAY_MAGIC_PREFIX = b"RMUXD"
@@ -389,6 +390,11 @@ def claude_history_save_timed_out(
     return started_at is not None and now - started_at >= _CLAUDE_HISTORY_SAVE_TIMEOUT
 
 
+def first_frame_timed_out(deadline: float | None, now: float) -> bool:
+    """Bound a newly attached transport without timing established frames."""
+    return deadline is not None and now >= deadline
+
+
 @dataclass(frozen=True)
 class ClaudeHistoryPolicyAction:
     """Pure result of matching a helper acknowledgement to a pending choice."""
@@ -554,6 +560,7 @@ class TerminalSurface:
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
         self._last_screen: AppliedScreen | None = None
+        self._startup_detail: str | None = None
 
     def set_physical_size(self, size: os.terminal_size) -> None:
         """Set the local viewport without changing the remote screen geometry."""
@@ -593,17 +600,30 @@ class TerminalSurface:
             self.stream.write(b"".join(controls))
             self.stream.flush()
 
-    def show_startup(self, size: os.terminal_size) -> None:
+    def show_startup(
+        self,
+        size: os.terminal_size,
+        detail: str = "Reconnecting sessions and panes…",
+    ) -> None:
         """Paint startup feedback only on the recoverable alternate screen."""
         self.set_physical_size(size)
-        if self.active and not self.interaction_active:
+        if (
+            self.active
+            and not self.interaction_active
+            and detail == self._startup_detail
+        ):
             return
         self.start(interactive=False)
         self.stream.write(
-            render_startup_surface(size.columns, size.lines).encode("utf-8")
+            render_startup_surface(
+                size.columns,
+                size.lines,
+                detail,
+            ).encode("utf-8")
         )
         self.stream.flush()
         self.interaction_active = False
+        self._startup_detail = detail
 
     def begin_interaction(self) -> None:
         """Reveal cooked-mode setup prompts without leaving startup cleanup.
@@ -1539,8 +1559,11 @@ def _finish_remote_attach(
     process: subprocess.Popen,
     *,
     before_interaction: Callable[[], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> subprocess.Popen:
     """Complete the cooked-mode attach handshake and one consented takeover."""
+    if on_stage is not None:
+        on_stage("Attaching to workspace…")
     try:
         _send_start(process)
     except ProbeError:
@@ -1603,6 +1626,7 @@ def prepare_remote_process(
     *,
     before_interaction: Callable[[], None] | None = None,
     before_local_restart: Callable[[], None] | None = None,
+    on_stage: Callable[[str], None] | None = None,
 ) -> subprocess.Popen:
     """Resolve compatibility and consent before the remote attaches to tmux."""
 
@@ -1618,6 +1642,8 @@ def prepare_remote_process(
         fps=args.fps,
         ssh_args=args.ssh_arg,
     )
+    if on_stage is not None:
+        on_stage("Connecting to remote host…")
     process = _spawn_remote(argv)
     startup = await_remote_startup(process)
     install_version = __version__
@@ -1639,6 +1665,8 @@ def prepare_remote_process(
     else:
         assert startup.hello is not None
         hello = startup.hello
+        if on_stage is not None:
+            on_stage("Checking Railmux versions…")
         facts = CompatibilityFacts(
             local_version=__version__,
             local_protocol=PROTOCOL_VERSION,
@@ -1694,6 +1722,7 @@ def prepare_remote_process(
                     current_size,
                     process,
                     before_interaction=before_interaction,
+                    on_stage=on_stage,
                 )
             if decision.action == "install_remote":
                 assert decision.reason is not None
@@ -1764,6 +1793,7 @@ def prepare_remote_process(
         current_size,
         process,
         before_interaction=before_interaction,
+        on_stage=on_stage,
     )
 
 
@@ -1855,13 +1885,14 @@ def run(args: argparse.Namespace) -> int:
         recorder.finish("startup_failed", SshDisplayStats())
         raise
     surface = TerminalSurface(sys.stdout.buffer, mouse=not args.no_mouse)
-    surface.show_startup(current_size)
+    surface.show_startup(current_size, "Connecting to remote host…")
     try:
         process = prepare_remote_process(
             args,
             current_size,
             before_interaction=surface.begin_interaction,
             before_local_restart=surface.close,
+            on_stage=lambda detail: surface.show_startup(current_size, detail),
         )
     except KeyboardInterrupt:
         surface.close()
@@ -1873,7 +1904,7 @@ def run(args: argparse.Namespace) -> int:
         recorder.finish("startup_failed", SshDisplayStats())
         raise
     recorder.mark_attached()
-    surface.show_startup(current_size)
+    surface.show_startup(current_size, "Waiting for the first frame…")
     local_size = current_size
     decoder = ServerMessageDecoder()
     model = ScreenModel()
@@ -1884,6 +1915,7 @@ def run(args: argparse.Namespace) -> int:
     selector.register(process.stdout.fileno(), selectors.EVENT_READ, "remote")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "local")
     started = time.monotonic()
+    first_frame_deadline: float | None = started + _FIRST_FRAME_TIMEOUT
     next_history_prefetch = started
     next_heartbeat = started + _HEARTBEAT_INTERVAL
     frames = 0
@@ -2340,6 +2372,7 @@ def run(args: argparse.Namespace) -> int:
                                 send_protocol_frame(encode_input(b"\033[I"))
                             frames += 1
                             frames_since_attach += 1
+                            first_frame_deadline = None
                             if first_frame_ms is None:
                                 first_frame_ms = int(
                                     max(0.0, time.monotonic() - diagnostic_started)
@@ -2471,6 +2504,7 @@ def run(args: argparse.Namespace) -> int:
                         if reconnect_policy:
                             send_protocol_frame(reconnect_policy)
                         now = time.monotonic()
+                        first_frame_deadline = now + _FIRST_FRAME_TIMEOUT
                         next_history_prefetch = now
                         next_heartbeat = now + _HEARTBEAT_INTERVAL
                         frames_since_attach = 0
@@ -2482,6 +2516,11 @@ def run(args: argparse.Namespace) -> int:
                         continue
                     break
                 now = time.monotonic()
+                if first_frame_timed_out(first_frame_deadline, now):
+                    raise ProbeError(
+                        "timed out waiting for the remote display's first frame; "
+                        "the Railmux session and agents were left intact"
+                    )
                 if now >= next_heartbeat:
                     send_protocol_frame(encode_heartbeat())
                     next_heartbeat = now + _HEARTBEAT_INTERVAL

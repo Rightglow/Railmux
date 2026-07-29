@@ -55,14 +55,18 @@ def render_empty_surface(pane_number: int, width: int, height: int) -> str:
     )
 
 
-def render_startup_surface(width: int, height: int) -> str:
+def render_startup_surface(
+    width: int,
+    height: int,
+    detail: str = "Reconnecting sessions and panes…",
+) -> str:
     """Return immediate startup feedback while workspace recovery runs."""
     return _centered_surface(
         (
             (_ACCENT, "RAILMUX"),
             (_HEADING, "Restoring your workspace"),
             ("", ""),
-            (_MUTED, "Reconnecting sessions and panes…"),
+            (_MUTED, detail),
         ),
         width,
         height,

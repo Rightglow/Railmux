@@ -19,6 +19,7 @@ jobs:
       - run: python -m pip install -U pip
       - run: python -m pip install -e ".[dev]"
       - run: python -m ruff check src tests tools
+      - run: python tools/ssh_display_benchmark.py --check
       - run: python -m build
       - run: python -m twine check dist/*
       - run: python tools/wheel_smoke.py dist/*.whl

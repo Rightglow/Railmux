@@ -1078,7 +1078,7 @@ def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
     monkeypatch.setattr(
         TerminalSurface,
         "show_startup",
-        lambda _self, size: events.append(("surface", size)),
+        lambda _self, size, detail: events.append(("surface", size, detail)),
     )
     monkeypatch.setattr(
         TerminalSurface,
@@ -1092,10 +1092,12 @@ def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
         *,
         before_interaction,
         before_local_restart,
+        on_stage,
     ):
         events.append(("preflight", size))
         assert callable(before_interaction)
         assert callable(before_local_restart)
+        assert callable(on_stage)
         raise fast_display_client.ProbeError("stop")
 
     monkeypatch.setattr(
@@ -1106,7 +1108,11 @@ def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
         fast_display_client.run(parse_client_args(["server"]))
 
     assert events == [
-        ("surface", os.terminal_size((105, 22))),
+        (
+            "surface",
+            os.terminal_size((105, 22)),
+            "Connecting to remote host…",
+        ),
         ("preflight", os.terminal_size((105, 22))),
         ("close", None),
     ]
@@ -1136,7 +1142,7 @@ def test_ctrl_c_during_masked_remote_setup_restores_terminal(
     monkeypatch.setattr(
         TerminalSurface,
         "show_startup",
-        lambda _self, _size: events.append("surface"),
+        lambda _self, _size, _detail: events.append("surface"),
     )
     monkeypatch.setattr(
         TerminalSurface,
@@ -3406,6 +3412,22 @@ def test_startup_interaction_stays_visible_and_returns_to_restoring():
     assert not surface.interaction_active
 
 
+def test_startup_stage_change_repaints_without_reentering_terminal():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    size = os.terminal_size((80, 24))
+
+    surface.show_startup(size, "Connecting to remote host…")
+    output.seek(0)
+    output.truncate()
+    surface.show_startup(size, "Checking Railmux versions…")
+
+    painted = output.getvalue()
+    assert b"\033[?1049h" not in painted
+    assert b"Checking Railmux versions" in painted
+    assert b"Connecting to remote host" not in painted
+
+
 def test_repeated_startup_prompt_keeps_previous_install_output_visible():
     output = io.BytesIO()
     surface = TerminalSurface(output)
@@ -3569,10 +3591,43 @@ def test_compatible_remote_is_confirmed_before_attach(monkeypatch):
         ),
     )
 
-    selected = prepare_remote_process(args, os.terminal_size((120, 40)))
+    stages = []
+    selected = prepare_remote_process(
+        args,
+        os.terminal_size((120, 40)),
+        on_stage=stages.append,
+    )
 
     assert selected is process
     assert process.stdin.getvalue() == REMOTE_START
+    assert stages == [
+        "Connecting to remote host…",
+        "Checking Railmux versions…",
+        "Attaching to workspace…",
+    ]
+
+
+def test_reconnect_flag_does_not_change_initial_ssh_command():
+    plain = parse_client_args(["server"])
+    reconnecting = parse_client_args(["server", "--reconnect"])
+
+    def command(args):
+        return build_ssh_argv(
+            args.destination,
+            session=args.session,
+            width=120,
+            height=40,
+            fps=args.fps,
+            ssh_args=args.ssh_arg,
+        )
+
+    assert command(reconnecting) == command(plain)
+
+
+def test_first_frame_timeout_applies_only_while_waiting():
+    assert not fast_display_client.first_frame_timed_out(None, 100.0)
+    assert not fast_display_client.first_frame_timed_out(100.0, 99.999)
+    assert fast_display_client.first_frame_timed_out(100.0, 100.0)
 
 
 def test_busy_legacy_attach_can_be_replaced_once_with_consent(monkeypatch):

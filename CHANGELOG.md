@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607292] - 2026-07-29
+
+### Added
+
+- Show live connection, compatibility, attach, and first-frame stages beneath
+  the recoverable `Restoring your workspace` SSH startup screen.
+- Add `railmux doctor --ssh HOST` as a bounded read-only compatibility probe
+  that never attaches, creates, resizes, replaces, installs, or upgrades a
+  remote workspace and omits the host from its report.
+- Add a deterministic SSH display wire-budget benchmark to CI, protecting
+  compressed keyframes, small row patches, and bounded history requests
+  without flaky wall-clock thresholds.
+
+### Fixed
+
+- Bound an accepted display's first frame to 30 seconds, restoring the local
+  terminal with an actionable error while leaving the remote Railmux session
+  and agents intact.
+- Verify that opt-in reconnect cannot affect the initial SSH command or attach
+  path, and bound the replacement transport's first frame independently.
+
 ## [0.2.19.dev202607291] - 2026-07-29
 
 ### Fixed
@@ -1308,7 +1329,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607291...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607292...HEAD
+[0.2.19.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607291...v0.2.19.dev202607292
 [0.2.19.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607290...v0.2.19.dev202607291
 [0.2.19.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19.dev202607290
 [0.2.18]: https://github.com/Rightglow/Railmux/compare/v0.2.17...v0.2.18

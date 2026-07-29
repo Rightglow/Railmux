@@ -132,6 +132,33 @@ def test_doctor_json_is_forwarded_before_tmux_preflight(monkeypatch, tmp_path):
     preflight.assert_not_called()
 
 
+def test_doctor_ssh_dispatches_read_only_remote_preflight(monkeypatch):
+    remote_doctor = MagicMock(return_value=2)
+    preflight = MagicMock(return_value=False)
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.run_remote_ssh_doctor",
+        remote_doctor,
+    )
+    monkeypatch.setattr("railmux.cli.ensure_tmux_available", preflight)
+
+    result = main([
+        "doctor",
+        "--ssh",
+        "example",
+        "--ssh-arg=-J",
+        "--ssh-arg=jump",
+        "--json",
+    ])
+
+    assert result == 2
+    remote_doctor.assert_called_once_with(
+        "example",
+        ssh_args=["-J", "jump"],
+        json_output=True,
+    )
+    preflight.assert_not_called()
+
+
 def test_legacy_doctor_flag_is_removed():
     with pytest.raises(SystemExit) as exc:
         main(["--doctor"])

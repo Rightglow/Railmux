@@ -33,11 +33,11 @@ def test_empty_surface_is_centered_and_explains_the_interaction_pair():
 
 
 def test_startup_surface_uses_the_same_product_language():
-    surface = render_startup_surface(60, 12)
+    surface = render_startup_surface(60, 12, "Checking Railmux versions…")
 
     assert "RAILMUX" in surface
     assert "Restoring your workspace" in surface
-    assert "Reconnecting sessions and panes…" in surface
+    assert "Checking Railmux versions…" in surface
 
 
 def test_empty_surface_exits_instead_of_spinning_on_stdin_eof(monkeypatch):

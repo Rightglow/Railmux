@@ -89,7 +89,9 @@ The remote needs Python 3.9+ and `tmux`. With permission, the local client can
 install a matching Railmux into the remote user environment; it never uses
 `sudo`. Railmux keeps its managed tmux workspace isolated from your default
 tmux server and never rewrites provider histories under `~/.codex` or
-`~/.claude`. Run `railmux doctor` for a privacy-safe setup report. Multiple
+`~/.claude`. Run `railmux doctor` for a privacy-safe local setup report, or
+`railmux doctor --ssh your-server` for a read-only remote compatibility
+preflight. Multiple
 terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
 for focus and layout limits.
 
@@ -399,6 +401,13 @@ railmux doctor
 Use `railmux doctor --json` for the same privacy-safe snapshot in a versioned,
 machine-readable form suitable for issue tooling.
 
+Before connecting, `railmux doctor --ssh your-server` checks SSH reachability,
+the remote Railmux and protocol versions, the optional SSH display dependency,
+and remote `tmux`. It stops after the compatibility hello: it does not attach,
+create, resize, replace, install, or upgrade anything. Repeat
+`--ssh-arg=VALUE` when the connection needs options such as a jump host. The
+hostname is omitted from both text and JSON output.
+
 The doctor command works even when `tmux` is missing. It reports component versions, terminal capability
 hints, configuration health, dedicated-server reachability, watchdog state,
 the number of legacy candidates on the default server, the age and bounded
@@ -625,9 +634,11 @@ stable; close the keyboard before rotating the device. A terminal narrower than
 40 columns is rejected immediately; hide the keyboard or reduce the terminal
 font size before connecting.
 
-The local client paints **Restoring your workspace** immediately while the SSH
-handshake and remote attach are still in progress; the first validated remote
-frame replaces it.
+The local client paints **Restoring your workspace** immediately, with a
+smaller live stage for connecting, checking versions, attaching, and waiting
+for the first frame. The first validated remote frame replaces it. Waiting for
+that frame is bounded to 30 seconds; a timeout exits only the local display and
+leaves the remote Railmux workspace and agents intact.
 
 Both the ordinary launcher and SSH display keep a low-frequency watchdog
 outside the attached tmux client. Three consecutive dedicated-server health
@@ -642,6 +653,11 @@ current client can connect during that cleanup. If an older helper still owns
 the historical lifetime lock, reconnecting presents an explicit replacement
 prompt. Approving it may detach every terminal attached to that managed
 Railmux session, but never kills the session or its agents.
+
+`--reconnect` is currently opt-in. It affects only an established display
+after at least one frame has been painted; it does not alter the initial SSH
+command or attach handshake. During its 60-second retry window, Ctrl-] or
+Ctrl-C cancels locally without stopping the remote workspace.
 
 ### 4. Will automated review sessions pollute my session list?
 

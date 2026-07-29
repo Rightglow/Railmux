@@ -174,7 +174,29 @@ def main(argv: list[str] | None = None) -> int:
             action="store_true",
             help="print the versioned privacy-safe diagnostic snapshot as JSON",
         )
+        doctor_parser.add_argument(
+            "--ssh",
+            metavar="HOST",
+            help=(
+                "run a read-only remote SSH compatibility preflight; "
+                "the host is omitted from output"
+            ),
+        )
+        doctor_parser.add_argument(
+            "--ssh-arg",
+            action="append",
+            default=[],
+            help="extra ssh argument for --ssh; repeat and use --ssh-arg=VALUE",
+        )
         doctor_args = doctor_parser.parse_args(raw_args[1:])
+        if doctor_args.ssh:
+            from railmux.ssh_doctor import run_remote_ssh_doctor
+
+            return run_remote_ssh_doctor(
+                doctor_args.ssh,
+                ssh_args=doctor_args.ssh_arg,
+                json_output=doctor_args.json,
+            )
         return run_doctor(
             claude_home=Path(doctor_args.claude_home),
             json_output=doctor_args.json,
