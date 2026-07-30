@@ -131,8 +131,11 @@ soft keyboard is observed—the keyboard is already open and no longer needs
 pointer ownership—or after the first keyboard input when no resize is
 observable. When the projected viewport closes, the client toggles and
 reasserts its DEC mouse modes rather than trusting Termux's retained logical
-mode bit; this returns drag and click ownership to Railmux even when Termux
-keeps native touch handling after the resize. The projection state remains
+mode bit; a second bounded reassertion shortly after the close resize covers
+Termux completing its native touch handoff after SIGWINCH. This returns drag
+and click ownership to Railmux even when Termux keeps native touch handling
+after the resize. A rapid keyboard reopen cancels that delayed reassertion.
+The projection state remains
 bounded so a missing or inexact keyboard-close resize cannot leave touch input
 permanently owned by Termux. If that bounded timer expires while the keyboard
 is still open, only a passive close-reassert marker remains; it captures no
@@ -796,8 +799,9 @@ enter copy-mode accidentally. Non-left sidebar and status gestures are still
 forwarded, terminal-native selection overrides never enter the client, and the
 opaque keyboard sequence `Ctrl-B [` remains the explicit copy-mode path.
 
-A clean click candidate in the already-focused agent route may instead become
-a client-owned semantic open. Bounded visible `http://` and `https://` tokens
+A semantic hover candidate may be highlighted in either visible agent route,
+but only a clean click in the already-focused agent route may become a
+client-owned semantic open. Bounded visible `http://` and `https://` tokens
 are opened locally and never sent to the remote shell. A bounded Unix-style
 path sends a typed protocol request containing only the visible pane ID and raw
 token. Besides terminal soft wraps, the recognizer can join a bounded path-only

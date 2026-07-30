@@ -988,6 +988,13 @@ def test_local_text_selection_does_not_open_on_drag_or_unfocused_pane():
         semantic_open=False,
     )
     selection.cancel()
+    assert selection.hover(
+        SgrMouseEvent(b"hover", 35, 2, 1, True),
+        unfocused,
+    )
+    assert selection.segments() == (
+        (0, 0, b"https://example.test"),
+    )
     selection.pointer_event(press, unfocused)
     replayed = selection.pointer_event(
         SgrMouseEvent(b"up", 0, 2, 1, False),
@@ -1440,6 +1447,50 @@ def test_termux_keyboard_projection_state_has_a_bounded_fallback():
     assert touch.keyboard_projected
     assert touch.observe_projection(False)
     assert not touch.keyboard_projected
+
+
+def test_termux_keyboard_close_queues_one_delayed_mouse_reassert():
+    touch = TermuxTouchKeyboard(
+        enabled=True,
+        timeout=10.0,
+        close_reassert_delay=0.15,
+    )
+    touch.pointer_event(
+        SgrMouseEvent(b"press", 0, 40, 22, True),
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    )
+    assert touch.observe_projection(True, now=6.0)
+
+    assert touch.observe_projection(False, now=20.0)
+    assert not touch.post_close_reassert_due(20.149)
+    assert touch.post_close_reassert_due(20.15)
+    assert not touch.post_close_reassert_due(20.16)
+
+
+def test_termux_rapid_keyboard_reopen_cancels_delayed_reassert():
+    touch = TermuxTouchKeyboard(
+        enabled=True,
+        close_reassert_delay=0.15,
+    )
+    press = SgrMouseEvent(b"press", 0, 40, 22, True)
+    fields = {
+        "clicked_pane_id": "%8",
+        "cursor_pane_id": "%8",
+        "cursor_y": 21,
+        "cursor_visible": True,
+        "pane_frozen": False,
+    }
+    touch.pointer_event(press, now=5.0, **fields)
+    assert touch.observe_projection(True, now=6.0)
+    assert touch.observe_projection(False, now=7.0)
+
+    assert touch.pointer_event(press, now=7.05, **fields).handled
+    assert not touch.post_close_reassert_due(7.2)
 
 
 def test_termux_prompt_tap_times_out_when_keyboard_does_not_open():

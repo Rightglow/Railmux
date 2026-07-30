@@ -629,11 +629,11 @@ copy-mode. Selection is limited to the current visible viewport and cannot
 cross a pane divider; keyboard input, resize, reconnect, and layout changes
 clear it.
 
-A clean click on visible text in the **focused** agent pane also recognizes
-plain `http://` and `https://` URLs and Unix-style paths. Recognized text gains
-a local hover highlight where mouse-motion reporting is supported, then
-briefly flashes when clicked. URLs open in the initiating machine's default
-browser.
+Visible URLs and paths gain a local hover highlight in either agent pane where
+mouse-motion reporting is supported. A clean click recognizes and opens them
+only in the **focused** agent pane; the first click in the other pane continues
+to mean focus. Plain `http://` and `https://` URLs open in the initiating
+machine's default browser.
 
 Paths are checked read-only against the remote pane's current working
 directory. The default `path_open = "ask"` dialog makes the inside choice

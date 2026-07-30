@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607306] - 2026-07-30
+
+### Fixed
+
+- Reassert Termux mouse modes once more after the soft-keyboard close resize
+  has settled, restoring history scrolling and sidebar clicks when Termux
+  completes native touch ownership transfer after SIGWINCH.
+- Show semantic URL/path hover in either visible agent pane while retaining
+  the safety rule that an unfocused pane's first click only changes focus.
+
 ## [0.2.19.dev202607305] - 2026-07-30
 
 ### Fixed
@@ -1441,7 +1451,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607305...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607306...HEAD
+[0.2.19.dev202607306]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607305...v0.2.19.dev202607306
 [0.2.19.dev202607305]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607304...v0.2.19.dev202607305
 [0.2.19.dev202607304]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607303...v0.2.19.dev202607304
 [0.2.19.dev202607303]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607302...v0.2.19.dev202607303

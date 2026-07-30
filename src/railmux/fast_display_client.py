@@ -2945,6 +2945,11 @@ def run(args: argparse.Namespace) -> int:
                             selection.segments(),
                         )
                         redraw_local_prompt()
+                if touch_keyboard.post_close_reassert_due(now):
+                    # Termux can finish transferring native touch ownership
+                    # just after its close SIGWINCH. Reassert once after that
+                    # boundary as well as immediately in the resize branch.
+                    surface.resume_mouse(reassert=True)
                 expired_paths = tuple(
                     request_id
                     for request_id, pending in pending_path_open.items()

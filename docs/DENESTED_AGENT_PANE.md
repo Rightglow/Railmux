@@ -437,7 +437,8 @@ recovery/latency mechanism rather than the correctness authority.
 
 This phase still has no structured Windows input, emulator-native scrollback,
 OSC, image, or OSC-8 hyperlink metadata. Plain visible HTTP(S) URLs and
-Unix-style paths are recognized from a clean click in the focused agent pane;
+Unix-style paths are highlighted under hover in either visible agent pane, but
+recognized for opening only from a clean click in the focused agent pane;
 quoted paths containing spaces are not. Bracketed-paste and focus-event modes
 are synchronized, but other input-affecting terminal modes remain delegated to
 tmux or unsupported. Local history preserves common SGR colour and character

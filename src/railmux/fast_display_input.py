@@ -83,13 +83,16 @@ class TermuxTouchKeyboard:
         enabled: bool,
         timeout: float = 10.0,
         input_row_radius: int = 1,
+        close_reassert_delay: float = 0.15,
     ) -> None:
         self.enabled = enabled
         self.timeout = timeout
         self.input_row_radius = input_row_radius
+        self.close_reassert_delay = close_reassert_delay
         self._active = False
         self._keyboard_projected = False
         self._close_reassert_pending = False
+        self._post_close_reassert_at: float | None = None
         self._deadline: float | None = None
         self._release_button: int | None = None
 
@@ -145,6 +148,9 @@ class TermuxTouchKeyboard:
         ):
             return TouchKeyboardAction()
         requested_at = time.monotonic() if now is None else now
+        # A rapid reopen supersedes the delayed ownership reassertion queued by
+        # the previous close; Termux must receive this new native prompt tap.
+        self._post_close_reassert_at = None
         self._active = True
         self._keyboard_projected = False
         self._deadline = requested_at + self.timeout
@@ -163,7 +169,13 @@ class TermuxTouchKeyboard:
     ) -> bool:
         """Track keyboard geometry and request mouse restore once it opens."""
         if not projected and self._close_reassert_pending:
-            return self.cancel()
+            observed_at = time.monotonic() if now is None else now
+            restored = self.cancel()
+            if restored:
+                self._post_close_reassert_at = (
+                    observed_at + self.close_reassert_delay
+                )
+            return restored
         if not self._active:
             return False
         if projected:
@@ -182,8 +194,24 @@ class TermuxTouchKeyboard:
             self._deadline = observed_at + self.timeout
             return first_projection
         if self._keyboard_projected:
-            return self.cancel()
+            observed_at = time.monotonic() if now is None else now
+            restored = self.cancel()
+            if restored:
+                self._post_close_reassert_at = (
+                    observed_at + self.close_reassert_delay
+                )
+            return restored
         return False
+
+    def post_close_reassert_due(self, now: float | None = None) -> bool:
+        """Request one delayed DEC-mode reassert after Termux finishes closing."""
+        if self._post_close_reassert_at is None:
+            return False
+        checked_at = time.monotonic() if now is None else now
+        if checked_at < self._post_close_reassert_at:
+            return False
+        self._post_close_reassert_at = None
+        return True
 
     def keyboard_input(self) -> bool:
         """Restore tracking after input when no keyboard resize was observable."""
@@ -214,6 +242,7 @@ class TermuxTouchKeyboard:
         self._active = False
         self._keyboard_projected = False
         self._close_reassert_pending = keep_close_reassert
+        self._post_close_reassert_at = None
         self._deadline = None
         self._release_button = None
         return was_active
@@ -932,7 +961,6 @@ class LocalTextSelection:
     ) -> ClickTarget | None:
         if (
             source is None
-            or not source.semantic_open
             or source.route.pane_id is None
         ):
             return None
