@@ -6,6 +6,7 @@ import json
 
 from railmux.tool_panes import (
     PaneRef,
+    ToolPaneManager,
     ToolState,
     decode_state,
     is_tool_pane_marker,
@@ -86,3 +87,49 @@ def test_tool_pane_marker_is_scoped_to_one_outer_session():
         outer_session_id="$4",
     )
     assert not is_tool_pane_marker("not-json", outer_session_id="$4")
+
+
+def test_owner_slot_falls_back_to_existing_selection_marker(monkeypatch):
+    manager = object.__new__(ToolPaneManager)
+    manager.outer_session_id = "$4"
+    clicked = _ref(8, 108)
+    controller = _ref(9, 109)
+    refs = {"%8": clicked, "%9": controller}
+    monkeypatch.setattr(manager, "_pane_ref", refs.get)
+    monkeypatch.setattr(manager, "_show_option", lambda _name: None)
+    monkeypatch.setattr(manager, "_outer_window_ids", lambda: frozenset({"@2"}))
+    monkeypatch.setattr(
+        manager,
+        "_output",
+        lambda *args, **_kwargs: (
+            "%9:secondary"
+            if args[:4] == ("show-options", "-p", "-v", "-t")
+            and args[4] == "%8"
+            else "%9"
+            if args[:4] == ("show-window-options", "-v", "-t", "@2")
+            else None
+        ),
+    )
+
+    assert manager.slot_for_owner("%8") == "secondary"
+
+
+def test_owner_slot_rejects_selection_marker_outside_outer_window(monkeypatch):
+    manager = object.__new__(ToolPaneManager)
+    manager.outer_session_id = "$4"
+    refs = {
+        "%8": _ref(8, 108),
+        "%9": _ref(9, 109, window=7),
+    }
+    monkeypatch.setattr(manager, "_pane_ref", refs.get)
+    monkeypatch.setattr(manager, "_show_option", lambda _name: None)
+    monkeypatch.setattr(manager, "_outer_window_ids", lambda: frozenset({"@2"}))
+    monkeypatch.setattr(
+        manager,
+        "_output",
+        lambda *args, **_kwargs: (
+            "%9:primary" if args[0] == "show-options" else "%9"
+        ),
+    )
+
+    assert manager.slot_for_owner("%8") is None

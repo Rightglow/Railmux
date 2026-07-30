@@ -452,16 +452,16 @@ def test_server_resolves_only_readable_paths_from_visible_agent_cwd(
     )
 
     assert fast_display_server.resolve_path_result(
-        "$4", 1, "%8", "src/main.py"
+        "$4", 1, "%8", "src/main.py", path_open_policy="ask"
     ) == PathResult(1, PathKind.FILE, str(code.resolve()))
     assert fast_display_server.resolve_path_result(
-        "$4", 2, "%8", "src"
+        "$4", 2, "%8", "src", path_open_policy="ask"
     ) == PathResult(2, PathKind.DIRECTORY, str(source.resolve()))
     assert fast_display_server.resolve_path_result(
-        "$4", 3, "%8", "missing.py"
+        "$4", 3, "%8", "missing.py", path_open_policy="ask"
     ) == PathResult(3, PathKind.UNAVAILABLE)
     assert fast_display_server.resolve_path_result(
-        "$4", 4, "%9", "src/main.py"
+        "$4", 4, "%9", "src/main.py", path_open_policy="ask"
     ) == PathResult(4, PathKind.UNAVAILABLE)
 
 
@@ -668,6 +668,7 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
         highlight_row=0,
         highlight_column=4,
         highlight_text=b"https://example.test/docs",
+        highlight_segments=((0, 4, b"https://example.test/docs"),),
     )
     assert url_action.replay_events == ()
 
@@ -691,7 +692,99 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
         highlight_row=0,
         highlight_column=8,
         highlight_text=b"src/railmux/app.py:123:7",
+        highlight_segments=((0, 8, b"src/railmux/app.py:123:7"),),
     )
+
+
+def test_local_text_selection_uses_pane_offset_for_hover_and_click():
+    route = HistorySnapshot(1, "%8", 10, 2, 24, 1)
+    source = SelectionSource(
+        route,
+        (b"sidebar---See https://example.test",),
+        10,
+    )
+    selection = LocalTextSelection()
+    hover = SgrMouseEvent(b"hover", 35, 18, 3, True)
+
+    assert selection.hover(hover, source)
+    assert selection.segments() == ((2, 14, b"https://example.test"),)
+
+    press = SgrMouseEvent(b"down", 0, 18, 3, True)
+    release = SgrMouseEvent(b"up", 0, 18, 3, False)
+    selection.pointer_event(press, source)
+    action = selection.pointer_event(release, source)
+    assert action.open_target is not None
+    assert action.open_target.value == "https://example.test"
+
+
+def test_local_text_selection_recognizes_wrapped_path_from_second_row():
+    route = HistorySnapshot(1, "%8", 4, 1, 16, 2)
+    source = SelectionSource(
+        route,
+        (b"See /home/user/l", b"ong/file.py     "),
+        0,
+    )
+    selection = LocalTextSelection()
+    hover = SgrMouseEvent(b"hover", 35, 7, 3, True)
+
+    assert selection.hover(hover, source)
+    assert selection.segments() == (
+        (1, 8, b"/home/user/l"),
+        (2, 4, b"ong/file.py"),
+    )
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 7, 3, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 7, 3, False),
+        source,
+    )
+    assert action.open_target is not None
+    assert action.open_target.value == "/home/user/long/file.py"
+
+
+def test_local_text_selection_recognizes_wrapped_url_from_second_row():
+    route = HistorySnapshot(1, "%8", 0, 0, 18, 2)
+    source = SelectionSource(
+        route,
+        (b"Visit https://exam", b"ple.test/docs     "),
+        0,
+    )
+    selection = LocalTextSelection()
+    hover = SgrMouseEvent(b"hover", 35, 3, 2, True)
+
+    assert selection.hover(hover, source)
+    assert selection.segments() == (
+        (0, 6, b"https://exam"),
+        (1, 0, b"ple.test/docs"),
+    )
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 3, 2, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 3, 2, False),
+        source,
+    )
+    assert action.open_target is not None
+    assert action.open_target.value == "https://example.test/docs"
+
+
+def test_local_text_selection_strips_label_before_absolute_path():
+    route = HistorySnapshot(1, "%8", 0, 0, 40, 1)
+    source = SelectionSource(
+        route,
+        (b"failed path:=/home/user/project/file.py",),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 24, 1, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 24, 1, False),
+        source,
+    )
+
+    assert action.open_target is not None
+    assert action.open_target.value == "/home/user/project/file.py"
+    assert action.open_target.highlight_column == 13
 
 
 def test_local_text_selection_hovers_semantic_targets_without_opening_them():
@@ -3964,6 +4057,49 @@ def test_local_status_preserves_painted_status_left_and_background():
     assert b"\033[4;21H" in painted
     assert b"\033[48;2;95;175;0m\033[1;38;5;17m\033[K" in painted
     assert b"Copied 12 chars." in painted
+
+
+def test_local_status_is_one_clickable_source_and_survives_remote_paint():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.set_physical_size(os.terminal_size((40, 4)))
+    screen = AppliedScreen(
+        width=40,
+        height=4,
+        cursor_x=2,
+        cursor_y=2,
+        cursor_visible=True,
+        terminal_modes=TerminalMode.NONE,
+        rows=(b"one", b"two", b"three", b"status"),
+        changed_rows=(0, 1, 2, 3),
+        clear=True,
+    )
+    surface.paint(screen)
+    surface.show_local_status("Exact warning", level="warning")
+
+    click = SgrMouseEvent(b"down", 0, 30, 4, True)
+    assert surface.local_status_at(click) == "Exact warning"
+    assert surface.local_status_at(
+        SgrMouseEvent(b"outside", 0, 10, 4, True)
+    ) is None
+
+    output.seek(0)
+    output.truncate()
+    surface.paint(replace(screen, changed_rows=(3,), clear=False))
+    assert b"Exact warning" in output.getvalue()
+
+    with patch(
+        "railmux.fast_display_client.local_clipboard.copy",
+        return_value=True,
+    ) as native:
+        assert surface.copy_local_status_at(click)
+    native.assert_called_once_with(b"Exact warning")
+    assert surface.local_status_at(click) == "Copied status message."
+
+    surface.clear_local_status()
+    assert surface.local_status_at(
+        SgrMouseEvent(b"down", 0, 30, 4, True)
+    ) is None
 
 
 def test_claude_history_prompt_is_local_bounded_and_mouse_selectable():

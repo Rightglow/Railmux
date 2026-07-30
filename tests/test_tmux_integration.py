@@ -416,6 +416,7 @@ def test_real_remote_path_resolution_is_bound_to_visible_agent(
         7,
         agent_pane,
         str(code),
+        path_open_policy="ask",
     ) == PathResult(7, PathKind.FILE, str(code.resolve()))
     assert fast_display_server.resolve_path_result(
         session_id,

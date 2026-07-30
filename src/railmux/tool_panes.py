@@ -33,6 +33,8 @@ _OWNER_OPTIONS = {
 }
 _KEEPER_OPTION = "@railmux_tool_keeper_v1"
 TOOL_PANE_OPTION = "@railmux_tool_surface_v1"
+_SELECTION_KEY_OPTION = "@railmux_selection_key"
+_SELECTION_KEY_RE = re.compile(r"^(%\d+):(primary|secondary)$")
 _DUMMY_COMMAND = "exec sleep 2147483647"
 
 
@@ -425,7 +427,40 @@ class ToolPaneManager:
                 and ref.pane_pid == current.pane_pid
             ):
                 return slot
-        return None
+        # A Railmux UI process that was already running when the package was
+        # upgraded has not necessarily published the newer session-scoped
+        # owner options yet. Its long-standing selection-isolation marker still
+        # identifies the exact controller and slot. Accept that marker only
+        # when both panes are live in this manager's outer window.
+        raw = self._output(
+            "show-options",
+            "-p",
+            "-v",
+            "-t",
+            current.pane_id,
+            _SELECTION_KEY_OPTION,
+        )
+        match = _SELECTION_KEY_RE.fullmatch(raw or "")
+        if match is None:
+            return None
+        controller = self._pane_ref(match.group(1))
+        outer_windows = self._outer_window_ids()
+        window_controller = self._output(
+            "show-window-options",
+            "-v",
+            "-t",
+            current.window_id,
+            "@railmux_controller_pane",
+        )
+        if (
+            controller is None
+            or controller.pane_id == current.pane_id
+            or window_controller != controller.pane_id
+            or controller.window_id not in outer_windows
+            or current.window_id not in outer_windows
+        ):
+            return None
+        return match.group(2)
 
     def visible_tool_panes(self) -> frozenset[str]:
         result: set[str] = set()

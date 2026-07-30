@@ -291,6 +291,9 @@ class SelectionSource:
     semantic_open: bool = True
 
 
+SelectionSegment = tuple[int, int, bytes]
+
+
 @dataclass(frozen=True)
 class ClickTarget:
     """One explicit URL or remote-path click resolved from visible text."""
@@ -303,9 +306,7 @@ class ClickTarget:
     highlight_row: int | None = None
     highlight_column: int | None = None
     highlight_text: bytes = b""
-
-
-SelectionSegment = tuple[int, int, bytes]
+    highlight_segments: tuple[SelectionSegment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -364,6 +365,9 @@ _HIDDEN_PATH_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9_.@+~-]*$")
 _PATH_NAMES = frozenset({"Dockerfile", "Makefile", "README", "LICENSE", "CHANGELOG"})
 _TOKEN_LEADING = "([{"
 _TOKEN_TRAILING = ".,;!?)]}"
+_EMBEDDED_ABSOLUTE_PATH_RE = re.compile(
+    r"(?:^|(?<=[^A-Za-z0-9_.@+~/-]))/"
+)
 
 
 def _clicked_character_index(
@@ -458,24 +462,42 @@ def click_target_at(
         )
         if not start <= character_index < end:
             continue
-        if token.lower().startswith(("http://", "https://")):
-            parsed = urlsplit(token)
+        lower = token.lower()
+        url_offsets = tuple(
+            offset
+            for prefix in ("http://", "https://")
+            if (offset := lower.find(prefix)) >= 0
+        )
+        if url_offsets:
+            offset = min(url_offsets)
+            candidate = token[offset:]
+            candidate_start = start + offset
+            if not candidate_start <= character_index < end:
+                return None
+            parsed = urlsplit(candidate)
             if (
                 parsed.scheme.lower() in ("http", "https")
                 and parsed.hostname is not None
-                and len(token.encode("utf-8")) <= 8192
+                and len(candidate.encode("utf-8")) <= 8192
             ):
                 start_cell = sum(
-                    _display_width(character) for character in text[:start]
+                    _display_width(character)
+                    for character in text[:candidate_start]
                 )
                 return ClickTarget(
                     "url",
-                    token,
+                    candidate,
                     pane_id,
                     highlight_column=start_cell,
-                    highlight_text=token.encode("utf-8"),
+                    highlight_text=candidate.encode("utf-8"),
                 )
             return None
+        absolute = tuple(_EMBEDDED_ABSOLUTE_PATH_RE.finditer(token))
+        if absolute:
+            offset = absolute[-1].start()
+            if start + offset <= character_index:
+                token = token[offset:]
+                start += offset
         path = _path_parts(token)
         if path is not None:
             value, line, target_column = path
@@ -495,6 +517,153 @@ def click_target_at(
     return None
 
 
+def _pane_cells(
+    source: SelectionSource,
+    *,
+    start: int = 0,
+    end: int | None = None,
+) -> tuple[tuple[str | None, ...], ...]:
+    """Decode pane-local cells from either full-screen or history rows."""
+    route = source.route
+    if end is None:
+        end = route.height
+    decode_width = source.row_x_offset + route.width
+    decoded: list[tuple[str | None, ...]] = []
+    for index in range(start, min(end, route.height)):
+        line = source.rows[index] if index < len(source.rows) else b""
+        cells = _plain_display_cells(line, decode_width)
+        decoded.append(
+            cells[source.row_x_offset : source.row_x_offset + route.width]
+        )
+    return tuple(decoded)
+
+
+def _rows_are_wrapped(
+    rows: tuple[tuple[str | None, ...], ...],
+    upper: int,
+) -> bool:
+    """Conservatively recognize a visual soft-wrap between adjacent rows."""
+    if not 0 <= upper < len(rows) - 1 or not rows[upper]:
+        return False
+    return rows[upper][-1] != " " and rows[upper + 1][0] not in (" ", None)
+
+
+def _highlight_runs(
+    target: ClickTarget,
+    *,
+    width: int,
+    first_row: int,
+    route_x: int,
+    route_y: int,
+) -> tuple[SelectionSegment, ...]:
+    """Split one logical wrapped highlight back into physical pane rows."""
+    if (
+        target.highlight_column is None
+        or not target.highlight_text
+        or width <= 0
+    ):
+        return ()
+    text = target.highlight_text.decode("utf-8", errors="replace")
+    row = first_row + target.highlight_column // width
+    column = target.highlight_column % width
+    chunks: list[SelectionSegment] = []
+    chunk_row = row
+    chunk_column = column
+    chunk: list[str] = []
+    for character in text:
+        cell_width = _display_width(character)
+        if cell_width > 0 and column + cell_width > width:
+            if chunk:
+                chunks.append((
+                    route_y + chunk_row,
+                    route_x + chunk_column,
+                    "".join(chunk).encode("utf-8"),
+                ))
+            row += 1
+            column = 0
+            chunk_row = row
+            chunk_column = 0
+            chunk = []
+        chunk.append(character)
+        column += cell_width
+        if column == width:
+            chunks.append((
+                route_y + chunk_row,
+                route_x + chunk_column,
+                "".join(chunk).encode("utf-8"),
+            ))
+            row += 1
+            column = 0
+            chunk_row = row
+            chunk_column = 0
+            chunk = []
+    if chunk:
+        chunks.append((
+            route_y + chunk_row,
+            route_x + chunk_column,
+            "".join(chunk).encode("utf-8"),
+        ))
+    return tuple(chunks)
+
+
+def _target_in_rows(
+    rows: tuple[tuple[str | None, ...], ...],
+    row: int,
+    column: int,
+    *,
+    route: HistorySnapshot,
+) -> ClickTarget | None:
+    """Resolve a semantic target across one bounded visual-wrap chain."""
+    if not 0 <= row < len(rows) or route.width <= 0:
+        return None
+    first = row
+    while (
+        first > 0
+        and row - first < 7
+        and _rows_are_wrapped(rows, first - 1)
+    ):
+        first -= 1
+    last = row
+    while (
+        last + 1 < len(rows)
+        and last - first < 7
+        and _rows_are_wrapped(rows, last)
+    ):
+        last += 1
+    cells = tuple(cell for pane_row in rows[first : last + 1] for cell in pane_row)
+    target = click_target_at(
+        cells,
+        (row - first) * route.width + column,
+        pane_id=route.pane_id or "",
+    )
+    if target is None and (first != row or last != row):
+        first = row
+        target = click_target_at(
+            rows[row],
+            column,
+            pane_id=route.pane_id or "",
+        )
+    if target is None:
+        return None
+    segments = _highlight_runs(
+        target,
+        width=route.width,
+        first_row=first,
+        route_x=route.x,
+        route_y=route.y,
+    )
+    if not segments:
+        return None
+    first_segment = segments[0]
+    return replace(
+        target,
+        highlight_row=first_segment[0],
+        highlight_column=first_segment[1],
+        highlight_text=first_segment[2],
+        highlight_segments=segments,
+    )
+
+
 class LocalTextSelection:
     """Own one pane-bounded, visible-screen selection for ``railmux ssh``."""
 
@@ -506,9 +675,9 @@ class LocalTextSelection:
         self._head: tuple[int, int] | None = None
         self._active = False
         self._semantic_open = False
-        self._flash: SelectionSegment | None = None
+        self._flash: tuple[SelectionSegment, ...] = ()
         self._flash_until: float | None = None
-        self._hover: SelectionSegment | None = None
+        self._hover: tuple[SelectionSegment, ...] = ()
 
     @property
     def active(self) -> bool:
@@ -544,14 +713,17 @@ class LocalTextSelection:
         column = event.x - 1 - source.route.x
         if not 0 <= row < len(source.rows):
             return None
-        cells = _plain_display_cells(source.rows[row], source.route.width)
-        target = click_target_at(cells, column, pane_id=source.route.pane_id)
-        if target is None or target.highlight_column is None:
-            return None
-        return replace(
-            target,
-            highlight_row=source.route.y + row,
-            highlight_column=source.route.x + target.highlight_column,
+        start = max(0, row - 7)
+        end = min(source.route.height, row + 8)
+        return _target_in_rows(
+            _pane_cells(source, start=start, end=end),
+            row - start,
+            column,
+            route=replace(
+                source.route,
+                y=source.route.y + start,
+                height=end - start,
+            ),
         )
 
     def hover(
@@ -561,19 +733,11 @@ class LocalTextSelection:
     ) -> bool:
         """Update a local-only semantic hover without forwarding motion."""
         if not event.is_hover_motion or self.capturing or self.active:
-            changed = self._hover is not None
-            self._hover = None
+            changed = bool(self._hover)
+            self._hover = ()
             return changed
         target = self._target_at(event, source)
-        hover = (
-            None
-            if target is None
-            else (
-                target.highlight_row,
-                target.highlight_column,
-                target.highlight_text,
-            )
-        )
+        hover = () if target is None else target.highlight_segments
         changed = hover != self._hover
         self._hover = hover
         return changed
@@ -586,22 +750,32 @@ class LocalTextSelection:
             or duration <= 0
         ):
             return False
-        self._flash = (
+        self._flash = target.highlight_segments or ((
             target.highlight_row,
             target.highlight_column,
             target.highlight_text,
+        ),)
+        if any(
+            row is None or column is None or not text
+            for row, column, text in self._flash
+        ):
+            self._flash = ()
+            return False
+        self._flash = tuple(
+            (int(row), int(column), text)
+            for row, column, text in self._flash
         )
         self._flash_until = now + duration
         return True
 
     def clear_expired_flash(self, now: float) -> bool:
         if (
-            self._flash is None
+            not self._flash
             or self._flash_until is None
             or now < self._flash_until
         ):
             return False
-        self._flash = None
+        self._flash = ()
         self._flash_until = None
         return True
 
@@ -654,17 +828,9 @@ class LocalTextSelection:
         source: SelectionSource,
     ) -> None:
         route = source.route
-        decoded: list[tuple[str | None, ...]] = []
-        decode_width = source.row_x_offset + route.width
-        for index in range(route.height):
-            line = source.rows[index] if index < len(source.rows) else b""
-            cells = _plain_display_cells(line, decode_width)
-            decoded.append(
-                cells[source.row_x_offset : source.row_x_offset + route.width]
-            )
         self._press = event
         self._route = route
-        self._rows = tuple(decoded)
+        self._rows = _pane_cells(source)
         self._anchor = self._point(event, route)
         self._head = self._anchor
         self._active = False
@@ -692,10 +858,11 @@ class LocalTextSelection:
                 press = self._press
                 if not self._active:
                     target = (
-                        click_target_at(
-                            self._rows[self._anchor[1]],
+                        _target_in_rows(
+                            self._rows,
+                            self._anchor[1],
                             self._anchor[0],
-                            pane_id=self._route.pane_id,
+                            route=self._route,
                         )
                         if (
                             self._semantic_open
@@ -704,19 +871,6 @@ class LocalTextSelection:
                         )
                         else None
                     )
-                    if (
-                        target is not None
-                        and self._route is not None
-                        and self._anchor is not None
-                        and target.highlight_column is not None
-                    ):
-                        target = replace(
-                            target,
-                            highlight_row=self._route.y + self._anchor[1],
-                            highlight_column=(
-                                self._route.x + target.highlight_column
-                            ),
-                        )
                     self.cancel()
                     return SelectionAction(
                         handled=True,
@@ -740,8 +894,8 @@ class LocalTextSelection:
             )
 
         if self._is_plain_left_press(event) and source is not None:
-            repaint = self.cancel() or self._hover is not None
-            self._hover = None
+            repaint = self.cancel() or bool(self._hover)
+            self._hover = ()
             self._begin(event, source)
             return SelectionAction(handled=True, repaint=repaint)
 
@@ -799,8 +953,8 @@ class LocalTextSelection:
 
     def segments(self) -> tuple[SelectionSegment, ...]:
         """Return reverse-video text runs in logical screen coordinates."""
-        flash = (self._flash,) if self._flash is not None else ()
-        hover = (self._hover,) if self._hover is not None else ()
+        flash = self._flash
+        hover = self._hover
         if not self._active or self._route is None:
             return (*hover, *flash)
         start, end = self._ordered_points()

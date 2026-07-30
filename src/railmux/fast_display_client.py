@@ -579,6 +579,9 @@ class TerminalSurface:
         self.physical_size: os.terminal_size | None = None
         self._last_screen: AppliedScreen | None = None
         self._startup_detail: str | None = None
+        self._local_status_text: str | None = None
+        self._local_status_level = "info"
+        self._local_status_bounds: tuple[int, int, int] | None = None
 
     def set_physical_size(self, size: os.terminal_size) -> None:
         """Set the local viewport without changing the remote screen geometry."""
@@ -651,6 +654,7 @@ class TerminalSurface:
     ) -> None:
         """Paint startup feedback only on the recoverable alternate screen."""
         self.set_physical_size(size)
+        self.clear_local_status()
         if (
             self.active
             and not self.interaction_active
@@ -700,49 +704,84 @@ class TerminalSurface:
     def show_local_status(self, message: str, *, level: str = "info") -> None:
         """Show local feedback without erasing Railmux's status-left brand."""
         self.start()
-        height = 1 if self.physical_size is None else self.physical_size.lines
         safe = "".join(
             character if character.isprintable() and character != "\x1b" else " "
             for character in message
         )
+        self._local_status_text = safe
+        self._local_status_level = level
+        self.stream.write(self._render_local_status())
+        self.stream.flush()
+
+    def _render_local_status(self) -> bytes:
+        """Render and locate the current local status-right replacement."""
+        if self._local_status_text is None:
+            self._local_status_bounds = None
+            return b""
+        safe = self._local_status_text
+        level = self._local_status_level
+        height = 1 if self.physical_size is None else self.physical_size.lines
         screen = self._last_screen
         if screen is None:
             if self.physical_size is not None:
                 safe = safe[: self.physical_size.columns]
-            rendered = (
+            self._local_status_bounds = (max(1, height), 1, max(1, len(safe)))
+            return (
                 f"\033[0m\033[{max(1, height)};1H\033[2K{safe}\033[?25l"
             ).encode("utf-8")
-        else:
-            width = screen.width
-            if self.physical_size is not None:
-                width = min(width, self.physical_size.columns)
-            # The left half belongs to Railmux's persistent brand/mode/layout
-            # controls. Local-only SSH feedback is a transient status-right
-            # replacement and must never clear those controls.
-            reserved = width // 2
-            available = max(0, width - reserved)
-            safe = safe[:available]
-            column = max(reserved + 1, width - len(safe) + 1)
-            background = self._row_background_sgr(screen.rows[-1])
-            foreground = {
-                "success": b"\033[1;38;5;17m",
-                "warning": b"\033[1;38;5;220m",
-                "error": b"\033[1;38;5;196m",
-            }.get(level, b"\033[38;5;231m")
-            rendered = b"".join(
-                (
-                    b"\033[0m",
-                    f"\033[{max(1, height)};{reserved + 1}H".encode(),
-                    background,
-                    foreground,
-                    b"\033[K",
-                    f"\033[{max(1, height)};{column}H".encode(),
-                    safe.encode("utf-8"),
-                    b"\033[0m\033[?25l",
-                )
+        width = screen.width
+        if self.physical_size is not None:
+            width = min(width, self.physical_size.columns)
+        # The left half belongs to Railmux's persistent brand/mode/layout
+        # controls. Local-only SSH feedback is a transient status-right
+        # replacement and must never clear those controls.
+        reserved = width // 2
+        available = max(0, width - reserved)
+        safe = safe[:available]
+        column = max(reserved + 1, width - len(safe) + 1)
+        self._local_status_bounds = (max(1, height), column, width)
+        background = self._row_background_sgr(screen.rows[-1])
+        foreground = {
+            "success": b"\033[1;38;5;17m",
+            "warning": b"\033[1;38;5;220m",
+            "error": b"\033[1;38;5;196m",
+        }.get(level, b"\033[38;5;231m")
+        return b"".join(
+            (
+                b"\033[0m",
+                f"\033[{max(1, height)};{reserved + 1}H".encode(),
+                background,
+                foreground,
+                b"\033[K",
+                f"\033[{max(1, height)};{column}H".encode(),
+                safe.encode("utf-8"),
+                b"\033[0m\033[?25l",
             )
-        self.stream.write(rendered)
-        self.stream.flush()
+        )
+
+    def clear_local_status(self) -> None:
+        """Forget local feedback before restoring the authoritative screen."""
+        self._local_status_text = None
+        self._local_status_bounds = None
+
+    def local_status_at(self, event: SgrMouseEvent) -> str | None:
+        """Return the exact local status source rendered under a mouse event."""
+        bounds = self._local_status_bounds
+        if self._local_status_text is None or bounds is None:
+            return None
+        row, first_column, last_column = bounds
+        if event.y != row or not first_column <= event.x <= last_column:
+            return None
+        return self._local_status_text
+
+    def copy_local_status_at(self, event: SgrMouseEvent) -> bool:
+        """Copy the visible local status and replace it with acknowledgement."""
+        text = self.local_status_at(event)
+        if text is None:
+            return False
+        self.copy_to_clipboard(text.encode("utf-8"))
+        self.show_local_status("Copied status message.", level="success")
+        return True
 
     @staticmethod
     def _row_background_sgr(row: bytes) -> bytes:
@@ -1059,6 +1098,8 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
+        if self._local_status_text is not None:
+            rendered.append(self._render_local_status())
         self.stream.write(b"".join(rendered))
         self.stream.flush()
         return bool(enabled_modes & TerminalMode.FOCUS_EVENTS)
@@ -1092,6 +1133,8 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
+        if self._local_status_text is not None:
+            rendered.append(self._render_local_status())
         self.stream.write(b"".join(rendered))
         self.stream.flush()
 
@@ -1112,6 +1155,7 @@ class TerminalSurface:
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
+        self.clear_local_status()
         self.active = False
         self.interaction_active = False
 
@@ -2070,6 +2114,7 @@ def run(args: argparse.Namespace) -> int:
         int, _PendingPathOpen, PathResult
     ] | None = None
     path_open_prompt_mouse_button: int | None = None
+    local_status_mouse_button: int | None = None
     periodic_prefetch = PeriodicPrefetchGate()
 
     def send_protocol_frame(frame: bytes) -> None:
@@ -2179,6 +2224,24 @@ def run(args: argparse.Namespace) -> int:
         nonlocal history_info_until
         nonlocal selection_clear_at
         nonlocal path_open_prompt, path_open_prompt_mouse_button
+        nonlocal local_status_mouse_button
+        if isinstance(part, SgrMouseEvent):
+            if local_status_mouse_button is not None and not part.pressed:
+                suppress = part.button & 3 == local_status_mouse_button
+                local_status_mouse_button = None
+                if suppress:
+                    return
+            if (
+                part.pressed
+                and not part.button & (32 | 64)
+                and part.button & 3 in (0, 2)
+            ):
+                if surface.copy_local_status_at(part):
+                    history_info_until = (
+                        time.monotonic() + _HISTORY_INFO_SECONDS
+                    )
+                    local_status_mouse_button = part.button & 3
+                    return
         if isinstance(part, SgrMouseEvent) and part.is_hover_motion:
             # DECSET 1003 reports local pointer movement even without a
             # pressed button. Consume it locally: hover must never become SSH
@@ -2880,6 +2943,8 @@ def run(args: argparse.Namespace) -> int:
                 if restore_local_status or clear_selection or clear_click_flash:
                     if clear_selection:
                         selection.cancel()
+                    if restore_local_status:
+                        surface.clear_local_status()
                     if latest_screen is not None:
                         surface.paint(
                             full_repaint(latest_screen),
