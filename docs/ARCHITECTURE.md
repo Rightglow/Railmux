@@ -121,6 +121,16 @@ layer owns agent wheel input. Ordinary `ssh` followed by `railmux` retains the
 copy-mode coalescer, and attaching to an existing Railmux session never changes
 that session's setting.
 
+The local SSH client recognizes Termux only from its local environment, never
+from terminal dimensions or the remote host. An unmodified left press within
+one row of the visible input cursor, inside the same verified live agent route,
+temporarily disables local mouse reporting so Termux can open its soft keyboard
+on the next tap. History overlays, hidden cursors, sidebars, modals, previews,
+and other panes fail closed. Mouse reporting resumes after the first keyboard
+input when no resize is observable, when the projected soft keyboard closes, or
+after a bounded no-input timeout. Desktop terminals and direct Railmux launches
+never enter this path.
+
 Managed Claude Code panes may advertise a verified transcript source without
 using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,
 or `native`: `ask` makes the first upward wheel gesture open a local-only
@@ -459,7 +469,10 @@ the first frame. Provider validation, swap/attach, and focus restoration remain
 in the ordinary deferred recovery path. A failed prelayout is a no-op fallback;
 if deferred recovery produces no content, it removes only those owned empty
 panes and returns to the full-width sidebar. With no saved visible agent—or in
-compact presentation—the initial surface remains the sidebar.
+compact presentation—the initial surface remains the sidebar. The first
+deferred restore reuses a successfully created skeleton and is queued without
+an artificial settle delay; it must not repeat topology creation or skip any
+provider, tmux-identity, swap, or index-generation validation.
 
 Ask Railmux is an explicit auxiliary display, not a provider-session recovery
 authority. Opening static Help performs no provider work. The Ask action

@@ -391,6 +391,10 @@ class LocalHistoryView:
         route = self._route_at_position(x, y)
         return None if route is None else route.pane_id
 
+    def pane_is_frozen(self, pane_id: str | None) -> bool:
+        """Whether one routed pane currently owns a local history viewport."""
+        return pane_id is not None and pane_id in self.viewports
+
     def selection_source(
         self,
         event: SgrMouseEvent,

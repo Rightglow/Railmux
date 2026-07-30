@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607300] - 2026-07-30
+
+### Added
+
+- Let Termux users tap the focused Claude Code or Codex prompt to temporarily
+  yield `railmux ssh` mouse tracking, then tap again to open the soft keyboard;
+  tracking returns after input, keyboard close, or a bounded timeout.
+- Make the safe **Soft quit** and **Cancel** choices in the quit confirmation
+  directly clickable while retaining explicit keyboard shortcuts.
+
+### Changed
+
+- Start deferred project/workspace restoration without fixed 50/100 ms waits
+  and reuse an already validated prelayout pane skeleton instead of attempting
+  the same topology creation twice. Session, tmux identity, provider-index, and
+  swap transaction validation remain unchanged.
+
 ## [0.2.19.dev202607292] - 2026-07-29
 
 ### Added
@@ -1329,7 +1346,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607292...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607300...HEAD
+[0.2.19.dev202607300]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607292...v0.2.19.dev202607300
 [0.2.19.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607291...v0.2.19.dev202607292
 [0.2.19.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607290...v0.2.19.dev202607291
 [0.2.19.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19.dev202607290

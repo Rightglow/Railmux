@@ -1000,7 +1000,9 @@ class App:
         # Paint discovered orphans without parsing their JSONLs. Full labels
         # and statuses are refined after MainLoop renders the first frame.
         self._render_running_pane()
-        # Re-open the right pane after MainLoop paints the sidebar's first frame.
+        # Re-open the right pane on MainLoop's first deferred callback. The
+        # prelayout path establishes final pane boundaries before that first
+        # frame, so restoration no longer needs a visible sidebar-only pause.
         self._pending_restore_state = state
         workspace_state = state.get("workspace") if state else None
         self._defer_startup_sidebar_focus_visual = (
@@ -5394,7 +5396,7 @@ class App:
         # attached.  The fallback below retains the established incremental
         # recovery path if geometry or tmux cannot be validated.
         planned = self._planned_dual_restore_geometry(requested)
-        if planned is not None:
+        if planned is not None and not getattr(self, "_prelayout_created", False):
             agent_width, secondary_extent = planned
             transport.create_dual(
                 requested,
@@ -9687,10 +9689,10 @@ class App:
             self._loop.set_alarm_in(self._config.poll_interval_ms / 1000.0, self._on_tick)
             if self._pending_project is not None:
                 self._loop.set_alarm_in(
-                    0.05, self._load_pending_project)
+                    0, self._load_pending_project)
             if self._pending_restore_state is not None:
                 self._loop.set_alarm_in(
-                    0.1, self._restore_pending_right_pane)
+                    0, self._restore_pending_right_pane)
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.

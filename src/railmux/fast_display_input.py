@@ -5,9 +5,11 @@ This leaf module deliberately has no dependency on the SSH process lifecycle.
 
 from __future__ import annotations
 
+import os
 import re
 import time
 import unicodedata
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
@@ -42,6 +44,132 @@ class SgrMouseEvent:
         terminator = b"M" if self.pressed else b"m"
         raw = _SGR_MOUSE_PREFIX + f"{self.button};{self.x};{y}".encode() + terminator
         return replace(self, raw=raw, y=y)
+
+
+def is_termux_environment(environ: Mapping[str, str] | None = None) -> bool:
+    """Recognize an official Termux client without guessing from geometry."""
+    values = os.environ if environ is None else environ
+    if values.get("TERMUX_VERSION"):
+        return True
+    return values.get("PREFIX", "").rstrip("/") == "/data/data/com.termux/files/usr"
+
+
+@dataclass(frozen=True)
+class TouchKeyboardAction:
+    """One local-only mouse-tracking transition for a Termux prompt tap."""
+
+    handled: bool = False
+    suspend_mouse: bool = False
+    show_hint: bool = False
+
+
+class TermuxTouchKeyboard:
+    """Temporarily yield one focused agent prompt to Termux's soft keyboard."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        timeout: float = 10.0,
+        input_row_radius: int = 1,
+    ) -> None:
+        self.enabled = enabled
+        self.timeout = timeout
+        self.input_row_radius = input_row_radius
+        self._active = False
+        self._keyboard_projected = False
+        self._deadline: float | None = None
+        self._release_button: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return self._active
+
+    @staticmethod
+    def _is_plain_left_press(event: SgrMouseEvent) -> bool:
+        return (
+            event.pressed
+            and event.button == 0
+            and event.wheel_direction == 0
+        )
+
+    def pointer_event(
+        self,
+        event: SgrMouseEvent,
+        *,
+        clicked_pane_id: str | None,
+        cursor_pane_id: str | None,
+        cursor_y: int,
+        cursor_visible: bool,
+        pane_frozen: bool,
+        now: float | None = None,
+    ) -> TouchKeyboardAction:
+        """Consume a prompt tap and its paired release when assistance applies."""
+        if self._release_button is not None:
+            if (
+                not event.pressed
+                and event.button & 3 == self._release_button
+            ):
+                self._release_button = None
+                return TouchKeyboardAction(handled=True)
+            # Termux normally emits only the paired release after the press.
+            # Leave unrelated queued reports on their ordinary routing path.
+            return TouchKeyboardAction()
+        if (
+            not self.enabled
+            or self._active
+            or pane_frozen
+            or not cursor_visible
+            or clicked_pane_id is None
+            or clicked_pane_id != cursor_pane_id
+            or abs((event.y - 1) - cursor_y) > self.input_row_radius
+            or not self._is_plain_left_press(event)
+        ):
+            return TouchKeyboardAction()
+        requested_at = time.monotonic() if now is None else now
+        self._active = True
+        self._keyboard_projected = False
+        self._deadline = requested_at + self.timeout
+        self._release_button = event.button & 3
+        return TouchKeyboardAction(
+            handled=True,
+            suspend_mouse=True,
+            show_hint=True,
+        )
+
+    def observe_projection(self, projected: bool) -> bool:
+        """Track keyboard geometry and request mouse restore when it closes."""
+        if not self._active:
+            return False
+        if projected:
+            self._keyboard_projected = True
+            self._deadline = None
+            return False
+        if self._keyboard_projected:
+            return self.cancel()
+        return False
+
+    def keyboard_input(self) -> bool:
+        """Restore tracking after input when no keyboard resize was observable."""
+        if self._active and not self._keyboard_projected:
+            return self.cancel()
+        return False
+
+    def expire(self, now: float | None = None) -> bool:
+        """Restore tracking if the second tap never opens a keyboard."""
+        if not self._active or self._deadline is None:
+            return False
+        checked_at = time.monotonic() if now is None else now
+        return self.cancel() if checked_at >= self._deadline else False
+
+    def cancel(self) -> bool:
+        """Clear local touch state and report whether tracking must resume."""
+        was_active = self._active
+        self._active = False
+        self._keyboard_projected = False
+        self._deadline = None
+        self._release_button = None
+        return was_active
 
 
 class TerminalInputDecoder:

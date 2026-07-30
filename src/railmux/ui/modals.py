@@ -122,10 +122,39 @@ class QuitConfirmModal(urwid.WidgetWrap):
         else:
             summary = "No running sessions."
 
-        actions = [("y / ↵", "quit and kill all sessions")]
+        action_rows: list[urwid.Widget] = [
+            _action_legend(
+                [("y / ↵", "quit and kill all sessions")],
+                align="center",
+                wrap="space",
+            ),
+        ]
         if on_soft_quit is not None:
-            actions.append(("s", "soft quit (keep sessions alive)"))
-        actions.append(("n / Esc", "cancel"))
+            action_rows.append(
+                ClickableRow(
+                    _action_legend(
+                        [("s", "soft quit (keep sessions alive)")],
+                        align="center",
+                        wrap="space",
+                    ),
+                    on_click=on_soft_quit,
+                    click_key="quit:soft",
+                )
+            )
+        cancel_row = _action_legend(
+            [("n / Esc", "cancel")],
+            align="center",
+            wrap="space",
+        )
+        action_rows.append(
+            ClickableRow(
+                cancel_row,
+                on_click=on_cancel,
+                click_key="quit:cancel",
+            )
+            if on_cancel is not None
+            else cancel_row
+        )
         self._title = urwid.Text("Quit railmux?", align="center")
         self._summary = urwid.Text(("live", summary), align="center")
         self._shared_notice = (
@@ -136,11 +165,7 @@ class QuitConfirmModal(urwid.WidgetWrap):
             )
             if attached_clients > 1 else None
         )
-        self._actions = _action_legend(
-            actions,
-            align="center",
-            wrap="space",
-        )
+        self._actions = urwid.Pile(action_rows)
         body_widgets: list[urwid.Widget] = [
             self._title,
             urwid.Divider(),

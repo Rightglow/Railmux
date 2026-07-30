@@ -46,7 +46,9 @@ from railmux.fast_display_input import (
     LocalTextSelection,
     SelectionSegment,
     SgrMouseEvent,
+    TermuxTouchKeyboard,
     TerminalInputDecoder,
+    is_termux_environment,
     page_key_direction,
     split_page_key_input,
 )
@@ -82,6 +84,7 @@ _HISTORY_PREFETCH_INTERVAL = 3.0
 _CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_INFO_SECONDS = 2.0
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
+_TERMUX_TOUCH_HINT = "Tap the prompt again to open the keyboard"
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
 _REMOTE_ATTACH_TIMEOUT = 30.0
@@ -556,6 +559,7 @@ class TerminalSurface:
         self.active = False
         self.interaction_active = False
         self.mouse_active = False
+        self.mouse_suspended = False
         self.cursor_hidden = False
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
@@ -591,7 +595,12 @@ class TerminalSurface:
         if interactive and not self.cursor_hidden:
             controls.append(b"\033[?25l")
             self.cursor_hidden = True
-        if interactive and self.mouse and not self.mouse_active:
+        if (
+            interactive
+            and self.mouse
+            and not self.mouse_active
+            and not self.mouse_suspended
+        ):
             # Button-event tracking includes wheel and drag events. SGR mode
             # preserves coordinates beyond the legacy X10 limit.
             controls.append(b"\033[?1002h\033[?1006h")
@@ -599,6 +608,26 @@ class TerminalSurface:
         if controls:
             self.stream.write(b"".join(controls))
             self.stream.flush()
+
+    def suspend_mouse(self) -> None:
+        """Yield touch input to a local terminal until explicitly resumed."""
+        if not self.mouse or self.mouse_suspended:
+            return
+        self.mouse_suspended = True
+        if self.mouse_active:
+            self.stream.write(b"\033[?1002l\033[?1006l")
+            self.stream.flush()
+            self.mouse_active = False
+
+    def resume_mouse(self) -> None:
+        """Restore local mouse reports after a bounded touch-input handoff."""
+        if not self.mouse_suspended:
+            return
+        self.mouse_suspended = False
+        if self.active and not self.interaction_active and not self.mouse_active:
+            self.stream.write(b"\033[?1002h\033[?1006h")
+            self.stream.flush()
+            self.mouse_active = True
 
     def show_startup(
         self,
@@ -649,6 +678,7 @@ class TerminalSurface:
         self.stream.flush()
         self.terminal_modes = TerminalMode.NONE
         self.mouse_active = False
+        self.mouse_suspended = False
         self.cursor_hidden = False
         self.interaction_active = True
 
@@ -1001,6 +1031,7 @@ class TerminalSurface:
         self.stream.flush()
         self.terminal_modes = TerminalMode.NONE
         self.mouse_active = False
+        self.mouse_suspended = False
         self.cursor_hidden = False
         self.active = False
         self.interaction_active = False
@@ -1911,6 +1942,9 @@ def run(args: argparse.Namespace) -> int:
     terminal_input = TerminalInputDecoder()
     history = LocalHistoryView(history_limit)
     selection = LocalTextSelection()
+    touch_keyboard = TermuxTouchKeyboard(
+        enabled=not args.no_mouse and is_termux_environment()
+    )
     selector = selectors.DefaultSelector()
     selector.register(process.stdout.fileno(), selectors.EVENT_READ, "remote")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "local")
@@ -2069,6 +2103,39 @@ def run(args: argparse.Namespace) -> int:
                     latest_screen.cursor_x, latest_screen.cursor_y
                 )
             )
+            clicked_pane_id = (
+                None
+                if latest_screen is None
+                else history.pane_id_at_position(part.x - 1, part.y - 1)
+            )
+            cursor_pane_id = (
+                None
+                if latest_screen is None
+                else history.pane_id_at_position(
+                    latest_screen.cursor_x,
+                    latest_screen.cursor_y,
+                )
+            )
+            touch_action = touch_keyboard.pointer_event(
+                part,
+                clicked_pane_id=clicked_pane_id,
+                cursor_pane_id=cursor_pane_id,
+                cursor_y=0 if latest_screen is None else latest_screen.cursor_y,
+                cursor_visible=(
+                    False if latest_screen is None else latest_screen.cursor_visible
+                ),
+                pane_frozen=history.pane_is_frozen(clicked_pane_id),
+                now=time.monotonic(),
+            )
+            if touch_action.suspend_mouse:
+                selection.cancel()
+                selection_clear_at = None
+                history_info_until = None
+                surface.suspend_mouse()
+                if touch_action.show_hint:
+                    surface.show_local_status(_TERMUX_TOUCH_HINT)
+            if touch_action.handled:
+                return
             selection_action = selection.pointer_event(
                 part,
                 (
@@ -2132,6 +2199,17 @@ def run(args: argparse.Namespace) -> int:
             return
         if not part:
             return
+        if (
+            part not in (b"\x1b[I", b"\x1b[O")
+            and touch_keyboard.keyboard_input()
+        ):
+            surface.resume_mouse()
+            if latest_screen is not None:
+                surface.paint(
+                    full_repaint(latest_screen),
+                    history.overlays(),
+                    selection.segments(),
+                )
         selection_clear_at = None
         if selection.cancel() and latest_screen is not None:
             surface.paint(
@@ -2208,6 +2286,7 @@ def run(args: argparse.Namespace) -> int:
                             f"{_MAX_TERMINAL_COLUMNS}x{_MAX_TERMINAL_LINES}"
                         )
                     if _is_soft_keyboard_projection(observed_size, current_size):
+                        touch_keyboard.observe_projection(True)
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if latest_screen is not None:
@@ -2239,6 +2318,8 @@ def run(args: argparse.Namespace) -> int:
                             f"{_MIN_TERMINAL_LINES}"
                         )
                     elif observed_size == current_size:
+                        if touch_keyboard.observe_projection(False):
+                            surface.resume_mouse()
                         # The soft keyboard closed. Restore the complete
                         # logical screen even if no remote patch is pending.
                         surface.set_physical_size(observed_size)
@@ -2252,6 +2333,8 @@ def run(args: argparse.Namespace) -> int:
                             if claude_history_prompt_input is not None:
                                 surface.show_claude_history_prompt()
                     else:
+                        if touch_keyboard.cancel():
+                            surface.resume_mouse()
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if history.active and latest_screen is not None:
@@ -2411,6 +2494,14 @@ def run(args: argparse.Namespace) -> int:
                         for key_part in split_page_key_input(part):
                             handle_terminal_part(key_part, set())
                 now = time.monotonic()
+                if touch_keyboard.expire(now):
+                    surface.resume_mouse()
+                    if latest_screen is not None:
+                        surface.paint(
+                            full_repaint(latest_screen),
+                            history.overlays(),
+                            selection.segments(),
+                        )
                 restore_local_status = (
                     history_info_until is not None and now >= history_info_until
                 )
@@ -2451,6 +2542,8 @@ def run(args: argparse.Namespace) -> int:
                     process.poll() is not None and not events
                 )
                 if connection_ended:
+                    if touch_keyboard.cancel():
+                        surface.resume_mouse()
                     old_fd = process.stdout.fileno()
                     _reap_remote(process)
                     if should_automatically_reconnect(

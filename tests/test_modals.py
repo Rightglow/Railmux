@@ -179,6 +179,40 @@ def test_quit_confirm_warns_when_ui_is_shared_by_multiple_clients():
     assert "quitting closes this UI in all of them" in text
 
 
+def test_quit_confirm_mouse_clicks_soft_quit_and_cancel_but_not_hard_quit():
+    called: list[str] = []
+    modal = QuitConfirmModal(
+        on_confirm=lambda: called.append("hard"),
+        on_soft_quit=lambda: called.append("soft"),
+        on_cancel=lambda: called.append("cancel"),
+        running_count=2,
+    )
+    size = (48, modal.preferred_height(48))
+
+    def click_row(label: str) -> None:
+        canvas = modal.render(size, focus=True)
+        row = next(
+            index
+            for index, line in enumerate(canvas.text)
+            if label.encode() in line
+        )
+        assert modal.mouse_event(
+            size, "mouse press", 1, size[0] // 2, row, True
+        )
+
+    click_row("soft quit")
+    click_row("cancel")
+    hard_canvas = modal.render(size, focus=True)
+    hard_row = next(
+        index
+        for index, line in enumerate(hard_canvas.text)
+        if b"quit and kill all sessions" in line
+    )
+    modal.mouse_event(size, "mouse press", 1, size[0] // 2, hard_row, True)
+
+    assert called == ["soft", "cancel"]
+
+
 def test_layout_save_height_tracks_wrapped_description_and_actions():
     modal = LayoutSaveModal(
         lambda: None, lambda: None, lambda: None, lambda: None, lambda: None)

@@ -89,7 +89,9 @@ from railmux.fast_display_input import (
     SelectionAction,
     SelectionSource,
     SgrMouseEvent,
+    TermuxTouchKeyboard,
     TerminalInputDecoder,
+    is_termux_environment,
     page_key_direction,
     split_page_key_input,
 )
@@ -698,6 +700,122 @@ def test_terminal_surface_can_leave_mouse_to_the_local_terminal():
 
     assert b"?1002" not in stream.getvalue()
     assert b"?1006" not in stream.getvalue()
+
+
+def test_terminal_surface_can_temporarily_yield_and_restore_mouse():
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream)
+
+    surface.start()
+    surface.suspend_mouse()
+    surface.start()
+    suspended = stream.getvalue()
+    surface.resume_mouse()
+    restored = stream.getvalue()
+
+    assert suspended.count(b"\033[?1002h\033[?1006h") == 1
+    assert suspended.endswith(b"\033[?1002l\033[?1006l")
+    assert restored.endswith(b"\033[?1002h\033[?1006h")
+
+
+def test_termux_detection_uses_local_environment_not_terminal_geometry():
+    assert is_termux_environment({"TERMUX_VERSION": "0.118"})
+    assert is_termux_environment({"PREFIX": "/data/data/com.termux/files/usr/"})
+    assert not is_termux_environment({"TERM": "xterm-256color", "COLUMNS": "40"})
+
+
+def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
+    touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
+    press = SgrMouseEvent(b"press", 0, 40, 22, True)
+    release = SgrMouseEvent(b"release", 0, 40, 22, False)
+
+    action = touch.pointer_event(
+        press,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    )
+
+    assert action.handled and action.suspend_mouse and action.show_hint
+    assert touch.active
+    assert touch.pointer_event(
+        release,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    ).handled
+    assert touch.keyboard_input()
+    assert not touch.active
+
+
+def test_termux_prompt_tap_is_fail_closed_and_keyboard_resize_owns_lifetime():
+    press = SgrMouseEvent(b"press", 0, 40, 22, True)
+    desktop = TermuxTouchKeyboard(enabled=False, timeout=10.0)
+    assert not desktop.pointer_event(
+        press,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    ).handled
+
+    touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
+    for clicked, cursor, visible, frozen, y in (
+        ("%9", "%8", True, False, 21),
+        ("%8", "%8", False, False, 21),
+        ("%8", "%8", True, True, 21),
+        ("%8", "%8", True, False, 18),
+    ):
+        assert not touch.pointer_event(
+            press,
+            clicked_pane_id=clicked,
+            cursor_pane_id=cursor,
+            cursor_y=y,
+            cursor_visible=visible,
+            pane_frozen=frozen,
+            now=5.0,
+        ).handled
+
+    touch.pointer_event(
+        press,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    )
+    assert not touch.expire(14.9)
+    assert not touch.observe_projection(True)
+    assert not touch.keyboard_input()
+    assert touch.active
+    assert touch.observe_projection(False)
+    assert not touch.active
+
+
+def test_termux_prompt_tap_times_out_when_keyboard_does_not_open():
+    touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
+    touch.pointer_event(
+        SgrMouseEvent(b"press", 0, 40, 22, True),
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    )
+
+    assert not touch.expire(14.9)
+    assert touch.expire(15.0)
+    assert not touch.active
 
 
 def test_terminal_surface_paints_only_the_local_history_pane_rectangle():

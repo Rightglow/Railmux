@@ -248,6 +248,13 @@ multi-pane UI. Railmux waits until at least 84 columns and 26 rows are available
 before returning to wide mode, avoiding repeated changes around the boundary.
 The minimum usable workspace is 40 columns by 12 rows.
 
+In Termux, `railmux ssh` keeps mouse support enabled while making the focused
+Claude Code or Codex prompt keyboard-friendly. Tap the prompt once to hand
+touch input back to Termux, then tap it again to open the soft keyboard.
+Railmux restores mouse reporting after typing, when the keyboard closes, or
+after a short timeout. This assistance is local to Termux and does not affect
+desktop terminals.
+
 ### Finding running sessions
 
 Plain text matches the visible session label, project, and provider without

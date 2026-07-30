@@ -635,6 +635,49 @@ def test_startup_prelayout_builds_saved_dual_before_first_frame(monkeypatch):
     assert app._prelayout_created
 
 
+def test_restore_reuses_startup_prelayout_without_recreating_dual_geometry(
+        monkeypatch):
+    app = _minimal_app()
+    workspace = app._agent_workspace()
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    workspace.primary.pane_id = "%2"
+    workspace.secondary.pane_id = "%3"
+    app._prelayout_created = True
+    app._planned_dual_restore_geometry = MagicMock(return_value=(143, 57))
+    app._restore_agent_target = MagicMock(return_value=True)
+    app._restore_workspace_slot = MagicMock(return_value=True)
+    app._resize_sidebar_for_layout = MagicMock(return_value=True)
+    app._agent_region_size = MagicMock(return_value=(200, 40))
+    app._layout_fits = MagicMock(return_value=True)
+    app._paint_slot_active_target = MagicMock()
+    app._set_workspace_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._apply_layout_profile = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    transport = MagicMock()
+    transport.create_primary.return_value = True
+    transport.create_secondary.return_value = True
+    app._display_transport_manager = transport
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.select_pane", lambda _pane: True)
+
+    saved = {
+        "layout": "side-by-side",
+        "target": "primary",
+        "focus": "sidebar",
+        "slots": {
+            "primary": {"kind": "agent", "tmux": "cc-primary"},
+            "secondary": {"kind": "agent", "tmux": "cc-secondary"},
+        },
+    }
+
+    assert app._restore_workspace({}, saved)
+
+    transport.create_dual.assert_not_called()
+    app._restore_agent_target.assert_called_once()
+    app._restore_workspace_slot.assert_called_once()
+
+
 def test_startup_prelayout_builds_saved_single_at_exact_width(monkeypatch):
     app = _minimal_app()
     app._pending_restore_state = {
@@ -2624,12 +2667,9 @@ def test_run_defers_saved_agent_focus_and_reverts_bar_if_setup_raises(
 
 def _render_text(modal) -> str:
     """Extract all plain text from a QuitConfirmModal's body."""
-    pile = modal._wrapped_widget.base_widget.base_widget
-    texts = []
-    for widget, _ in pile.contents:
-        if isinstance(widget, urwid.Text):
-            texts.append(widget.text)
-    return "\n".join(str(t) for t in texts)
+    height = modal.preferred_height(60)
+    canvas = modal.render((60, height), focus=False)
+    return "\n".join(line.decode(errors="replace") for line in canvas.text)
 
 
 def test_quit_modal_shows_s_option():
