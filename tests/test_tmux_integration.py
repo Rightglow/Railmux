@@ -51,6 +51,7 @@ from railmux.models import Project
 from railmux.ui.app import App, _Running
 from railmux.ui.workspace import (
     AgentWorkspace,
+    COMPACT_RESIZE_SEQUENCE,
     DisplayTransportKind,
     WorkspaceLayout,
     WorkspacePresentation,
@@ -2179,6 +2180,118 @@ def test_real_local_workspace_restore_rebuilds_layout_target_and_focus(
         WorkspaceLayout.STACKED, window_width)
     assert workspace.primary.transport_kind is DisplayTransportKind.SWAP
     assert workspace.secondary.transport_kind is DisplayTransportKind.SWAP
+
+
+def test_real_compact_parking_keeps_hidden_provider_geometry_stable(
+        isolated_tmux):
+    display_session, sidebar_pane, _socket_path = isolated_tmux
+    subprocess.run(
+        ["tmux", "resize-window", "-t", display_session, "-x", "180", "-y", "40"],
+        check=True,
+    )
+    subprocess.run(
+        ["tmux", "new-session", "-d", "-x", "82", "-y", "39",
+         "-s", "compact-park-agent", "sleep 60"],
+        check=True,
+    )
+    workspace = AgentWorkspace()
+    manager = AgentDisplayTransport(
+        workspace,
+        "swap",
+        auto_launched=True,
+        outer_session_name=display_session,
+        outer_session_id=tmux_ctl.current_session_id(),
+        owner_pane_id=sidebar_pane,
+    )
+    assert manager.create_primary(agent_width=82)
+    outcome = manager.attach(workspace.primary, "compact-park-agent")
+    assert outcome.ok and outcome.kind is DisplayTransportKind.SWAP
+    state = workspace.primary.swap_state
+    assert state is not None
+    provider_pid = tmux_ctl.pane_identity(state.agent_pane_id).pane_pid
+
+    assert manager.park(workspace.primary)
+    parked_size = tmux_ctl.pane_size(state.agent_pane_id)
+    assert parked_size is not None
+    subprocess.run(
+        ["tmux", "resize-window", "-t", display_session, "-x", "105", "-y", "20"],
+        check=True,
+    )
+    # Only the inert outer placeholder follows the cramped split. The real
+    # provider remains in its detached home window at a stable geometry.
+    assert tmux_ctl.pane_size(state.agent_pane_id) == parked_size
+
+    placeholder = workspace.primary.pane_id
+    assert placeholder == state.placeholder_pane_id
+    subprocess.run(
+        ["tmux", "resize-pane", "-Z", "-t", placeholder], check=True)
+    assert manager.resume(workspace.primary)
+    identity = tmux_ctl.pane_identity(state.agent_pane_id)
+    assert identity is not None and identity.pane_pid == provider_pid
+    assert identity.window_id == state.display_window_id
+
+    assert manager.return_home(workspace.primary)
+    assert tmux_ctl.kill_session("compact-park-agent")
+
+
+def test_real_tmux_f20_reaches_urwid_private_resize_key(isolated_tmux):
+    """Exercise the actual helper send-keys spelling and Urwid decoding."""
+    _session_name, controller_pane, socket_path = isolated_tmux
+    reader = (
+        "import os,time,tty;"
+        "tty.setraw(0);"
+        "print('f20-ready',flush=True);"
+        "print(os.read(0,5).hex(),flush=True);"
+        "time.sleep(10)"
+    )
+    subprocess.run(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "respawn-pane",
+            "-k",
+            "-t",
+            controller_pane,
+            sys.executable,
+            "-c",
+            reader,
+        ],
+        check=True,
+    )
+    assert _wait_until(
+        lambda: "f20-ready" in subprocess.check_output(
+            [
+                "tmux", "-S", socket_path,
+                "capture-pane", "-p", "-t", controller_pane,
+            ],
+            text=True,
+        )
+    )
+    subprocess.run(
+        [
+            "tmux", "-S", socket_path,
+            "send-keys", "-l", "-t", controller_pane,
+            COMPACT_RESIZE_SEQUENCE,
+        ],
+        check=True,
+    )
+    assert _wait_until(
+        lambda: "1b5b33347e" in subprocess.check_output(
+            [
+                "tmux", "-S", socket_path,
+                "capture-pane", "-p", "-t", controller_pane,
+            ],
+            text=True,
+        )
+    )
+
+    from urwid.display.escape import process_keyqueue
+
+    keys, remainder = process_keyqueue(
+        list(bytes.fromhex("1b5b33347e")), more_available=False)
+    assert keys == ["f20"]
+    assert remainder == []
 
 
 def test_real_kill_preparation_keeps_swap_secondary_as_empty_surface(

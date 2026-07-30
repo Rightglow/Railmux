@@ -524,8 +524,9 @@ export default function Home() {
             </h2>
             <p>
               When space gets tight, Railmux projects the sidebar and each
-              agent onto separate pages. Nothing is killed or rearranged
-              underneath. The phone recording uses touch only: tap
+              agent onto separate pages. Nothing is killed; off-screen agents
+              keep running in protected tmux sessions until selected. The
+              phone recording uses touch only: tap
               <strong> New session</strong>, then tap the page labels.
             </p>
             <div className="compact-controls">
@@ -568,6 +569,14 @@ export default function Home() {
                 agent CLI. Install locally for ordinary use and for the fast SSH
                 client.
               </p>
+              <aside className="install-remote-note">
+                <span>REMOTE WORK</span>
+                <p>
+                  If ordinary SSH cannot keep up with full-screen redraws,
+                  use <code>railmux ssh</code> from macOS, Linux, or Windows
+                  through WSL.
+                </p>
+              </aside>
             </div>
             <div className="install-commands">
               <CopyCommand command="pip install railmux" />

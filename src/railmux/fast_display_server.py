@@ -23,6 +23,7 @@ import io
 import json
 import os
 import re
+import secrets
 import select
 import shlex
 import shutil
@@ -38,7 +39,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Sequence
+from typing import Callable, Sequence
 
 from railmux import (
     __version__,
@@ -80,12 +81,22 @@ from railmux.fast_display_protocol import (
     encode_path_open_result,
     encode_update,
 )
+from railmux.ui.workspace import (
+    COMPACT_ENTER_HEIGHT,
+    COMPACT_ENTER_WIDTH,
+    COMPACT_RESIZE_OPTION,
+    COMPACT_RESIZE_SEQUENCE,
+)
 from railmux.settings import Settings
 from railmux.tool_panes import (
     TOOL_PANE_OPTION,
     is_tool_pane_marker,
     manager_for_session,
 )
+
+
+_COMPACT_PREPARE_TIMEOUT = 0.4
+_COMPACT_TMUX_TIMEOUT = 0.15
 
 
 class DisplayServerError(RuntimeError):
@@ -1501,6 +1512,137 @@ def _resize_tmux_client(
         pass
 
 
+def _is_compact_geometry(width: int, height: int) -> bool:
+    return width < COMPACT_ENTER_WIDTH or height < COMPACT_ENTER_HEIGHT
+
+
+def _compact_tmux_output(*args: str) -> str | None:
+    """Run one handshake-only tmux read under the sub-frame deadline."""
+    try:
+        return subprocess.check_output(
+            tmux_server.tmux_argv(*args),
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=_COMPACT_TMUX_TIMEOUT,
+        ).strip()
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
+        return None
+
+
+def _set_compact_resize_option(
+    session_id: str, value: str | None,
+) -> bool:
+    args = [
+        "set-window-option", "-t", session_id,
+    ]
+    if value is None:
+        args.extend(["-u", COMPACT_RESIZE_OPTION])
+    else:
+        args.extend([COMPACT_RESIZE_OPTION, value])
+    try:
+        return subprocess.run(
+            tmux_server.tmux_argv(*args),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_COMPACT_TMUX_TIMEOUT,
+            check=False,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _clear_compact_resize_option_if(
+    session_id: str, expected: str,
+) -> None:
+    current = _compact_tmux_output(
+        "show-window-options", "-v", "-t", session_id,
+        COMPACT_RESIZE_OPTION,
+    )
+    if current == expected:
+        _set_compact_resize_option(session_id, None)
+
+
+def _request_compact_resize_preparation(
+    session_id: str,
+    width: int,
+    height: int,
+    *,
+    timeout: float = _COMPACT_PREPARE_TIMEOUT,
+    progress: Callable[[], None] | None = None,
+) -> str | None:
+    """Give Railmux a bounded chance to park hidden agents before shrinking.
+
+    tmux resizes hidden panes even while another pane is zoomed.  The private
+    F20 target asks the controller to move swap-owned hidden agents back to
+    their detached home windows before ``TIOCSWINSZ`` can narrow their PTYs.
+    Older/busy controllers simply time out and retain the established resize
+    behavior; the helper never mutates provider panes itself.
+    """
+    if not _is_compact_geometry(width, height):
+        return None
+    try:
+        raw = _compact_tmux_output(
+            "display-message", "-p", "-t", session_id,
+            "#{window_width}\t#{window_height}\t#{window_panes}"
+            "\t#{@railmux_controller_pane}",
+        )
+        current_width, current_height, pane_count, controller = raw.split(
+            "\t", 3)
+        current = int(current_width), int(current_height)
+        panes = int(pane_count)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if (_is_compact_geometry(*current)
+            or panes <= 1
+            or re.fullmatch(r"%[0-9]+", controller) is None):
+        return None
+
+    token = secrets.token_hex(8)
+    request = f"request:{token}:{width}:{height}"
+    ready = f"ready:{token}:{width}:{height}"
+    failed = f"failed:{token}:{width}:{height}"
+    if not _set_compact_resize_option(session_id, request):
+        return None
+    try:
+        sent = subprocess.run(
+            tmux_server.tmux_argv(
+                "send-keys", "-l", "-t", controller,
+                COMPACT_RESIZE_SEQUENCE,
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_COMPACT_TMUX_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        sent = None
+    if sent is None or sent.returncode != 0:
+        _clear_compact_resize_option_if(session_id, request)
+        return None
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    while time.monotonic() < deadline:
+        if progress is not None:
+            progress()
+        current_value = _compact_tmux_output(
+            "show-window-options", "-v", "-t", session_id,
+            COMPACT_RESIZE_OPTION,
+        )
+        if current_value is None:
+            break
+        if current_value == ready:
+            return ready
+        if current_value == failed or current_value != request:
+            break
+        time.sleep(0.02)
+    _clear_compact_resize_option_if(session_id, request)
+    return None
+
+
 @lru_cache(maxsize=1)
 def _tmux_client_feature_args() -> tuple[str, ...]:
     """Request per-client RGB output when the installed tmux supports it."""
@@ -1877,12 +2019,16 @@ def serve(
             # no newer helper can cross this boundary until this attach ends.
             _detach_session_clients(session_id)
         _use_smallest_window_size(session_id)
+        compact_ready = _request_compact_resize_preparation(
+            session_id, width, height)
         pid, master_fd = _spawn_tmux_client(session_id, width, height)
         if not _wait_until_attached(session_id, pid):
             _stop_client(pid, master_fd)
             pid = None
             master_fd = None
             raise DisplayServerError("the private tmux client failed to attach")
+        if compact_ready is not None:
+            _clear_compact_resize_option_if(session_id, compact_ready)
         _emit_attach_status(REMOTE_ATTACH_ACCEPTED)
     except BaseException:
         if pid is not None and master_fd is not None:
@@ -1952,6 +2098,23 @@ def _serve_attached(
             pending_packet = None
             pending_state = None
 
+    def drain_pty_during_resize_prepare() -> None:
+        """Keep provider output flowing during the bounded UI handshake."""
+        nonlocal pty_open, screen_changed
+        while pty_open:
+            try:
+                data = os.read(master_fd, 65536)
+            except BlockingIOError:
+                return
+            except OSError:
+                pty_open = False
+                return
+            if not data:
+                pty_open = False
+                return
+            stream.feed(data)
+            screen_changed = True
+
     def queue_control_packet(packet: bytes, *, priority: bool = False) -> None:
         if len(control_packets) >= 4:
             if not priority:
@@ -1977,7 +2140,15 @@ def _serve_attached(
         if (new_width, new_height) == (width, height):
             return
         discard_unsent_update()
+        compact_ready = _request_compact_resize_preparation(
+            session_id,
+            new_width,
+            new_height,
+            progress=drain_pty_during_resize_prepare,
+        )
         _resize_tmux_client(pid, master_fd, new_width, new_height)
+        if compact_ready is not None:
+            _clear_compact_resize_option_if(session_id, compact_ready)
         screen.resize(lines=new_height, columns=new_width)
         width, height = new_width, new_height
         force_keyframe = True

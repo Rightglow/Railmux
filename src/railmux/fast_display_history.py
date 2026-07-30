@@ -937,19 +937,26 @@ class LocalHistoryView:
         return was_active
 
 
-def coalesce_forwarded_wheel(
-    action: HistoryAction,
+def claim_batched_wheel(
     event: SgrMouseEvent,
-    forwarded_directions: set[int],
-) -> HistoryAction:
-    """Bound one read's remote vertical-wheel burst without a time heuristic."""
+    handled_directions: set[int],
+) -> bool:
+    """Admit at most one wheel tick per direction from one terminal read.
+
+    Trackpads commonly report several identical SGR wheel packets together.
+    If painting is briefly busy with fresh agent output, those packets can
+    accumulate in stdin and then move a frozen local-history viewport many
+    lines at once.  Bounding each read preserves the established one-line
+    local scroll feel without using a timing heuristic; a later read remains
+    immediately eligible.
+    """
     direction = event.wheel_direction
-    if not action.forwarded_input or direction == 0:
-        return action
-    if direction in forwarded_directions:
-        return replace(action, forwarded_input=b"")
-    forwarded_directions.add(direction)
-    return action
+    if direction == 0:
+        return True
+    if direction in handled_directions:
+        return False
+    handled_directions.add(direction)
+    return True
 
 
 def input_may_change_routes(

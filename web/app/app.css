@@ -1410,6 +1410,39 @@ code {
   line-height: 1.65;
 }
 
+.install-remote-note {
+  max-width: 600px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 18px;
+  align-items: start;
+  margin-top: 24px;
+  padding: 16px 0 0 18px;
+  border-top: 1px solid var(--line);
+  border-left: 3px solid var(--acid);
+}
+
+.install-remote-note > span {
+  padding-top: 3px;
+  color: #66706d;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+}
+
+.install-remote-note p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.install-remote-note code {
+  color: var(--night);
+  font-weight: 750;
+}
+
 .install-commands {
   display: grid;
   gap: 10px;

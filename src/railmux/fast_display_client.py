@@ -39,7 +39,7 @@ from railmux.fast_display_history import (
     HistoryAction,
     LocalHistoryView,
     PeriodicPrefetchGate,
-    coalesce_forwarded_wheel,
+    claim_batched_wheel,
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
@@ -2264,7 +2264,7 @@ def run(args: argparse.Namespace) -> int:
 
     def handle_terminal_part(
         part: bytes | SgrMouseEvent,
-        forwarded_wheels: set[int],
+        handled_wheels: set[int],
     ) -> None:
         nonlocal route_refresh_needed
         nonlocal claude_history_prompt_input, claude_history_pending_choice
@@ -2534,19 +2534,15 @@ def run(args: argparse.Namespace) -> int:
                     selection.segments(),
                 )
             for replay_event in selection_action.replay_events:
+                if not claim_batched_wheel(replay_event, handled_wheels):
+                    continue
                 replay_action = history.pointer_event(
                     replay_event,
                     focused_pane_id,
                     status_row=status_row,
                     now=time.monotonic(),
                 )
-                apply_history_action(
-                    coalesce_forwarded_wheel(
-                        replay_action,
-                        replay_event,
-                        forwarded_wheels,
-                    )
-                )
+                apply_history_action(replay_action)
             if selection_action.copy_data is not None:
                 surface.copy_to_clipboard(selection_action.copy_data)
                 character_count = len(
@@ -2579,15 +2575,15 @@ def run(args: argparse.Namespace) -> int:
                     begin_path_open(target)
             if selection_action.handled:
                 return
+            if not claim_batched_wheel(part, handled_wheels):
+                return
             action = history.pointer_event(
                 part,
                 focused_pane_id,
                 status_row=status_row,
                 now=time.monotonic(),
             )
-            apply_history_action(
-                coalesce_forwarded_wheel(action, part, forwarded_wheels)
-            )
+            apply_history_action(action)
             return
         if not part:
             return
@@ -2941,13 +2937,13 @@ def run(args: argparse.Namespace) -> int:
                         data, emergency_exit = split_local_escape(data)
                         if emergency_exit:
                             local_exit = True
-                        forwarded_wheels: set[int] = set()
+                        handled_wheels: set[int] = set()
                         for part in terminal_input.feed(data):
                             if isinstance(part, bytes):
                                 for key_part in split_page_key_input(part):
-                                    handle_terminal_part(key_part, forwarded_wheels)
+                                    handle_terminal_part(key_part, handled_wheels)
                             else:
-                                handle_terminal_part(part, forwarded_wheels)
+                                handle_terminal_part(part, handled_wheels)
                         if local_exit:
                             break
                 if not local_exit:

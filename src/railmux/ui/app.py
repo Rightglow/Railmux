@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+import re
 import shutil
 import threading
 import time
@@ -88,6 +89,10 @@ from railmux.ui.statusbar import ButtonBar, HintBar, TIPS
 from railmux.ui.workspace import (
     AgentSlot,
     AgentWorkspace,
+    COMPACT_ENTER_HEIGHT,
+    COMPACT_ENTER_WIDTH,
+    COMPACT_RESIZE_KEY,
+    COMPACT_RESIZE_OPTION,
     DUAL_SIDEBAR_MIN_WIDTH,
     DUAL_SIDEBAR_PERCENT,
     MINIMUM_AGENT_PANE_SIZE,
@@ -775,6 +780,8 @@ class App:
         self._workspace = AgentWorkspace()
         self._display_transport_manager: AgentDisplayTransport | None = None
         self._loop: urwid.MainLoop | None = None
+        self._remote_compact_prepared: dict | None = None
+        self._remote_compact_rollback_alarm: object | None = None
         identity = self._restart_identity
         self._root_wheel_manager = (
             RootWheelForwardingManager(
@@ -2100,6 +2107,23 @@ class App:
                 "warn",
             )
             return False
+        compact_return_page: WorkspacePage | None = None
+        compact_target_page: WorkspacePage | None = None
+        workspace = self._agent_workspace()
+        if workspace.presentation is WorkspacePresentation.COMPACT:
+            compact_return_page = workspace.compact_page
+            compact_target_page = (
+                WorkspacePage.SECONDARY
+                if slot is workspace.secondary
+                else WorkspacePage.PRIMARY
+            )
+            # Never attach a provider into a hidden half-width placeholder.
+            # Establish the target's full compact viewport before the display
+            # transport moves or starts any provider pane.
+            if not self._select_workspace_page(compact_target_page):
+                self._last_attach_failure_reason = (
+                    "compact target could not be prepared safely")
+                return False
         selection = getattr(self, "_selection_isolation_manager", None)
         if selection is not None:
             selection.release_all()
@@ -2137,6 +2161,9 @@ class App:
                 f"{self._last_attach_failure_reason}.",
                 "error",
             )
+            if (compact_return_page is not None
+                    and compact_return_page is not compact_target_page):
+                self._select_workspace_page(compact_return_page)
             return False
         if slot.pane_id is None:
             self._last_attach_failure_reason = (
@@ -2151,6 +2178,9 @@ class App:
                 "no pane.",
                 "error",
             )
+            if (compact_return_page is not None
+                    and compact_return_page is not compact_target_page):
+                self._select_workspace_page(compact_return_page)
             return False
         self._check_agent_slot_size(slot)
         if steal_focus:
@@ -2180,14 +2210,12 @@ class App:
                 and not getattr(self, "_restoring_workspace", False)):
             self._apply_layout_profile(allow_create=True)
         self._install_tmux_bindings()
-        if (steal_focus
-                and self._agent_workspace().presentation
-                is WorkspacePresentation.COMPACT):
-            self._select_workspace_page(
-                WorkspacePage.SECONDARY
-                if slot is self._agent_workspace().secondary
-                else WorkspacePage.PRIMARY
-            )
+        if compact_target_page is not None:
+            if steal_focus:
+                self._select_workspace_page(compact_target_page)
+            elif (compact_return_page is not None
+                    and compact_return_page is not compact_target_page):
+                self._select_workspace_page(compact_return_page)
         return True
 
     def _report_attach_failure(self, prefix: str) -> None:
@@ -2326,6 +2354,192 @@ class App:
             return workspace.primary.pane_id
         return workspace.secondary.pane_id
 
+    def _page_for_active_pane(self, active: str | None) -> WorkspacePage:
+        workspace = self._agent_workspace()
+        owner = getattr(self, "_railmux_pane_id", None)
+        slot = workspace.slot_for_pane(active) if active else None
+        if active == owner:
+            return WorkspacePage.SIDEBAR
+        if slot is workspace.secondary:
+            return WorkspacePage.SECONDARY
+        if slot is workspace.primary:
+            return WorkspacePage.PRIMARY
+        if not getattr(self, "_railmux_has_focus", True):
+            return (
+                WorkspacePage.SECONDARY
+                if workspace.target is workspace.secondary
+                else WorkspacePage.PRIMARY
+            )
+        return WorkspacePage.SIDEBAR
+
+    def _slot_for_workspace_page(
+        self, page: WorkspacePage,
+    ) -> AgentSlot | None:
+        workspace = self._agent_workspace()
+        if page is WorkspacePage.PRIMARY:
+            return workspace.primary
+        if page is WorkspacePage.SECONDARY:
+            return workspace.secondary
+        return None
+
+    def _park_compact_hidden_agents(
+        self, visible: AgentSlot | None, *, strict: bool = False,
+    ) -> list[AgentSlot] | None:
+        """Park swap-owned hidden providers, returning newly parked slots.
+
+        ``None`` means at least one live hidden provider could not be proven
+        safe to park. Already-parked slots are not returned, so callers can
+        roll back only their own part of a larger transaction.
+        """
+        transport = self._display_transport()
+        parked: list[AgentSlot] = []
+        for slot in self._agent_workspace().slots:
+            if slot is visible or slot.agent_tmux_name is None:
+                continue
+            if slot.display_parked:
+                continue
+            if not transport.park(slot):
+                if strict:
+                    for changed in reversed(parked):
+                        transport.resume(changed)
+                    return None
+                continue
+            parked.append(slot)
+        return parked
+
+    def _resume_compact_slot(self, slot: AgentSlot) -> bool:
+        if not slot.display_parked:
+            return True
+        return self._display_transport().resume(slot)
+
+    def _rollback_remote_compact_prepare(
+        self, _loop=None, token: str | None = None,
+    ) -> None:
+        prepared = getattr(self, "_remote_compact_prepared", None)
+        if not isinstance(prepared, dict):
+            return
+        if token is not None and prepared.get("token") != token:
+            return
+        if (self._agent_workspace().presentation
+                is not WorkspacePresentation.WIDE):
+            return
+        self._remote_compact_prepared = None
+        self._remote_compact_rollback_alarm = None
+        owner = getattr(self, "_railmux_pane_id", None)
+        if (prepared.get("owned_zoom")
+                and owner is not None
+                and self._window_is_zoomed()):
+            active = tmux_ctl.active_pane_id(owner)
+            if active is not None:
+                tmux_ctl.toggle_pane_zoom(active)
+        for slot in reversed(prepared.get("parked", [])):
+            if isinstance(slot, AgentSlot):
+                self._resume_compact_slot(slot)
+        if prepared.get("restored_adaptive"):
+            # The helper abandoned the shrink after we temporarily rebuilt
+            # the logical dual layout at the still-safe intermediate width.
+            # Return to the responsive single projection it had before F20.
+            self._enter_adaptive_single_view()
+        active = prepared.get("active")
+        if isinstance(active, str) and tmux_ctl.pane_alive(active):
+            tmux_ctl.select_pane(active)
+        self._install_tmux_bindings()
+        self._apply_tmux_bar(self._tmux_error_bar)
+
+    def _handle_remote_compact_prepare(self) -> None:
+        """Consume one authenticated-by-window-option SSH resize request."""
+        owner = getattr(self, "_railmux_pane_id", None)
+        if owner is None:
+            return
+        raw = tmux_ctl.show_window_user_option(
+            owner, COMPACT_RESIZE_OPTION)
+        match = re.fullmatch(
+            r"request:([0-9a-f]{16}):([0-9]{1,4}):([0-9]{1,3})",
+            raw or "",
+        )
+        if match is None:
+            return
+        token = match.group(1)
+        width, height = int(match.group(2)), int(match.group(3))
+        request = match.group(0)
+        response = f"failed:{token}:{width}:{height}"
+        workspace = self._agent_workspace()
+        if (width >= COMPACT_ENTER_WIDTH
+                and height >= COMPACT_ENTER_HEIGHT):
+            tmux_ctl.set_window_user_option(
+                owner, COMPACT_RESIZE_OPTION, response)
+            return
+        if (workspace.presentation is not WorkspacePresentation.WIDE
+                or (self._loop is not None
+                    and self._loop.widget is not self._frame)):
+            tmux_ctl.set_window_user_option(
+                owner, COMPACT_RESIZE_OPTION, response)
+            return
+
+        restored_adaptive = False
+        if isinstance(
+                getattr(self, "_adaptive_single_state", None), dict):
+            # A gradual drag can enter the intermediate single-agent layout
+            # before it reaches compact. Rebuild the logical dual topology
+            # while the window is still at that safer width, then protect the
+            # hidden provider just like the direct wide->compact path. Without
+            # this step the normal geometry callback would attach it only
+            # after TIOCSWINSZ, creating the same narrow scrollback segment.
+            if not self._restore_adaptive_dual_view():
+                tmux_ctl.set_window_user_option(
+                    owner, COMPACT_RESIZE_OPTION, response)
+                return
+            restored_adaptive = True
+
+        active = tmux_ctl.active_pane_id(owner)
+        page = self._page_for_active_pane(active)
+        was_zoomed = self._window_is_zoomed()
+        profile = (
+            None if was_zoomed
+            else self._capture_layout_profile("always")
+        )
+        visible = self._slot_for_workspace_page(page)
+        parked = self._park_compact_hidden_agents(visible, strict=True)
+        pane_id = self._pane_for_workspace_page(page)
+        if (parked is None or pane_id is None
+                or not self._zoom_pane(pane_id)):
+            if parked:
+                for slot in reversed(parked):
+                    self._resume_compact_slot(slot)
+            if restored_adaptive:
+                self._enter_adaptive_single_view()
+            tmux_ctl.set_window_user_option(
+                owner, COMPACT_RESIZE_OPTION, response)
+            return
+
+        prepared = {
+            "token": token,
+            "active": active,
+            "page": page,
+            "was_zoomed": was_zoomed,
+            "profile": profile,
+            "parked": parked,
+            "owned_zoom": not was_zoomed,
+            "restored_adaptive": restored_adaptive,
+        }
+        # The helper may have timed out while a swap transaction was running.
+        # A value comparison prevents a late F20 from parking the workspace
+        # after its resize request has already been abandoned.
+        if tmux_ctl.show_window_user_option(
+                owner, COMPACT_RESIZE_OPTION) != request:
+            self._remote_compact_prepared = prepared
+            self._rollback_remote_compact_prepare(token=token)
+            return
+        self._remote_compact_prepared = prepared
+        ready = f"ready:{token}:{width}:{height}"
+        if not tmux_ctl.set_window_user_option(
+                owner, COMPACT_RESIZE_OPTION, ready):
+            self._rollback_remote_compact_prepare(token=token)
+            return
+        if self._loop is not None:
+            self._remote_compact_rollback_alarm = self._loop.set_alarm_in(
+                3.0, self._rollback_remote_compact_prepare, token)
+
     def _window_is_zoomed(self) -> bool:
         """Best-effort zoom query scoped to Railmux's current window."""
         pane_id = (
@@ -2378,13 +2592,42 @@ class App:
         natural Target just as focusing it in a wide layout does.
         """
         workspace = self._agent_workspace()
+        desired = self._slot_for_workspace_page(page)
         pane_id = self._pane_for_workspace_page(page)
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
             if announce:
                 self._set_status("That compact page is not available.", "tip")
             return False
+        parked = self._park_compact_hidden_agents(desired)
+        if parked is None:
+            if announce:
+                self._set_status(
+                    "That compact page could not be isolated safely.", "warn")
+            return False
 
+        # Zoom the inert placeholder before moving a parked provider back into
+        # it. The provider's first resize is therefore the full compact
+        # viewport, never the hidden half-width rectangle.
         if not self._zoom_pane(pane_id):
+            for changed in reversed(parked):
+                self._resume_compact_slot(changed)
+            return False
+        if desired is not None and not self._resume_compact_slot(desired):
+            fallback_page = workspace.compact_page
+            fallback_pane = self._pane_for_workspace_page(fallback_page)
+            if (fallback_pane is not None
+                    and self._zoom_pane(fallback_pane)):
+                for changed in reversed(parked):
+                    self._resume_compact_slot(changed)
+            if announce:
+                self._set_status(
+                    "That compact agent stayed safe in Running; "
+                    "its display could not be restored.",
+                    "warn",
+                )
+            return False
+        pane_id = self._pane_for_workspace_page(page)
+        if pane_id is None or not tmux_ctl.pane_alive(pane_id):
             return False
 
         workspace.compact_page = page
@@ -2394,6 +2637,7 @@ class App:
             self._set_workspace_target(AgentWorkspace.SECONDARY)
         self._set_railmux_focus(
             page is WorkspacePage.SIDEBAR, force_border=True)
+        self._install_tmux_bindings()
         self._apply_tmux_bar(self._tmux_error_bar)
         return True
 
@@ -2414,7 +2658,15 @@ class App:
             page = WorkspacePage.SECONDARY
         else:
             return
-        if page is workspace.compact_page:
+        page_slot = self._slot_for_workspace_page(page)
+        needs_transport = (
+            page_slot is not None and page_slot.display_parked)
+        if page is workspace.compact_page and not needs_transport:
+            return
+        # Status-range clicks are executed by tmux even while the controller
+        # pane is hidden. Complete the corresponding parking transaction here
+        # before updating the logical page/Target state.
+        if not self._select_workspace_page(page):
             return
         workspace.compact_page = page
         if page is WorkspacePage.PRIMARY:
@@ -2434,13 +2686,26 @@ class App:
             return True
         if presentation is WorkspacePresentation.COMPACT:
             owner = getattr(self, "_railmux_pane_id", None)
-            active = tmux_ctl.active_pane_id(owner) if owner else None
-            was_zoomed = self._window_is_zoomed()
+            prepared = getattr(self, "_remote_compact_prepared", None)
+            if isinstance(prepared, dict):
+                active = prepared.get("active")
+                was_zoomed = bool(prepared.get("was_zoomed"))
+                captured_profile = prepared.get("profile")
+                page = prepared.get("page")
+            else:
+                active = tmux_ctl.active_pane_id(owner) if owner else None
+                was_zoomed = self._window_is_zoomed()
+                captured_profile = (
+                    None
+                    if was_zoomed
+                    else self._capture_layout_profile("always")
+                )
+                page = self._page_for_active_pane(active)
             self._pre_compact_wide_zoom_pane = active if was_zoomed else None
             self._pre_compact_layout_profile = (
                 None
                 if was_zoomed
-                else self._capture_layout_profile("always")
+                else captured_profile
             )
             # Adaptive single is only a wide-screen projection. Compact mode
             # pages need the logical dual topology to exist so R/A1/A2 remain
@@ -2454,26 +2719,20 @@ class App:
                 active = (
                     tmux_ctl.active_pane_id(owner) if owner else None
                 )
-            slot = workspace.slot_for_pane(active) if active else None
-            if active == owner:
-                page = WorkspacePage.SIDEBAR
-            elif slot is workspace.secondary:
-                page = WorkspacePage.SECONDARY
-            elif slot is workspace.primary:
-                page = WorkspacePage.PRIMARY
-            elif not getattr(self, "_railmux_has_focus", True):
-                page = (
-                    WorkspacePage.SECONDARY
-                    if workspace.target is workspace.secondary
-                    else WorkspacePage.PRIMARY
-                )
-            else:
-                page = WorkspacePage.SIDEBAR
+                page = self._page_for_active_pane(active)
+            if not isinstance(page, WorkspacePage):
+                page = self._page_for_active_pane(active)
             if not self._select_workspace_page(page):
                 # The sidebar exists for every live UI and is the safest
                 # fallback when an agent pane disappears during the resize.
                 if page is not WorkspacePage.SIDEBAR:
                     self._select_workspace_page(WorkspacePage.SIDEBAR)
+            alarm = getattr(
+                self, "_remote_compact_rollback_alarm", None)
+            if alarm is not None and self._loop is not None:
+                self._loop.remove_alarm(alarm)
+            self._remote_compact_rollback_alarm = None
+            self._remote_compact_prepared = None
             return True
 
         # Leaving compact mode must remove only Railmux's current page zoom.
@@ -2503,6 +2762,11 @@ class App:
         if not restored_profile:
             self._resize_sidebar_for_layout(workspace.layout)
         self._apply_layout_profile(allow_create=True)
+        parked_failed = False
+        for slot in workspace.slots:
+            if slot.display_parked and not self._resume_compact_slot(slot):
+                parked_failed = True
+        self._install_tmux_bindings()
         self._reconcile_focus_from_tmux()
         restore_zoom = getattr(
             self, "_pre_compact_wide_zoom_pane", None)
@@ -2514,6 +2778,13 @@ class App:
                 tmux_ctl.select_pane(restore_zoom)
             tmux_ctl.toggle_pane_zoom(restore_zoom)
         self._apply_tmux_bar(self._tmux_error_bar)
+        if parked_failed:
+            self._set_status(
+                "A parked agent stayed alive in Running but its pane could "
+                "not be restored.",
+                "warn",
+                force=True,
+            )
         return True
 
     def _agent_region_size(self) -> tuple[int, int] | None:
@@ -4724,8 +4995,23 @@ class App:
     def _tool_owner_panes(self) -> dict[str, str | None]:
         workspace = self._agent_workspace()
         return {
-            AgentWorkspace.PRIMARY: workspace.primary.pane_id,
-            AgentWorkspace.SECONDARY: workspace.secondary.pane_id,
+            # A compact page keeps its hidden display slot alive as an inert
+            # placeholder while the provider is parked in its home session.
+            # Do not retarget a managed shell/viewer beneath that placeholder:
+            # it would make the tool appear owned by the wrong pane and would
+            # perturb the protected hidden geometry. ``reconcile`` suspends
+            # tools with no current owner and restores them when their agent
+            # page becomes visible again.
+            AgentWorkspace.PRIMARY: (
+                None
+                if workspace.primary.display_parked
+                else workspace.primary.pane_id
+            ),
+            AgentWorkspace.SECONDARY: (
+                None
+                if workspace.secondary.display_parked
+                else workspace.secondary.pane_id
+            ),
         }
 
     def _reconcile_tool_panes(self) -> None:
@@ -6801,6 +7087,12 @@ class App:
     # --- key handling ---
 
     def _on_input(self, key: str) -> None:
+        # F20 is private to the SSH display helper. It reaches the controller
+        # pane before that helper applies a compact-size TIOCSWINSZ, giving us
+        # a bounded opportunity to park hidden real agent panes first.
+        if key == COMPACT_RESIZE_KEY.lower():
+            self._handle_remote_compact_prepare()
+            return
         # F9 is routed here by a global tmux binding and must remain available
         # while a modal is open (notably Help's fullscreen copy workflow).
         if key == "f9":

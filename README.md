@@ -78,8 +78,9 @@ not permanent traps: press `o`, or choose **More → Options**, to change them
 later. One-time safety confirmations such as dependency installation and
 session deletion are intentionally asked at the action itself.
 
-For the responsive, locally cached SSH display, install Railmux on your local
-machine and connect with:
+If ordinary SSH cannot keep up with full-screen redraws, install Railmux on
+your local macOS, Linux, or Windows WSL environment and use its responsive,
+locally cached SSH display:
 
 ```bash
 railmux ssh your-server

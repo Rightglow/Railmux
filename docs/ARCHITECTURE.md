@@ -647,11 +647,17 @@ routing with focus, selection, or history.
   A resize may temporarily project an undersized dual layout as Sidebar plus
   its current Target agent; the other agent returns home without being killed.
   The exact slot identities, focus, orientation, and proportions must return
-  when both panes fit again. Entering compact presentation reconstructs both
-  physical agent panes before zooming one full-window page, including after a
-  soft restart that first degraded to the responsive single projection. Thus
-  `R`, `A1`, and `A2` are backed by real pane targets; compact changes
-  presentation, never the logical layout. Returning wide reapplies the
+  when both panes fit again. Entering compact presentation retains both outer
+  page positions, but only the visible A1/A2 page contains its real swap-owned
+  provider pane. Hidden providers are transactionally parked in their detached
+  home windows while inert placeholders retain stable tmux targets for `R`,
+  `A1`, and `A2`; switching pages zooms the target placeholder before swapping
+  its provider back. This prevents tmux from narrowing a hidden provider PTY
+  and permanently recording half-width cursor-addressed output. A bounded
+  `railmux ssh` controller handshake performs that parking before the helper's
+  compact `TIOCSWINSZ`; missing, nested, busy, or older controllers fail open
+  to the established resize path and never stop or restart an agent. Compact
+  changes presentation, never the logical layout. Returning wide reapplies the
   pre-compact proportions (or safe 20% sidebar and 50/50 agent defaults) rather
   than retaining the zoomed page's tmux reflow. Single-agent layout assigns
   about 30% of the outer width to the sidebar; either dual layout assigns about

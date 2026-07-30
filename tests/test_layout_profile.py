@@ -10,7 +10,9 @@ from railmux.ui.app import App, _Running
 from railmux.ui.modals import LayoutSaveModal
 from railmux.ui.workspace import (
     AgentWorkspace,
+    COMPACT_RESIZE_OPTION,
     WorkspaceLayout,
+    WorkspacePage,
     WorkspacePresentation,
 )
 
@@ -172,6 +174,217 @@ def test_compact_transition_captures_and_restores_runtime_geometry(monkeypatch):
 
     app._restore_transient_layout_profile.assert_called_once_with(profile)
     assert app._pre_compact_layout_profile is None
+
+
+def test_compact_page_switch_parks_old_agent_before_resuming_target(
+    monkeypatch,
+):
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    workspace = app._agent_workspace()
+    workspace.presentation = WorkspacePresentation.COMPACT
+    workspace.primary.agent_tmux_name = "agent-a"
+    workspace.secondary.agent_tmux_name = "agent-b"
+    workspace.secondary.display_parked = True
+    workspace.secondary.pane_id = "%30"
+    transport = MagicMock()
+
+    def park(slot):
+        assert slot is workspace.primary
+        slot.display_parked = True
+        slot.pane_id = "%20"
+        return True
+
+    def resume(slot):
+        assert slot is workspace.secondary
+        # The target placeholder must be zoomed before the provider moves.
+        app._zoom_pane.assert_called_once_with("%30")
+        slot.display_parked = False
+        slot.pane_id = "%3"
+        return True
+
+    transport.park.side_effect = park
+    transport.resume.side_effect = resume
+    app._display_transport_manager = transport
+    app._zoom_pane = MagicMock(return_value=True)
+    app._set_workspace_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._apply_tmux_bar = MagicMock()
+    app._tmux_error_bar = False
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
+
+    assert app._select_workspace_page(
+        WorkspacePage.SECONDARY) is True
+
+    transport.park.assert_called_once_with(workspace.primary)
+    transport.resume.assert_called_once_with(workspace.secondary)
+    assert workspace.compact_page.value == "secondary"
+
+
+def test_unavailable_compact_page_does_not_park_current_agent(monkeypatch):
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    workspace = app._agent_workspace()
+    workspace.presentation = WorkspacePresentation.COMPACT
+    workspace.primary.agent_tmux_name = "agent-a"
+    workspace.secondary.pane_id = None
+    transport = MagicMock()
+    app._display_transport_manager = transport
+    app._set_status = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
+
+    assert app._select_workspace_page(
+        WorkspacePage.SECONDARY, announce=True) is False
+
+    transport.park.assert_not_called()
+    assert workspace.primary.display_parked is False
+    app._set_status.assert_called_once_with(
+        "That compact page is not available.", "tip")
+
+
+def test_remote_compact_prepare_parks_hidden_agent_before_ack(monkeypatch):
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    workspace = app._agent_workspace()
+    workspace.primary.agent_tmux_name = "agent-a"
+    workspace.secondary.agent_tmux_name = "agent-b"
+    transport = MagicMock()
+
+    def park(slot):
+        assert slot is workspace.secondary
+        slot.display_parked = True
+        slot.pane_id = "%30"
+        return True
+
+    def resume(slot):
+        slot.display_parked = False
+        slot.pane_id = "%3"
+        return True
+
+    transport.park.side_effect = park
+    transport.resume.side_effect = resume
+    app._display_transport_manager = transport
+    app._frame = object()
+    app._loop = MagicMock()
+    app._loop.widget = app._frame
+    app._zoom_pane = MagicMock(return_value=True)
+    app._window_is_zoomed = MagicMock(return_value=False)
+    app._capture_layout_profile = MagicMock(
+        return_value=LayoutProfile(
+            "always", "side-by-side", 200, 500))
+    app._install_tmux_bindings = MagicMock()
+    app._apply_tmux_bar = MagicMock()
+    app._tmux_error_bar = False
+    request = "request:0011223344556677:105:20"
+    options = [request, request]
+    show = MagicMock(side_effect=lambda *_args: options.pop(0))
+    set_option = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.show_window_user_option", show)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_user_option", set_option)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%2")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
+
+    app._handle_remote_compact_prepare()
+
+    transport.park.assert_called_once_with(workspace.secondary)
+    app._zoom_pane.assert_called_once_with("%2")
+    set_option.assert_called_once_with(
+        "%1",
+        COMPACT_RESIZE_OPTION,
+        "ready:0011223344556677:105:20",
+    )
+    assert app._remote_compact_prepared["page"] is WorkspacePage.PRIMARY
+    app._loop.set_alarm_in.assert_called_once()
+
+    # If the helper disappears before TIOCSWINSZ, the bounded alarm restores
+    # the original wide placement instead of leaving a surprising parked UI.
+    app._rollback_remote_compact_prepare(token="0011223344556677")
+    transport.resume.assert_called_once_with(workspace.secondary)
+    assert app._remote_compact_prepared is None
+
+
+def test_remote_compact_prepare_rebuilds_adaptive_dual_before_parking(
+    monkeypatch,
+):
+    app = _app(WorkspaceLayout.SINGLE)
+    workspace = app._agent_workspace()
+    workspace.primary.agent_tmux_name = "agent-a"
+    workspace.secondary.agent_tmux_name = "agent-b"
+    app._adaptive_single_state = {"workspace": {}, "profile": None}
+    events: list[str] = []
+
+    def restore_dual():
+        events.append("restore-dual")
+        app._adaptive_single_state = None
+        workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+        workspace.secondary.pane_id = "%3"
+        return True
+
+    transport = MagicMock()
+
+    def park(slot):
+        events.append(f"park:{slot.key}")
+        slot.display_parked = True
+        slot.pane_id = "%30"
+        return True
+
+    def resume(slot):
+        slot.display_parked = False
+        slot.pane_id = "%3"
+        return True
+
+    app._restore_adaptive_dual_view = MagicMock(side_effect=restore_dual)
+    app._enter_adaptive_single_view = MagicMock(return_value=True)
+    transport.park.side_effect = park
+    transport.resume.side_effect = resume
+    app._display_transport_manager = transport
+    app._frame = object()
+    app._loop = MagicMock()
+    app._loop.widget = app._frame
+    app._zoom_pane = MagicMock(return_value=True)
+    app._window_is_zoomed = MagicMock(return_value=False)
+    app._capture_layout_profile = MagicMock(return_value=None)
+    app._install_tmux_bindings = MagicMock()
+    app._apply_tmux_bar = MagicMock()
+    app._tmux_error_bar = False
+    request = "request:0011223344556677:70:20"
+    options = [request, request]
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.show_window_user_option",
+        MagicMock(side_effect=lambda *_args: options.pop(0)),
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_user_option",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%2")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
+
+    app._handle_remote_compact_prepare()
+
+    assert events == ["restore-dual", "park:secondary"]
+    assert app._remote_compact_prepared["restored_adaptive"] is True
+
+    app._rollback_remote_compact_prepare(token="0011223344556677")
+
+    app._enter_adaptive_single_view.assert_called_once_with()
+
+
+def test_parked_compact_agent_is_not_published_as_tool_owner():
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    workspace = app._agent_workspace()
+    workspace.secondary.display_parked = True
+
+    assert app._tool_owner_panes() == {
+        AgentWorkspace.PRIMARY: "%2",
+        AgentWorkspace.SECONDARY: None,
+    }
 
 
 def test_compact_exit_without_snapshot_restores_safe_dual_ratio(monkeypatch):

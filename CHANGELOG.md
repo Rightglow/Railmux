@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19] - 2026-07-30
+
+### Added
+
+- Open clean-clicked HTTP(S) URLs from `railmux ssh` in the local browser and
+  resolve remote paths read-only against the visible agent pane.
+- Add one managed shell and tabbed Vim viewer per agent. Clicked paths can open
+  inside Railmux or in a separate terminal through an Ask/Always policy, while
+  `t`, `T`, F9, and layout changes preserve the exact managed processes.
+- Add Termux touch handling for compact navigation and focused prompt keyboard
+  access, plus directly clickable **Soft quit** and **Cancel** choices.
+- Add `railmux doctor --ssh HOST`, privacy-safe SSH display diagnostics,
+  visible startup stages, and a deterministic display wire-budget benchmark.
+
+### Changed
+
+- Enable bounded post-attach `railmux ssh` reconnection by default; use
+  `--no-reconnect` for a one-invocation opt-out.
+- Make workspace restoration event-driven and reuse a validated final pane
+  skeleton, reducing startup reflow without weakening identity checks.
+- Split SSH compatibility, input, selection, and history into independently
+  tested state machines and avoid redundant periodic history captures until
+  newer output can make them stale.
+
+### Fixed
+
+- Prevent `railmux ssh` compact resizes from leaving short half-width segments
+  in agent history. Before a coordinated shrink, hidden swap-owned providers
+  are parked in their detached home windows while inert placeholders absorb
+  tmux's narrow reflow; page switches restore the exact live pane only after
+  its target has the full compact viewport.
+- Bound same-direction trackpad wheel packets accumulated during a busy remote
+  repaint to one local-history row per terminal read, so scrolling down while
+  an agent is producing output no longer jumps past the passage being read.
+- Restore Termux taps, swipes, session activation, compact page navigation, and
+  mouse control after soft-keyboard viewport changes.
+- Reassemble wrapped URLs and remote paths across pane coordinates, exclude
+  adjacent labels and Unicode prose, and keep hover/click routing correct in
+  either visible agent pane.
+- Keep compatibility, installation, update, and attach prompts on the
+  recoverable startup surface; bound cancellation and first-frame failure
+  without stopping the remote workspace.
+- Keep local SSH status text authoritative for click-to-copy and recover exact
+  tool owners for live UIs upgraded from an earlier package.
+
+### Documentation
+
+- Recommend `railmux ssh` in the website and Quick Start when ordinary remote
+  redraws are not sufficiently smooth from macOS, Linux, or Windows WSL.
+
 ## [0.2.19.dev202607308] - 2026-07-30
 
 ### Fixed
@@ -1467,7 +1517,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607308...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19...HEAD
+[0.2.19]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19
 [0.2.19.dev202607308]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607307...v0.2.19.dev202607308
 [0.2.19.dev202607307]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607306...v0.2.19.dev202607307
 [0.2.19.dev202607306]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607305...v0.2.19.dev202607306

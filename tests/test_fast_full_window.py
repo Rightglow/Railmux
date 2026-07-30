@@ -90,7 +90,7 @@ from railmux.fast_display_history import (
     HistoryAction,
     LocalHistoryView,
     PeriodicPrefetchGate,
-    coalesce_forwarded_wheel,
+    claim_batched_wheel,
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
@@ -3640,23 +3640,37 @@ def test_history_content_cache_keeps_only_recent_pane_lifetimes():
     assert tuple(view.content_cache) == tuple(pane_ids[-8:])
 
 
-def test_forwarded_wheel_burst_is_bounded_per_read_without_time_threshold():
-    seen: set[int] = set()
-    up = SgrMouseEvent(b"up", 64, 5, 5, True)
-    down = SgrMouseEvent(b"down", 65, 5, 5, True)
-    forwarded_up = HistoryAction(forwarded_input=b"up")
+def test_local_history_wheel_burst_is_bounded_before_it_moves_viewport():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        0,
+        0,
+        30,
+        3,
+        tuple(f"line-{index}".encode() for index in range(10)),
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+    up = SgrMouseEvent(b"up", 64, 5, 2, True)
+    down = SgrMouseEvent(b"down", 65, 5, 2, True)
+    for _ in range(5):
+        view.wheel(up)
+    assert view.viewports["%8"].offset == 5
 
-    assert coalesce_forwarded_wheel(forwarded_up, up, seen).forwarded_input == b"up"
-    assert coalesce_forwarded_wheel(forwarded_up, up, seen).forwarded_input == b""
-    assert (
-        coalesce_forwarded_wheel(
-            HistoryAction(forwarded_input=b"down"), down, seen
-        ).forwarded_input
-        == b"down"
-    )
-    assert coalesce_forwarded_wheel(HistoryAction(render_history=True), up, seen) == (
-        HistoryAction(render_history=True)
-    )
+    handled: set[int] = set()
+    for _ in range(8):
+        if claim_batched_wheel(down, handled):
+            view.wheel(down)
+
+    # Eight packets accumulated in one read still move only one row.
+    assert view.viewports["%8"].offset == 4
+    # The opposite direction remains responsive in the same terminal read.
+    assert claim_batched_wheel(up, handled) is True
+    # A new os.read() owns a fresh set and therefore admits the next tick.
+    assert claim_batched_wheel(down, set()) is True
 
 
 def test_only_bounded_layout_and_modal_keys_invalidate_live_routes():
@@ -5605,6 +5619,79 @@ def test_attach_confirmation_matches_exact_child_pid(monkeypatch):
     monkeypatch.setattr(fast_display_server, "_child_exited", lambda _pid: False)
 
     assert fast_display_server._wait_until_attached("$4", 123, timeout=1.0) is True
+
+
+def test_compact_resize_preparation_waits_for_exact_controller_ack(monkeypatch):
+    outputs = iter((
+        "180\t40\t3\t%8",
+        "ready:0011223344556677:105:20",
+    ))
+    monkeypatch.setattr(
+        fast_display_server, "_compact_tmux_output",
+        lambda *_args: next(outputs),
+    )
+    set_option = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        fast_display_server, "_set_compact_resize_option", set_option)
+    sent = MagicMock(return_value=subprocess.CompletedProcess([], 0))
+    monkeypatch.setattr(fast_display_server.subprocess, "run", sent)
+    monkeypatch.setattr(
+        fast_display_server.secrets,
+        "token_hex",
+        lambda _length: "0011223344556677",
+    )
+    progress = MagicMock()
+
+    assert fast_display_server._request_compact_resize_preparation(
+        "$4", 105, 20, progress=progress,
+    ) == "ready:0011223344556677:105:20"
+
+    set_option.assert_called_once_with(
+        "$4", "request:0011223344556677:105:20")
+    assert sent.call_args.args[0][-5:] == [
+        "send-keys", "-l", "-t", "%8", "\x1b[34~",
+    ]
+    progress.assert_called_once_with()
+
+
+def test_compact_resize_preparation_times_out_fail_open(monkeypatch):
+    monkeypatch.setattr(
+        fast_display_server,
+        "_compact_tmux_output",
+        lambda *_args: "180\t40\t3\t%8",
+    )
+    set_option = MagicMock(return_value=True)
+    clear = MagicMock()
+    monkeypatch.setattr(
+        fast_display_server, "_set_compact_resize_option", set_option)
+    monkeypatch.setattr(
+        fast_display_server, "_clear_compact_resize_option_if", clear)
+    monkeypatch.setattr(
+        fast_display_server.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0),
+    )
+    monkeypatch.setattr(
+        fast_display_server.secrets,
+        "token_hex",
+        lambda _length: "0011223344556677",
+    )
+
+    assert fast_display_server._request_compact_resize_preparation(
+        "$4", 70, 18, timeout=0,
+    ) is None
+    clear.assert_called_once_with(
+        "$4", "request:0011223344556677:70:18")
+
+
+def test_noncompact_resize_never_contacts_controller(monkeypatch):
+    output = MagicMock()
+    monkeypatch.setattr(
+        fast_display_server, "_compact_tmux_output", output)
+
+    assert fast_display_server._request_compact_resize_preparation(
+        "$4", 120, 30) is None
+    output.assert_not_called()
 
 
 def test_server_window_size_policy_accepts_native_old_tmux(monkeypatch):

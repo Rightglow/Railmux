@@ -573,6 +573,18 @@ class AgentDisplayTransport:
 
         if (slot.swap_state is not None
                 and slot.swap_state.agent_tmux_name == agent_tmux_name
+                and slot.display_parked):
+            return (
+                AttachOutcome(True, DisplayTransportKind.SWAP)
+                if self.resume(slot)
+                else AttachOutcome(
+                    False,
+                    DisplayTransportKind.SWAP,
+                    "could not safely restore the parked agent pane",
+                )
+            )
+        if (slot.swap_state is not None
+                and slot.swap_state.agent_tmux_name == agent_tmux_name
                 and _verified_displayed(slot.swap_state)):
             slot.pane_id = slot.swap_state.agent_pane_id
             return AttachOutcome(True, DisplayTransportKind.SWAP)
@@ -719,7 +731,110 @@ class AgentDisplayTransport:
         slot.pane_id = state.agent_pane_id
         slot.transport_kind = DisplayTransportKind.SWAP
         slot.agent_tmux_name = agent_tmux_name
+        slot.display_parked = False
         return AttachOutcome(True, DisplayTransportKind.SWAP)
+
+    @staticmethod
+    def _with_phase(state: SwapState, phase: str) -> SwapState:
+        return SwapState(**{**asdict(state), "phase": phase})
+
+    def park(self, slot: AgentSlot) -> bool:
+        """Move one displayed swap agent home without forgetting its slot.
+
+        Compact pages keep the outer placeholder alive, so tmux may resize the
+        hidden rectangle without also resizing the real provider PTY.  Every
+        mutation uses the existing durable swap marker.  A failed proof either
+        rolls back to the displayed state or leaves the agent verified in its
+        detached home window; it never kills or respawns the provider.
+
+        Nested displays deliberately return ``False``.  They have no exact
+        pane identity transaction, so silently killing their attach client
+        would weaken the recovery guarantees this operation exists to provide.
+        """
+        if slot.agent_tmux_name is None or slot.in_history_mode:
+            return True
+        state = slot.swap_state
+        if state is None or slot.transport_kind is not DisplayTransportKind.SWAP:
+            return False
+        if slot.display_parked:
+            return _verified_home(state)
+        if not _verified_displayed(state):
+            return False
+
+        parking = self._with_phase(state, "parking")
+        if not _write_marker_pair(parking, slot.key):
+            return False
+        if not tmux_ctl.swap_panes(
+                state.agent_pane_id, state.placeholder_pane_id):
+            _write_marker_pair(state, slot.key)
+            return False
+        if not _verified_home(state):
+            if (tmux_ctl.swap_panes(
+                    state.agent_pane_id, state.placeholder_pane_id)
+                    and _verified_displayed(state)):
+                _write_marker_pair(state, slot.key)
+            return False
+
+        parked = self._with_phase(state, "parked")
+        slot.swap_state = parked
+        slot.pane_id = state.placeholder_pane_id
+        slot.display_parked = True
+        if _write_marker_pair(parked, slot.key):
+            return True
+
+        # The process still owns both exact identities. Prefer returning to
+        # the previously displayed state if the committed marker could not be
+        # mirrored; otherwise retain the verified-safe home placement so a
+        # later return_home/recovery pass can finish without guessing.
+        if (tmux_ctl.swap_panes(
+                state.agent_pane_id, state.placeholder_pane_id)
+                and _verified_displayed(state)):
+            slot.swap_state = state
+            slot.pane_id = state.agent_pane_id
+            slot.display_parked = False
+            _write_marker_pair(state, slot.key)
+        return False
+
+    def resume(self, slot: AgentSlot) -> bool:
+        """Restore one compact-parked swap agent into its exact outer slot."""
+        if not slot.display_parked:
+            return True
+        state = slot.swap_state
+        if state is None or slot.transport_kind is not DisplayTransportKind.SWAP:
+            return False
+        if not _verified_home(state):
+            return False
+
+        # The outer placeholder is already at its final visible geometry
+        # (compact callers zoom it first). Pre-sizing the detached home window
+        # avoids a second redraw when the real provider crosses the swap.
+        tmux_ctl.fit_session_to_pane(
+            state.agent_tmux_name, state.placeholder_pane_id)
+        resuming = self._with_phase(state, "resuming")
+        if not _write_marker_pair(resuming, slot.key):
+            return False
+        if not tmux_ctl.swap_panes(
+                state.agent_pane_id, state.placeholder_pane_id):
+            _write_marker_pair(state, slot.key)
+            return False
+        displayed = self._with_phase(state, "displayed")
+        if not _verified_displayed(displayed):
+            if (tmux_ctl.swap_panes(
+                    state.agent_pane_id, state.placeholder_pane_id)
+                    and _verified_home(state)):
+                _write_marker_pair(state, slot.key)
+            return False
+        if not _write_marker_pair(displayed, slot.key):
+            if (tmux_ctl.swap_panes(
+                    state.agent_pane_id, state.placeholder_pane_id)
+                    and _verified_home(state)):
+                _write_marker_pair(state, slot.key)
+            return False
+
+        slot.swap_state = displayed
+        slot.pane_id = state.agent_pane_id
+        slot.display_parked = False
+        return True
 
     def return_home(self, slot: AgentSlot, *, release_keeper: bool = True) -> bool:
         state = slot.swap_state
@@ -753,6 +868,7 @@ class AgentDisplayTransport:
         slot.agent_tmux_name = None
         slot.swap_state = None
         slot.transport_kind = DisplayTransportKind.NESTED
+        slot.display_parked = False
         if release_keeper:
             self._drop_keeper_if_idle()
         return True
@@ -838,7 +954,8 @@ class AgentDisplayTransport:
 
     def displayed_real_pane(self, agent_tmux_name: str) -> str | None:
         slot = self.workspace.slot_for_agent(agent_tmux_name)
-        if slot is None or slot.swap_state is None:
+        if (slot is None or slot.swap_state is None
+                or slot.display_parked):
             return None
         return slot.swap_state.agent_pane_id
 

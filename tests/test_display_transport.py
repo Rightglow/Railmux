@@ -317,6 +317,92 @@ def test_successful_swap_out_and_home(rig):
     assert "railmux-keep-1" in fake.killed_sessions
 
 
+def test_compact_parking_keeps_agent_home_and_slot_placeholder_stable(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    state = workspace.primary.swap_state
+    assert state is not None
+
+    assert manager.park(workspace.primary)
+    assert workspace.primary.display_parked is True
+    assert workspace.primary.agent_tmux_name == "agent-a"
+    assert workspace.primary.pane_id == state.placeholder_pane_id
+    assert fake.panes[state.agent_pane_id].window_id == state.home_window_id
+    assert fake.panes[state.placeholder_pane_id].window_id == state.display_window_id
+    assert json.loads(
+        fake.window_options[
+            (state.display_window_id, "@railmux_swap_primary")]
+    )["phase"] == "parked"
+
+    assert manager.resume(workspace.primary)
+    assert workspace.primary.display_parked is False
+    assert workspace.primary.agent_tmux_name == "agent-a"
+    assert workspace.primary.pane_id == state.agent_pane_id
+    assert fake.panes[state.agent_pane_id].window_id == state.display_window_id
+    assert json.loads(
+        fake.window_options[
+            (state.display_window_id, "@railmux_swap_primary")]
+    )["phase"] == "displayed"
+
+
+def test_compact_park_swap_failure_leaves_agent_displayed(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    fake.fail_swap_at = len(fake.swap_calls) + 1
+
+    assert not manager.park(workspace.primary)
+    assert workspace.primary.display_parked is False
+    assert workspace.primary.pane_id == "%2"
+    assert fake.panes["%2"].window_id == "@1"
+
+
+def test_compact_park_marker_commit_failure_rolls_back_display(rig, monkeypatch):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    original = transport_mod._write_marker_pair
+    writes = 0
+
+    def fail_park_commit(state, slot_key):
+        nonlocal writes
+        writes += 1
+        return False if writes == 2 else original(state, slot_key)
+
+    monkeypatch.setattr(
+        transport_mod, "_write_marker_pair", fail_park_commit)
+
+    assert not manager.park(workspace.primary)
+    assert workspace.primary.display_parked is False
+    assert workspace.primary.pane_id == "%2"
+    assert fake.panes["%2"].window_id == "@1"
+
+
+def test_compact_resume_swap_failure_keeps_agent_parked_home(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    assert manager.park(workspace.primary)
+    fake.fail_swap_at = len(fake.swap_calls) + 1
+
+    assert not manager.resume(workspace.primary)
+    assert workspace.primary.display_parked is True
+    assert fake.panes["%2"].window_id == "@2"
+    assert fake.panes[workspace.primary.pane_id].window_id == "@1"
+
+
+def test_return_home_accepts_already_parked_agent(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    assert manager.park(workspace.primary)
+    placeholder = workspace.primary.pane_id
+
+    assert manager.return_home(workspace.primary)
+    assert fake.panes["%2"].window_id == "@2"
+    assert workspace.primary.pane_id == placeholder
+    assert workspace.primary.agent_tmux_name is None
+    assert workspace.primary.swap_state is None
+    assert workspace.primary.display_parked is False
+    assert not fake.window_options
+
+
 def test_repeated_a_b_a_switch_keeps_process_identity(rig):
     fake, workspace, manager = rig
     assert manager.attach(workspace.primary, "agent-a").ok

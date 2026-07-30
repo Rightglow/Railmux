@@ -21,6 +21,8 @@ from railmux.ui.workspace import (
     AgentSlot,
     DisplayTransportKind,
     WorkspaceLayout,
+    WorkspacePage,
+    WorkspacePresentation,
 )
 
 
@@ -828,6 +830,50 @@ def test_single_click_prepaints_sidebar_before_agent_transport_switch():
         slot, "cc-live", steal_focus=False)
     assert events[:4] == [
         "session:new-session", "running:cc-live", "draw", "attach"]
+
+
+def test_compact_background_attach_uses_full_target_then_returns_page():
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._workspace.presentation = WorkspacePresentation.COMPACT
+    app._workspace.compact_page = WorkspacePage.SIDEBAR
+    slot = app._workspace.secondary
+    slot.pane_id = "%3"
+    app._double_focus_visual_pending = False
+    app._paint_slot_active_tmux_target = MagicMock()
+    app._redraw_focus_state_now = MagicMock()
+    app._check_agent_slot_size = MagicMock()
+    app._set_active_tmux_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._modes = MagicMock()
+    app._modes.return_value.for_tmux_name.return_value = MagicMock(key="codex")
+    app._running = {
+        "new-session": SimpleNamespace(
+            key="new-session",
+            tmux_name="cx-live",
+            is_placeholder=False,
+            is_legacy=False,
+        ),
+    }
+    selected: list[WorkspacePage] = []
+    app._select_workspace_page = MagicMock(
+        side_effect=lambda page: selected.append(page) or True)
+    transport = MagicMock()
+
+    def attach(target_slot, _tmux_name):
+        assert selected == [WorkspacePage.SECONDARY]
+        target_slot.pane_id = "%3"
+        return AttachOutcome(True, DisplayTransportKind.SWAP)
+
+    transport.attach.side_effect = attach
+    app._display_transport_manager = transport
+
+    assert app._attach_agent_slot(slot, "cx-live", steal_focus=False)
+
+    assert selected == [WorkspacePage.SECONDARY, WorkspacePage.SIDEBAR]
+    assert slot.agent_tmux_name == "cx-live"
 
 
 def test_failed_attach_restores_prior_active_target_immediately():

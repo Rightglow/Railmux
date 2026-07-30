@@ -41,6 +41,14 @@ COMPACT_ENTER_WIDTH = 80
 COMPACT_ENTER_HEIGHT = 24
 COMPACT_EXIT_WIDTH = 84
 COMPACT_EXIT_HEIGHT = 26
+# Private controller handshake used by the SSH display helper before a wide
+# tmux window is physically narrowed into compact presentation.
+COMPACT_RESIZE_OPTION = "@railmux_compact_resize_v1"
+COMPACT_RESIZE_KEY = "F20"
+# tmux ``send-keys`` treats an unrecognized F20 name as the three literal
+# characters "F20". Send the canonical terminal sequence in literal mode so
+# Urwid consistently decodes the private input as ``f20``.
+COMPACT_RESIZE_SEQUENCE = "\x1b[34~"
 SINGLE_SIDEBAR_PERCENT = 30
 DUAL_SIDEBAR_PERCENT = 20
 DUAL_SIDEBAR_MIN_WIDTH = 30
@@ -198,6 +206,11 @@ class AgentSlot:
     last_size_class: str | None = None
     transport_kind: DisplayTransportKind = DisplayTransportKind.NESTED
     swap_state: SwapState | None = None
+    # In compact presentation an off-screen swap-owned agent may live back in
+    # its detached home window while its inert placeholder keeps the outer
+    # A1/A2 page position stable.  The agent session continues running; this
+    # flag describes display placement only.
+    display_parked: bool = False
 
     @property
     def is_open(self) -> bool:
@@ -219,6 +232,7 @@ class AgentSlot:
         self.last_size_class = None
         self.transport_kind = DisplayTransportKind.NESTED
         self.swap_state = None
+        self.display_parked = False
 
 
 class AgentWorkspace:
