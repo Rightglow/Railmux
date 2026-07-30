@@ -876,6 +876,63 @@ def test_compact_background_attach_uses_full_target_then_returns_page():
     assert slot.agent_tmux_name == "cx-live"
 
 
+def test_compact_first_attach_creates_inert_target_before_selecting_it(
+    monkeypatch,
+):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.presentation = WorkspacePresentation.COMPACT
+    app._workspace.compact_page = WorkspacePage.SIDEBAR
+    slot = app._workspace.primary
+    app._double_focus_visual_pending = False
+    app._paint_slot_active_tmux_target = MagicMock()
+    app._redraw_focus_state_now = MagicMock()
+    app._check_agent_slot_size = MagicMock()
+    app._set_active_tmux_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._schedule_scroll_acceleration = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._modes = MagicMock()
+    app._modes.return_value.for_tmux_name.return_value = MagicMock(key="claude")
+    app._running = {
+        "new-session": SimpleNamespace(
+            key="new-session",
+            tmux_name="cc-live",
+            is_placeholder=False,
+            is_legacy=False,
+        ),
+    }
+    events: list[str] = []
+    transport = MagicMock()
+
+    def create_primary():
+        events.append("create")
+        slot.pane_id = "%2"
+        return True
+
+    transport.create_primary.side_effect = create_primary
+
+    def select_page(page):
+        events.append(f"select:{page.value}")
+        assert slot.pane_id == "%2"
+        return True
+
+    app._select_workspace_page = MagicMock(side_effect=select_page)
+
+    def attach(target_slot, _tmux_name):
+        events.append("attach")
+        assert target_slot.pane_id == "%2"
+        return AttachOutcome(True, DisplayTransportKind.SWAP)
+
+    transport.attach.side_effect = attach
+    app._display_transport_manager = transport
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.pane_alive", lambda _pane: True)
+
+    assert app._attach_agent_slot(slot, "cc-live", steal_focus=True)
+    assert events[:3] == ["create", "select:primary", "attach"]
+
+
 def test_failed_attach_restores_prior_active_target_immediately():
     app = App.__new__(App)
     app._workspace = AgentWorkspace()

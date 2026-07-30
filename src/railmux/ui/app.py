@@ -2117,6 +2117,25 @@ class App:
                 if slot is workspace.secondary
                 else WorkspacePage.PRIMARY
             )
+            # A compact workspace can legitimately start with only the
+            # full-window sidebar.  Establish an inert display placeholder
+            # before selecting the target page; the transport cannot create
+            # it later because compact selection intentionally happens before
+            # the real provider is moved out of its detached home window.
+            if slot.pane_id is None or not tmux_ctl.pane_alive(slot.pane_id):
+                transport = self._display_transport()
+                created = (
+                    transport.create_primary()
+                    if slot is workspace.primary
+                    else (
+                        workspace.layout is not WorkspaceLayout.SINGLE
+                        and transport.create_secondary(workspace.layout)
+                    )
+                )
+                if not created:
+                    self._last_attach_failure_reason = (
+                        "compact target placeholder could not be created")
+                    return False
             # Never attach a provider into a hidden half-width placeholder.
             # Establish the target's full compact viewport before the display
             # transport moves or starts any provider pane.
