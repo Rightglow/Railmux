@@ -582,6 +582,7 @@ class TerminalSurface:
         self._local_status_text: str | None = None
         self._local_status_level = "info"
         self._local_status_bounds: tuple[int, int, int] | None = None
+        self._local_status_interruptible = False
 
     def set_physical_size(self, size: os.terminal_size) -> None:
         """Set the local viewport without changing the remote screen geometry."""
@@ -637,15 +638,27 @@ class TerminalSurface:
             self.stream.flush()
             self.mouse_active = False
 
-    def resume_mouse(self) -> None:
+    def resume_mouse(self, *, reassert: bool = False) -> None:
         """Restore local mouse reports after a bounded touch-input handoff."""
-        if not self.mouse_suspended:
+        if not self.mouse:
             return
         self.mouse_suspended = False
-        if self.active and not self.interaction_active and not self.mouse_active:
-            self.stream.write(b"\033[?1003h\033[?1006h")
+        if not self.active or self.interaction_active:
+            return
+        if reassert and self.mouse_active:
+            # Termux can retain its native touch/selection owner across a soft
+            # keyboard close even though DECSET 1003 remains logically active.
+            # Toggle both modes so the emulator returns gestures to Railmux.
+            self.stream.write(
+                b"\033[?1003l\033[?1006l\033[?1003h\033[?1006h"
+            )
             self.stream.flush()
-            self.mouse_active = True
+            return
+        if self.mouse_active:
+            return
+        self.stream.write(b"\033[?1003h\033[?1006h")
+        self.stream.flush()
+        self.mouse_active = True
 
     def show_startup(
         self,
@@ -701,7 +714,13 @@ class TerminalSurface:
         self.cursor_hidden = False
         self.interaction_active = True
 
-    def show_local_status(self, message: str, *, level: str = "info") -> None:
+    def show_local_status(
+        self,
+        message: str,
+        *,
+        level: str = "info",
+        interruptible: bool = False,
+    ) -> None:
         """Show local feedback without erasing Railmux's status-left brand."""
         self.start()
         safe = "".join(
@@ -710,6 +729,7 @@ class TerminalSurface:
         )
         self._local_status_text = safe
         self._local_status_level = level
+        self._local_status_interruptible = interruptible
         self.stream.write(self._render_local_status())
         self.stream.flush()
 
@@ -763,6 +783,14 @@ class TerminalSurface:
         """Forget local feedback before restoring the authoritative screen."""
         self._local_status_text = None
         self._local_status_bounds = None
+        self._local_status_interruptible = False
+
+    def dismiss_interruptible_local_status(self) -> bool:
+        """Let the first user action reveal Railmux's authoritative status."""
+        if not self._local_status_interruptible:
+            return False
+        self.clear_local_status()
+        return True
 
     def local_status_at(self, event: SgrMouseEvent) -> str | None:
         """Return the exact local status source rendered under a mouse event."""
@@ -905,8 +933,8 @@ class TerminalSurface:
         title = " Open remote path "
         rows = (
             f"{border}┌\033[1m{title}\033[22m{'─' * (inner - len(title))}┐{normal}",
-            middle("[1]", "Always open inside Railmux"),
-            middle("[2]", "Open inside Railmux this time"),
+            middle("[1]", "Always use Railmux managed Vim"),
+            middle("[2]", "Use Railmux managed Vim this time"),
             middle("[3]", "Always open in a separate terminal"),
             middle("[4]", "Open in a separate terminal this time"),
             middle("[Esc]", "Cancel"),
@@ -2225,6 +2253,14 @@ def run(args: argparse.Namespace) -> int:
         nonlocal selection_clear_at
         nonlocal path_open_prompt, path_open_prompt_mouse_button
         nonlocal local_status_mouse_button
+        if surface.dismiss_interruptible_local_status():
+            history_info_until = None
+            if latest_screen is not None:
+                surface.paint(
+                    full_repaint(latest_screen),
+                    history.overlays(),
+                    selection.segments(),
+                )
         if isinstance(part, SgrMouseEvent):
             if local_status_mouse_button is not None and not part.pressed:
                 suppress = part.button & 3 == local_status_mouse_button
@@ -2605,8 +2641,10 @@ def run(args: argparse.Namespace) -> int:
     surface.show_local_status(
         "Ctrl-] disconnects · Ctrl-B d detaches · "
         f"mouse/copy {'off' if args.no_mouse else 'on'} · "
-        f"reconnect {'on' if args.reconnect else 'off'}"
+        f"reconnect {'on' if args.reconnect else 'off'}",
+        interruptible=True,
     )
+    history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
     try:
         with RawTerminal(sys.stdin.fileno()):
             while True:
@@ -2659,7 +2697,7 @@ def run(args: argparse.Namespace) -> int:
                         )
                     elif observed_size == current_size:
                         if touch_keyboard.observe_projection(False):
-                            surface.resume_mouse()
+                            surface.resume_mouse(reassert=True)
                         # The soft keyboard closed. Restore the complete
                         # logical screen even if no remote patch is pending.
                         surface.set_physical_size(observed_size)
@@ -2672,8 +2710,11 @@ def run(args: argparse.Namespace) -> int:
                             )
                             redraw_local_prompt()
                     else:
-                        if touch_keyboard.cancel():
-                            surface.resume_mouse()
+                        keyboard_projected = touch_keyboard.keyboard_projected
+                        if touch_keyboard.observe_projection(False):
+                            surface.resume_mouse(reassert=True)
+                        elif touch_keyboard.cancel():
+                            surface.resume_mouse(reassert=keyboard_projected)
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if history.active and latest_screen is not None:
@@ -2894,8 +2935,9 @@ def run(args: argparse.Namespace) -> int:
                         for key_part in split_page_key_input(part):
                             handle_terminal_part(key_part, set())
                 now = time.monotonic()
+                keyboard_projected = touch_keyboard.keyboard_projected
                 if touch_keyboard.expire(now):
-                    surface.resume_mouse()
+                    surface.resume_mouse(reassert=keyboard_projected)
                     if latest_screen is not None:
                         surface.paint(
                             full_repaint(latest_screen),

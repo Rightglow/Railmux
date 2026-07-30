@@ -89,12 +89,18 @@ class TermuxTouchKeyboard:
         self.input_row_radius = input_row_radius
         self._active = False
         self._keyboard_projected = False
+        self._close_reassert_pending = False
         self._deadline: float | None = None
         self._release_button: int | None = None
 
     @property
     def active(self) -> bool:
         return self._active
+
+    @property
+    def keyboard_projected(self) -> bool:
+        """Whether Termux has reported the shortened keyboard viewport."""
+        return self._keyboard_projected or self._close_reassert_pending
 
     @staticmethod
     def _is_plain_left_press(event: SgrMouseEvent) -> bool:
@@ -129,6 +135,7 @@ class TermuxTouchKeyboard:
         if (
             not self.enabled
             or self._active
+            or self._close_reassert_pending
             or pane_frozen
             or not cursor_visible
             or clicked_pane_id is None
@@ -155,6 +162,8 @@ class TermuxTouchKeyboard:
         now: float | None = None,
     ) -> bool:
         """Track keyboard geometry and request mouse restore once it opens."""
+        if not projected and self._close_reassert_pending:
+            return self.cancel()
         if not self._active:
             return False
         if projected:
@@ -187,13 +196,24 @@ class TermuxTouchKeyboard:
         if not self._active or self._deadline is None:
             return False
         checked_at = time.monotonic() if now is None else now
-        return self.cancel() if checked_at >= self._deadline else False
+        return (
+            self.cancel(
+                preserve_close_reassert=self._keyboard_projected,
+            )
+            if checked_at >= self._deadline
+            else False
+        )
 
-    def cancel(self) -> bool:
+    def cancel(self, *, preserve_close_reassert: bool = False) -> bool:
         """Clear local touch state and report whether tracking must resume."""
-        was_active = self._active
+        was_active = self._active or self._close_reassert_pending
+        keep_close_reassert = (
+            preserve_close_reassert
+            and (self._keyboard_projected or self._close_reassert_pending)
+        )
         self._active = False
         self._keyboard_projected = False
+        self._close_reassert_pending = keep_close_reassert
         self._deadline = None
         self._release_button = None
         return was_active
@@ -564,6 +584,166 @@ def _rows_are_wrapped(
     return rows[upper][-1] != " " and rows[upper + 1][0] not in (" ", None)
 
 
+def _row_text(cells: tuple[str | None, ...]) -> str:
+    """Return plain row text while preserving ordinary cell spacing."""
+    return "".join(cell or "" for cell in cells)
+
+
+def _display_column(text: str, character_index: int) -> int:
+    return sum(_display_width(character) for character in text[:character_index])
+
+
+def _hard_wrapped_target(
+    rows: tuple[tuple[str | None, ...], ...],
+    row: int,
+    column: int,
+    *,
+    route: HistorySnapshot,
+) -> ClickTarget | None:
+    """Join an indented path that an agent UI rendered across hard newlines.
+
+    Codex and Claude sometimes wrap a long path as two real terminal rows,
+    indenting the continuation. The first row can itself be an existing
+    directory, so accepting it early opens the wrong target. Only join a
+    bounded sequence when the first target is the final token on its row and
+    every continuation is the sole indented token on the next row.
+    """
+    if not 0 <= row < len(rows) or route.width <= 0:
+        return None
+    best: ClickTarget | None = None
+    first_candidate = max(0, row - 7)
+    for first in range(first_candidate, row + 1):
+        first_text = _row_text(rows[first])
+        tail = re.search(r"""[^\s<>"'`]+\s*$""", first_text)
+        if tail is None:
+            continue
+        tail_text = tail.group(0).rstrip()
+        if not tail_text:
+            continue
+        tail_end = tail.start() + len(tail_text)
+        tail_column = _display_column(first_text, tail_end - 1)
+        target = click_target_at(
+            rows[first],
+            tail_column,
+            pane_id=route.pane_id or "",
+        )
+        if (
+            target is None
+            or target.highlight_column is None
+            or not target.highlight_text
+        ):
+            continue
+        first_fragment = target.highlight_text.decode(
+            "utf-8", errors="replace"
+        )
+        fragments: list[tuple[int, int, str]] = [
+            (first, target.highlight_column, first_fragment)
+        ]
+        joined = first_fragment
+        previous_end = target.highlight_column + sum(
+            _display_width(character) for character in first_fragment
+        )
+        for following in range(first + 1, min(len(rows), first + 8)):
+            following_text = _row_text(rows[following])
+            continuation = re.fullmatch(
+                r"""(\s{0,8})([^\s<>"'`]+)\s*""",
+                following_text,
+            )
+            if continuation is None:
+                break
+            indent, fragment = continuation.groups()
+            fragment, _start, _end = _trim_click_token(
+                fragment,
+                len(indent),
+                len(indent) + len(fragment),
+            )
+            if (
+                not fragment
+                or (
+                    fragment[0] not in "._~"
+                    and not fragment[0].isalnum()
+                )
+                or (
+                    "/" not in fragment
+                    and _path_parts(fragment) is None
+                )
+            ):
+                break
+            # A trailing slash explicitly promises a continuation. Otherwise
+            # require the prior fragment to end close to the pane edge, which
+            # distinguishes visual wrapping from unrelated adjacent lines.
+            explicit_continuation = joined.endswith(("/", "-"))
+            if (
+                not explicit_continuation
+                and route.width - previous_end > 8
+            ):
+                break
+            fragment_column = _display_column(
+                following_text, len(indent)
+            )
+            fragments.append((following, fragment_column, fragment))
+            joined += fragment
+            previous_end = fragment_column + sum(
+                _display_width(character) for character in fragment
+            )
+            if not first <= row <= following:
+                continue
+            clicked_fragment = next(
+                (
+                    (fragment_row, fragment_start, fragment_text)
+                    for fragment_row, fragment_start, fragment_text in fragments
+                    if fragment_row == row
+                ),
+                None,
+            )
+            if clicked_fragment is None:
+                continue
+            _fragment_row, fragment_start, fragment_text = clicked_fragment
+            fragment_width = sum(
+                _display_width(character) for character in fragment_text
+            )
+            if not fragment_start <= column < fragment_start + fragment_width:
+                continue
+            if target.kind == "url":
+                parsed = urlsplit(joined)
+                if (
+                    parsed.scheme.lower() not in ("http", "https")
+                    or parsed.hostname is None
+                    or len(joined.encode("utf-8")) > 8192
+                ):
+                    continue
+                value = joined
+                line = None
+                target_column = None
+            else:
+                path = _path_parts(joined)
+                if path is None:
+                    continue
+                value, line, target_column = path
+            segments = tuple(
+                (
+                    route.y + fragment_row,
+                    route.x + fragment_start,
+                    fragment_text.encode("utf-8"),
+                )
+                for fragment_row, fragment_start, fragment_text in fragments
+            )
+            candidate = ClickTarget(
+                target.kind,
+                value,
+                route.pane_id or "",
+                line,
+                target_column,
+                highlight_row=segments[0][0],
+                highlight_column=segments[0][1],
+                highlight_text=segments[0][2],
+                highlight_segments=segments,
+            )
+            if best is None or len(candidate.value) > len(best.value):
+                best = candidate
+    return best
+
+
 def _highlight_runs(
     target: ClickTarget,
     *,
@@ -632,6 +812,14 @@ def _target_in_rows(
     """Resolve a semantic target across one bounded visual-wrap chain."""
     if not 0 <= row < len(rows) or route.width <= 0:
         return None
+    hard_wrapped = _hard_wrapped_target(
+        rows,
+        row,
+        column,
+        route=route,
+    )
+    if hard_wrapped is not None:
+        return hard_wrapped
     first = row
     while (
         first > 0

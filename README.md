@@ -636,10 +636,12 @@ briefly flashes when clicked. URLs open in the initiating machine's default
 browser.
 
 Paths are checked read-only against the remote pane's current working
-directory. The default `path_open = "ask"` dialog offers **Always inside
-Railmux**, **Inside this time**, **Always separate terminal**, and **Separate
-terminal this time**. Persistent behavior can be changed under **More →
-Options → Clicked paths in railmux ssh**.
+directory. The default `path_open = "ask"` dialog makes the inside choice
+explicit: it opens files directly in Railmux's managed Vim. It offers
+**Always use Railmux managed Vim**, **Use Railmux managed Vim this time**,
+**Always separate terminal**, and **Separate terminal this time**. Persistent
+behavior can be changed under **More → Options → Clicked paths in railmux
+ssh**, where the inside choice is likewise labelled **managed Vim**.
 
 The inside-Railmux choice gives each agent slot one reusable shell and one
 reusable Vim viewer below it. `t` selects the shell and `T` returns to Vim.

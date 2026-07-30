@@ -307,6 +307,7 @@ def test_options_render_current_policies_and_action_legend():
     assert "Railmux updates" in text
     assert "Claude history in railmux ssh" in text
     assert "Clicked paths in railmux ssh" in text
+    assert "Inside · managed Vim" in text
     assert "Local transcript" in text
     assert "[x] Always" in text
     assert "[x] Ask every time" in text

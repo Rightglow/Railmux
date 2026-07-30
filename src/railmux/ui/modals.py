@@ -802,7 +802,7 @@ class OptionsModal(urwid.WidgetWrap):
                 "external": "new local terminal SSHed to the same remote host",
             },
             labels=(
-                ("internal", "Inside Railmux"),
+                ("internal", "Inside · managed Vim"),
                 ("ask", "Ask every time"),
                 ("external", "Separate terminal"),
             ),

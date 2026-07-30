@@ -742,6 +742,121 @@ def test_local_text_selection_recognizes_wrapped_path_from_second_row():
     assert action.open_target.value == "/home/user/long/file.py"
 
 
+def test_local_text_selection_joins_agent_indented_hard_wrapped_path():
+    route = HistorySnapshot(1, "%8", 20, 2, 50, 2)
+    source = SelectionSource(
+        route,
+        (
+            b"sidebar".ljust(20)
+            + b"Report: /home/user/project/",
+            b"sidebar".ljust(20)
+            + b"    results/index.html             ",
+        ),
+        20,
+    )
+    selection = LocalTextSelection()
+    hover = SgrMouseEvent(b"hover", 35, 30, 4, True)
+
+    assert selection.hover(hover, source)
+    assert selection.segments() == (
+        (2, 28, b"/home/user/project/"),
+        (3, 24, b"results/index.html"),
+    )
+
+    selection.pointer_event(
+        SgrMouseEvent(b"down", 0, 30, 4, True),
+        source,
+    )
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 30, 4, False),
+        source,
+    )
+    assert action.open_target is not None
+    assert action.open_target.value == (
+        "/home/user/project/results/index.html"
+    )
+    assert action.open_target.highlight_segments == (
+        (2, 28, b"/home/user/project/"),
+        (3, 24, b"results/index.html"),
+    )
+
+    first_row_selection = LocalTextSelection()
+    first_row_selection.pointer_event(
+        SgrMouseEvent(b"down-first", 0, 35, 3, True),
+        source,
+    )
+    first_row_action = first_row_selection.pointer_event(
+        SgrMouseEvent(b"up-first", 0, 35, 3, False),
+        source,
+    )
+    assert first_row_action.open_target is not None
+    assert first_row_action.open_target.value == action.open_target.value
+
+
+def test_local_text_selection_joins_indented_path_split_inside_name():
+    route = HistorySnapshot(1, "%8", 0, 0, 50, 2)
+    source = SelectionSource(
+        route,
+        (
+            b"Report: /home/user/TensorRT-",
+            b"    LLM/results/index.html",
+        ),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    assert selection.hover(
+        SgrMouseEvent(b"hover", 35, 8, 2, True),
+        source,
+    )
+    assert selection.segments() == (
+        (0, 8, b"/home/user/TensorRT-"),
+        (1, 4, b"LLM/results/index.html"),
+    )
+
+
+def test_local_text_selection_does_not_join_adjacent_path_list_items():
+    route = HistorySnapshot(1, "%8", 0, 0, 50, 2)
+    source = SelectionSource(
+        route,
+        (
+            b"First: /home/user/first.txt",
+            b"    sibling/second.txt",
+        ),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    assert selection.hover(
+        SgrMouseEvent(b"hover", 35, 10, 1, True),
+        source,
+    )
+    assert selection.segments() == (
+        (0, 7, b"/home/user/first.txt"),
+    )
+
+
+def test_local_text_selection_does_not_append_indented_prose_to_directory():
+    route = HistorySnapshot(1, "%8", 0, 0, 50, 2)
+    source = SelectionSource(
+        route,
+        (
+            b"Directory: /home/user/project/",
+            b"    Summary",
+        ),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    assert selection.hover(
+        SgrMouseEvent(b"hover", 35, 20, 1, True),
+        source,
+    )
+    assert selection.segments() == (
+        (0, 11, b"/home/user/project/"),
+    )
+
+
 def test_local_text_selection_recognizes_wrapped_url_from_second_row():
     route = HistorySnapshot(1, "%8", 0, 0, 18, 2)
     source = SelectionSource(
@@ -1151,6 +1266,24 @@ def test_terminal_surface_can_temporarily_yield_and_restore_mouse():
     assert restored.endswith(b"\033[?1003h\033[?1006h")
 
 
+def test_terminal_surface_reasserts_mouse_after_termux_keyboard_closes():
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream)
+
+    surface.start()
+    surface.suspend_mouse()
+    surface.resume_mouse()
+    stream.seek(0)
+    stream.truncate()
+    surface.resume_mouse(reassert=True)
+
+    assert stream.getvalue() == (
+        b"\033[?1003l\033[?1006l\033[?1003h\033[?1006h"
+    )
+    assert surface.mouse_active
+    assert not surface.mouse_suspended
+
+
 def test_termux_detection_uses_local_environment_not_terminal_geometry():
     assert is_termux_environment({"TERMUX_VERSION": "0.118"})
     assert is_termux_environment({"PREFIX": "/data/data/com.termux/files/usr/"})
@@ -1253,8 +1386,10 @@ def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
     ).handled
     assert not touch.keyboard_input()
     assert touch.active
+    assert touch.keyboard_projected
     assert touch.observe_projection(False)
     assert not touch.active
+    assert not touch.keyboard_projected
 
 
 def test_termux_keyboard_projection_state_has_a_bounded_fallback():
@@ -1273,6 +1408,12 @@ def test_termux_keyboard_projection_state_has_a_bounded_fallback():
     assert not touch.expire(15.9)
     assert touch.expire(16.0)
     assert not touch.active
+    # Expiration restores mouse ownership immediately but retains no timer or
+    # input capture. A later close resize still requests the Termux mode
+    # reassertion that was missing from the original implementation.
+    assert touch.keyboard_projected
+    assert touch.observe_projection(False)
+    assert not touch.keyboard_projected
 
 
 def test_termux_prompt_tap_times_out_when_keyboard_does_not_open():
@@ -4141,6 +4282,36 @@ def test_local_status_is_one_clickable_source_and_survives_remote_paint():
     assert surface.local_status_at(
         SgrMouseEvent(b"down", 0, 30, 4, True)
     ) is None
+
+
+def test_interruptible_connection_status_yields_to_first_user_action():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.show_local_status(
+        "Ctrl-] disconnects · reconnect on",
+        interruptible=True,
+    )
+
+    assert surface.dismiss_interruptible_local_status()
+    assert not surface.dismiss_interruptible_local_status()
+    assert surface.local_status_at(
+        SgrMouseEvent(b"down", 0, 1, 1, True)
+    ) is None
+
+    surface.show_local_status("Checking remote path…")
+    assert not surface.dismiss_interruptible_local_status()
+
+
+def test_path_open_prompt_names_the_inside_surface_as_managed_vim():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.set_physical_size(os.terminal_size((60, 12)))
+
+    surface.show_path_open_prompt()
+
+    painted = output.getvalue()
+    assert b"Always use Railmux managed Vim" in painted
+    assert b"Use Railmux managed Vim this time" in painted
 
 
 def test_claude_history_prompt_is_local_bounded_and_mouse_selectable():

@@ -129,8 +129,14 @@ on the next tap. History overlays, hidden cursors, sidebars, modals, previews,
 and other panes fail closed. Mouse reporting resumes as soon as a projected
 soft keyboard is observed—the keyboard is already open and no longer needs
 pointer ownership—or after the first keyboard input when no resize is
-observable. The projection state remains bounded so a missing or inexact
-keyboard-close resize cannot leave touch input permanently owned by Termux.
+observable. When the projected viewport closes, the client toggles and
+reasserts its DEC mouse modes rather than trusting Termux's retained logical
+mode bit; this returns drag and click ownership to Railmux even when Termux
+keeps native touch handling after the resize. The projection state remains
+bounded so a missing or inexact keyboard-close resize cannot leave touch input
+permanently owned by Termux. If that bounded timer expires while the keyboard
+is still open, only a passive close-reassert marker remains; it captures no
+input and is consumed by the later usable resize.
 Desktop terminals and direct Railmux launches never enter this path.
 
 Managed Claude Code panes may advertise a verified transcript source without
@@ -794,10 +800,16 @@ A clean click candidate in the already-focused agent route may instead become
 a client-owned semantic open. Bounded visible `http://` and `https://` tokens
 are opened locally and never sent to the remote shell. A bounded Unix-style
 path sends a typed protocol request containing only the visible pane ID and raw
-token. The server accepts only a currently visible, non-controller agent pane,
-resolves the correct provider pane's current working directory (including
-identity-validated nested transport), and returns only a readable absolute path
-plus file/directory/other classification. It never opens or mutates the path.
+token. Besides terminal soft wraps, the recognizer can join a bounded path-only
+continuation that Codex or Claude rendered as a real indented newline; every
+physical fragment remains a separate highlight segment. This prevents an
+existing directory at the end of the first row from winning over the intended
+file on the next row. It does not join adjacent list items or indented prose.
+The server accepts only a currently visible, non-controller agent pane, resolves
+the correct provider pane's current working directory (including
+identity-validated nested transport), and returns only a readable absolute
+path plus file/directory/other classification. It never opens or mutates the
+path.
 The local launcher constructs an argv-only SSH invocation without `shell=True`;
 supported text files, including HTML, use remote Vim, and all other cases enter
 the containing directory. Unsupported local terminal launchers copy the

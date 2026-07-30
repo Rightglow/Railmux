@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607304] - 2026-07-30
+
+### Fixed
+
+- Reassert Termux mouse-reporting modes after the soft-keyboard viewport
+  closes, returning click and drag control to Railmux instead of leaving
+  native terminal touch handling active.
+- Reassemble agent-rendered paths across bounded indented hard newlines,
+  highlight every physical fragment, and open the complete file in the
+  existing managed Vim rather than treating its first-row directory as the
+  target.
+- Expire the initial `railmux ssh` connection hint and dismiss it on the first
+  user action so Railmux pane-focus and status messages are immediately
+  visible.
+
+### Changed
+
+- Label the inside clicked-path destination as Railmux's managed Vim in both
+  the first-use dialog and Options.
+
 ## [0.2.19.dev202607303] - 2026-07-30
 
 ### Fixed
