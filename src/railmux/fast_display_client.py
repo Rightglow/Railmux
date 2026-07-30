@@ -2465,6 +2465,11 @@ def run(args: argparse.Namespace) -> int:
                     latest_screen.cursor_y,
                 )
             )
+            status_row = (
+                compact_status_row(latest_screen)
+                if latest_screen is not None
+                else None
+            )
             touch_action = touch_keyboard.pointer_event(
                 part,
                 clicked_pane_id=clicked_pane_id,
@@ -2474,6 +2479,7 @@ def run(args: argparse.Namespace) -> int:
                     False if latest_screen is None else latest_screen.cursor_visible
                 ),
                 pane_frozen=history.pane_is_frozen(clicked_pane_id),
+                navigation_row=status_row,
                 now=time.monotonic(),
             )
             if touch_action.suspend_mouse:
@@ -2509,11 +2515,7 @@ def run(args: argparse.Namespace) -> int:
                 replay_action = history.pointer_event(
                     replay_event,
                     focused_pane_id,
-                    status_row=(
-                        compact_status_row(latest_screen)
-                        if latest_screen is not None
-                        else None
-                    ),
+                    status_row=status_row,
                     now=time.monotonic(),
                 )
                 apply_history_action(
@@ -2558,11 +2560,7 @@ def run(args: argparse.Namespace) -> int:
             action = history.pointer_event(
                 part,
                 focused_pane_id,
-                status_row=(
-                    compact_status_row(latest_screen)
-                    if latest_screen is not None
-                    else None
-                ),
+                status_row=status_row,
                 now=time.monotonic(),
             )
             apply_history_action(

@@ -1425,6 +1425,26 @@ def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
     assert not touch.keyboard_projected
 
 
+def test_termux_compact_navigation_never_yields_touch_to_soft_keyboard():
+    touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
+    press = SgrMouseEvent(b"press", 0, 4, 22, True)
+
+    action = touch.pointer_event(
+        press,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        navigation_row=22,
+        now=5.0,
+    )
+
+    assert not action.handled
+    assert not action.suspend_mouse
+    assert not touch.active
+
+
 def test_termux_keyboard_projection_state_has_a_bounded_fallback():
     touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
     touch.pointer_event(

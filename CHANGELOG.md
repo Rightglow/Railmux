@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607307] - 2026-07-30
+
+### Fixed
+
+- Kept Termux compact `R`/`A1`/`A2` taps on the mouse-navigation path even
+  when a just-restored workspace still has stale agent-route geometry, instead
+  of accidentally yielding the tap to the soft keyboard.
+
 ## [0.2.19.dev202607306] - 2026-07-30
 
 ### Fixed
@@ -1451,7 +1459,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607306...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607307...HEAD
+[0.2.19.dev202607307]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607306...v0.2.19.dev202607307
 [0.2.19.dev202607306]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607305...v0.2.19.dev202607306
 [0.2.19.dev202607305]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607304...v0.2.19.dev202607305
 [0.2.19.dev202607304]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607303...v0.2.19.dev202607304

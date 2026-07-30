@@ -122,6 +122,7 @@ class TermuxTouchKeyboard:
         cursor_y: int,
         cursor_visible: bool,
         pane_frozen: bool,
+        navigation_row: int | None = None,
         now: float | None = None,
     ) -> TouchKeyboardAction:
         """Consume a prompt tap and its paired release when assistance applies."""
@@ -143,6 +144,7 @@ class TermuxTouchKeyboard:
             or not cursor_visible
             or clicked_pane_id is None
             or clicked_pane_id != cursor_pane_id
+            or (navigation_row is not None and event.y == navigation_row)
             or abs((event.y - 1) - cursor_y) > self.input_row_radius
             or not self._is_plain_left_press(event)
         ):
