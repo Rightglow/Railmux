@@ -122,13 +122,16 @@ copy-mode coalescer, and attaching to an existing Railmux session never changes
 that session's setting.
 
 The local SSH client recognizes Termux only from its local environment, never
-from terminal dimensions or the remote host. An unmodified left press within
-one row of the visible input cursor, inside the same verified live agent route,
-temporarily disables local mouse reporting so Termux can open its soft keyboard
-on the next tap. Compact status navigation is classified before this prompt
-gesture, so stale agent geometry can never turn an `R`/`A1`/`A2` tap into a
-keyboard handoff. History overlays, hidden cursors, sidebars, modals, previews,
-and other panes fail closed. Mouse reporting resumes as soon as a projected
+from terminal dimensions or the remote host. Termux uses DECSET 1002 button
+tracking plus SGR coordinates because its emulator does not implement DECSET
+1003 any-event tracking; desktop clients retain 1003 for pointer hover. An
+unmodified left press within one row of the visible input cursor, inside the
+same verified live agent route, temporarily disables local mouse reporting so
+Termux can open its soft keyboard on the next tap. Compact status navigation is
+classified before this prompt gesture, so stale agent geometry can never turn
+an `R`/`A1`/`A2` tap into a keyboard handoff. History overlays, hidden cursors,
+sidebars, modals, previews, and other panes fail closed. Mouse reporting resumes
+as soon as a projected
 soft keyboard is observed—the keyboard is already open and no longer needs
 pointer ownership—or after the first keyboard input when no resize is
 observable. When the projected viewport closes, the client toggles and

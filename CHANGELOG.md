@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607308] - 2026-07-30
+
+### Fixed
+
+- Restored Termux taps, swipes, compact navigation, and session activation by
+  using the button-event mouse mode that Termux actually implements. Desktop
+  clients retain any-event tracking for URL/path hover.
+
 ## [0.2.19.dev202607307] - 2026-07-30
 
 ### Fixed
@@ -1459,7 +1467,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607307...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607308...HEAD
+[0.2.19.dev202607308]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607307...v0.2.19.dev202607308
 [0.2.19.dev202607307]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607306...v0.2.19.dev202607307
 [0.2.19.dev202607306]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607305...v0.2.19.dev202607306
 [0.2.19.dev202607305]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607304...v0.2.19.dev202607305

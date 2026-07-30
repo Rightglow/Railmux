@@ -1301,7 +1301,7 @@ def test_terminal_surface_can_temporarily_yield_and_restore_mouse():
 
 def test_terminal_surface_reasserts_mouse_after_termux_keyboard_closes():
     stream = io.BytesIO()
-    surface = TerminalSurface(stream)
+    surface = TerminalSurface(stream, mouse_hover=False)
 
     surface.start()
     surface.suspend_mouse()
@@ -1311,10 +1311,25 @@ def test_terminal_surface_reasserts_mouse_after_termux_keyboard_closes():
     surface.resume_mouse(reassert=True)
 
     assert stream.getvalue() == (
-        b"\033[?1003l\033[?1006l\033[?1003h\033[?1006h"
+        b"\033[?1002l\033[?1006l\033[?1002h\033[?1006h"
     )
     assert surface.mouse_active
     assert not surface.mouse_suspended
+
+
+def test_terminal_surface_termux_route_never_requests_unsupported_any_event_mode():
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+
+    surface.start()
+    surface.suspend_mouse()
+    surface.resume_mouse()
+    surface.close()
+
+    rendered = stream.getvalue()
+    assert rendered.count(b"\033[?1002h\033[?1006h") == 2
+    assert rendered.count(b"\033[?1002l\033[?1006l") == 2
+    assert b"?1003" not in rendered
 
 
 def test_termux_detection_uses_local_environment_not_terminal_geometry():

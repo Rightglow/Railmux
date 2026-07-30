@@ -567,9 +567,16 @@ class RawTerminal:
 class TerminalSurface:
     """Paint a server-rendered screen and unconditionally restore the TTY."""
 
-    def __init__(self, stream: BinaryIO, *, mouse: bool = True) -> None:
+    def __init__(
+        self,
+        stream: BinaryIO,
+        *,
+        mouse: bool = True,
+        mouse_hover: bool = True,
+    ) -> None:
         self.stream = stream
         self.mouse = mouse
+        self.mouse_tracking_mode = 1003 if mouse_hover else 1002
         self.active = False
         self.interaction_active = False
         self.mouse_active = False
@@ -583,6 +590,16 @@ class TerminalSurface:
         self._local_status_level = "info"
         self._local_status_bounds: tuple[int, int, int] | None = None
         self._local_status_interruptible = False
+
+    def _mouse_mode(self, enabled: bool) -> bytes:
+        suffix = b"h" if enabled else b"l"
+        return (
+            b"\033[?"
+            + str(self.mouse_tracking_mode).encode("ascii")
+            + suffix
+            + b"\033[?1006"
+            + suffix
+        )
 
     def set_physical_size(self, size: os.terminal_size) -> None:
         """Set the local viewport without changing the remote screen geometry."""
@@ -619,10 +636,11 @@ class TerminalSurface:
             and not self.mouse_active
             and not self.mouse_suspended
         ):
-            # Any-event tracking adds local URL/path hover while retaining
-            # wheel, click, and drag reports. SGR mode preserves coordinates
-            # beyond the legacy X10 limit.
-            controls.append(b"\033[?1003h\033[?1006h")
+            # Any-event tracking adds desktop URL/path hover. Termux supports
+            # button-event mode but does not implement DECSET 1003, so its
+            # touch client uses DECSET 1002. SGR mode preserves coordinates
+            # beyond the legacy X10 limit on both routes.
+            controls.append(self._mouse_mode(True))
             self.mouse_active = True
         if controls:
             self.stream.write(b"".join(controls))
@@ -634,7 +652,7 @@ class TerminalSurface:
             return
         self.mouse_suspended = True
         if self.mouse_active:
-            self.stream.write(b"\033[?1003l\033[?1006l")
+            self.stream.write(self._mouse_mode(False))
             self.stream.flush()
             self.mouse_active = False
 
@@ -647,16 +665,15 @@ class TerminalSurface:
             return
         if reassert and self.mouse_active:
             # Termux can retain its native touch/selection owner across a soft
-            # keyboard close even though DECSET 1003 remains logically active.
-            # Toggle both modes so the emulator returns gestures to Railmux.
-            self.stream.write(
-                b"\033[?1003l\033[?1006l\033[?1003h\033[?1006h"
-            )
+            # keyboard close even though DECSET 1002 remains logically active.
+            # Toggle tracking and SGR so the emulator returns gestures to
+            # Railmux.
+            self.stream.write(self._mouse_mode(False) + self._mouse_mode(True))
             self.stream.flush()
             return
         if self.mouse_active:
             return
-        self.stream.write(b"\033[?1003h\033[?1006h")
+        self.stream.write(self._mouse_mode(True))
         self.stream.flush()
         self.mouse_active = True
 
@@ -704,7 +721,7 @@ class TerminalSurface:
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
         if self.mouse_active:
-            controls.append(b"\033[?1003l\033[?1006l")
+            controls.append(self._mouse_mode(False))
         controls.append(b"\033[2J\033[H")
         self.stream.write(b"".join(controls))
         self.stream.flush()
@@ -1175,7 +1192,7 @@ class TerminalSurface:
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
         if self.mouse_active:
-            controls.append(b"\033[?1003l\033[?1006l")
+            controls.append(self._mouse_mode(False))
         controls.append(b"\033[?1049l")
         self.stream.write(b"".join(controls))
         self.stream.flush()
@@ -2075,7 +2092,12 @@ def run(args: argparse.Namespace) -> int:
     except BaseException:
         recorder.finish("startup_failed", SshDisplayStats())
         raise
-    surface = TerminalSurface(sys.stdout.buffer, mouse=not args.no_mouse)
+    termux_touch = is_termux_environment()
+    surface = TerminalSurface(
+        sys.stdout.buffer,
+        mouse=not args.no_mouse,
+        mouse_hover=not termux_touch,
+    )
     surface.show_startup(current_size, "Connecting to remote host…")
     try:
         process = prepare_remote_process(
@@ -2103,7 +2125,7 @@ def run(args: argparse.Namespace) -> int:
     history = LocalHistoryView(history_limit)
     selection = LocalTextSelection()
     touch_keyboard = TermuxTouchKeyboard(
-        enabled=not args.no_mouse and is_termux_environment()
+        enabled=not args.no_mouse and termux_touch
     )
     selector = selectors.DefaultSelector()
     selector.register(process.stdout.fileno(), selectors.EVENT_READ, "remote")
