@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.20] - 2026-07-30
+
 ### Fixed
 
 - Re-arm bracketed-paste and focus-event modes across automatic SSH reconnects,
@@ -1527,7 +1529,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.20...HEAD
+[0.2.20]: https://github.com/Rightglow/Railmux/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19
 [0.2.19.dev202607308]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607307...v0.2.19.dev202607308
 [0.2.19.dev202607307]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607306...v0.2.19.dev202607307
