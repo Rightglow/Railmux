@@ -221,7 +221,12 @@ immediately. Only frames painted by the current helper qualify another
 automatic retry. The last valid frame and bounded history cache may remain
 painted with a local reconnect status; a new decoder/model accepts only a fresh
 keyframe, and cached pane content is reusable only after a fresh multi-line
-timeline anchor, as the new display authority.
+timeline anchor, as the new display authority. Before replacement, the local
+surface disables the old helper's bracketed-paste and focus-event modes so the
+fresh keyframe must re-arm them and can deliver focus-in to the new tmux
+client. Non-interactive retry SSH diagnostics never write directly into the
+retained alternate-screen surface; bounded Railmux status remains its only
+reconnect feedback.
 
 ## Modes are registered providers, not a boolean
 

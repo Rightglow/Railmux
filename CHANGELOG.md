@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Re-arm bracketed-paste and focus-event modes across automatic SSH reconnects,
+  and keep retry diagnostics from writing through the retained terminal
+  surface, so typing after a recovered connection no longer corrupts the
+  display.
+
 ## [0.2.19] - 2026-07-30
 
 ### Added

@@ -1847,6 +1847,36 @@ def test_mode_only_patch_reconciles_terminal_modes_once_and_restores_them():
     assert rendered.index(b"\033[?1004l") < rendered.index(b"\033[?1049l")
 
 
+def test_reconnect_releases_and_rearms_remote_input_modes():
+    requested = TerminalMode.BRACKETED_PASTE | TerminalMode.FOCUS_EVENTS
+    screen = AppliedScreen(
+        width=4,
+        height=2,
+        cursor_x=1,
+        cursor_y=0,
+        cursor_visible=True,
+        terminal_modes=requested,
+        rows=(b"one", b"two"),
+        changed_rows=(0, 1),
+        clear=True,
+    )
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream)
+
+    assert surface.paint(screen) is True
+    surface.show_local_status("connection lost")
+    surface.begin_reconnect()
+    assert surface.terminal_modes is TerminalMode.NONE
+    assert surface._local_status_text is None
+    assert surface.paint(screen) is True
+
+    rendered = stream.getvalue()
+    assert rendered.count(b"\033[?2004h") == 2
+    assert rendered.count(b"\033[?1004h") == 2
+    assert rendered.count(b"\033[?2004l") == 1
+    assert rendered.count(b"\033[?1004l") == 1
+
+
 def test_ctrl_right_bracket_is_consumed_locally_with_trailing_data():
     forwarded, should_exit = split_local_escape(b"before" + LOCAL_ESCAPE + b"after")
 
@@ -4177,6 +4207,7 @@ def test_automatic_reconnect_never_requests_takeover_or_interactive_auth(
     )
 
     assert selected is process
+    surface.begin_reconnect.assert_called_once_with()
     reconnect.assert_called_once()
     assert reconnect.call_args.kwargs == {
         "replace_existing_client": False,
@@ -4231,8 +4262,9 @@ def test_reconnect_window_outlives_the_remote_half_open_lease():
 def test_reconnect_attach_forces_noninteractive_bounded_ssh(monkeypatch):
     process = _PreflightProcess()
     built = MagicMock(return_value=["ssh", "remote"])
+    spawn = MagicMock(return_value=process)
     monkeypatch.setattr(fast_display_client, "build_ssh_argv", built)
-    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
+    monkeypatch.setattr(fast_display_client, "_spawn_remote", spawn)
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
@@ -4274,6 +4306,10 @@ def test_reconnect_attach_forces_noninteractive_bounded_ssh(monkeypatch):
     ]
     assert ssh_args[4:] == ["-J", "jump"]
     assert built.call_args.kwargs["replace_existing_client"] is False
+    spawn.assert_called_once_with(
+        ["ssh", "remote"],
+        suppress_stderr=True,
+    )
 
 
 def test_local_reconnect_status_is_bounded_to_terminal_bottom_row():

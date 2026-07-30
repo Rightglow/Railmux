@@ -1004,6 +1004,13 @@ class TerminalSurface:
         self.terminal_modes = requested
         return enabled
 
+    def begin_reconnect(self) -> None:
+        """Release input modes owned by the old helper before replacing it."""
+        if not self.active:
+            return
+        self._reconcile_terminal_modes(TerminalMode.NONE)
+        self.clear_local_status()
+
     @staticmethod
     def _cursor_is_covered(
         screen: AppliedScreen,
@@ -1493,12 +1500,17 @@ def _upgrade_local_and_restart(version: str, raw_args: Sequence[str]) -> NoRetur
     raise AssertionError("os.execv returned unexpectedly")
 
 
-def _spawn_remote(argv: Sequence[str]) -> subprocess.Popen:
+def _spawn_remote(
+    argv: Sequence[str],
+    *,
+    suppress_stderr: bool = False,
+) -> subprocess.Popen:
     try:
         process = subprocess.Popen(
             list(argv),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL if suppress_stderr else None,
         )
     except OSError as exc:
         raise ProbeError(f"could not start ssh: {exc}") from exc
@@ -1613,7 +1625,11 @@ def _reconnect_remote_attach(
         replace_existing_client=replace_existing_client,
         existing_session_only=existing_session_only,
     )
-    process = _spawn_remote(argv)
+    process = (
+        _spawn_remote(argv, suppress_stderr=True)
+        if noninteractive
+        else _spawn_remote(argv)
+    )
     try:
         if cancel_fd is None and timeout is None:
             startup = await_remote_startup(process)
@@ -1672,6 +1688,7 @@ def _automatic_reconnect(
     reconnect_metrics: dict[str, int] | None = None,
 ) -> subprocess.Popen:
     """Reconnect one display without install, upgrade, takeover, or prompts."""
+    surface.begin_reconnect()
     deadline = time.monotonic() + _RECONNECT_WINDOW
     delay = 0.0
     attempt = 0
