@@ -2622,7 +2622,8 @@ def run(args: argparse.Namespace) -> int:
                             f"{_MAX_TERMINAL_COLUMNS}x{_MAX_TERMINAL_LINES}"
                         )
                     if _is_soft_keyboard_projection(observed_size, current_size):
-                        touch_keyboard.observe_projection(True)
+                        if touch_keyboard.observe_projection(True):
+                            surface.resume_mouse()
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if latest_screen is not None:

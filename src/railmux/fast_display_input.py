@@ -148,14 +148,30 @@ class TermuxTouchKeyboard:
             show_hint=True,
         )
 
-    def observe_projection(self, projected: bool) -> bool:
-        """Track keyboard geometry and request mouse restore when it closes."""
+    def observe_projection(
+        self,
+        projected: bool,
+        *,
+        now: float | None = None,
+    ) -> bool:
+        """Track keyboard geometry and request mouse restore once it opens."""
         if not self._active:
             return False
         if projected:
+            first_projection = not self._keyboard_projected
             self._keyboard_projected = True
-            self._deadline = None
-            return False
+            # Disabling mouse tracking after the initiating press can prevent
+            # its release report from reaching us. The keyboard projection is
+            # definitive evidence that gesture has ended; do not consume the
+            # release of the user's first restored Railmux click instead.
+            self._release_button = None
+            observed_at = time.monotonic() if now is None else now
+            # The keyboard is already visible, so Termux no longer needs to
+            # own terminal pointer input. Restore Railmux mouse reporting now
+            # instead of depending on a later, exact close-resize event.
+            # Retain a bounded active state only to recognize that close.
+            self._deadline = observed_at + self.timeout
+            return first_projection
         if self._keyboard_projected:
             return self.cancel()
         return False
@@ -167,7 +183,7 @@ class TermuxTouchKeyboard:
         return False
 
     def expire(self, now: float | None = None) -> bool:
-        """Restore tracking if the second tap never opens a keyboard."""
+        """Clear touch assistance if open/close geometry stops reporting."""
         if not self._active or self._deadline is None:
             return False
         checked_at = time.monotonic() if now is None else now

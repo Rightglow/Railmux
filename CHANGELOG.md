@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607303] - 2026-07-30
+
+### Fixed
+
+- Restore Railmux mouse gestures as soon as Termux reports that its soft
+  keyboard projection is open, bound the remaining projection state, and
+  discard a missing initiating release so closing the keyboard cannot leave
+  touch input owned by Termux or consume the next Railmux click.
+- Reassemble clicked URLs and remote paths across bounded visual wraps, strip
+  non-path labels before absolute paths, and apply the correct horizontal pane
+  offset to hover and click coordinates.
+- Make local SSH warnings and acknowledgements the authoritative clickable
+  status-right source, so copying the displayed message cannot return an older
+  tip or focus notification.
+- Recover the exact primary or secondary agent slot from existing
+  identity-checked Railmux pane markers when a live UI process predates the
+  newer managed-tool owner options.
+
 ## [0.2.19.dev202607302] - 2026-07-30
 
 ### Added
@@ -1388,7 +1406,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607300...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607303...HEAD
+[0.2.19.dev202607303]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607302...v0.2.19.dev202607303
 [0.2.19.dev202607302]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607301...v0.2.19.dev202607302
 [0.2.19.dev202607301]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607300...v0.2.19.dev202607301
 [0.2.19.dev202607300]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607292...v0.2.19.dev202607300

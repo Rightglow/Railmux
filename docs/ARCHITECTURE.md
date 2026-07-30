@@ -126,10 +126,12 @@ from terminal dimensions or the remote host. An unmodified left press within
 one row of the visible input cursor, inside the same verified live agent route,
 temporarily disables local mouse reporting so Termux can open its soft keyboard
 on the next tap. History overlays, hidden cursors, sidebars, modals, previews,
-and other panes fail closed. Mouse reporting resumes after the first keyboard
-input when no resize is observable, when the projected soft keyboard closes, or
-after a bounded no-input timeout. Desktop terminals and direct Railmux launches
-never enter this path.
+and other panes fail closed. Mouse reporting resumes as soon as a projected
+soft keyboard is observed—the keyboard is already open and no longer needs
+pointer ownership—or after the first keyboard input when no resize is
+observable. The projection state remains bounded so a missing or inexact
+keyboard-close resize cannot leave touch input permanently owned by Termux.
+Desktop terminals and direct Railmux launches never enter this path.
 
 Managed Claude Code panes may advertise a verified transcript source without
 using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,

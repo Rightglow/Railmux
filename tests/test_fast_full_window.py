@@ -1187,7 +1187,7 @@ def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
     assert not touch.active
 
 
-def test_termux_prompt_tap_is_fail_closed_and_keyboard_resize_owns_lifetime():
+def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
     press = SgrMouseEvent(b"press", 0, 40, 22, True)
     desktop = TermuxTouchKeyboard(enabled=False, timeout=10.0)
     assert not desktop.pointer_event(
@@ -1227,10 +1227,51 @@ def test_termux_prompt_tap_is_fail_closed_and_keyboard_resize_owns_lifetime():
         now=5.0,
     )
     assert not touch.expire(14.9)
-    assert not touch.observe_projection(True)
+    assert touch.observe_projection(True, now=15.0)
+    assert not touch.observe_projection(True, now=15.1)
+    # If disabling mouse tracking hid the initiating release, the first
+    # restored Railmux click must still retain both its press and release.
+    restored_press = SgrMouseEvent(b"restored-press", 0, 20, 12, True)
+    restored_release = SgrMouseEvent(b"restored-release", 0, 20, 12, False)
+    assert not touch.pointer_event(
+        restored_press,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=15.2,
+    ).handled
+    assert not touch.pointer_event(
+        restored_release,
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=15.2,
+    ).handled
     assert not touch.keyboard_input()
     assert touch.active
     assert touch.observe_projection(False)
+    assert not touch.active
+
+
+def test_termux_keyboard_projection_state_has_a_bounded_fallback():
+    touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
+    touch.pointer_event(
+        SgrMouseEvent(b"press", 0, 40, 22, True),
+        clicked_pane_id="%8",
+        cursor_pane_id="%8",
+        cursor_y=21,
+        cursor_visible=True,
+        pane_frozen=False,
+        now=5.0,
+    )
+
+    assert touch.observe_projection(True, now=6.0)
+    assert not touch.expire(15.9)
+    assert touch.expire(16.0)
     assert not touch.active
 
 
