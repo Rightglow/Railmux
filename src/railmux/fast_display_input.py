@@ -12,6 +12,7 @@ import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 from railmux.fast_display_protocol import HistorySnapshot, MAX_CLIPBOARD_BYTES
 
@@ -277,6 +278,18 @@ class SelectionSource:
     route: HistorySnapshot
     rows: tuple[bytes, ...]
     row_x_offset: int
+    semantic_open: bool = True
+
+
+@dataclass(frozen=True)
+class ClickTarget:
+    """One explicit URL or remote-path click resolved from visible text."""
+
+    kind: str
+    value: str
+    pane_id: str
+    line: int | None = None
+    column: int | None = None
 
 
 SelectionSegment = tuple[int, int, bytes]
@@ -290,6 +303,7 @@ class SelectionAction:
     replay_events: tuple[SgrMouseEvent, ...] = ()
     repaint: bool = False
     copy_data: bytes | None = None
+    open_target: ClickTarget | None = None
 
 
 @lru_cache(maxsize=4096)
@@ -327,6 +341,127 @@ def _plain_display_cells(line: bytes, width: int) -> tuple[str | None, ...]:
     return tuple(cells)
 
 
+_CLICK_TOKEN_RE = re.compile(r"""[^\s<>"'`]+""")
+_PATH_LINE_COLUMN_RE = re.compile(
+    r"^(.*):([1-9][0-9]*):([1-9][0-9]*)$"
+)
+_PATH_LINE_RE = re.compile(r"^(.*):([1-9][0-9]*)$")
+_BARE_PATH_RE = re.compile(r"^[A-Za-z0-9_.@+~-]+\.[A-Za-z][A-Za-z0-9]{0,11}$")
+_HIDDEN_PATH_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9_.@+~-]*$")
+_PATH_NAMES = frozenset({"Dockerfile", "Makefile", "README", "LICENSE", "CHANGELOG"})
+_TOKEN_LEADING = "([{"
+_TOKEN_TRAILING = ".,;!?)]}"
+
+
+def _clicked_character_index(
+    cells: tuple[str | None, ...],
+    column: int,
+) -> tuple[str, int] | None:
+    """Return display text plus the character index owning one terminal cell."""
+    if not 0 <= column < len(cells):
+        return None
+    owner = column
+    while owner > 0 and cells[owner] is None:
+        owner -= 1
+    if cells[owner] is None:
+        return None
+    parts: list[str] = []
+    character_count = 0
+    clicked_index: int | None = None
+    for cell_column, value in enumerate(cells):
+        if value is None:
+            continue
+        if cell_column == owner:
+            clicked_index = character_count
+        parts.append(value)
+        character_count += len(value)
+    if clicked_index is None:
+        return None
+    return "".join(parts), clicked_index
+
+
+def _trim_click_token(
+    token: str,
+    start: int,
+    end: int,
+) -> tuple[str, int, int]:
+    while token and token[0] in _TOKEN_LEADING:
+        token = token[1:]
+        start += 1
+    while token and token[-1] in _TOKEN_TRAILING:
+        token = token[:-1]
+        end -= 1
+    return token, start, end
+
+
+def _path_parts(token: str) -> tuple[str, int | None, int | None] | None:
+    path = token
+    line = None
+    column = None
+    location = _PATH_LINE_COLUMN_RE.fullmatch(path)
+    if location is not None:
+        path = location.group(1)
+        line = min(int(location.group(2)), 2_147_483_647)
+        column = min(int(location.group(3)), 2_147_483_647)
+    else:
+        location = _PATH_LINE_RE.fullmatch(path)
+        if location is not None:
+            path = location.group(1)
+            line = min(int(location.group(2)), 2_147_483_647)
+    if (
+        not path
+        or len(path.encode("utf-8")) > 4096
+        or "\x00" in path
+        or "://" in path
+    ):
+        return None
+    name = path.rsplit("/", 1)[-1]
+    path_like = (
+        path == "~"
+        or path.startswith(("/", "./", "../", "~/"))
+        or "/" in path
+        or name in _PATH_NAMES
+        or any(name.startswith(f"{prefix}.") for prefix in _PATH_NAMES)
+        or _BARE_PATH_RE.fullmatch(name) is not None
+        or _HIDDEN_PATH_RE.fullmatch(name) is not None
+    )
+    return (path, line, column) if path_like else None
+
+
+def click_target_at(
+    cells: tuple[str | None, ...],
+    column: int,
+    *,
+    pane_id: str,
+) -> ClickTarget | None:
+    """Recognize a bounded HTTP(S) URL or Unix path under one display cell."""
+    clicked = _clicked_character_index(cells, column)
+    if clicked is None:
+        return None
+    text, character_index = clicked
+    for match in _CLICK_TOKEN_RE.finditer(text):
+        token, start, end = _trim_click_token(
+            match.group(0), match.start(), match.end()
+        )
+        if not start <= character_index < end:
+            continue
+        if token.lower().startswith(("http://", "https://")):
+            parsed = urlsplit(token)
+            if (
+                parsed.scheme.lower() in ("http", "https")
+                and parsed.hostname is not None
+                and len(token.encode("utf-8")) <= 8192
+            ):
+                return ClickTarget("url", token, pane_id)
+            return None
+        path = _path_parts(token)
+        if path is not None:
+            value, line, target_column = path
+            return ClickTarget("path", value, pane_id, line, target_column)
+        return None
+    return None
+
+
 class LocalTextSelection:
     """Own one pane-bounded, visible-screen selection for ``railmux ssh``."""
 
@@ -337,6 +472,7 @@ class LocalTextSelection:
         self._anchor: tuple[int, int] | None = None
         self._head: tuple[int, int] | None = None
         self._active = False
+        self._semantic_open = False
 
     @property
     def active(self) -> bool:
@@ -354,6 +490,7 @@ class LocalTextSelection:
         self._anchor = None
         self._head = None
         self._active = False
+        self._semantic_open = False
         return was_active
 
     def validate_routes(
@@ -419,6 +556,7 @@ class LocalTextSelection:
         self._anchor = self._point(event, route)
         self._head = self._anchor
         self._active = False
+        self._semantic_open = source.semantic_open
 
     def pointer_event(
         self,
@@ -441,10 +579,24 @@ class LocalTextSelection:
             if not event.pressed:
                 press = self._press
                 if not self._active:
+                    target = (
+                        click_target_at(
+                            self._rows[self._anchor[1]],
+                            self._anchor[0],
+                            pane_id=self._route.pane_id,
+                        )
+                        if (
+                            self._semantic_open
+                            and self._anchor is not None
+                            and self._route.pane_id is not None
+                        )
+                        else None
+                    )
                     self.cancel()
                     return SelectionAction(
                         handled=True,
-                        replay_events=(press, event),
+                        replay_events=() if target is not None else (press, event),
+                        open_target=target,
                     )
                 head = self._point(event, self._route)
                 changed = head != self._head

@@ -1,4 +1,4 @@
-"""Private v12 framing for the coalesced full-window SSH display."""
+"""Private v13 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD12\x00"
-INPUT_MAGIC = b"RMUXK12\x00"
-PROTOCOL_VERSION = 12
+DISPLAY_MAGIC = b"RMUXD13\x00"
+INPUT_MAGIC = b"RMUXK13\x00"
+PROTOCOL_VERSION = 13
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
 REMOTE_START = b"RAILMUX-START/1\n"
@@ -25,12 +25,15 @@ MAX_HISTORY_LINES = 20000
 MAX_PREFETCH_HISTORY_LINES = 300
 MAX_HISTORY_PANES = 8
 MAX_CLIPBOARD_BYTES = 64 * 1024
+MAX_PATH_BYTES = 4096
 _UPDATE_METADATA = struct.Struct(">BIHHHHBHI")
 _HISTORY_METADATA = struct.Struct(">IIHHHHBI")
 _HISTORY_REQUEST = struct.Struct(">IHHH")
 _HISTORY_BATCH_METADATA = struct.Struct(">II")
 _HISTORY_PANE_METADATA = struct.Struct(">IHHHHB")
 _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
+_PATH_REQUEST = struct.Struct(">IIH")
+_PATH_RESULT = struct.Struct(">IBH")
 _HISTORY_MOUSE_FORWARDABLE = 1 << 0
 _HISTORY_TRANSCRIPT_BACKED = 1 << 1
 _HISTORY_MORE_AVAILABLE = 1 << 2
@@ -56,6 +59,7 @@ class OutputKind(IntEnum):
     HISTORY_BATCH = 3
     CLAUDE_HISTORY_POLICY = 4
     CLIPBOARD = 5
+    PATH_RESULT = 6
 
 
 class InputKind(IntEnum):
@@ -66,6 +70,16 @@ class InputKind(IntEnum):
     PREFETCH_HISTORY = 5
     HEARTBEAT = 6
     SET_CLAUDE_HISTORY = 7
+    RESOLVE_PATH = 8
+
+
+class PathKind(IntEnum):
+    """Bounded remote filesystem classification for an explicit click."""
+
+    UNAVAILABLE = 0
+    FILE = 1
+    DIRECTORY = 2
+    OTHER = 3
 
 
 class TerminalMode(IntFlag):
@@ -142,6 +156,15 @@ class ClipboardCopy:
     """One bounded clipboard payload requested by the remote tmux client."""
 
     data: bytes
+
+
+@dataclass(frozen=True)
+class PathResult:
+    """One server-validated absolute remote path or an empty rejection."""
+
+    request_id: int
+    kind: PathKind
+    path: str = ""
 
 
 @dataclass(frozen=True)
@@ -367,6 +390,23 @@ def encode_clipboard_copy(data: bytes) -> bytes:
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
 
 
+def encode_path_result(result: PathResult) -> bytes:
+    if not 0 <= result.request_id <= 0xFFFFFFFF:
+        raise ValueError("invalid path request identity")
+    encoded = result.path.encode("utf-8")
+    if result.kind is PathKind.UNAVAILABLE:
+        if encoded:
+            raise ValueError("an unavailable path result must be empty")
+    elif not encoded or len(encoded) > MAX_PATH_BYTES or b"\x00" in encoded:
+        raise ValueError("invalid resolved path")
+    payload = (
+        bytes((int(OutputKind.PATH_RESULT),))
+        + _PATH_RESULT.pack(result.request_id, int(result.kind), len(encoded))
+        + encoded
+    )
+    return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
 def _decompress_rows(data: bytes, expected_size: int) -> bytes:
     if not 0 <= expected_size <= MAX_SCREEN_BYTES:
         raise ValueError("invalid decompressed screen size")
@@ -448,6 +488,8 @@ class ServerMessageDecoder:
         | HistorySnapshot
         | HistoryBatch
         | ClaudeHistoryPolicyResult
+        | ClipboardCopy
+        | PathResult
     ]:
         self._buffer.extend(data)
         messages: list[
@@ -455,6 +497,8 @@ class ServerMessageDecoder:
             | HistorySnapshot
             | HistoryBatch
             | ClaudeHistoryPolicyResult
+            | ClipboardCopy
+            | PathResult
         ] = []
         header_size = len(DISPLAY_MAGIC) + LENGTH_BYTES
         while True:
@@ -634,6 +678,24 @@ class ServerMessageDecoder:
                         raise ValueError("invalid clipboard payload")
                     messages.append(ClipboardCopy(body))
                     continue
+                if output_kind is OutputKind.PATH_RESULT:
+                    if len(body) < _PATH_RESULT.size:
+                        raise ValueError("truncated path result")
+                    request_id, raw_kind, size = _PATH_RESULT.unpack(
+                        body[:_PATH_RESULT.size]
+                    )
+                    kind = PathKind(raw_kind)
+                    encoded = body[_PATH_RESULT.size:]
+                    if len(encoded) != size or size > MAX_PATH_BYTES:
+                        raise ValueError("invalid path result size")
+                    path = encoded.decode("utf-8")
+                    if kind is PathKind.UNAVAILABLE:
+                        if path:
+                            raise ValueError("invalid unavailable path result")
+                    elif not path or "\x00" in path:
+                        raise ValueError("invalid resolved path")
+                    messages.append(PathResult(request_id, kind, path))
+                    continue
                 if len(body) < _UPDATE_METADATA.size:
                     raise ValueError("truncated screen metadata")
                 (
@@ -678,7 +740,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v12 history response messages."""
+    """Compatibility view which ignores v13 control-response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()
@@ -732,6 +794,54 @@ def encode_claude_history_policy(
     return _encode_input_message(
         InputKind.SET_CLAUDE_HISTORY, bytes((values[(policy, persistent)],))
     )
+
+
+def encode_path_request(request_id: int, pane_id: str, path: str) -> bytes:
+    if not 0 <= request_id <= 0xFFFFFFFF:
+        raise ValueError("invalid path request identity")
+    if (
+        not pane_id.startswith("%")
+        or not pane_id[1:].isdigit()
+        or not 0 < int(pane_id[1:]) <= 0xFFFFFFFF
+    ):
+        raise ValueError("invalid path pane identity")
+    encoded = path.encode("utf-8")
+    if (
+        not encoded
+        or len(encoded) > MAX_PATH_BYTES
+        or b"\x00" in encoded
+        or b"\n" in encoded
+        or b"\r" in encoded
+    ):
+        raise ValueError("invalid remote path")
+    return _encode_input_message(
+        InputKind.RESOLVE_PATH,
+        _PATH_REQUEST.pack(
+            request_id,
+            int(pane_id[1:]),
+            len(encoded),
+        )
+        + encoded,
+    )
+
+
+def decode_path_request(data: bytes) -> tuple[int, str, str]:
+    if len(data) < _PATH_REQUEST.size:
+        raise ValueError("invalid path request")
+    request_id, pane_number, size = _PATH_REQUEST.unpack(
+        data[:_PATH_REQUEST.size]
+    )
+    encoded = data[_PATH_REQUEST.size:]
+    if (
+        pane_number == 0
+        or len(encoded) != size
+        or not 1 <= size <= MAX_PATH_BYTES
+        or b"\x00" in encoded
+        or b"\n" in encoded
+        or b"\r" in encoded
+    ):
+        raise ValueError("invalid path request")
+    return request_id, f"%{pane_number}", encoded.decode("utf-8")
 
 
 def decode_claude_history_policy(data: bytes) -> str:
@@ -854,6 +964,14 @@ class InputFrameDecoder:
                 or (
                     kind is InputKind.PREFETCH_HISTORY
                     and len(message_data) != _PREFETCH_HISTORY_REQUEST.size
+                )
+                or (
+                    kind is InputKind.RESOLVE_PATH
+                    and (
+                        len(message_data) < _PATH_REQUEST.size
+                        or len(message_data)
+                        > _PATH_REQUEST.size + MAX_PATH_BYTES
+                    )
                 )
             ):
                 continue

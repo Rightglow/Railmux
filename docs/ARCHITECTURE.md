@@ -174,7 +174,7 @@ feedback only: it grants no protocol authority and is replaced by the first
 validated display keyframe. Authentication, compatibility, installation, and
 attach prompts remain cooked-mode interactions.
 
-Protocol v12 reports a second bounded status after the attach boundary and
+Protocol v13 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45
@@ -787,6 +787,22 @@ This client-owned drag never reaches tmux, so stock `MouseDrag1Pane` cannot
 enter copy-mode accidentally. Non-left sidebar and status gestures are still
 forwarded, terminal-native selection overrides never enter the client, and the
 opaque keyboard sequence `Ctrl-B [` remains the explicit copy-mode path.
+
+A clean click candidate in the already-focused agent route may instead become
+a client-owned semantic open. Bounded visible `http://` and `https://` tokens
+are opened locally and never sent to the remote shell. A bounded Unix-style
+path sends a typed protocol request containing only the visible pane ID and raw
+token. The server accepts only a currently visible, non-controller agent pane,
+resolves the correct provider pane's current working directory (including
+identity-validated nested transport), and returns only a readable absolute path
+plus file/directory/other classification. It never opens or mutates the path.
+The local launcher constructs an argv-only SSH invocation without `shell=True`;
+supported text files, including HTML, use remote Vim, and all other cases enter
+the containing directory. Unsupported local terminal launchers copy the
+shell-quoted command instead. Clean clicks in an unfocused agent continue to
+mean focus, and drags continue to mean selection, so semantic recognition
+cannot replace either established gesture.
+
 Vertical wheel input also fails closed while agent geometry is unknown
 and on the one-cell tmux border around a known agent; losing one transitional
 wheel tick is preferable to leaking stock `WheelUpPane`, entering copy-mode,

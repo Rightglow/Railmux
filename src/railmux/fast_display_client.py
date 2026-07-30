@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import BinaryIO, NoReturn, Optional, Sequence
 
-from railmux import __version__, local_clipboard
+from railmux import __version__, local_clipboard, local_open
 from railmux.config import (
     ConfigError,
     SSH_HISTORY_MAX_LINES,
@@ -43,6 +43,7 @@ from railmux.fast_display_history import (
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
+    ClickTarget,
     LocalTextSelection,
     SelectionSegment,
     SgrMouseEvent,
@@ -58,6 +59,8 @@ from railmux.fast_display_protocol import (
     DISPLAY_MAGIC,
     HistoryBatch,
     HistorySnapshot,
+    PathKind,
+    PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
@@ -72,6 +75,7 @@ from railmux.fast_display_protocol import (
     encode_claude_history_policy,
     encode_input,
     encode_keyframe_request,
+    encode_path_request,
     encode_resize,
 )
 from railmux.pane_surface import render_startup_surface
@@ -84,6 +88,7 @@ _HISTORY_PREFETCH_INTERVAL = 3.0
 _CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_INFO_SECONDS = 2.0
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
+_PATH_OPEN_TIMEOUT = 5.0
 _TERMUX_TOUCH_HINT = "Tap the prompt again to open the keyboard"
 _REMOTE_HELLO_TIMEOUT = 60.0
 _REMOTE_HELLO_LIMIT = 16 * 1024
@@ -226,6 +231,12 @@ class RemoteHello:
     protocol: int
     ready: bool
     tmux: bool = True
+
+
+@dataclass(frozen=True)
+class _PendingPathOpen:
+    target: ClickTarget
+    requested_at: float
 
 
 class RemoteStartKind(Enum):
@@ -709,7 +720,11 @@ class TerminalSurface:
             safe = safe[:available]
             column = max(reserved + 1, width - len(safe) + 1)
             background = self._row_background_sgr(screen.rows[-1])
-            foreground = b"\033[1;38;5;17m" if level == "success" else b"\033[38;5;231m"
+            foreground = {
+                "success": b"\033[1;38;5;17m",
+                "warning": b"\033[1;38;5;220m",
+                "error": b"\033[1;38;5;196m",
+            }.get(level, b"\033[38;5;231m")
             rendered = b"".join(
                 (
                     b"\033[0m",
@@ -823,7 +838,7 @@ class TerminalSurface:
         self,
         requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v12."""
+        """Mirror only input-affecting modes explicitly carried by protocol v13."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -1611,7 +1626,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v12 helper holds the mutex only while registering its exact tmux
+    # A current v13 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)
@@ -1973,6 +1988,8 @@ def run(args: argparse.Namespace) -> int:
     claude_history_pending_since: float | None = None
     claude_history_prompt_mouse_button: int | None = None
     claude_history_runtime_choice: str | None = None
+    path_request_id = 0
+    pending_path_open: dict[int, _PendingPathOpen] = {}
     periodic_prefetch = PeriodicPrefetchGate()
 
     def send_protocol_frame(frame: bytes) -> None:
@@ -1984,6 +2001,29 @@ def run(args: argparse.Namespace) -> int:
             process.stdin.flush()
         except BrokenPipeError:
             remote_closed = True
+
+    def show_open_result(result: local_open.OpenResult) -> None:
+        nonlocal history_info_until
+        if result.copy_data is not None:
+            surface.copy_to_clipboard(result.copy_data)
+        surface.show_local_status(result.message, level=result.level)
+        history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
+
+    def begin_path_open(target: ClickTarget) -> None:
+        nonlocal path_request_id, history_info_until
+        path_request_id = (path_request_id + 1) & 0xFFFFFFFF
+        if path_request_id == 0:
+            path_request_id = 1
+        pending_path_open.clear()
+        pending_path_open[path_request_id] = _PendingPathOpen(
+            target,
+            time.monotonic(),
+        )
+        send_protocol_frame(
+            encode_path_request(path_request_id, target.pane_id, target.value)
+        )
+        surface.show_local_status("Checking remote path…")
+        history_info_until = None
 
     def apply_history_action(action: HistoryAction) -> None:
         nonlocal route_refresh_needed
@@ -2141,7 +2181,11 @@ def run(args: argparse.Namespace) -> int:
                 (
                     None
                     if latest_screen is None
-                    else history.selection_source(part, latest_screen.rows)
+                    else history.selection_source(
+                        part,
+                        latest_screen.rows,
+                        focused_pane_id=focused_pane_id,
+                    )
                 ),
             )
             if selection.capturing or not selection.active:
@@ -2181,6 +2225,12 @@ def run(args: argparse.Namespace) -> int:
                 )
                 history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
                 selection_clear_at = time.monotonic() + _SELECTION_HIGHLIGHT_SECONDS
+            if selection_action.open_target is not None:
+                target = selection_action.open_target
+                if target.kind == "url":
+                    show_open_result(local_open.open_url(target.value))
+                else:
+                    begin_path_open(target)
             if selection_action.handled:
                 return
             action = history.pointer_event(
@@ -2364,6 +2414,34 @@ def run(args: argparse.Namespace) -> int:
                             if isinstance(message, ClipboardCopy):
                                 surface.copy_to_clipboard(message.data)
                                 continue
+                            if isinstance(message, PathResult):
+                                pending = pending_path_open.pop(
+                                    message.request_id,
+                                    None,
+                                )
+                                if pending is None:
+                                    continue
+                                if message.kind is PathKind.UNAVAILABLE:
+                                    show_open_result(local_open.OpenResult(
+                                        False,
+                                        "Path is not available in this remote workspace",
+                                        "warning",
+                                    ))
+                                    continue
+                                show_open_result(local_open.open_remote_path(
+                                    args.destination,
+                                    ssh_args=args.ssh_arg,
+                                    path=message.path,
+                                    directory=(
+                                        message.kind is PathKind.DIRECTORY
+                                    ),
+                                    regular_file=(
+                                        message.kind is PathKind.FILE
+                                    ),
+                                    line=pending.target.line,
+                                    column=pending.target.column,
+                                ))
+                                continue
                             if isinstance(message, HistoryBatch):
                                 accepted_prefetch_id = history.prefetch_pending_id
                                 action = history.accept_prefetch(message)
@@ -2502,6 +2580,19 @@ def run(args: argparse.Namespace) -> int:
                             history.overlays(),
                             selection.segments(),
                         )
+                expired_paths = tuple(
+                    request_id
+                    for request_id, pending in pending_path_open.items()
+                    if now - pending.requested_at >= _PATH_OPEN_TIMEOUT
+                )
+                if expired_paths:
+                    for request_id in expired_paths:
+                        pending_path_open.pop(request_id, None)
+                    show_open_result(local_open.OpenResult(
+                        False,
+                        "Remote path check timed out",
+                        "warning",
+                    ))
                 restore_local_status = (
                     history_info_until is not None and now >= history_info_until
                 )
@@ -2582,6 +2673,7 @@ def run(args: argparse.Namespace) -> int:
                         selection = LocalTextSelection()
                         history_info_until = None
                         selection_clear_at = None
+                        pending_path_open.clear()
                         claude_history_prompt_input = None
                         claude_history_pending_choice = None
                         claude_history_pending_since = None

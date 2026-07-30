@@ -621,6 +621,26 @@ instead selects within that pane and copies locally without invoking tmux
 copy-mode. Selection is limited to the current visible viewport and cannot
 cross a pane divider; keyboard input, resize, reconnect, and layout changes
 clear it.
+
+A clean click on visible text in the **focused** agent pane also recognizes
+plain `http://` and `https://` URLs and Unix-style paths. URLs open in the
+initiating machine's default browser. Paths are checked read-only against the
+remote pane's current working directory: directories open a new local terminal
+SSHed into that directory, while common code, text, log, and HTML files open in
+remote Vim at a detected `:line[:column]`. Unsupported file types or a remote
+without Vim fall back to the containing directory. On a local terminal for
+which Railmux has no safe window launcher, the equivalent quoted SSH command is
+copied instead. The first-version launcher supports Terminal.app on macOS,
+common Linux terminal emulators, and Windows Terminal from WSL; Termux uses the
+command-copy fallback for remote paths. A first click in another agent pane
+only focuses it, preserving normal preview/resume behavior; dragging still
+selects and copies.
+
+This first version deliberately recognizes unquoted paths without spaces.
+Relative paths printed in old history resolve against the pane's **current**
+working directory, and localhost URLs still refer to the remote host unless the
+user has configured SSH port forwarding.
+
 `Ctrl-B [` remains the explicit copy-mode path. Use `--no-mouse` when reliable
 ordinary terminal selection is more important than local history. History
 preserves text colours and common

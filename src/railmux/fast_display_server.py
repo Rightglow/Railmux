@@ -49,6 +49,8 @@ from railmux.fast_display_protocol import (
     InputFrameDecoder,
     MAX_CLIPBOARD_BYTES,
     MAX_HISTORY_LINES,
+    PathKind,
+    PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
@@ -61,10 +63,12 @@ from railmux.fast_display_protocol import (
     decode_claude_history_choice,
     decode_history_prefetch,
     decode_history_request,
+    decode_path_request,
     encode_claude_history_policy_result,
     encode_clipboard_copy,
     encode_history_batch,
     encode_history_snapshot,
+    encode_path_result,
     encode_update,
 )
 from railmux.settings import Settings
@@ -894,6 +898,94 @@ def _list_agent_panes(
     return tuple(pane for _zoomed, _active, pane in rows if pane.pane_id != controller)
 
 
+def _pane_current_path(pane: _PaneGeometry) -> str | None:
+    """Read the real provider pane cwd for either display transport."""
+    target_pane = pane.history_pane_id or pane.pane_id
+    argv = (
+        tmux_server.target_argv(
+            pane.history_server,
+            "display-message",
+            "-p",
+            "-t",
+            target_pane,
+            "#{pane_current_path}",
+        )
+        if pane.history_server is not None
+        else tmux_server.tmux_argv(
+            "display-message",
+            "-p",
+            "-t",
+            target_pane,
+            "#{pane_current_path}",
+        )
+    )
+    try:
+        current = subprocess.check_output(
+            argv,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        ).rstrip("\n")
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    return current if current and "\x00" not in current and "\n" not in current else None
+
+
+def resolve_path_result(
+    session_id: str,
+    request_id: int,
+    pane_id: str,
+    raw_path: str,
+) -> PathResult:
+    """Resolve one explicit click against a currently visible agent pane."""
+    pane = next(
+        (
+            candidate
+            for candidate in _list_agent_panes(session_id)
+            if candidate.pane_id == pane_id
+        ),
+        None,
+    )
+    if pane is None:
+        return PathResult(request_id, PathKind.UNAVAILABLE)
+    current = _pane_current_path(pane)
+    if current is None:
+        return PathResult(request_id, PathKind.UNAVAILABLE)
+    if raw_path == "~":
+        candidate = Path.home()
+    elif raw_path.startswith("~/"):
+        candidate = Path.home() / raw_path[2:]
+    else:
+        candidate = Path(raw_path)
+        if not candidate.is_absolute():
+            candidate = Path(current) / candidate
+    try:
+        resolved = candidate.resolve(strict=True)
+        info = resolved.stat()
+    except (OSError, RuntimeError):
+        return PathResult(request_id, PathKind.UNAVAILABLE)
+    if stat.S_ISREG(info.st_mode):
+        kind = PathKind.FILE
+        access = os.R_OK
+    elif stat.S_ISDIR(info.st_mode):
+        kind = PathKind.DIRECTORY
+        access = os.R_OK | os.X_OK
+    else:
+        kind = PathKind.OTHER
+        access = os.R_OK
+    text = str(resolved)
+    if (
+        not os.access(resolved, access)
+        or not text
+        or len(text.encode("utf-8")) > 4096
+        or "\x00" in text
+        or "\n" in text
+        or "\r" in text
+    ):
+        return PathResult(request_id, PathKind.UNAVAILABLE)
+    return PathResult(request_id, kind, text)
+
+
 def _render_history_line(pyte: object, line: bytes, width: int) -> bytes:
     """Parse one physical tmux line and emit only allowlisted SGR styling."""
     screen = pyte.Screen(width, 1)
@@ -1553,7 +1645,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v12 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v13 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE
@@ -1952,6 +2044,18 @@ def _serve_attached(
                                 policy,
                                 persistent=persistent,
                                 applied=applied,
+                            ),
+                            priority=True,
+                        )
+                        continue
+                    if message.kind is InputKind.RESOLVE_PATH:
+                        try:
+                            request = decode_path_request(message.data)
+                        except ValueError:
+                            continue
+                        queue_control_packet(
+                            encode_path_result(
+                                resolve_path_result(session_id, *request)
                             ),
                             priority=True,
                         )

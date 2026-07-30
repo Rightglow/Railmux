@@ -260,7 +260,7 @@ path:
 railmux ssh your-server
 ```
 
-Protocol v12 begins with a bounded remote hello containing package version,
+Protocol v13 begins with a bounded remote hello containing package version,
 protocol version, SSH dependency readiness, and tmux availability. The server
 does not inspect or mutate tmux until the compatible client returns the exact
 start acknowledgement. Missing Railmux or its optional dependency can be
@@ -281,7 +281,7 @@ across differing package versions.
 
 If the default `railmux` tmux session is absent, the server starts Railmux in a
 detached tmux session using the same installed Python environment. A custom
-`--session` is never auto-created. Multiple protocol-v12 helpers may attach to
+`--session` is never auto-created. Multiple protocol-v13 helpers may attach to
 the same managed session. A short flock covers only validation and attachment;
 the helper confirms its own child by matching tmux's `#{client_pid}` before it
 releases that boundary. The shared window is set to `window-size=smallest`, so
@@ -344,7 +344,7 @@ A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
 
-Display protocol v12 uses monotonically sequenced, zlib-compressed keyframes and
+Display protocol v13 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
@@ -367,9 +367,13 @@ and uses `capture-pane -e -N` without entering copy-mode or sending keys. `-N`
 retains styled trailing cells so a red, green, gray, or other background can
 reach the pane boundary. Raw tmux control sequences are parsed through `pyte`;
 reconstructed text and allowlisted SGR character styles cross the screen
-protocol. One bounded, validated OSC 52
-clipboard payload may cross as a separate explicit message; other OSC and
-terminal actions are not forwarded. The local client consumes that explicit
+protocol. One bounded, validated OSC 52 clipboard payload may cross as a
+separate explicit message; other OSC and terminal actions are not forwarded.
+Protocol v13 also carries one bounded, typed path-lookup request and result.
+The remote accepts it only for a visible agent route, resolves it read-only
+against the real provider pane's current working directory, and returns an
+absolute readable path plus its coarse kind; opening remains entirely local.
+The local client consumes the explicit
 copy request with a native clipboard writer when available (`pbcopy`,
 `wl-copy`, `xclip`, `xsel`, or WSL `clip.exe`) and otherwise emits bounded
 OSC 52 to the local terminal; native commands never run on the remote helper.
@@ -383,9 +387,9 @@ a persistent or current-invocation answer only after helper acknowledgement.
 This capability is explicit on the
 wire: an unrelated mouse-aware TUI retains application-level wheel input, while
 locally transcript-backed wheel input never opens Claude Code's
-provider-managed history view. Protocol v12 also
+provider-managed history view. Protocol v13 also
 reports whether older rows remain, instead of inferring exhaustion from a
-short compressed page. Protocol v12 permits at most 20000 physical lines;
+short compressed page. Protocol v13 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from
 2000 lines up to its configured 2000-20000 cap. A server-side styled-byte
 budget may return a shorter newest suffix rather than fail the display helper.
@@ -427,11 +431,13 @@ route. Malformed or incoherent snapshots fail closed. Periodic prefetch is a
 recovery/latency mechanism rather than the correctness authority.
 
 This phase still has no structured Windows input, emulator-native scrollback,
-OSC, image, or hyperlink support. Bracketed-paste and focus-event modes are
-synchronized, but other input-affecting terminal modes remain delegated to
+OSC, image, or OSC-8 hyperlink metadata. Plain visible HTTP(S) URLs and
+Unix-style paths are recognized from a clean click in the focused agent pane;
+quoted paths containing spaces are not. Bracketed-paste and focus-event modes
+are synchronized, but other input-affecting terminal modes remain delegated to
 tmux or unsupported. Local history preserves common SGR colour and character
-styles, but it still has no search, wrapped-line reflow, semantic selection, or
-history beyond its bounded cache. `pyte` remains a private compatibility
+styles, but it still has no search, wrapped-line reflow, semantic text
+selection, or history beyond its bounded cache. `pyte` remains a private compatibility
 dependency; wide characters, uncommon style combinations, terminal modes,
 copy-mode, resize behavior, and sustained Codex/Claude output still require
 real-terminal validation.

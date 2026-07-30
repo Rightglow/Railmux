@@ -399,23 +399,28 @@ class LocalHistoryView:
         self,
         event: SgrMouseEvent,
         live_rows: tuple[bytes, ...],
+        *,
+        focused_pane_id: str | None = None,
     ) -> SelectionSource | None:
         """Freeze the visible pane rows under one prospective local drag."""
         route = self._route_at(event)
         if route is None or route.pane_id is None:
             return None
+        semantic_open = route.pane_id == focused_pane_id
         viewport = self.viewports.get(route.pane_id)
         if viewport is not None:
             return SelectionSource(
                 route,
                 self._visible_lines(viewport),
                 0,
+                semantic_open,
             )
         start = route.y
         return SelectionSource(
             route,
             live_rows[start : start + route.height],
             route.x,
+            semantic_open,
         )
 
     @staticmethod

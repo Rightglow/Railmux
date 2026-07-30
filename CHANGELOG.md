@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607301] - 2026-07-30
+
+### Added
+
+- Let `railmux ssh` open a clean-clicked HTTP(S) URL in the local browser and
+  resolve a clicked remote path read-only against the visible agent pane.
+  Common code, text, log, and HTML files open in remote Vim inside a new local
+  terminal; directories and unsupported files open their containing remote
+  directory, with a copied SSH command as the safe launcher fallback.
+
+### Changed
+
+- Advance the private SSH display protocol to v13 with bounded typed path
+  lookup messages. The server accepts only visible non-controller panes and
+  never opens or mutates the requested path.
+
 ## [0.2.19.dev202607300] - 2026-07-30
 
 ### Added

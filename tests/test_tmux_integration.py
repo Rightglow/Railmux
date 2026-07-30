@@ -34,6 +34,8 @@ from railmux.display_transport import (
     recover_interrupted_swaps,
 )
 from railmux.fast_display_protocol import (
+    PathKind,
+    PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_HELLO_PREFIX,
@@ -142,6 +144,70 @@ def _wait_until(predicate, timeout: float = 3.0) -> bool:
             return True
         time.sleep(0.05)
     return False
+
+
+def test_real_remote_path_resolution_is_bound_to_visible_agent(
+    isolated_tmux,
+    tmp_path,
+    monkeypatch,
+):
+    session_name, controller_pane, socket_path = isolated_tmux
+    monkeypatch.setattr(
+        tmux_server,
+        "tmux_argv",
+        lambda *args, **_kwargs: ["tmux", "-S", socket_path, *args],
+    )
+    subprocess.run(
+        tmux_server.tmux_argv(
+            "set-window-option",
+            "-t",
+            session_name,
+            "@railmux_controller_pane",
+            controller_pane,
+        ),
+        check=True,
+    )
+    agent_pane = subprocess.check_output(
+        tmux_server.tmux_argv(
+            "split-window",
+            "-d",
+            "-h",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            session_name,
+            "sleep 60",
+        ),
+        text=True,
+    ).strip()
+    subprocess.run(
+        tmux_server.tmux_argv("select-pane", "-t", agent_pane),
+        check=True,
+    )
+    session_id = fast_display_server._validate_railmux(session_name)
+    assert session_id
+
+    code = tmp_path / "clicked.html"
+    code.write_text("<p>safe</p>\n")
+    assert fast_display_server.resolve_path_result(
+        session_id,
+        7,
+        agent_pane,
+        str(code),
+    ) == PathResult(7, PathKind.FILE, str(code.resolve()))
+    assert fast_display_server.resolve_path_result(
+        session_id,
+        8,
+        agent_pane,
+        ".",
+    ).kind is PathKind.DIRECTORY
+    assert fast_display_server.resolve_path_result(
+        session_id,
+        9,
+        controller_pane,
+        str(code),
+    ) == PathResult(9, PathKind.UNAVAILABLE)
 
 
 def _script_command(command: str) -> list[str]:

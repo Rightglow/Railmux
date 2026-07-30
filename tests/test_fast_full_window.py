@@ -23,6 +23,8 @@ from railmux.fast_display_protocol import (
     HistorySnapshot,
     InputFrameDecoder,
     InputKind,
+    PathKind,
+    PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
@@ -36,12 +38,15 @@ from railmux.fast_display_protocol import (
     UpdateKind,
     decode_history_prefetch,
     decode_history_request,
+    decode_path_request,
     decode_claude_history_policy,
     decode_claude_history_choice,
     encode_history_batch,
     encode_history_prefetch,
     encode_history_request,
     encode_history_snapshot,
+    encode_path_request,
+    encode_path_result,
     encode_claude_history_policy,
     encode_claude_history_policy_result,
     encode_clipboard_copy,
@@ -85,6 +90,7 @@ from railmux.fast_display_history import (
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
+    ClickTarget,
     LocalTextSelection,
     SelectionAction,
     SelectionSource,
@@ -233,6 +239,26 @@ def test_history_request_round_trip_validates_pointer_and_line_limit():
         encode_history_request(1, 80, 24, 20001)
 
 
+def test_path_request_and_result_round_trip_are_bounded():
+    request = InputFrameDecoder().feed(
+        encode_path_request(17, "%42", "src/main.py")
+    )[0]
+
+    assert request.kind is InputKind.RESOLVE_PATH
+    assert decode_path_request(request.data) == (17, "%42", "src/main.py")
+    result = PathResult(17, PathKind.FILE, "/workspace/src/main.py")
+    assert ServerMessageDecoder().feed(encode_path_result(result)) == [result]
+    rejected = PathResult(18, PathKind.UNAVAILABLE)
+    assert ServerMessageDecoder().feed(encode_path_result(rejected)) == [rejected]
+
+    with pytest.raises(ValueError):
+        encode_path_request(1, "42", "main.py")
+    with pytest.raises(ValueError):
+        encode_path_request(1, "%42", "x" * 4097)
+    with pytest.raises(ValueError):
+        encode_path_result(PathResult(1, PathKind.UNAVAILABLE, "/leak"))
+
+
 def test_claude_history_policy_input_round_trip_is_bounded():
     decoder = InputFrameDecoder()
     encoded = encode_claude_history_policy("local")
@@ -359,6 +385,64 @@ def test_server_failed_persistent_history_choice_keeps_previous_override():
     ) == (False, "native")
 
 
+def test_server_resolves_only_readable_paths_from_visible_agent_cwd(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "src"
+    source.mkdir()
+    code = source / "main.py"
+    code.write_text("print('ok')\n")
+    pane = fast_display_server._PaneGeometry("%8", 20, 0, 60, 24)
+    monkeypatch.setattr(
+        fast_display_server,
+        "_list_agent_panes",
+        lambda _session: (pane,),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_pane_current_path",
+        lambda _pane: str(tmp_path),
+    )
+
+    assert fast_display_server.resolve_path_result(
+        "$4", 1, "%8", "src/main.py"
+    ) == PathResult(1, PathKind.FILE, str(code.resolve()))
+    assert fast_display_server.resolve_path_result(
+        "$4", 2, "%8", "src"
+    ) == PathResult(2, PathKind.DIRECTORY, str(source.resolve()))
+    assert fast_display_server.resolve_path_result(
+        "$4", 3, "%8", "missing.py"
+    ) == PathResult(3, PathKind.UNAVAILABLE)
+    assert fast_display_server.resolve_path_result(
+        "$4", 4, "%9", "src/main.py"
+    ) == PathResult(4, PathKind.UNAVAILABLE)
+
+
+def test_server_reads_nested_provider_cwd_from_history_source(monkeypatch):
+    target = MagicMock()
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        20,
+        0,
+        60,
+        24,
+        history_server=target,
+        history_pane_id="%2",
+    )
+    nested_argv = ["tmux", "-L", "nested", "display-message"]
+    monkeypatch.setattr(
+        fast_display_server.tmux_server,
+        "target_argv",
+        lambda *args: nested_argv,
+    )
+    checked = MagicMock(return_value="/remote/workspace\n")
+    monkeypatch.setattr(fast_display_server.subprocess, "check_output", checked)
+
+    assert fast_display_server._pane_current_path(pane) == "/remote/workspace"
+    assert checked.call_args.args[0] is nested_argv
+
+
 def test_server_options_change_clears_only_a_this_time_history_override():
     assert fast_display_server.refresh_claude_history_override(
         "native", "local", "native"
@@ -421,6 +505,71 @@ def test_local_text_selection_replays_a_plain_click_unchanged():
     assert action.replay_events == (press, release)
     assert action.copy_data is None
     assert selection.active is False
+
+
+def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
+    route = HistorySnapshot(1, "%8", 0, 0, 80, 1)
+    selection = LocalTextSelection()
+    url_source = SelectionSource(
+        route,
+        (b"See https://example.test/docs.",),
+        0,
+    )
+    press = SgrMouseEvent(b"url-down", 0, 8, 1, True)
+    release = SgrMouseEvent(b"url-up", 0, 8, 1, False)
+
+    selection.pointer_event(press, url_source)
+    url_action = selection.pointer_event(release, url_source)
+
+    assert url_action.open_target == ClickTarget(
+        "url", "https://example.test/docs", "%8"
+    )
+    assert url_action.replay_events == ()
+
+    path_source = SelectionSource(
+        route,
+        (b"changed src/railmux/app.py:123:7",),
+        0,
+    )
+    path_press = SgrMouseEvent(b"path-down", 0, 12, 1, True)
+    selection.pointer_event(path_press, path_source)
+    path_action = selection.pointer_event(
+        SgrMouseEvent(b"path-up", 0, 12, 1, False),
+        path_source,
+    )
+    assert path_action.open_target == ClickTarget(
+        "path", "src/railmux/app.py", "%8", 123, 7
+    )
+
+
+def test_local_text_selection_does_not_open_on_drag_or_unfocused_pane():
+    route = HistorySnapshot(1, "%8", 0, 0, 40, 1)
+    selection = LocalTextSelection()
+    source = SelectionSource(route, (b"https://example.test",), 0)
+    press = SgrMouseEvent(b"down", 0, 2, 1, True)
+    selection.pointer_event(press, source)
+    selection.pointer_event(SgrMouseEvent(b"drag", 32, 8, 1, True), None)
+    dragged = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 8, 1, False),
+        None,
+    )
+    assert dragged.open_target is None
+    assert dragged.copy_data
+
+    unfocused = SelectionSource(
+        route,
+        (b"https://example.test",),
+        0,
+        semantic_open=False,
+    )
+    selection.cancel()
+    selection.pointer_event(press, unfocused)
+    replayed = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 2, 1, False),
+        unfocused,
+    )
+    assert replayed.open_target is None
+    assert replayed.replay_events
 
 
 def test_local_text_selection_preserves_two_remote_click_gestures():
