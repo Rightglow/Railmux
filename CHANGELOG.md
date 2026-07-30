@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607305] - 2026-07-30
+
+### Fixed
+
+- Stop clean-click URL recognition before adjacent Unicode punctuation and
+  prose instead of sending the explanatory text to the local browser.
+- Avoid manufacturing an empty managed shell for a first click that opens
+  only Vim; quitting that viewer now returns directly to its agent.
+
+### Changed
+
+- Make F9 follow a focused managed terminal or Vim, and keep per-agent tool
+  splits orthogonal to the outer layout: below side-by-side agents and to the
+  right of stacked agents.
+
 ## [0.2.19.dev202607304] - 2026-07-30
 
 ### Fixed
@@ -1426,7 +1441,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607303...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607305...HEAD
+[0.2.19.dev202607305]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607304...v0.2.19.dev202607305
+[0.2.19.dev202607304]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607303...v0.2.19.dev202607304
 [0.2.19.dev202607303]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607302...v0.2.19.dev202607303
 [0.2.19.dev202607302]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607301...v0.2.19.dev202607302
 [0.2.19.dev202607301]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607300...v0.2.19.dev202607301

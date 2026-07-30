@@ -696,6 +696,32 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
     )
 
 
+def test_local_text_selection_stops_url_before_chinese_prose():
+    route = HistorySnapshot(1, "%8", 0, 0, 100, 1)
+    source = SelectionSource(
+        route,
+        (
+            "See https://github.com/NVIDIA/TensorRT-LLM/pull/17000)，并注明由"
+            .encode(),
+        ),
+        0,
+    )
+    selection = LocalTextSelection()
+    press = SgrMouseEvent(b"down", 0, 20, 1, True)
+    release = SgrMouseEvent(b"up", 0, 20, 1, False)
+
+    selection.pointer_event(press, source)
+    action = selection.pointer_event(release, source)
+
+    assert action.open_target is not None
+    assert action.open_target.value == (
+        "https://github.com/NVIDIA/TensorRT-LLM/pull/17000"
+    )
+    assert action.open_target.highlight_text == (
+        b"https://github.com/NVIDIA/TensorRT-LLM/pull/17000"
+    )
+
+
 def test_local_text_selection_uses_pane_offset_for_hover_and_click():
     route = HistorySnapshot(1, "%8", 10, 2, 24, 1)
     source = SelectionSource(

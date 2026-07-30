@@ -278,14 +278,86 @@ def test_real_managed_tool_surface_reuses_shell_and_vim_tabs(
     assert manager._exact_ref(state.shell) is not None
     assert manager._exact_ref(state.viewer) is not None
 
-    manager.reconcile({"primary": agent_pane, "secondary": None})
+    manager.reconcile(
+        {"primary": agent_pane, "secondary": None},
+        layout="stacked",
+    )
     assert manager.visible_tool_panes() == frozenset({viewer_id})
+    owner_left, owner_top = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", agent_pane, "#{pane_left} #{pane_top}",
+        ],
+        text=True,
+    ).split()
+    viewer_left, viewer_top = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", viewer_id, "#{pane_left} #{pane_top}",
+        ],
+        text=True,
+    ).split()
+    assert int(viewer_left) > int(owner_left)
+    assert viewer_top == owner_top
+
+    assert manager.suspend("primary")
+    manager.reconcile(
+        {"primary": agent_pane, "secondary": None},
+        layout="side-by-side",
+    )
+    owner_left, owner_top = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", agent_pane, "#{pane_left} #{pane_top}",
+        ],
+        text=True,
+    ).split()
+    viewer_left, viewer_top = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", viewer_id, "#{pane_left} #{pane_top}",
+        ],
+        text=True,
+    ).split()
+    assert viewer_left == owner_left
+    assert int(viewer_top) > int(owner_top)
+
     subprocess.run(
         ["tmux", "-S", socket_path, "kill-pane", "-t", viewer_id],
         check=True,
     )
     manager.reconcile({"primary": agent_pane, "secondary": None})
     assert manager.visible_tool_panes() == frozenset({shell_id})
+
+    # A fresh click-to-Vim flow no longer manufactures an empty shell. Once
+    # both older surfaces are gone, quitting that viewer returns to the agent.
+    subprocess.run(
+        ["tmux", "-S", socket_path, "kill-pane", "-t", shell_id],
+        check=True,
+    )
+    assert manager.load("primary") is None
+    fresh_viewer = manager.open_viewer(
+        "primary",
+        agent_pane,
+        str(first),
+    )
+    assert fresh_viewer.ok
+    fresh_state = manager.load("primary")
+    assert fresh_state is not None
+    assert fresh_state.shell is None
+    assert fresh_state.viewer is not None
+    subprocess.run(
+        ["tmux", "-S", socket_path, "kill-pane", "-t", fresh_viewer.pane_id],
+        check=True,
+    )
+    assert manager.load("primary") is None
+    assert subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", session_name, "#{pane_id}",
+        ],
+        text=True,
+    ).strip() == agent_pane
 
 
 def test_real_managed_tool_surface_preserves_compact_zoom(

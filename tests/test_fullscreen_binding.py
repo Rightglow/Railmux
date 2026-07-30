@@ -350,6 +350,29 @@ def test_fullscreen_uses_actual_focused_secondary(monkeypatch):
     assert toggled == ["%3"]
 
 
+def test_fullscreen_uses_focused_managed_tool(monkeypatch):
+    manager = MagicMock()
+    manager.visible_tool_panes.return_value = frozenset({"%9"})
+    app = _bare_app(
+        _railmux_pane_id="%1",
+        _managed_tool_panes=manager,
+    )
+    app._get_tool_pane_manager = MagicMock(return_value=manager)
+    app._sync_target_slot_from_tmux = MagicMock()
+    toggled = []
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _target: "%9")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.toggle_pane_zoom",
+        lambda pane: toggled.append(pane) or True,
+    )
+
+    app._toggle_agent_fullscreen()
+
+    assert toggled == ["%9"]
+    app._sync_target_slot_from_tmux.assert_not_called()
+
+
 def test_f9_is_noop_in_compact_presentation(monkeypatch):
     app = _bare_app(_railmux_pane_id="%1")
     workspace = app._agent_workspace()

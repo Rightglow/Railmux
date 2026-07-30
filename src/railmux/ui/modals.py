@@ -266,7 +266,7 @@ class HelpModal(urwid.WidgetWrap):
             ("t", "Open a terminal in the active project"),
             ("␣", "Preview stopped / switch running session"),
             ("F8", "Cycle layout: single / side-by-side / stacked"),
-            ("F9", "Fullscreen the agent pane (toggle) for clean text copy"),
+            ("F9", "Fullscreen the focused agent / terminal / Vim (toggle)"),
             ("q or Ctrl-C", "Quit railmux (prompts for confirmation)"),
         ]),
         ("Mouse", [

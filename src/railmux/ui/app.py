@@ -2291,11 +2291,22 @@ class App:
             self._projected_target_pane_id = None
 
     def _toggle_agent_fullscreen(self) -> None:
-        """Zoom the focused agent, or the last active agent from the sidebar."""
+        """Zoom the focused agent/tool, or the Target agent from the sidebar."""
         if (self._agent_workspace().presentation
                 is WorkspacePresentation.COMPACT):
             self._set_status(
                 "Compact view already shows one full-window page.", "tip")
+            return
+        owner = getattr(self, "_railmux_pane_id", None)
+        active = tmux_ctl.active_pane_id(owner) if owner is not None else None
+        manager = self._get_tool_pane_manager()
+        if (
+            active is not None
+            and manager is not None
+            and active in manager.visible_tool_panes()
+        ):
+            if not self._zoom_pane(active, toggle_if_current=True):
+                self._set_status("Could not toggle tool fullscreen.", "error")
             return
         slot = self._sync_target_slot_from_tmux()
         pane_id = slot.pane_id
@@ -4720,7 +4731,10 @@ class App:
     def _reconcile_tool_panes(self) -> None:
         manager = self._get_tool_pane_manager()
         if manager is not None:
-            manager.reconcile(self._tool_owner_panes())
+            manager.reconcile(
+                self._tool_owner_panes(),
+                layout=self._agent_workspace().layout.value,
+            )
 
     def _suspend_tool_panes(self) -> bool:
         manager = self._get_tool_pane_manager()

@@ -124,7 +124,7 @@ for focus and layout limits.
 | `o` | Open persistent Railmux options |
 | `␣` | Preview stopped or switch running target (like single-click) |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
-| `F9` | Fullscreen the agent pane (toggle) for clean text selection |
+| `F9` | Fullscreen the focused agent, managed terminal, or Vim (toggle) |
 | `?` | Full help popup with all keybindings |
 | `q` or `Ctrl-C` | Quit with confirmation |
 
@@ -643,15 +643,18 @@ explicit: it opens files directly in Railmux's managed Vim. It offers
 behavior can be changed under **More → Options → Clicked paths in railmux
 ssh**, where the inside choice is likewise labelled **managed Vim**.
 
-The inside-Railmux choice gives each agent slot one reusable shell and one
-reusable Vim viewer below it. `t` selects the shell and `T` returns to Vim.
+The inside-Railmux choice gives each agent slot at most one reusable shell and
+one reusable Vim viewer. `t` selects the shell and `T` returns to Vim.
 Clicking another supported code, text, log, or HTML file reuses that Vim
 process and opens a native tab instead of closing the previous file; use
-Vim's `gt` / `gT` to move between tabs. Exiting the final Vim tab restores the
-shell automatically. Directories and unsupported file types select the shell
-and use the relevant directory when creating it. An existing shell keeps its
-working directory and running command instead of accepting injected `cd`
-keystrokes. The managed processes are parked by exact tmux identity during
+Vim's `gt` / `gT` to move between tabs. If a managed shell already exists,
+exiting Vim restores it; a click that opened only Vim returns directly to the
+agent instead of leaving an empty shell. Directories and unsupported file
+types select the shell and use the relevant directory when creating it. An
+existing shell keeps its working directory and running command instead of
+accepting injected `cd` keystrokes. With side-by-side agents the tool is below
+its agent; with stacked agents it moves to the right. F9 follows the currently
+focused tool. Managed processes are parked by exact tmux identity during
 Railmux layout rebuilds rather than being killed.
 
 The separate-terminal choice SSHes into a directory or opens supported files

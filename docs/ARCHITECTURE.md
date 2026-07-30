@@ -830,7 +830,13 @@ window ID are recorded together. The inactive process is kept in a
 Railmux-marked private parking session and swapped into the outer layout only
 after those identities revalidate. Layout rebuilds park visible tools first;
 failed identity or swap checks stop the transition rather than killing or
-guessing at a pane. Tool panes carry a pane-local marker so the SSH history and
+guessing at a pane. A viewer opened before any explicit terminal does not
+manufacture a hidden shell: quitting that Vim returns to the owning agent,
+whereas quitting a viewer after a shell exists restores that shell. Tool
+splits remain orthogonal to the outer dual-agent layout: side-by-side agent
+columns place tools below, while stacked agent rows place tools on the right.
+F9 zooms the focused tool when one owns focus, otherwise it retains the Target
+agent behavior. Tool panes carry a pane-local marker so the SSH history and
 semantic-click router can exclude them without extra polling subprocesses.
 
 Vertical wheel input also fails closed while agent geometry is unknown

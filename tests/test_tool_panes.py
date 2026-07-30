@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 from railmux.tool_panes import (
     PaneRef,
@@ -87,6 +88,27 @@ def test_tool_pane_marker_is_scoped_to_one_outer_session():
         outer_session_id="$4",
     )
     assert not is_tool_pane_marker("not-json", outer_session_id="$4")
+
+
+def test_tool_split_is_orthogonal_to_workspace_layout():
+    manager = object.__new__(ToolPaneManager)
+    manager._show_option = MagicMock(return_value="stacked")
+    manager._output = MagicMock(return_value="%9")
+    manager._pane_ref = MagicMock(return_value=PaneRef("%9", 99, "$4", "@1"))
+    owner = PaneRef("%2", 22, "$4", "@1")
+
+    result = manager._split_tool(owner, "sleep 1")
+
+    assert result == PaneRef("%9", 99, "$4", "@1")
+    assert manager._output.call_args.args[:3] == (
+        "split-window", "-h", "-d",
+    )
+
+    manager._show_option.return_value = "side-by-side"
+    manager._split_tool(owner, "sleep 1")
+    assert manager._output.call_args.args[:3] == (
+        "split-window", "-v", "-d",
+    )
 
 
 def test_owner_slot_falls_back_to_existing_selection_marker(monkeypatch):

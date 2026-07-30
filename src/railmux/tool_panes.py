@@ -32,6 +32,7 @@ _OWNER_OPTIONS = {
     "secondary": "@railmux_agent_secondary_v1",
 }
 _KEEPER_OPTION = "@railmux_tool_keeper_v1"
+_LAYOUT_OPTION = "@railmux_workspace_layout_v1"
 TOOL_PANE_OPTION = "@railmux_tool_surface_v1"
 _SELECTION_KEY_OPTION = "@railmux_selection_key"
 _SELECTION_KEY_RE = re.compile(r"^(%\d+):(primary|secondary)$")
@@ -365,8 +366,17 @@ class ToolPaneManager:
     def _save(self, state: ToolState) -> bool:
         return self._set_option(_STATE_OPTIONS[state.slot], state.to_json())
 
-    def sync_owners(self, owners: Mapping[str, str | None]) -> None:
+    def sync_owners(
+        self,
+        owners: Mapping[str, str | None],
+        *,
+        layout: str | None = None,
+    ) -> None:
         """Publish exact agent slot identities for the SSH display helper."""
+        if layout is not None:
+            if layout not in {"single", "side-by-side", "stacked"}:
+                raise ValueError("invalid workspace layout")
+            self._set_option_if_changed(_LAYOUT_OPTION, layout)
         for slot in _SLOTS:
             pane_id = owners.get(slot)
             ref = self._pane_ref(pane_id) if pane_id else None
@@ -569,12 +579,20 @@ class ToolPaneManager:
             return None
         return state, placeholder
 
-    def _split_below(
+    def _split_tool(
         self, owner: PaneRef, command: str, *, percent: int = 35,
     ) -> PaneRef | None:
+        # Keep each tool orthogonal to the outer two-agent division: narrow
+        # side-by-side agent columns use a tool below, while wide stacked rows
+        # use a tool to the right. Single keeps the familiar tool-below shape.
+        split_flag = (
+            "-h"
+            if self._show_option(_LAYOUT_OPTION) == "stacked"
+            else "-v"
+        )
         pane_id = self._output(
             "split-window",
-            "-v",
+            split_flag,
             "-d",
             "-P",
             "-F",
@@ -699,7 +717,7 @@ class ToolPaneManager:
                 return None
             updated = state
         else:
-            temporary = self._split_below(owner, _DUMMY_COMMAND)
+            temporary = self._split_tool(owner, _DUMMY_COMMAND)
             if temporary is None:
                 return None
             if not self._run(
@@ -740,7 +758,7 @@ class ToolPaneManager:
         shell = self._exact_ref(state.shell) if state else None
         reused = shell is not None
         if state is None:
-            shell = self._split_below(owner, self._shell_command(cwd))
+            shell = self._split_tool(owner, self._shell_command(cwd))
             if shell is None:
                 return ToolResult(False, "Could not create terminal pane", level="error")
             if not self._mark_tool(shell, slot, "shell"):
@@ -840,11 +858,43 @@ class ToolPaneManager:
         preserve_zoom = self._window_is_zoomed(owner.pane_id)
         state = self.load(slot)
         if state is None:
-            shell_result = self.open_shell(slot, owner_pane_id, Path(path).parent)
-            if not shell_result.ok:
-                return shell_result
-            state = self.load(slot)
-        assert state is not None
+            viewer = self._split_tool(
+                owner,
+                self._viewer_command(path, line=line, column=column),
+            )
+            if viewer is None:
+                return ToolResult(False, "Could not start remote Vim", level="error")
+            if not self._mark_tool(viewer, slot, "viewer"):
+                self._run("kill-pane", "-t", viewer.pane_id)
+                return ToolResult(
+                    False, "Could not register remote Vim", level="error"
+                )
+            state = ToolState(
+                slot,
+                self.outer_session_id,
+                owner,
+                None,
+                viewer,
+                "viewer",
+                None,
+                None,
+                None,
+            )
+            if not self._save(state):
+                self._run("kill-pane", "-t", viewer.pane_id)
+                return ToolResult(
+                    False, "Could not register remote Vim", level="error"
+                )
+            if not self._select_tool(
+                viewer.pane_id,
+                preserve_zoom=preserve_zoom,
+            ):
+                return ToolResult(
+                    False, "Could not focus Vim viewer", level="error"
+                )
+            return ToolResult(
+                True, "Opened remote file inside Railmux", viewer.pane_id
+            )
         viewer = self._exact_ref(state.viewer)
         if viewer is not None:
             if not self._send_vim_tab(
@@ -1025,9 +1075,14 @@ class ToolPaneManager:
         )
         return self._save(state)
 
-    def reconcile(self, owners: Mapping[str, str | None]) -> None:
+    def reconcile(
+        self,
+        owners: Mapping[str, str | None],
+        *,
+        layout: str | None = None,
+    ) -> None:
         """Repair dead viewers and restore live surfaces below current slots."""
-        self.sync_owners(owners)
+        self.sync_owners(owners, layout=layout)
         for slot in ("primary", "secondary"):
             state = self.load(slot)
             if state is None:

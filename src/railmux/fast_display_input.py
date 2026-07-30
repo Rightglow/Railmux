@@ -401,6 +401,12 @@ _HIDDEN_PATH_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9_.@+~-]*$")
 _PATH_NAMES = frozenset({"Dockerfile", "Makefile", "README", "LICENSE", "CHANGELOG"})
 _TOKEN_LEADING = "([{"
 _TOKEN_TRAILING = ".,;!?)]}"
+_URL_ASCII_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "0123456789"
+    "-._~:/?#[]@!$&()*+,;=%"
+)
 _EMBEDDED_ABSOLUTE_PATH_RE = re.compile(
     r"(?:^|(?<=[^A-Za-z0-9_.@+~/-]))/"
 )
@@ -445,6 +451,22 @@ def _trim_click_token(
         token = token[:-1]
         end -= 1
     return token, start, end
+
+
+def _bounded_url_token(token: str) -> str:
+    """Stop a visible URL before adjacent Unicode prose and trim punctuation."""
+    end = next(
+        (
+            index
+            for index, character in enumerate(token)
+            if character not in _URL_ASCII_CHARACTERS
+        ),
+        len(token),
+    )
+    candidate = token[:end]
+    while candidate and candidate[-1] in _TOKEN_TRAILING:
+        candidate = candidate[:-1]
+    return candidate
 
 
 def _path_parts(token: str) -> tuple[str, int | None, int | None] | None:
@@ -506,9 +528,10 @@ def click_target_at(
         )
         if url_offsets:
             offset = min(url_offsets)
-            candidate = token[offset:]
+            candidate = _bounded_url_token(token[offset:])
             candidate_start = start + offset
-            if not candidate_start <= character_index < end:
+            candidate_end = candidate_start + len(candidate)
+            if not candidate_start <= character_index < candidate_end:
                 return None
             parsed = urlsplit(candidate)
             if (
