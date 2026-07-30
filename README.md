@@ -118,7 +118,8 @@ for focus and layout limits.
 | `s` | Toggle star — starred sessions pinned to top with ⭐ |
 | `k` | Kill the running agent process (keeps session file) |
 | `d` | Delete the focused session (prompts for confirmation) |
-| `t` | Open a terminal in the active project directory |
+| `t` | Open or return to the managed terminal below the Target agent |
+| `T` | Return to that agent's managed Vim viewer, when open |
 | `m` | Cycle through available agent modes |
 | `o` | Open persistent Railmux options |
 | `␣` | Preview stopped or switch running target (like single-click) |
@@ -374,6 +375,8 @@ agent_transport = "swap" # or "nested"
 history_lines = 10000
 # Claude Code wheel history: "ask", "local", or "native"
 claude_history = "ask"
+# Clicked remote paths: "ask", "internal", or "external"
+path_open = "ask"
 ```
 
 Most users should leave `agent_transport` unchanged. Railmux automatically uses
@@ -385,8 +388,8 @@ screen update the same values that Options exposes; Options preserves comments,
 formatting, order, and unknown keys. The local-only `ssh.history_lines` setting
 is intentionally file/command-line controlled because the remote TUI cannot
 configure the machine that initiated `railmux ssh`. By contrast,
-`ssh.claude_history` belongs to the remote workspace and is exposed in that
-workspace's Options screen. A one-run Codex choice is kept only in memory. A
+`ssh.claude_history` and `ssh.path_open` belong to the remote workspace and are
+exposed in that workspace's Options screen. A one-run Codex choice is kept only in memory. A
 `This time` layout profile is stored here until it is successfully applied on
 the next launch, then removed.
 
@@ -484,6 +487,14 @@ same VS Code setting. Configure it in User Settings JSON:
 Use `nothing` instead if your editor version still intercepts right-click or you
 prefer all right-click events to pass directly to terminal applications.
 
+**CJK input methods in VS Code/Cursor**: if Chinese, Japanese, or Korean input
+occasionally stops while ASCII still works, click outside the integrated
+terminal and then back into the agent pane. This resets a stuck xterm.js
+composition focus without reconnecting Railmux. If `Ctrl-Space` switches input
+sources, it can conflict with terminal suggestions; use the OS input-source
+menu/Globe key to confirm, rebind the terminal suggestion action, or disable it
+with `"terminal.integrated.suggest.enabled": false`.
+
 **F8 (layout) and F9 (fullscreen)**: the operating system or terminal may
 consume function keys before tmux sees them. On macOS, either hold `Fn` when
 pressing the key or enable *System Settings → Keyboard → “Use F1, F2, etc. keys
@@ -537,15 +548,9 @@ terminal update. Install Railmux locally, then run:
 railmux ssh your-server
 ```
 
-Add `--reconnect` to keep an established display available through a brief
-network interruption:
-
-```bash
-railmux ssh --reconnect your-server
-```
-
-Automatic reconnect retries for up to 60 seconds while leaving the last screen
-visible. Press `Ctrl-]` or `Ctrl-C` while it is retrying to stop immediately.
+Automatic reconnect is enabled by default and retries for up to 60 seconds
+while leaving the last screen visible. Press `Ctrl-]` or `Ctrl-C` while it is
+retrying to stop immediately.
 It starts only after the first screen has arrived and never retries an explicit
 detach, soft quit, hard quit, or local disconnect. Retries use non-interactive
 SSH authentication and never install, upgrade, replace, detach, or kill
@@ -553,6 +558,8 @@ anything remotely. A retry attaches only when the same managed Railmux session
 still exists, so it cannot recreate a workspace that was Soft Quit during a
 network race. If the connection needs a new password or MFA interaction,
 Railmux restores the terminal and asks you to rerun the ordinary command.
+Use `--no-reconnect` when diagnosing a connection or when the local client
+should exit immediately after an established display is lost.
 
 Before the remote helper attaches to tmux, both ends exchange package and
 private-protocol versions. If Railmux is absent remotely, the local client asks
@@ -623,18 +630,40 @@ cross a pane divider; keyboard input, resize, reconnect, and layout changes
 clear it.
 
 A clean click on visible text in the **focused** agent pane also recognizes
-plain `http://` and `https://` URLs and Unix-style paths. URLs open in the
-initiating machine's default browser. Paths are checked read-only against the
-remote pane's current working directory: directories open a new local terminal
-SSHed into that directory, while common code, text, log, and HTML files open in
-remote Vim at a detected `:line[:column]`. Unsupported file types or a remote
-without Vim fall back to the containing directory. On a local terminal for
-which Railmux has no safe window launcher, the equivalent quoted SSH command is
-copied instead. The first-version launcher supports Terminal.app on macOS,
-common Linux terminal emulators, and Windows Terminal from WSL; Termux uses the
-command-copy fallback for remote paths. A first click in another agent pane
-only focuses it, preserving normal preview/resume behavior; dragging still
-selects and copies.
+plain `http://` and `https://` URLs and Unix-style paths. Recognized text gains
+a local hover highlight where mouse-motion reporting is supported, then
+briefly flashes when clicked. URLs open in the initiating machine's default
+browser.
+
+Paths are checked read-only against the remote pane's current working
+directory. The default `path_open = "ask"` dialog offers **Always inside
+Railmux**, **Inside this time**, **Always separate terminal**, and **Separate
+terminal this time**. Persistent behavior can be changed under **More →
+Options → Clicked paths in railmux ssh**.
+
+The inside-Railmux choice gives each agent slot one reusable shell and one
+reusable Vim viewer below it. `t` selects the shell and `T` returns to Vim.
+Clicking another supported code, text, log, or HTML file reuses that Vim
+process and opens a native tab instead of closing the previous file; use
+Vim's `gt` / `gT` to move between tabs. Exiting the final Vim tab restores the
+shell automatically. Directories and unsupported file types select the shell
+and use the relevant directory when creating it. An existing shell keeps its
+working directory and running command instead of accepting injected `cd`
+keystrokes. The managed processes are parked by exact tmux identity during
+Railmux layout rebuilds rather than being killed.
+
+The separate-terminal choice SSHes into a directory or opens supported files
+in remote Vim at a detected `:line[:column]`. The Vim check is remote; no local
+Vim installation is needed. Unsupported file types or a remote without Vim
+fall back to the containing directory and print that fallback in the new
+terminal. The Railmux status can confirm only that the detached local terminal
+launcher started, not the later SSH/Vim outcome. On a local terminal for which
+Railmux has no safe window launcher, the equivalent quoted SSH command is
+copied instead. The launcher supports Terminal.app on macOS, common Linux
+terminal emulators, and Windows Terminal from WSL; Termux uses command-copy
+when a separate terminal is selected. A first click in another agent pane only
+focuses it, preserving normal preview/resume behavior; dragging still selects
+and copies.
 
 This first version deliberately recognizes unquoted paths without spaces.
 Relative paths printed in old history resolve against the pane's **current**
@@ -681,10 +710,11 @@ the historical lifetime lock, reconnecting presents an explicit replacement
 prompt. Approving it may detach every terminal attached to that managed
 Railmux session, but never kills the session or its agents.
 
-`--reconnect` is currently opt-in. It affects only an established display
-after at least one frame has been painted; it does not alter the initial SSH
-command or attach handshake. During its 60-second retry window, Ctrl-] or
-Ctrl-C cancels locally without stopping the remote workspace.
+Automatic reconnect affects only an established display after at least one
+frame has been painted; it does not alter the initial SSH command or attach
+handshake. During its 60-second retry window, Ctrl-] or Ctrl-C cancels locally
+without stopping the remote workspace. `--no-reconnect` disables it for one
+invocation.
 
 ### 4. Will automated review sessions pollute my session list?
 

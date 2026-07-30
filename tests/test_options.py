@@ -108,6 +108,17 @@ def test_options_claude_history_policy_persists(tmp_path, monkeypatch):
     assert app._settings.claude_history_policy == "native"
 
 
+def test_options_path_open_policy_persists(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+    modal._option_rows["path_open"][0].keypress((60,), "enter")
+    assert app._settings.path_open_policy == "internal"
+    modal._option_rows["path_open"][2].keypress((60,), "enter")
+    assert app._settings.path_open_policy == "external"
+
+
 def test_options_failed_claude_history_write_keeps_selected_policy(
     tmp_path, monkeypatch,
 ):

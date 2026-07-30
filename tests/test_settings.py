@@ -21,6 +21,7 @@ def test_defaults_when_no_file(settings):
     assert store.layout_profile is None
     assert store.layout_save_policy == "ask"
     assert store.claude_history_policy == "ask"
+    assert store.path_open_policy == "ask"
 
 
 def test_codex_policy_persists_in_existing_codex_table(settings):
@@ -83,6 +84,16 @@ def test_claude_history_policy_refreshes_after_helper_process_write(settings):
 
     assert helper.set_claude_history_policy("native")
     assert running_ui.claude_history_policy == "native"
+
+
+@pytest.mark.parametrize("policy", ["ask", "internal", "external"])
+def test_path_open_policy_round_trips_and_refreshes(settings, policy):
+    running_ui, path = settings
+    helper = Settings()
+
+    assert helper.set_path_open_policy(policy)
+    assert running_ui.path_open_policy == policy
+    assert tomlkit.parse(path.read_text()).unwrap()["ssh"]["path_open"] == policy
 
 
 def test_malformed_config_is_never_overwritten(tmp_path, monkeypatch):

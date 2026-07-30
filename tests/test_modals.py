@@ -250,11 +250,15 @@ def test_options_support_keyboard_mouse_and_failed_save():
         yolo_policy="never",
         update_policy="ask",
         claude_history_policy="ask",
+        path_open_policy="ask",
         on_layout_policy=lambda value: changes.append(("layout", value)) or True,
         on_yolo_policy=lambda value: value != "always",
         on_update_policy=lambda value: changes.append(("update", value)) or True,
         on_claude_history_policy=lambda value: (
             changes.append(("claude_history", value)) or True
+        ),
+        on_path_open_policy=lambda value: (
+            changes.append(("path_open", value)) or True
         ),
         on_close=lambda: changes.append(("close", "")),
     )
@@ -287,19 +291,22 @@ def test_options_render_current_policies_and_action_legend():
         yolo_policy="ask",
         update_policy="never",
         claude_history_policy="local",
+        path_open_policy="internal",
         on_layout_policy=lambda _value: True,
         on_yolo_policy=lambda _value: True,
         on_update_policy=lambda _value: True,
         on_claude_history_policy=lambda _value: True,
+        on_path_open_policy=lambda _value: True,
         on_close=lambda: None,
     )
 
-    text = _rendered_text(modal, size=(70, 40))
+    text = _rendered_text(modal, size=(70, 60))
 
     assert "Layout retention" in text
     assert "Codex auto-run (YOLO)" in text
     assert "Railmux updates" in text
     assert "Claude history in railmux ssh" in text
+    assert "Clicked paths in railmux ssh" in text
     assert "Local transcript" in text
     assert "[x] Always" in text
     assert "[x] Ask every time" in text
@@ -314,10 +321,12 @@ def test_options_keyboard_starts_on_current_layout_choice():
         yolo_policy="never",
         update_policy="ask",
         claude_history_policy="ask",
+        path_open_policy="ask",
         on_layout_policy=lambda value: changes.append(value) or True,
         on_yolo_policy=lambda _value: True,
         on_update_policy=lambda _value: True,
         on_claude_history_policy=lambda _value: True,
+        on_path_open_policy=lambda _value: True,
         on_close=lambda: None,
     )
 

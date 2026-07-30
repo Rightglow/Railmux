@@ -303,9 +303,10 @@ def open_remote_path(
             "warning",
             command.encode("utf-8"),
         )
-    label = (
-        "directory"
-        if directory
-        else "file" if regular_file and is_vim_text_path(path) else "file directory"
-    )
-    return OpenResult(True, f"Opened remote {label} in a new terminal", "success")
+    if directory:
+        message = "Opening remote directory · new terminal"
+    elif regular_file and is_vim_text_path(path):
+        message = "Opening remote file in Vim · new terminal"
+    else:
+        message = "Opening remote file's directory · new terminal"
+    return OpenResult(True, message, "success")

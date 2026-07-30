@@ -32,6 +32,7 @@ class Config:
     show_empty_projects: bool = False
     ssh_history_lines: int = SSH_HISTORY_DEFAULT_LINES
     ssh_claude_history: str = "ask"
+    ssh_path_open: str = "ask"
 
     def resolved_codex_home(self) -> Path:
         """The one resolved ``CODEX_HOME`` directory.
@@ -122,6 +123,14 @@ def load_config(config_path: Path | None = None) -> Config:
         raise ConfigError(
             'ssh.claude_history must be "ask", "local", or "native"'
         )
+    path_open = ssh.get("path_open", "ask")
+    if (
+        not isinstance(path_open, str)
+        or path_open not in choices_for("ssh.path_open")
+    ):
+        raise ConfigError(
+            'ssh.path_open must be "ask", "internal", or "external"'
+        )
 
     return Config(
         claude_binary=_string(
@@ -133,4 +142,5 @@ def load_config(config_path: Path | None = None) -> Config:
         show_empty_projects=projects.get("show_empty_projects") is True,
         ssh_history_lines=history_lines,
         ssh_claude_history=claude_history,
+        ssh_path_open=path_open,
     )

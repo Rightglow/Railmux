@@ -37,6 +37,16 @@ class SgrMouseEvent:
             return 0
         return -1 if base_button == 1 else 1
 
+    @property
+    def is_hover_motion(self) -> bool:
+        """Whether this is motion with no pressed mouse button."""
+        return (
+            self.pressed
+            and bool(self.button & 32)
+            and self.button & 3 == 3
+            and not self.button & 64
+        )
+
     def translated_y(self, offset: int) -> "SgrMouseEvent":
         """Translate a local projected row back into remote screen space."""
         if offset == 0:
@@ -290,6 +300,9 @@ class ClickTarget:
     pane_id: str
     line: int | None = None
     column: int | None = None
+    highlight_row: int | None = None
+    highlight_column: int | None = None
+    highlight_text: bytes = b""
 
 
 SelectionSegment = tuple[int, int, bytes]
@@ -452,12 +465,32 @@ def click_target_at(
                 and parsed.hostname is not None
                 and len(token.encode("utf-8")) <= 8192
             ):
-                return ClickTarget("url", token, pane_id)
+                start_cell = sum(
+                    _display_width(character) for character in text[:start]
+                )
+                return ClickTarget(
+                    "url",
+                    token,
+                    pane_id,
+                    highlight_column=start_cell,
+                    highlight_text=token.encode("utf-8"),
+                )
             return None
         path = _path_parts(token)
         if path is not None:
             value, line, target_column = path
-            return ClickTarget("path", value, pane_id, line, target_column)
+            start_cell = sum(
+                _display_width(character) for character in text[:start]
+            )
+            return ClickTarget(
+                "path",
+                value,
+                pane_id,
+                line,
+                target_column,
+                highlight_column=start_cell,
+                highlight_text=token.encode("utf-8"),
+            )
         return None
     return None
 
@@ -473,6 +506,9 @@ class LocalTextSelection:
         self._head: tuple[int, int] | None = None
         self._active = False
         self._semantic_open = False
+        self._flash: SelectionSegment | None = None
+        self._flash_until: float | None = None
+        self._hover: SelectionSegment | None = None
 
     @property
     def active(self) -> bool:
@@ -492,6 +528,82 @@ class LocalTextSelection:
         self._active = False
         self._semantic_open = False
         return was_active
+
+    @staticmethod
+    def _target_at(
+        event: SgrMouseEvent,
+        source: SelectionSource | None,
+    ) -> ClickTarget | None:
+        if (
+            source is None
+            or not source.semantic_open
+            or source.route.pane_id is None
+        ):
+            return None
+        row = event.y - 1 - source.route.y
+        column = event.x - 1 - source.route.x
+        if not 0 <= row < len(source.rows):
+            return None
+        cells = _plain_display_cells(source.rows[row], source.route.width)
+        target = click_target_at(cells, column, pane_id=source.route.pane_id)
+        if target is None or target.highlight_column is None:
+            return None
+        return replace(
+            target,
+            highlight_row=source.route.y + row,
+            highlight_column=source.route.x + target.highlight_column,
+        )
+
+    def hover(
+        self,
+        event: SgrMouseEvent,
+        source: SelectionSource | None,
+    ) -> bool:
+        """Update a local-only semantic hover without forwarding motion."""
+        if not event.is_hover_motion or self.capturing or self.active:
+            changed = self._hover is not None
+            self._hover = None
+            return changed
+        target = self._target_at(event, source)
+        hover = (
+            None
+            if target is None
+            else (
+                target.highlight_row,
+                target.highlight_column,
+                target.highlight_text,
+            )
+        )
+        changed = hover != self._hover
+        self._hover = hover
+        return changed
+
+    def flash(self, target: ClickTarget, *, now: float, duration: float) -> bool:
+        if (
+            target.highlight_row is None
+            or target.highlight_column is None
+            or not target.highlight_text
+            or duration <= 0
+        ):
+            return False
+        self._flash = (
+            target.highlight_row,
+            target.highlight_column,
+            target.highlight_text,
+        )
+        self._flash_until = now + duration
+        return True
+
+    def clear_expired_flash(self, now: float) -> bool:
+        if (
+            self._flash is None
+            or self._flash_until is None
+            or now < self._flash_until
+        ):
+            return False
+        self._flash = None
+        self._flash_until = None
+        return True
 
     def validate_routes(
         self,
@@ -592,6 +704,19 @@ class LocalTextSelection:
                         )
                         else None
                     )
+                    if (
+                        target is not None
+                        and self._route is not None
+                        and self._anchor is not None
+                        and target.highlight_column is not None
+                    ):
+                        target = replace(
+                            target,
+                            highlight_row=self._route.y + self._anchor[1],
+                            highlight_column=(
+                                self._route.x + target.highlight_column
+                            ),
+                        )
                     self.cancel()
                     return SelectionAction(
                         handled=True,
@@ -615,7 +740,8 @@ class LocalTextSelection:
             )
 
         if self._is_plain_left_press(event) and source is not None:
-            repaint = self.cancel()
+            repaint = self.cancel() or self._hover is not None
+            self._hover = None
             self._begin(event, source)
             return SelectionAction(handled=True, repaint=repaint)
 
@@ -673,8 +799,10 @@ class LocalTextSelection:
 
     def segments(self) -> tuple[SelectionSegment, ...]:
         """Return reverse-video text runs in logical screen coordinates."""
+        flash = (self._flash,) if self._flash is not None else ()
+        hover = (self._hover,) if self._hover is not None else ()
         if not self._active or self._route is None:
-            return ()
+            return (*hover, *flash)
         start, end = self._ordered_points()
         segments: list[SelectionSegment] = []
         for row in range(start[1], end[1] + 1):
@@ -689,7 +817,7 @@ class LocalTextSelection:
                     text.encode("utf-8"),
                 )
             )
-        return tuple(segments)
+        return (*segments, *hover, *flash)
 
 
 def page_key_direction(data: bytes) -> int:

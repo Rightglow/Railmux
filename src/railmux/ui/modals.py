@@ -694,10 +694,12 @@ class OptionsModal(urwid.WidgetWrap):
         yolo_policy: str,
         update_policy: str,
         claude_history_policy: str,
+        path_open_policy: str,
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
         on_claude_history_policy: Callable[[str], bool],
+        on_path_open_policy: Callable[[str], bool],
         on_close: Callable[[], None],
     ) -> None:
         self._on_close = on_close
@@ -706,12 +708,14 @@ class OptionsModal(urwid.WidgetWrap):
             "yolo": yolo_policy,
             "update": update_policy,
             "claude_history": claude_history_policy,
+            "path_open": path_open_policy,
         }
         self._callbacks = {
             "layout": on_layout_policy,
             "yolo": on_yolo_policy,
             "update": on_update_policy,
             "claude_history": on_claude_history_policy,
+            "path_open": on_path_open_policy,
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
         rows: list[urwid.Widget] = [
@@ -780,6 +784,27 @@ class OptionsModal(urwid.WidgetWrap):
                 ("local", "Local transcript"),
                 ("ask", "Ask on first scroll"),
                 ("native", "Claude native"),
+            ),
+        ))
+        rows.extend([
+            urwid.Divider(),
+            urwid.Text(("title", "Clicked paths in railmux ssh")),
+            urwid.Text(
+                "Choose whether remote files open in the managed Vim below "
+                "the target agent or in a separate local terminal."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "path_open",
+            {
+                "internal": "managed Vim; t selects shell and T returns to Vim",
+                "ask": "ask before choosing an opening surface",
+                "external": "new local terminal SSHed to the same remote host",
+            },
+            labels=(
+                ("internal", "Inside Railmux"),
+                ("ask", "Ask every time"),
+                ("external", "Separate terminal"),
             ),
         ))
         rows.extend([

@@ -102,6 +102,7 @@ def test_remote_path_uses_macos_terminal_or_copies_safe_command(monkeypatch):
     )
 
     assert opened.opened
+    assert opened.message == "Opening remote file in Vim · new terminal"
     assert launched[0][0] == "/usr/bin/osascript"
     assert "ssh -t -- host" in launched[0][-1]
 
@@ -144,6 +145,7 @@ def test_remote_path_uses_new_wsl_terminal_tab(monkeypatch):
     )
 
     assert result.opened
+    assert result.message == "Opening remote file in Vim · new terminal"
     assert len(launched) == 1
     assert launched[0][:-1] == (
         "/mnt/c/Windows/System32/wt.exe",
@@ -160,3 +162,29 @@ def test_remote_path_uses_new_wsl_terminal_tab(monkeypatch):
         "host",
     )
     assert "command -v vim" in launched[0][-1]
+
+
+def test_remote_path_status_distinguishes_directory_and_binary(monkeypatch):
+    monkeypatch.setattr(local_open.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        local_open.shutil,
+        "which",
+        lambda name: "/usr/bin/osascript" if name == "osascript" else None,
+    )
+    monkeypatch.setattr(local_open, "_detached_popen", lambda _argv: None)
+
+    directory = local_open.open_remote_path(
+        "host",
+        ssh_args=(),
+        path="/remote/project",
+        directory=True,
+    )
+    binary = local_open.open_remote_path(
+        "host",
+        ssh_args=(),
+        path="/remote/project/model.bin",
+        directory=False,
+    )
+
+    assert directory.message == "Opening remote directory · new terminal"
+    assert binary.message == "Opening remote file's directory · new terminal"

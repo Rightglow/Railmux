@@ -39,6 +39,7 @@ from railmux.help_workspace import (
     materialize_help_workspace,
 )
 from railmux.settings import LayoutProfile, Settings
+from railmux.tool_panes import ToolPaneManager, manager_for_session
 from railmux.launcher import (
     build_codex_new_command,
     build_codex_resume_command,
@@ -514,6 +515,7 @@ class App:
     _attention_notice_key: tuple[str, int] | None = None
     _tip_index: int = 0
     _tip_since: float = 0.0
+    _managed_tool_panes: ToolPaneManager | None = None
     # railmux's status line is rendered into the OUTER tmux status bar (full
     # terminal width) — there is no in-pane status widget. Off until run() wires
     # it up; session-scoped so it never touches the user's global tmux config.
@@ -3290,7 +3292,14 @@ class App:
         # good Always preference during exit.
         self._active_sidebar_permille = None
         self._active_primary_permille = None
+        if not self._suspend_tool_panes():
+            self._set_status(
+                "Layout change stopped: a terminal could not be parked safely.",
+                "error",
+            )
+            return
         committed = self._rotate_split_attempt()
+        self._reconcile_tool_panes()
         if (self._agent_workspace().presentation
                 is WorkspacePresentation.COMPACT):
             self._restore_compact_page()
@@ -4629,15 +4638,29 @@ class App:
                 "refresh automatically.")
             return True
 
+        def set_path_open(policy: str) -> bool:
+            if not self._settings.set_path_open_policy(policy):
+                self._set_status(
+                    "Could not save clicked-path option; setting unchanged.",
+                    "error",
+                )
+                return False
+            self._set_status(
+                f"Clicked paths in railmux ssh: {policy}; "
+                "applies to the next click.")
+            return True
+
         modal = OptionsModal(
             layout_policy=self._settings.layout_save_policy,
             yolo_policy=self._settings.codex_yolo_policy,
             update_policy=self._settings.update_policy,
             claude_history_policy=self._settings.claude_history_policy,
+            path_open_policy=self._settings.path_open_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
             on_claude_history_policy=set_claude_history,
+            on_path_open_policy=set_path_open,
             on_close=self._close_options_modal,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
@@ -4673,6 +4696,75 @@ class App:
 
     # --- project shortcut: terminal ---
 
+    def _get_tool_pane_manager(self) -> ToolPaneManager | None:
+        existing = getattr(self, "_managed_tool_panes", None)
+        session_id = tmux_ctl.current_session_id()
+        if session_id is None:
+            return None
+        if (
+            existing is not None
+            and existing.outer_session_id == session_id
+        ):
+            return existing
+        manager = manager_for_session(session_id)
+        self._managed_tool_panes = manager
+        return manager
+
+    def _tool_owner_panes(self) -> dict[str, str | None]:
+        workspace = self._agent_workspace()
+        return {
+            AgentWorkspace.PRIMARY: workspace.primary.pane_id,
+            AgentWorkspace.SECONDARY: workspace.secondary.pane_id,
+        }
+
+    def _reconcile_tool_panes(self) -> None:
+        manager = self._get_tool_pane_manager()
+        if manager is not None:
+            manager.reconcile(self._tool_owner_panes())
+
+    def _suspend_tool_panes(self) -> bool:
+        manager = self._get_tool_pane_manager()
+        if manager is None:
+            return True
+        succeeded = True
+        for slot in self._agent_workspace().slots:
+            if not manager.suspend(slot.key):
+                succeeded = False
+        if not succeeded:
+            # A two-slot transition can fail after the first surface was
+            # parked. Restore every safely recoverable surface before the
+            # caller aborts its layout mutation.
+            manager.reconcile(self._tool_owner_panes())
+        return succeeded
+
+    def _open_managed_terminal(self, path: Path) -> None:
+        slot = self._sync_target_slot_from_tmux()
+        pane_id = slot.pane_id
+        manager = self._get_tool_pane_manager()
+        if (
+            manager is None
+            or pane_id is None
+            or not tmux_ctl.pane_alive(pane_id)
+        ):
+            self._set_status("Could not identify the target agent pane.", "error")
+            return
+        result = manager.open_shell(slot.key, pane_id, path)
+        self._set_status(result.message, result.level)
+        if result.ok:
+            self._set_railmux_focus(False)
+
+    def _focus_managed_viewer(self) -> None:
+        slot = self._sync_target_slot_from_tmux()
+        pane_id = slot.pane_id
+        manager = self._get_tool_pane_manager()
+        if manager is None or pane_id is None:
+            self._set_status("No Vim viewer is open for this agent.", "warn")
+            return
+        result = manager.focus_viewer(slot.key, pane_id)
+        self._set_status(result.message, result.level)
+        if result.ok:
+            self._set_railmux_focus(False)
+
     def _active_project(self) -> Project | None:
         """Project to act on for the terminal shortcut.
 
@@ -4686,31 +4778,11 @@ class App:
         return self._selected_project
 
     def _open_terminal_for_active_project(self) -> None:
-        import os
-        import shlex
-        import subprocess as _sp
         proj = self._active_project()
         if proj is None:
             self._set_status("no project focused/selected")
             return
-        shell = os.environ.get("SHELL", "/bin/bash")
-        cmd = f"cd {shlex.quote(str(proj.real_path))} && exec {shlex.quote(shell)}"
-        # Split below the explicit active agent. If no agent pane exists, tmux
-        # falls back to the current pane as before.
-        pane_id = self._sync_target_slot_from_tmux().pane_id
-        target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
-        new_pane = tmux_ctl.split_window_v(cmd, target=target)
-        if not new_pane:
-            self._set_status("failed to split for terminal")
-            return
-        # Auto-close the pane when the shell exits (default, but be explicit).
-        _sp.run(
-            ["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
-            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-        )
-        tmux_ctl.select_pane(new_pane)
-        self._set_railmux_focus(False)
-        self._set_status(f"terminal: {proj.display_name}  (Ctrl-B then arrow = move panes)")
+        self._open_managed_terminal(proj.real_path)
 
     def _on_detach(self) -> None:
         """Detach from Railmux while keeping every agent session alive."""
@@ -7507,6 +7579,7 @@ class App:
                 del self._running[key]
 
         self._reconcile_display_slots(session_is_alive, pane_is_alive)
+        self._reconcile_tool_panes()
 
         # Promote any `__new__-N` placeholders to their real session id — in
         # BOTH Claude and Codex mode. While a session stays a placeholder its
@@ -8897,40 +8970,10 @@ class App:
 
     def _open_terminal_for_path(self, path: Path) -> None:
         """Open a terminal in *path*, including unresolved new projects."""
-        import os
-        import shlex
-        import subprocess as _sp
-        shell = os.environ.get("SHELL", "/bin/bash")
-        cmd = f"cd {shlex.quote(str(path))} && exec {shlex.quote(shell)}"
-        pane_id = self._sync_target_slot_from_tmux().pane_id
-        target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
-        new_pane = tmux_ctl.split_window_v(cmd, target=target)
-        if not new_pane:
-            self._set_status("failed to split for terminal")
-            return
-        _sp.run(["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
-                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-        tmux_ctl.select_pane(new_pane)
-        self._set_railmux_focus(False)
-        self._set_status(f"terminal: {path.name or path}")
+        self._open_managed_terminal(path)
 
     def _do_context_term(self, session: SessionMeta) -> None:
-        import os
-        import shlex
-        import subprocess as _sp
-        shell = os.environ.get("SHELL", "/bin/bash")
-        cmd = f"cd {shlex.quote(str(session.project.real_path))} && exec {shlex.quote(shell)}"
-        pane_id = self._sync_target_slot_from_tmux().pane_id
-        target = pane_id if (pane_id and tmux_ctl.pane_alive(pane_id)) else None
-        new_pane = tmux_ctl.split_window_v(cmd, target=target)
-        if not new_pane:
-            self._set_status("failed to split for terminal")
-            return
-        _sp.run(["tmux", "set-option", "-p", "-t", new_pane, "remain-on-exit", "off"],
-                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
-        tmux_ctl.select_pane(new_pane)
-        self._set_railmux_focus(False)
-        self._set_status(f"terminal: {session.project.display_name}")
+        self._open_managed_terminal(session.project.real_path)
 
     def _do_context_delete(self, session: SessionMeta) -> None:
         title = session.display_title
@@ -9080,21 +9123,29 @@ class App:
                     sidebar_permille=sidebar_permille,
                     exit_margin=True):
                 return None
-            result = (
-                "restored"
-                if self._restore_adaptive_dual_view()
-                else "failed"
-            )
+            if not self._suspend_tool_panes():
+                result = "failed"
+            else:
+                result = (
+                    "restored"
+                    if self._restore_adaptive_dual_view()
+                    else "failed"
+                )
+                self._reconcile_tool_panes()
             if result == "failed":
                 self._adaptive_single_failed_geometry = (width, height)
             return result
         if (workspace.layout is not WorkspaceLayout.SINGLE
                 and not self._wide_layout_fits_geometry(width, height)):
-            result = (
-                "entered"
-                if self._enter_adaptive_single_view()
-                else "failed"
-            )
+            if not self._suspend_tool_panes():
+                result = "failed"
+            else:
+                result = (
+                    "entered"
+                    if self._enter_adaptive_single_view()
+                    else "failed"
+                )
+                self._reconcile_tool_panes()
             if result == "failed":
                 self._adaptive_single_failed_geometry = (width, height)
             return result

@@ -202,6 +202,23 @@ class Settings:
             return False
         return self._update_section("ssh", {"claude_history": policy})
 
+    # -- Fast SSH clicked paths -----------------------------------------
+    @property
+    def path_open_policy(self) -> str:
+        self._load()
+        policy = self._get("ssh", "path_open")
+        return (
+            policy
+            if isinstance(policy, str)
+            and policy in choices_for("ssh.path_open")
+            else "ask"
+        )
+
+    def set_path_open_policy(self, policy: str) -> bool:
+        if policy not in choices_for("ssh.path_open"):
+            return False
+        return self._update_section("ssh", {"path_open": policy})
+
     # -- Saved outer-workspace geometry ---------------------------------
     @property
     def layout_save_policy(self) -> str:

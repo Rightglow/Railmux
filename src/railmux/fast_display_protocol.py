@@ -1,4 +1,4 @@
-"""Private v13 framing for the coalesced full-window SSH display."""
+"""Private v14 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD13\x00"
-INPUT_MAGIC = b"RMUXK13\x00"
-PROTOCOL_VERSION = 13
+DISPLAY_MAGIC = b"RMUXD14\x00"
+INPUT_MAGIC = b"RMUXK14\x00"
+PROTOCOL_VERSION = 14
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
 REMOTE_START = b"RAILMUX-START/1\n"
@@ -33,7 +33,9 @@ _HISTORY_BATCH_METADATA = struct.Struct(">II")
 _HISTORY_PANE_METADATA = struct.Struct(">IHHHHB")
 _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
 _PATH_REQUEST = struct.Struct(">IIH")
-_PATH_RESULT = struct.Struct(">IBH")
+_PATH_RESULT = struct.Struct(">IBBH")
+_PATH_OPEN_REQUEST = struct.Struct(">IIBBIIH")
+_PATH_OPEN_RESULT = struct.Struct(">IBBH")
 _HISTORY_MOUSE_FORWARDABLE = 1 << 0
 _HISTORY_TRANSCRIPT_BACKED = 1 << 1
 _HISTORY_MORE_AVAILABLE = 1 << 2
@@ -60,6 +62,7 @@ class OutputKind(IntEnum):
     CLAUDE_HISTORY_POLICY = 4
     CLIPBOARD = 5
     PATH_RESULT = 6
+    PATH_OPEN_RESULT = 7
 
 
 class InputKind(IntEnum):
@@ -71,6 +74,7 @@ class InputKind(IntEnum):
     HEARTBEAT = 6
     SET_CLAUDE_HISTORY = 7
     RESOLVE_PATH = 8
+    OPEN_PATH = 9
 
 
 class PathKind(IntEnum):
@@ -80,6 +84,12 @@ class PathKind(IntEnum):
     FILE = 1
     DIRECTORY = 2
     OTHER = 3
+
+
+class PathOpenPolicy(IntEnum):
+    ASK = 0
+    INTERNAL = 1
+    EXTERNAL = 2
 
 
 class TerminalMode(IntFlag):
@@ -165,6 +175,17 @@ class PathResult:
     request_id: int
     kind: PathKind
     path: str = ""
+    policy: str = "ask"
+
+
+@dataclass(frozen=True)
+class PathOpenResult:
+    """Outcome of a revalidated internal/external path-open choice."""
+
+    request_id: int
+    applied: bool
+    level: str
+    message: str
 
 
 @dataclass(frozen=True)
@@ -401,10 +422,62 @@ def encode_path_result(result: PathResult) -> bytes:
         raise ValueError("invalid resolved path")
     payload = (
         bytes((int(OutputKind.PATH_RESULT),))
-        + _PATH_RESULT.pack(result.request_id, int(result.kind), len(encoded))
+        + _PATH_RESULT.pack(
+            result.request_id,
+            int(result.kind),
+            int(_path_open_policy(result.policy)),
+            len(encoded),
+        )
         + encoded
     )
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
+def encode_path_open_result(result: PathOpenResult) -> bytes:
+    levels = {"info": 0, "success": 1, "warning": 2, "error": 3}
+    if (
+        not 0 <= result.request_id <= 0xFFFFFFFF
+        or result.level not in levels
+        or not isinstance(result.applied, bool)
+    ):
+        raise ValueError("invalid path-open result")
+    encoded = result.message.encode("utf-8")
+    if not encoded or len(encoded) > 4096 or b"\x00" in encoded:
+        raise ValueError("invalid path-open result message")
+    payload = (
+        bytes((int(OutputKind.PATH_OPEN_RESULT),))
+        + _PATH_OPEN_RESULT.pack(
+            result.request_id,
+            int(result.applied),
+            levels[result.level],
+            len(encoded),
+        )
+        + encoded
+    )
+    return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
+def _path_open_policy(policy: str) -> PathOpenPolicy:
+    values = {
+        "ask": PathOpenPolicy.ASK,
+        "internal": PathOpenPolicy.INTERNAL,
+        "external": PathOpenPolicy.EXTERNAL,
+    }
+    try:
+        return values[policy]
+    except KeyError as exc:
+        raise ValueError("invalid path-open policy") from exc
+
+
+def _decode_path_open_policy(value: int, *, allow_ask: bool = True) -> str:
+    values = {
+        int(PathOpenPolicy.ASK): "ask",
+        int(PathOpenPolicy.INTERNAL): "internal",
+        int(PathOpenPolicy.EXTERNAL): "external",
+    }
+    if value not in values or (not allow_ask and value == int(PathOpenPolicy.ASK)):
+        raise ValueError("invalid path-open policy")
+    return values[value]
 
 
 def _decompress_rows(data: bytes, expected_size: int) -> bytes:
@@ -681,10 +754,11 @@ class ServerMessageDecoder:
                 if output_kind is OutputKind.PATH_RESULT:
                     if len(body) < _PATH_RESULT.size:
                         raise ValueError("truncated path result")
-                    request_id, raw_kind, size = _PATH_RESULT.unpack(
+                    request_id, raw_kind, raw_policy, size = _PATH_RESULT.unpack(
                         body[:_PATH_RESULT.size]
                     )
                     kind = PathKind(raw_kind)
+                    policy = _decode_path_open_policy(raw_policy)
                     encoded = body[_PATH_RESULT.size:]
                     if len(encoded) != size or size > MAX_PATH_BYTES:
                         raise ValueError("invalid path result size")
@@ -694,7 +768,35 @@ class ServerMessageDecoder:
                             raise ValueError("invalid unavailable path result")
                     elif not path or "\x00" in path:
                         raise ValueError("invalid resolved path")
-                    messages.append(PathResult(request_id, kind, path))
+                    messages.append(PathResult(request_id, kind, path, policy))
+                    continue
+                if output_kind is OutputKind.PATH_OPEN_RESULT:
+                    if len(body) < _PATH_OPEN_RESULT.size:
+                        raise ValueError("truncated path-open result")
+                    request_id, applied, raw_level, size = _PATH_OPEN_RESULT.unpack(
+                        body[:_PATH_OPEN_RESULT.size]
+                    )
+                    levels = {
+                        0: "info",
+                        1: "success",
+                        2: "warning",
+                        3: "error",
+                    }
+                    encoded = body[_PATH_OPEN_RESULT.size:]
+                    if (
+                        applied not in (0, 1)
+                        or raw_level not in levels
+                        or len(encoded) != size
+                        or not 1 <= size <= 4096
+                        or b"\x00" in encoded
+                    ):
+                        raise ValueError("invalid path-open result")
+                    messages.append(PathOpenResult(
+                        request_id,
+                        bool(applied),
+                        levels[raw_level],
+                        encoded.decode("utf-8"),
+                    ))
                     continue
                 if len(body) < _UPDATE_METADATA.size:
                     raise ValueError("truncated screen metadata")
@@ -740,7 +842,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v13 control-response messages."""
+    """Compatibility view which ignores v14 control-response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()
@@ -825,6 +927,59 @@ def encode_path_request(request_id: int, pane_id: str, path: str) -> bytes:
     )
 
 
+def encode_path_open_request(
+    request_id: int,
+    pane_id: str,
+    path: str,
+    *,
+    policy: str,
+    persistent: bool,
+    line: int | None = None,
+    column: int | None = None,
+) -> bytes:
+    if not isinstance(persistent, bool):
+        raise ValueError("invalid path-open persistence")
+    if policy not in {"internal", "external"}:
+        raise ValueError("invalid path-open policy")
+    if (
+        line is not None
+        and (
+            not isinstance(line, int)
+            or isinstance(line, bool)
+            or not 1 <= line <= 0xFFFFFFFF
+        )
+    ):
+        raise ValueError("invalid path-open line")
+    if (
+        column is not None
+        and (
+            line is None
+            or not isinstance(column, int)
+            or isinstance(column, bool)
+            or not 1 <= column <= 0xFFFFFFFF
+        )
+    ):
+        raise ValueError("invalid path-open column")
+    # Reuse the path request's strict identity and text validation.
+    encoded_request = encode_path_request(request_id, pane_id, path)
+    header = len(INPUT_MAGIC) + LENGTH_BYTES + 1
+    raw = encoded_request[header:]
+    path_request_id, pane_number, size = _PATH_REQUEST.unpack(
+        raw[:_PATH_REQUEST.size]
+    )
+    encoded = raw[_PATH_REQUEST.size:]
+    payload = _PATH_OPEN_REQUEST.pack(
+        path_request_id,
+        pane_number,
+        int(_path_open_policy(policy)),
+        int(persistent),
+        line or 0,
+        column or 0,
+        size,
+    ) + encoded
+    return _encode_input_message(InputKind.OPEN_PATH, payload)
+
+
 def decode_path_request(data: bytes) -> tuple[int, str, str]:
     if len(data) < _PATH_REQUEST.size:
         raise ValueError("invalid path request")
@@ -842,6 +997,37 @@ def decode_path_request(data: bytes) -> tuple[int, str, str]:
     ):
         raise ValueError("invalid path request")
     return request_id, f"%{pane_number}", encoded.decode("utf-8")
+
+
+def decode_path_open_request(
+    data: bytes,
+) -> tuple[int, str, str, str, bool, int | None, int | None]:
+    if len(data) < _PATH_OPEN_REQUEST.size:
+        raise ValueError("invalid path-open request")
+    request_id, pane_number, raw_policy, persistent, line, column, size = (
+        _PATH_OPEN_REQUEST.unpack(data[:_PATH_OPEN_REQUEST.size])
+    )
+    encoded = data[_PATH_OPEN_REQUEST.size:]
+    if (
+        pane_number == 0
+        or persistent not in (0, 1)
+        or (line == 0 and column != 0)
+        or len(encoded) != size
+        or not 1 <= size <= MAX_PATH_BYTES
+        or b"\x00" in encoded
+        or b"\n" in encoded
+        or b"\r" in encoded
+    ):
+        raise ValueError("invalid path-open request")
+    return (
+        request_id,
+        f"%{pane_number}",
+        encoded.decode("utf-8"),
+        _decode_path_open_policy(raw_policy, allow_ask=False),
+        bool(persistent),
+        line or None,
+        column or None,
+    )
 
 
 def decode_claude_history_policy(data: bytes) -> str:
@@ -971,6 +1157,14 @@ class InputFrameDecoder:
                         len(message_data) < _PATH_REQUEST.size
                         or len(message_data)
                         > _PATH_REQUEST.size + MAX_PATH_BYTES
+                    )
+                )
+                or (
+                    kind is InputKind.OPEN_PATH
+                    and (
+                        len(message_data) < _PATH_OPEN_REQUEST.size
+                        or len(message_data)
+                        > _PATH_OPEN_REQUEST.size + MAX_PATH_BYTES
                     )
                 )
             ):

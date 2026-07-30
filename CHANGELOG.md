@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.19.dev202607302] - 2026-07-30
+
+### Added
+
+- Add a per-agent managed shell and Vim surface: `t` returns to the shell,
+  `T` returns to Vim, subsequent clicked files use native Vim tabs, and layout
+  rebuilds park the exact processes without killing them.
+- Let the first clicked remote path choose **Always** or **This time** for
+  opening inside Railmux or in a separate terminal; expose the persistent
+  Ask/Inside/Separate policy in Options.
+- Highlight recognized URL/path text on local `railmux ssh` hover and briefly
+  flash the token when it is clicked without forwarding pointer motion.
+
+### Changed
+
+- Advance the private SSH display protocol to v14 with bounded path-open
+  choices and acknowledgements; managed tool panes are excluded from agent
+  history and semantic-click routing.
+- Enable bounded post-attach `railmux ssh` reconnection by default, with
+  `--no-reconnect` as an explicit one-invocation opt-out.
+- Clarify whether a clicked remote path is opening in Vim, opening a directory,
+  or opening an unsupported file's containing directory, and document that
+  the Vim capability is checked remotely.
+- Add a concise VS Code/Cursor CJK input-method recovery note for stuck
+  xterm.js composition focus and `Ctrl-Space` conflicts.
+
 ## [0.2.19.dev202607301] - 2026-07-30
 
 ### Added
@@ -1363,6 +1389,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initial PyPI release under the Railmux name.
 
 [Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607300...HEAD
+[0.2.19.dev202607302]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607301...v0.2.19.dev202607302
+[0.2.19.dev202607301]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607300...v0.2.19.dev202607301
 [0.2.19.dev202607300]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607292...v0.2.19.dev202607300
 [0.2.19.dev202607292]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607291...v0.2.19.dev202607292
 [0.2.19.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607290...v0.2.19.dev202607291

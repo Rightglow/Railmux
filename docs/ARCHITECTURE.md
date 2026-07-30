@@ -174,7 +174,7 @@ feedback only: it grants no protocol authority and is replaced by the first
 validated display keyframe. Authentication, compatibility, installation, and
 attach prompts remain cooked-mode interactions.
 
-Protocol v13 reports a second bounded status after the attach boundary and
+Protocol v14 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45
@@ -189,7 +189,7 @@ One BUSY status is treated as ordinary v8 attach contention: the local client
 starts one fresh non-replacement helper before offering takeover. Only a second
 BUSY is persistent enough to justify the destructive-sounding consent prompt.
 
-Opt-in automatic reconnect is a narrower post-attach path. It becomes eligible
+Default-on automatic reconnect is a narrower post-attach path. It becomes eligible
 only after at least one valid screen frame and only for an unexpected reaped
 process status; local EOF/escape, native detach, soft quit, and hard quit are
 terminal outcomes. A retry uses a fresh compatibility hello and ordinary
@@ -802,6 +802,22 @@ the containing directory. Unsupported local terminal launchers copy the
 shell-quoted command instead. Clean clicks in an unfocused agent continue to
 mean focus, and drags continue to mean selection, so semantic recognition
 cannot replace either established gesture.
+
+Protocol v14 separates path validation from the requested destination. The
+first response includes the remote workspace's Ask/Inside/Separate policy; an
+Inside or Separate choice is returned in a bounded typed request and the
+server revalidates pane identity, current working directory, path type, and
+access before taking action. A persistent choice updates only the shared
+remote `config.toml`.
+
+Inside-Railmux tools are session-scoped tmux processes, with at most one shell
+and one Vim viewer for each agent slot. Pane ID, pane PID, session ID, and
+window ID are recorded together. The inactive process is kept in a
+Railmux-marked private parking session and swapped into the outer layout only
+after those identities revalidate. Layout rebuilds park visible tools first;
+failed identity or swap checks stop the transition rather than killing or
+guessing at a pane. Tool panes carry a pane-local marker so the SSH history and
+semantic-click router can exclude them without extra polling subprocesses.
 
 Vertical wheel input also fails closed while agent geometry is unknown
 and on the one-cell tmux border around a known agent; losing one transitional

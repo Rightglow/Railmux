@@ -80,7 +80,9 @@ BINDINGS: list[Binding] = [
     Binding(("-",), "-", "Less", "_collapse_button_bar",
             contexts=_ALL_CTX, show_in_hint=False),
     # All three — opens a shell in the active project's directory.
-    Binding(("t", "T"), "t", "term", "_open_terminal_for_active_project",
+    Binding(("t",), "t", "term", "_open_terminal_for_active_project",
+            contexts=_ALL_CTX),
+    Binding(("T",), "T", "Vim", "_focus_managed_viewer",
             contexts=_ALL_CTX),
     # Space is reliably distinct across traditional and extended terminals.
     Binding((" ",), "␣", "preview",

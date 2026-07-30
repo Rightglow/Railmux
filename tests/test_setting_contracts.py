@@ -13,6 +13,7 @@ from railmux.setting_contracts import (
 def test_ssh_setting_contracts_pin_values_and_activation_boundaries():
     history = SETTING_CONTRACTS["ssh.history_lines"]
     claude = SETTING_CONTRACTS["ssh.claude_history"]
+    path_open = SETTING_CONTRACTS["ssh.path_open"]
 
     assert (history.minimum, history.maximum) == (
         SSH_HISTORY_MIN_LINES,
@@ -24,6 +25,8 @@ def test_ssh_setting_contracts_pin_values_and_activation_boundaries():
         "next_ssh_invocation",
         "next_remote_history_refresh",
     )
+    assert path_open.choices == frozenset({"ask", "internal", "external"})
+    assert path_open.effects == ("next_path_click",)
 
 
 def test_config_loader_enforces_the_declared_numeric_contract(

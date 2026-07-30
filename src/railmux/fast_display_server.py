@@ -40,7 +40,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Sequence
 
-from railmux import __version__, restart_state, tmux_health, tmux_server
+from railmux import (
+    __version__,
+    local_open,
+    restart_state,
+    tmux_health,
+    tmux_server,
+)
 from railmux import transcript as transcript_renderer
 from railmux.fast_display_protocol import (
     HistoryBatch,
@@ -50,6 +56,7 @@ from railmux.fast_display_protocol import (
     MAX_CLIPBOARD_BYTES,
     MAX_HISTORY_LINES,
     PathKind,
+    PathOpenResult,
     PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
@@ -64,14 +71,21 @@ from railmux.fast_display_protocol import (
     decode_history_prefetch,
     decode_history_request,
     decode_path_request,
+    decode_path_open_request,
     encode_claude_history_policy_result,
     encode_clipboard_copy,
     encode_history_batch,
     encode_history_snapshot,
     encode_path_result,
+    encode_path_open_result,
     encode_update,
 )
 from railmux.settings import Settings
+from railmux.tool_panes import (
+    TOOL_PANE_OPTION,
+    is_tool_pane_marker,
+    manager_for_session,
+)
 
 
 class DisplayServerError(RuntimeError):
@@ -788,7 +802,8 @@ def _list_agent_panes(
                 "#{pane_top}\t#{pane_width}\t#{pane_height}\t"
                 "#{history_size}\t#{alternate_on}\t#{mouse_any_flag}\t"
                 f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}}\t"
-                f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}}",
+                f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}}\t"
+                f"#{{{TOOL_PANE_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -803,7 +818,7 @@ def _list_agent_panes(
     for raw_row in output.splitlines():
         fields = raw_row.split("\t")
         if (
-            len(fields) != 15
+            len(fields) != 16
             or fields[0] != session_id
             or fields[2] not in ("0", "1")
             or fields[3] not in ("0", "1")
@@ -834,6 +849,8 @@ def _list_agent_panes(
         ):
             return ()
         seen.add(pane_id)
+        if is_tool_pane_marker(fields[15], outer_session_id=session_id):
+            continue
         history_server = None
         history_pane_id = None
         marker = fields[13]
@@ -936,6 +953,8 @@ def resolve_path_result(
     request_id: int,
     pane_id: str,
     raw_path: str,
+    *,
+    path_open_policy: str | None = None,
 ) -> PathResult:
     """Resolve one explicit click against a currently visible agent pane."""
     pane = next(
@@ -983,7 +1002,98 @@ def resolve_path_result(
         or "\r" in text
     ):
         return PathResult(request_id, PathKind.UNAVAILABLE)
-    return PathResult(request_id, kind, text)
+    policy = path_open_policy or Settings().path_open_policy
+    return PathResult(request_id, kind, text, policy)
+
+
+def apply_path_open_request(
+    session_id: str,
+    request_id: int,
+    pane_id: str,
+    raw_path: str,
+    policy: str,
+    persistent: bool,
+    line: int | None,
+    column: int | None,
+) -> PathOpenResult:
+    """Revalidate and apply one explicit clicked-path destination choice."""
+    resolved = resolve_path_result(
+        session_id,
+        request_id,
+        pane_id,
+        raw_path,
+        path_open_policy=policy,
+    )
+    if resolved.kind is PathKind.UNAVAILABLE:
+        return PathOpenResult(
+            request_id,
+            False,
+            "warning",
+            "Path is no longer available in this remote workspace",
+        )
+    if persistent and not Settings().set_path_open_policy(policy):
+        return PathOpenResult(
+            request_id,
+            False,
+            "error",
+            "Could not save the clicked-path preference",
+        )
+    if policy == "external":
+        return PathOpenResult(
+            request_id,
+            True,
+            "success",
+            "Opening remote path in a separate terminal",
+        )
+    manager = manager_for_session(session_id)
+    slot = manager.slot_for_owner(pane_id) if manager is not None else None
+    if manager is None or slot is None:
+        return PathOpenResult(
+            request_id,
+            False,
+            "warning",
+            "Could not match the clicked agent to a managed tool pane",
+        )
+    path = Path(resolved.path)
+    if (
+        resolved.kind is PathKind.FILE
+        and local_open.is_vim_text_path(resolved.path)
+        and shutil.which("vim") is not None
+    ):
+        outcome = manager.open_viewer(
+            slot,
+            pane_id,
+            resolved.path,
+            line=line,
+            column=column,
+        )
+    else:
+        directory = (
+            path
+            if resolved.kind is PathKind.DIRECTORY
+            else path.parent
+        )
+        outcome = manager.open_shell(slot, pane_id, directory)
+        if (
+            outcome.ok
+            and resolved.kind is PathKind.FILE
+            and local_open.is_vim_text_path(resolved.path)
+        ):
+            return PathOpenResult(
+                request_id,
+                True,
+                "warning",
+                (
+                    "Remote Vim is unavailable; selected the managed terminal "
+                    "(an existing shell keeps its current directory)"
+                ),
+            )
+    return PathOpenResult(
+        request_id,
+        outcome.ok,
+        outcome.level,
+        outcome.message,
+    )
 
 
 def _render_history_line(pyte: object, line: bytes, width: int) -> bytes:
@@ -1645,7 +1755,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v13 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v14 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE
@@ -2056,6 +2166,18 @@ def _serve_attached(
                         queue_control_packet(
                             encode_path_result(
                                 resolve_path_result(session_id, *request)
+                            ),
+                            priority=True,
+                        )
+                        continue
+                    if message.kind is InputKind.OPEN_PATH:
+                        try:
+                            request = decode_path_open_request(message.data)
+                        except ValueError:
+                            continue
+                        queue_control_packet(
+                            encode_path_open_result(
+                                apply_path_open_request(session_id, *request)
                             ),
                             priority=True,
                         )

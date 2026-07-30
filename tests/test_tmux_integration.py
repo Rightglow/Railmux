@@ -28,6 +28,7 @@ from railmux import (
     tmux_ctl,
     tmux_health,
     tmux_server,
+    tool_panes,
 )
 from railmux.display_transport import (
     AgentDisplayTransport,
@@ -144,6 +145,226 @@ def _wait_until(predicate, timeout: float = 3.0) -> bool:
             return True
         time.sleep(0.05)
     return False
+
+
+def test_real_managed_tool_surface_reuses_shell_and_vim_tabs(
+    isolated_tmux,
+    tmp_path,
+    monkeypatch,
+):
+    if shutil.which("vim") is None:
+        pytest.skip("vim is not installed")
+    session_name, controller_pane, socket_path = isolated_tmux
+    target = tmux_server.TmuxServerTarget(
+        socket_path,
+        int(subprocess.check_output(
+            [
+                "tmux",
+                "-S",
+                socket_path,
+                "display-message",
+                "-p",
+                "-t",
+                session_name,
+                "#{pid}",
+            ],
+            text=True,
+        ).strip()),
+    )
+    session_id = subprocess.check_output(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "display-message",
+            "-p",
+            "-t",
+            session_name,
+            "#{session_id}",
+        ],
+        text=True,
+    ).strip()
+    agent_pane = subprocess.check_output(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "split-window",
+            "-d",
+            "-h",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            controller_pane,
+            "sleep 60",
+        ],
+        text=True,
+    ).strip()
+    first = tmp_path / "first.txt"
+    second = tmp_path / "second.txt"
+    first.write_text("first\n")
+    second.write_text("second\n")
+    manager = tool_panes.ToolPaneManager(session_id, target=target)
+    monkeypatch.setattr(
+        tmux_server,
+        "tmux_argv",
+        lambda *args, **_kwargs: ["tmux", "-S", socket_path, *args],
+    )
+    subprocess.run(
+        tmux_server.tmux_argv(
+            "set-window-option",
+            "-t",
+            session_name,
+            "@railmux_controller_pane",
+            controller_pane,
+        ),
+        check=True,
+    )
+    manager.sync_owners({"primary": agent_pane, "secondary": None})
+
+    shell_result = manager.open_shell("primary", agent_pane, tmp_path)
+    assert shell_result.ok
+    shell_id = shell_result.pane_id
+    assert shell_id in manager.visible_tool_panes()
+    # While a tool owns keyboard focus, SSH mouse/history routing stays
+    # native instead of pretending that tool is an agent.
+    assert fast_display_server._list_agent_panes(
+        session_id,
+        claude_history_policy="ask",
+    ) == ()
+    subprocess.run(
+        ["tmux", "-S", socket_path, "select-pane", "-t", agent_pane],
+        check=True,
+    )
+    routes = fast_display_server._list_agent_panes(
+        session_id,
+        claude_history_policy="ask",
+    )
+    assert tuple(route.pane_id for route in routes) == (agent_pane,)
+    assert manager.open_shell("primary", agent_pane, tmp_path).pane_id == shell_id
+
+    viewer_result = manager.open_viewer(
+        "primary",
+        agent_pane,
+        str(first),
+        line=1,
+    )
+    assert viewer_result.ok
+    viewer_id = viewer_result.pane_id
+    assert viewer_id != shell_id
+    assert manager.visible_tool_panes() == frozenset({viewer_id})
+    assert _wait_until(
+        lambda: manager._pane_current_command(viewer_id) in {
+            "vim", "vim.basic", "vim.tiny", "nvim", "view",
+        }
+    )
+
+    second_result = manager.open_viewer(
+        "primary",
+        agent_pane,
+        str(second),
+        line=1,
+    )
+    assert second_result.ok
+    assert second_result.pane_id == viewer_id
+    assert manager.open_shell("primary", agent_pane, tmp_path).pane_id == shell_id
+    assert manager.focus_viewer("primary", agent_pane).pane_id == viewer_id
+
+    assert manager.suspend("primary")
+    assert manager.visible_tool_panes() == frozenset()
+    state = manager.load("primary")
+    assert state is not None
+    assert manager._exact_ref(state.shell) is not None
+    assert manager._exact_ref(state.viewer) is not None
+
+    manager.reconcile({"primary": agent_pane, "secondary": None})
+    assert manager.visible_tool_panes() == frozenset({viewer_id})
+    subprocess.run(
+        ["tmux", "-S", socket_path, "kill-pane", "-t", viewer_id],
+        check=True,
+    )
+    manager.reconcile({"primary": agent_pane, "secondary": None})
+    assert manager.visible_tool_panes() == frozenset({shell_id})
+
+
+def test_real_managed_tool_surface_preserves_compact_zoom(
+    isolated_tmux,
+    tmp_path,
+):
+    session_name, controller_pane, socket_path = isolated_tmux
+    server_pid = int(subprocess.check_output(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "display-message",
+            "-p",
+            "-t",
+            session_name,
+            "#{pid}",
+        ],
+        text=True,
+    ).strip())
+    session_id = subprocess.check_output(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "display-message",
+            "-p",
+            "-t",
+            session_name,
+            "#{session_id}",
+        ],
+        text=True,
+    ).strip()
+    agent_pane = subprocess.check_output(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "split-window",
+            "-d",
+            "-h",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "-t",
+            controller_pane,
+            "sleep 60",
+        ],
+        text=True,
+    ).strip()
+    subprocess.run(
+        ["tmux", "-S", socket_path, "select-pane", "-t", agent_pane],
+        check=True,
+    )
+    subprocess.run(
+        ["tmux", "-S", socket_path, "resize-pane", "-Z", "-t", agent_pane],
+        check=True,
+    )
+    manager = tool_panes.ToolPaneManager(
+        session_id,
+        target=tmux_server.TmuxServerTarget(socket_path, server_pid),
+    )
+
+    result = manager.open_shell("primary", agent_pane, tmp_path)
+
+    assert result.ok
+    assert subprocess.check_output(
+        [
+            "tmux",
+            "-S",
+            socket_path,
+            "display-message",
+            "-p",
+            "-t",
+            result.pane_id,
+            "#{window_zoomed_flag}\t#{pane_active}",
+        ],
+        text=True,
+    ).strip() == "1\t1"
 
 
 def test_real_remote_path_resolution_is_bound_to_visible_agent(

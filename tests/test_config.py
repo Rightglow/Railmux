@@ -12,6 +12,7 @@ def test_load_with_no_file_uses_defaults(tmp_path):
     assert cfg.show_empty_projects is False
     assert cfg.ssh_history_lines == 10000
     assert cfg.ssh_claude_history == "ask"
+    assert cfg.ssh_path_open == "ask"
 
 
 def test_load_partial_overrides(tmp_path):
@@ -105,6 +106,21 @@ def test_ssh_claude_history_rejects_unknown_choice(tmp_path, value):
     path = tmp_path / "config.toml"
     path.write_text(f"[ssh]\nclaude_history = {value}\n")
     with pytest.raises(ConfigError, match="ssh.claude_history"):
+        load_config(config_path=path)
+
+
+@pytest.mark.parametrize("value", ("ask", "internal", "external"))
+def test_ssh_path_open_accepts_documented_choices(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f'[ssh]\npath_open = "{value}"\n')
+    assert load_config(config_path=path).ssh_path_open == value
+
+
+@pytest.mark.parametrize("value", ('"sometimes"', '["internal"]', "true", "1"))
+def test_ssh_path_open_rejects_unknown_choice(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[ssh]\npath_open = {value}\n")
+    with pytest.raises(ConfigError, match="ssh.path_open"):
         load_config(config_path=path)
 
 

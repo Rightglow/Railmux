@@ -260,7 +260,7 @@ path:
 railmux ssh your-server
 ```
 
-Protocol v13 begins with a bounded remote hello containing package version,
+Protocol v14 begins with a bounded remote hello containing package version,
 protocol version, SSH dependency readiness, and tmux availability. The server
 does not inspect or mutate tmux until the compatible client returns the exact
 start acknowledgement. Missing Railmux or its optional dependency can be
@@ -281,7 +281,7 @@ across differing package versions.
 
 If the default `railmux` tmux session is absent, the server starts Railmux in a
 detached tmux session using the same installed Python environment. A custom
-`--session` is never auto-created. Multiple protocol-v13 helpers may attach to
+`--session` is never auto-created. Multiple protocol-v14 helpers may attach to
 the same managed session. A short flock covers only validation and attachment;
 the helper confirms its own child by matching tmux's `#{client_pid}` before it
 releases that boundary. The shared window is set to `window-size=smallest`, so
@@ -303,7 +303,7 @@ enumeration to close the race, and never kills the session, panes, or agents.
 The client first starts one fresh ordinary helper after BUSY, so transient v8
 attach contention completes without presenting the legacy takeover prompt.
 
-The optional local `--reconnect` loop lasts long enough to outlive the
+The default local reconnect loop lasts long enough to outlive the
 45-second lease. It retains the last painted frame, uses non-interactive
 authentication, and performs only ordinary non-replacement attaches. Local
 `Ctrl-]`, `Ctrl-C`, or EOF cancels every handshake/backoff immediately.
@@ -344,7 +344,7 @@ A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
 
-Display protocol v13 uses monotonically sequenced, zlib-compressed keyframes and
+Display protocol v14 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
@@ -369,10 +369,15 @@ reach the pane boundary. Raw tmux control sequences are parsed through `pyte`;
 reconstructed text and allowlisted SGR character styles cross the screen
 protocol. One bounded, validated OSC 52 clipboard payload may cross as a
 separate explicit message; other OSC and terminal actions are not forwarded.
-Protocol v13 also carries one bounded, typed path-lookup request and result.
+Protocol v14 also carries bounded, typed path lookup, destination-choice, and
+application-result messages.
 The remote accepts it only for a visible agent route, resolves it read-only
 against the real provider pane's current working directory, and returns an
-absolute readable path plus its coarse kind; opening remains entirely local.
+absolute readable path plus its coarse kind and configured destination policy.
+After an explicit Inside/Separate choice, the server revalidates the path:
+Inside may swap an identity-checked managed shell/Vim pane into the outer
+layout, while Separate merely acknowledges so the initiating client can use
+its local terminal launcher.
 The local client consumes the explicit
 copy request with a native clipboard writer when available (`pbcopy`,
 `wl-copy`, `xclip`, `xsel`, or WSL `clip.exe`) and otherwise emits bounded
@@ -387,9 +392,9 @@ a persistent or current-invocation answer only after helper acknowledgement.
 This capability is explicit on the
 wire: an unrelated mouse-aware TUI retains application-level wheel input, while
 locally transcript-backed wheel input never opens Claude Code's
-provider-managed history view. Protocol v13 also
+provider-managed history view. Protocol v14 also
 reports whether older rows remain, instead of inferring exhaustion from a
-short compressed page. Protocol v13 permits at most 20000 physical lines;
+short compressed page. Protocol v14 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from
 2000 lines up to its configured 2000-20000 cap. A server-side styled-byte
 budget may return a shorter newest suffix rather than fail the display helper.

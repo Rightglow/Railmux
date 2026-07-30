@@ -1,11 +1,9 @@
 from pathlib import Path
-import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from railmux.config import Config
 from railmux.models import Project
-from railmux.ui import app as app_mod
 from railmux.ui.app import App, _Running
 from railmux.ui.running_pane import RunningEntry
 
@@ -152,18 +150,8 @@ def test_open_terminal_for_unresolved_project_path(monkeypatch, tmp_path):
     path = tmp_path / "new-project"
     path.mkdir()
     app = App.__new__(App)
-    app._right_pane_id = None
-    statuses = []
-    focus = []
-    app._set_status = lambda text, *args: statuses.append(text)
-    app._set_railmux_focus = lambda active: focus.append(active)
-    monkeypatch.setattr(
-        app_mod.tmux_ctl, "split_window_v",
-        lambda command, target=None: "%9")
-    monkeypatch.setattr(app_mod.tmux_ctl, "select_pane", lambda pane: None)
-    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: None)
+    app._open_managed_terminal = MagicMock()
 
     app._open_terminal_for_path(path)
 
-    assert focus == [False]
-    assert statuses == ["terminal: new-project"]
+    app._open_managed_terminal.assert_called_once_with(path)

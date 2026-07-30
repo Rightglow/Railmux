@@ -60,6 +60,7 @@ from railmux.fast_display_protocol import (
     HistoryBatch,
     HistorySnapshot,
     PathKind,
+    PathOpenResult,
     PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
@@ -76,6 +77,7 @@ from railmux.fast_display_protocol import (
     encode_input,
     encode_keyframe_request,
     encode_path_request,
+    encode_path_open_request,
     encode_resize,
 )
 from railmux.pane_surface import render_startup_surface
@@ -88,6 +90,7 @@ _HISTORY_PREFETCH_INTERVAL = 3.0
 _CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_INFO_SECONDS = 2.0
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
+_CLICK_FLASH_SECONDS = 0.18
 _PATH_OPEN_TIMEOUT = 5.0
 _TERMUX_TOUCH_HINT = "Tap the prompt again to open the keyboard"
 _REMOTE_HELLO_TIMEOUT = 60.0
@@ -612,9 +615,10 @@ class TerminalSurface:
             and not self.mouse_active
             and not self.mouse_suspended
         ):
-            # Button-event tracking includes wheel and drag events. SGR mode
-            # preserves coordinates beyond the legacy X10 limit.
-            controls.append(b"\033[?1002h\033[?1006h")
+            # Any-event tracking adds local URL/path hover while retaining
+            # wheel, click, and drag reports. SGR mode preserves coordinates
+            # beyond the legacy X10 limit.
+            controls.append(b"\033[?1003h\033[?1006h")
             self.mouse_active = True
         if controls:
             self.stream.write(b"".join(controls))
@@ -626,7 +630,7 @@ class TerminalSurface:
             return
         self.mouse_suspended = True
         if self.mouse_active:
-            self.stream.write(b"\033[?1002l\033[?1006l")
+            self.stream.write(b"\033[?1003l\033[?1006l")
             self.stream.flush()
             self.mouse_active = False
 
@@ -636,7 +640,7 @@ class TerminalSurface:
             return
         self.mouse_suspended = False
         if self.active and not self.interaction_active and not self.mouse_active:
-            self.stream.write(b"\033[?1002h\033[?1006h")
+            self.stream.write(b"\033[?1003h\033[?1006h")
             self.stream.flush()
             self.mouse_active = True
 
@@ -683,7 +687,7 @@ class TerminalSurface:
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
         if self.mouse_active:
-            controls.append(b"\033[?1002l\033[?1006l")
+            controls.append(b"\033[?1003l\033[?1006l")
         controls.append(b"\033[2J\033[H")
         self.stream.write(b"".join(controls))
         self.stream.flush()
@@ -834,11 +838,71 @@ class TerminalSurface:
             return "native", False
         return None
 
+    def _path_open_prompt_geometry(self) -> tuple[int, int, int]:
+        size = self.physical_size or os.terminal_size((80, 24))
+        width = min(54, max(40, size.columns - 2))
+        left = max(1, (size.columns - width) // 2 + 1)
+        top = max(1, (size.lines - 7) // 2 + 1)
+        return left, top, width
+
+    def show_path_open_prompt(self) -> None:
+        """Draw the local destination choice for one clicked remote path."""
+        self.start()
+        left, top, width = self._path_open_prompt_geometry()
+        inner = width - 2
+        border = "\033[38;5;70m"
+        yellow = "\033[1;38;5;220m"
+        normal = "\033[0m"
+
+        def middle(shortcut: str, text: str) -> str:
+            content_width = max(0, inner - len(shortcut) - 2)
+            shown = text[:content_width]
+            plain_width = len(shortcut) + len(shown) + 2
+            return (
+                f"{border}│{normal} {yellow}{shortcut}{normal} {shown}"
+                f"{' ' * max(0, inner - plain_width)}{border}│{normal}"
+            )
+
+        title = " Open remote path "
+        rows = (
+            f"{border}┌\033[1m{title}\033[22m{'─' * (inner - len(title))}┐{normal}",
+            middle("[1]", "Always open inside Railmux"),
+            middle("[2]", "Open inside Railmux this time"),
+            middle("[3]", "Always open in a separate terminal"),
+            middle("[4]", "Open in a separate terminal this time"),
+            middle("[Esc]", "Cancel"),
+            f"{border}└{'─' * inner}┘{normal}",
+        )
+        rendered = [b"\033[0m"]
+        for offset, row in enumerate(rows):
+            rendered.append(
+                f"\033[{top + offset};{left}H{row}\033[?25l".encode("utf-8")
+            )
+        self.stream.write(b"".join(rendered))
+        self.stream.flush()
+
+    def path_open_prompt_choice(
+        self,
+        event: SgrMouseEvent,
+    ) -> tuple[str, bool] | None:
+        left, top, width = self._path_open_prompt_geometry()
+        if not event.pressed or not left <= event.x < left + width:
+            return None
+        if event.y == top + 1:
+            return "internal", True
+        if event.y == top + 2:
+            return "internal", False
+        if event.y == top + 3:
+            return "external", True
+        if event.y == top + 4:
+            return "external", False
+        return None
+
     def _reconcile_terminal_modes(
         self,
         requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v13."""
+        """Mirror only input-affecting modes explicitly carried by protocol v14."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -1040,7 +1104,7 @@ class TerminalSurface:
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
         if self.mouse_active:
-            controls.append(b"\033[?1002l\033[?1006l")
+            controls.append(b"\033[?1003l\033[?1006l")
         controls.append(b"\033[?1049l")
         self.stream.write(b"".join(controls))
         self.stream.flush()
@@ -1626,7 +1690,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v13 helper holds the mutex only while registering its exact tmux
+    # A current v14 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)
@@ -1863,13 +1927,22 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="do not capture mouse events (allows ordinary terminal selection)",
     )
-    parser.add_argument(
+    reconnect_group = parser.add_mutually_exclusive_group()
+    reconnect_group.add_argument(
         "--reconnect",
+        dest="reconnect",
         action="store_true",
+        default=True,
         help=(
             "retry an established display for up to 60 seconds after an "
-            "unexpected connection loss"
+            "unexpected connection loss (default)"
         ),
+    )
+    reconnect_group.add_argument(
+        "--no-reconnect",
+        dest="reconnect",
+        action="store_false",
+        help="exit immediately after an established display loses its connection",
     )
     parser.add_argument(
         "--history-lines",
@@ -1990,6 +2063,13 @@ def run(args: argparse.Namespace) -> int:
     claude_history_runtime_choice: str | None = None
     path_request_id = 0
     pending_path_open: dict[int, _PendingPathOpen] = {}
+    pending_path_actions: dict[
+        int, tuple[_PendingPathOpen, PathResult, str]
+    ] = {}
+    path_open_prompt: tuple[
+        int, _PendingPathOpen, PathResult
+    ] | None = None
+    path_open_prompt_mouse_button: int | None = None
     periodic_prefetch = PeriodicPrefetchGate()
 
     def send_protocol_frame(frame: bytes) -> None:
@@ -2024,6 +2104,38 @@ def run(args: argparse.Namespace) -> int:
         )
         surface.show_local_status("Checking remote path…")
         history_info_until = None
+
+    def choose_path_open(
+        request_id: int,
+        pending: _PendingPathOpen,
+        resolved: PathResult,
+        policy: str,
+        persistent: bool,
+    ) -> None:
+        nonlocal history_info_until
+        pending = _PendingPathOpen(pending.target, time.monotonic())
+        pending_path_actions[request_id] = (pending, resolved, policy)
+        send_protocol_frame(encode_path_open_request(
+            request_id,
+            pending.target.pane_id,
+            pending.target.value,
+            policy=policy,
+            persistent=persistent,
+            line=pending.target.line,
+            column=pending.target.column,
+        ))
+        scope = "Saving" if persistent else "Using"
+        destination = (
+            "managed Vim" if policy == "internal" else "separate terminal"
+        )
+        surface.show_local_status(f"{scope} {destination}…")
+        history_info_until = None
+
+    def redraw_local_prompt() -> None:
+        if path_open_prompt is not None:
+            surface.show_path_open_prompt()
+        elif claude_history_prompt_input is not None:
+            surface.show_claude_history_prompt()
 
     def apply_history_action(action: HistoryAction) -> None:
         nonlocal route_refresh_needed
@@ -2066,6 +2178,104 @@ def run(args: argparse.Namespace) -> int:
         nonlocal claude_history_runtime_choice
         nonlocal history_info_until
         nonlocal selection_clear_at
+        nonlocal path_open_prompt, path_open_prompt_mouse_button
+        if isinstance(part, SgrMouseEvent) and part.is_hover_motion:
+            # DECSET 1003 reports local pointer movement even without a
+            # pressed button. Consume it locally: hover must never become SSH
+            # input or disturb a modal choice.
+            if (
+                path_open_prompt is not None
+                or claude_history_prompt_input is not None
+            ):
+                return
+            displayed_height = (
+                latest_screen.height
+                if latest_screen is not None
+                else current_size.lines
+            )
+            hover_event = surface.translate_mouse_event(
+                part,
+                logical_height=displayed_height,
+            )
+            focused_pane_id = (
+                None
+                if latest_screen is None
+                else history.pane_id_at_position(
+                    latest_screen.cursor_x,
+                    latest_screen.cursor_y,
+                )
+            )
+            source = (
+                None
+                if latest_screen is None
+                else history.selection_source(
+                    hover_event,
+                    latest_screen.rows,
+                    focused_pane_id=focused_pane_id,
+                )
+            )
+            if selection.hover(hover_event, source) and latest_screen is not None:
+                surface.paint(
+                    full_repaint(latest_screen),
+                    history.overlays(),
+                    selection.segments(),
+                )
+            return
+        if path_open_prompt is not None:
+            request_id, pending, resolved = path_open_prompt
+            if isinstance(part, SgrMouseEvent):
+                selected = surface.path_open_prompt_choice(part)
+                if selected is None:
+                    return
+                path_open_prompt_mouse_button = part.button & 3
+                policy, persistent = selected
+            else:
+                selected = {
+                    b"1": ("internal", True),
+                    b"2": ("internal", False),
+                    b"3": ("external", True),
+                    b"4": ("external", False),
+                }.get(part)
+                if selected is None:
+                    if part == b"\x1b":
+                        path_open_prompt = None
+                        pending_path_open.pop(request_id, None)
+                        if latest_screen is not None:
+                            surface.paint(
+                                full_repaint(latest_screen),
+                                history.overlays(),
+                                selection.segments(),
+                            )
+                        return
+                    surface.show_path_open_prompt()
+                    return
+                policy, persistent = selected
+            path_open_prompt = None
+            pending_path_open.pop(request_id, None)
+            if latest_screen is not None:
+                surface.paint(
+                    full_repaint(latest_screen),
+                    history.overlays(),
+                    selection.segments(),
+                )
+            choose_path_open(
+                request_id,
+                pending,
+                resolved,
+                policy,
+                persistent,
+            )
+            return
+        if isinstance(part, SgrMouseEvent) and (
+            path_open_prompt_mouse_button is not None
+        ):
+            suppress = (
+                not part.pressed
+                and part.button & 3 == path_open_prompt_mouse_button
+            )
+            path_open_prompt_mouse_button = None
+            if suppress:
+                return
         if claude_history_prompt_input is not None:
             if isinstance(part, SgrMouseEvent):
                 selected = surface.claude_history_prompt_choice(part)
@@ -2227,6 +2437,19 @@ def run(args: argparse.Namespace) -> int:
                 selection_clear_at = time.monotonic() + _SELECTION_HIGHLIGHT_SECONDS
             if selection_action.open_target is not None:
                 target = selection_action.open_target
+                if (
+                    selection.flash(
+                        target,
+                        now=time.monotonic(),
+                        duration=_CLICK_FLASH_SECONDS,
+                    )
+                    and latest_screen is not None
+                ):
+                    surface.paint(
+                        full_repaint(latest_screen),
+                        history.overlays(),
+                        selection.segments(),
+                    )
                 if target.kind == "url":
                     show_open_result(local_open.open_url(target.value))
                 else:
@@ -2345,9 +2568,12 @@ def run(args: argparse.Namespace) -> int:
                                 history.overlays(),
                                 selection.segments(),
                             )
-                            if claude_history_prompt_input is not None:
-                                surface.show_claude_history_prompt()
-                            elif claude_history_pending_choice is not None:
+                            redraw_local_prompt()
+                            if (
+                                path_open_prompt is None
+                                and claude_history_prompt_input is None
+                                and claude_history_pending_choice is not None
+                            ):
                                 label = (
                                     "smooth local"
                                     if claude_history_pending_choice[0] == "local"
@@ -2380,8 +2606,7 @@ def run(args: argparse.Namespace) -> int:
                                 history.overlays(),
                                 selection.segments(),
                             )
-                            if claude_history_prompt_input is not None:
-                                surface.show_claude_history_prompt()
+                            redraw_local_prompt()
                     else:
                         if touch_keyboard.cancel():
                             surface.resume_mouse()
@@ -2392,8 +2617,7 @@ def run(args: argparse.Namespace) -> int:
                                 full_repaint(latest_screen),
                                 selection=selection.segments(),
                             )
-                        if claude_history_prompt_input is not None:
-                            surface.show_claude_history_prompt()
+                        redraw_local_prompt()
                         history.clear_cache()
                         route_refresh_needed = True
                         send_protocol_frame(
@@ -2428,19 +2652,54 @@ def run(args: argparse.Namespace) -> int:
                                         "warning",
                                     ))
                                     continue
-                                show_open_result(local_open.open_remote_path(
-                                    args.destination,
-                                    ssh_args=args.ssh_arg,
-                                    path=message.path,
-                                    directory=(
-                                        message.kind is PathKind.DIRECTORY
-                                    ),
-                                    regular_file=(
-                                        message.kind is PathKind.FILE
-                                    ),
-                                    line=pending.target.line,
-                                    column=pending.target.column,
-                                ))
+                                if message.policy == "ask":
+                                    pending_path_open[message.request_id] = pending
+                                    path_open_prompt = (
+                                        message.request_id,
+                                        pending,
+                                        message,
+                                    )
+                                    surface.show_path_open_prompt()
+                                    history_info_until = None
+                                else:
+                                    choose_path_open(
+                                        message.request_id,
+                                        pending,
+                                        message,
+                                        message.policy,
+                                        False,
+                                    )
+                                continue
+                            if isinstance(message, PathOpenResult):
+                                action = pending_path_actions.pop(
+                                    message.request_id,
+                                    None,
+                                )
+                                if action is None:
+                                    continue
+                                pending, resolved, policy = action
+                                if message.applied and policy == "external":
+                                    show_open_result(local_open.open_remote_path(
+                                        args.destination,
+                                        ssh_args=args.ssh_arg,
+                                        path=resolved.path,
+                                        directory=(
+                                            resolved.kind is PathKind.DIRECTORY
+                                        ),
+                                        regular_file=(
+                                            resolved.kind is PathKind.FILE
+                                        ),
+                                        line=pending.target.line,
+                                        column=pending.target.column,
+                                    ))
+                                else:
+                                    surface.show_local_status(
+                                        message.message,
+                                        level=message.level,
+                                    )
+                                    history_info_until = (
+                                        time.monotonic() + _HISTORY_INFO_SECONDS
+                                    )
                                 continue
                             if isinstance(message, HistoryBatch):
                                 accepted_prefetch_id = history.prefetch_pending_id
@@ -2522,8 +2781,7 @@ def run(args: argparse.Namespace) -> int:
                                 history.overlays(),
                                 selection.segments(),
                             )
-                            if claude_history_prompt_input is not None:
-                                surface.show_claude_history_prompt()
+                            redraw_local_prompt()
                             if focus_reporting_started:
                                 # Enabling DECSET 1004 does not require a
                                 # terminal to report its already-focused state.
@@ -2580,10 +2838,15 @@ def run(args: argparse.Namespace) -> int:
                             history.overlays(),
                             selection.segments(),
                         )
+                        redraw_local_prompt()
                 expired_paths = tuple(
                     request_id
                     for request_id, pending in pending_path_open.items()
                     if now - pending.requested_at >= _PATH_OPEN_TIMEOUT
+                    and (
+                        path_open_prompt is None
+                        or path_open_prompt[0] != request_id
+                    )
                 )
                 if expired_paths:
                     for request_id in expired_paths:
@@ -2593,13 +2856,28 @@ def run(args: argparse.Namespace) -> int:
                         "Remote path check timed out",
                         "warning",
                     ))
+                expired_actions = tuple(
+                    request_id
+                    for request_id, (pending, _resolved, _policy)
+                    in pending_path_actions.items()
+                    if now - pending.requested_at >= _PATH_OPEN_TIMEOUT
+                )
+                if expired_actions:
+                    for request_id in expired_actions:
+                        pending_path_actions.pop(request_id, None)
+                    show_open_result(local_open.OpenResult(
+                        False,
+                        "Remote path open timed out",
+                        "warning",
+                    ))
                 restore_local_status = (
                     history_info_until is not None and now >= history_info_until
                 )
                 clear_selection = (
                     selection_clear_at is not None and now >= selection_clear_at
                 )
-                if restore_local_status or clear_selection:
+                clear_click_flash = selection.clear_expired_flash(now)
+                if restore_local_status or clear_selection or clear_click_flash:
                     if clear_selection:
                         selection.cancel()
                     if latest_screen is not None:
@@ -2608,6 +2886,7 @@ def run(args: argparse.Namespace) -> int:
                             history.overlays(),
                             selection.segments(),
                         )
+                        redraw_local_prompt()
                     if restore_local_status:
                         history_info_until = None
                     if clear_selection:
@@ -2674,6 +2953,9 @@ def run(args: argparse.Namespace) -> int:
                         history_info_until = None
                         selection_clear_at = None
                         pending_path_open.clear()
+                        pending_path_actions.clear()
+                        path_open_prompt = None
+                        path_open_prompt_mouse_button = None
                         claude_history_prompt_input = None
                         claude_history_pending_choice = None
                         claude_history_pending_since = None

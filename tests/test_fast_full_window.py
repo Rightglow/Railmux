@@ -24,6 +24,7 @@ from railmux.fast_display_protocol import (
     InputFrameDecoder,
     InputKind,
     PathKind,
+    PathOpenResult,
     PathResult,
     PROTOCOL_VERSION,
     REMOTE_ATTACH_ACCEPTED,
@@ -39,6 +40,7 @@ from railmux.fast_display_protocol import (
     decode_history_prefetch,
     decode_history_request,
     decode_path_request,
+    decode_path_open_request,
     decode_claude_history_policy,
     decode_claude_history_choice,
     encode_history_batch,
@@ -46,6 +48,8 @@ from railmux.fast_display_protocol import (
     encode_history_request,
     encode_history_snapshot,
     encode_path_request,
+    encode_path_open_request,
+    encode_path_open_result,
     encode_path_result,
     encode_claude_history_policy,
     encode_claude_history_policy_result,
@@ -259,6 +263,48 @@ def test_path_request_and_result_round_trip_are_bounded():
         encode_path_result(PathResult(1, PathKind.UNAVAILABLE, "/leak"))
 
 
+def test_path_open_request_and_result_round_trip_are_bounded():
+    decoder = InputFrameDecoder()
+    message = decoder.feed(encode_path_open_request(
+        19,
+        "%42",
+        "src/main.py",
+        policy="internal",
+        persistent=True,
+        line=123,
+        column=7,
+    ))[0]
+
+    assert message.kind is InputKind.OPEN_PATH
+    assert decode_path_open_request(message.data) == (
+        19,
+        "%42",
+        "src/main.py",
+        "internal",
+        True,
+        123,
+        7,
+    )
+    result = PathOpenResult(19, True, "success", "Opened inside Railmux")
+    assert ServerMessageDecoder().feed(encode_path_open_result(result)) == [result]
+
+    with pytest.raises(ValueError):
+        encode_path_open_request(
+            1, "%42", "main.py", policy="ask", persistent=False
+        )
+    with pytest.raises(ValueError):
+        encode_path_open_request(
+            1,
+            "%42",
+            "main.py",
+            policy="external",
+            persistent=False,
+            column=3,
+        )
+    with pytest.raises(ValueError):
+        encode_path_open_result(PathOpenResult(1, False, "debug", "no"))
+
+
 def test_claude_history_policy_input_round_trip_is_bounded():
     decoder = InputFrameDecoder()
     encoded = encode_claude_history_policy("local")
@@ -443,6 +489,100 @@ def test_server_reads_nested_provider_cwd_from_history_source(monkeypatch):
     assert checked.call_args.args[0] is nested_argv
 
 
+def test_server_path_open_choice_persists_and_uses_managed_vim(monkeypatch):
+    resolved = PathResult(
+        7,
+        PathKind.FILE,
+        "/workspace/src/main.py",
+        "internal",
+    )
+    settings = MagicMock()
+    settings.set_path_open_policy.return_value = True
+    manager = MagicMock()
+    manager.slot_for_owner.return_value = "primary"
+    manager.open_viewer.return_value = MagicMock(
+        ok=True,
+        level="success",
+        message="Opened remote file inside Railmux",
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "resolve_path_result",
+        lambda *_args, **_kwargs: resolved,
+    )
+    monkeypatch.setattr(fast_display_server, "Settings", lambda: settings)
+    monkeypatch.setattr(
+        fast_display_server,
+        "manager_for_session",
+        lambda _session: manager,
+    )
+    monkeypatch.setattr(fast_display_server.shutil, "which", lambda _name: "/usr/bin/vim")
+
+    result = fast_display_server.apply_path_open_request(
+        "$4",
+        7,
+        "%8",
+        "src/main.py",
+        "internal",
+        True,
+        12,
+        3,
+    )
+
+    assert result == PathOpenResult(
+        7,
+        True,
+        "success",
+        "Opened remote file inside Railmux",
+    )
+    settings.set_path_open_policy.assert_called_once_with("internal")
+    manager.open_viewer.assert_called_once_with(
+        "primary",
+        "%8",
+        "/workspace/src/main.py",
+        line=12,
+        column=3,
+    )
+
+
+def test_server_external_path_choice_never_mutates_tmux(monkeypatch):
+    settings = MagicMock()
+    settings.set_path_open_policy.return_value = True
+    manager = MagicMock()
+    monkeypatch.setattr(
+        fast_display_server,
+        "resolve_path_result",
+        lambda *_args, **_kwargs: PathResult(
+            8,
+            PathKind.DIRECTORY,
+            "/workspace/src",
+            "external",
+        ),
+    )
+    monkeypatch.setattr(fast_display_server, "Settings", lambda: settings)
+    monkeypatch.setattr(
+        fast_display_server,
+        "manager_for_session",
+        lambda _session: manager,
+    )
+
+    result = fast_display_server.apply_path_open_request(
+        "$4",
+        8,
+        "%8",
+        "src",
+        "external",
+        False,
+        None,
+        None,
+    )
+
+    assert result.applied
+    assert result.level == "success"
+    settings.set_path_open_policy.assert_not_called()
+    manager.assert_not_called()
+
+
 def test_server_options_change_clears_only_a_this_time_history_override():
     assert fast_display_server.refresh_claude_history_override(
         "native", "local", "native"
@@ -522,7 +662,12 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
     url_action = selection.pointer_event(release, url_source)
 
     assert url_action.open_target == ClickTarget(
-        "url", "https://example.test/docs", "%8"
+        "url",
+        "https://example.test/docs",
+        "%8",
+        highlight_row=0,
+        highlight_column=4,
+        highlight_text=b"https://example.test/docs",
     )
     assert url_action.replay_events == ()
 
@@ -538,8 +683,54 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
         path_source,
     )
     assert path_action.open_target == ClickTarget(
-        "path", "src/railmux/app.py", "%8", 123, 7
+        "path",
+        "src/railmux/app.py",
+        "%8",
+        123,
+        7,
+        highlight_row=0,
+        highlight_column=8,
+        highlight_text=b"src/railmux/app.py:123:7",
     )
+
+
+def test_local_text_selection_hovers_semantic_targets_without_opening_them():
+    route = HistorySnapshot(1, "%8", 2, 3, 40, 1)
+    source = SelectionSource(
+        route,
+        (b"See https://example.test/docs",),
+        0,
+    )
+    selection = LocalTextSelection()
+    hover = SgrMouseEvent(b"hover", 35, 10, 4, True)
+
+    assert hover.is_hover_motion is True
+    assert selection.hover(hover, source) is True
+    assert selection.segments() == (
+        (3, 6, b"https://example.test/docs"),
+    )
+    assert selection.hover(hover, source) is False
+
+    moved_away = SgrMouseEvent(b"away", 35, 3, 4, True)
+    assert selection.hover(moved_away, source) is True
+    assert selection.segments() == ()
+
+
+def test_local_text_selection_click_flash_expires_without_clearing_hover():
+    selection = LocalTextSelection()
+    target = ClickTarget(
+        "url",
+        "https://example.test",
+        "%8",
+        highlight_row=4,
+        highlight_column=7,
+        highlight_text=b"https://example.test",
+    )
+
+    assert selection.flash(target, now=10.0, duration=0.18) is True
+    assert selection.clear_expired_flash(10.17) is False
+    assert selection.clear_expired_flash(10.18) is True
+    assert selection.segments() == ()
 
 
 def test_local_text_selection_does_not_open_on_drag_or_unfocused_pane():
@@ -833,8 +1024,8 @@ def test_terminal_surface_paints_only_changed_patch_rows_and_restores_mouse():
     surface.close()
 
     rendered = stream.getvalue()
-    assert b"\033[?1002h\033[?1006h" in rendered
-    assert b"\033[?1002l\033[?1006l" in rendered
+    assert b"\033[?1003h\033[?1006h" in rendered
+    assert b"\033[?1003l\033[?1006l" in rendered
     assert b"\033[2;1H\033[2Kchanged" in rendered
     assert b"\033[1;1H" not in rendered
     assert b"\033[2J" in rendered  # alternate-screen initialization only
@@ -847,7 +1038,7 @@ def test_terminal_surface_can_leave_mouse_to_the_local_terminal():
     surface.start()
     surface.close()
 
-    assert b"?1002" not in stream.getvalue()
+    assert b"?1003" not in stream.getvalue()
     assert b"?1006" not in stream.getvalue()
 
 
@@ -862,9 +1053,9 @@ def test_terminal_surface_can_temporarily_yield_and_restore_mouse():
     surface.resume_mouse()
     restored = stream.getvalue()
 
-    assert suspended.count(b"\033[?1002h\033[?1006h") == 1
-    assert suspended.endswith(b"\033[?1002l\033[?1006l")
-    assert restored.endswith(b"\033[?1002h\033[?1006h")
+    assert suspended.count(b"\033[?1003h\033[?1006h") == 1
+    assert suspended.endswith(b"\033[?1003l\033[?1006l")
+    assert restored.endswith(b"\033[?1003h\033[?1006h")
 
 
 def test_termux_detection_uses_local_environment_not_terminal_geometry():
@@ -3421,13 +3612,16 @@ def test_remote_attach_status_stops_at_line_before_display_frames(
     process.wait(timeout=2.0)
 
 
-def test_reconnect_flag_is_opt_in_and_preserved_in_raw_argv():
+def test_reconnect_is_default_and_can_be_disabled_or_explicit():
     default = parse_client_args(["server"])
     enabled = parse_client_args(["server", "--reconnect"])
+    disabled = parse_client_args(["server", "--no-reconnect"])
 
-    assert default.reconnect is False
+    assert default.reconnect is True
     assert enabled.reconnect is True
+    assert disabled.reconnect is False
     assert enabled.raw_argv == ("server", "--reconnect")
+    assert disabled.raw_argv == ("server", "--no-reconnect")
 
 
 def test_history_line_limit_is_optional_and_cli_bounded():
@@ -3647,7 +3841,7 @@ def test_startup_surface_uses_alternate_screen_and_restores_primary():
 
     painted = output.getvalue()
     assert painted.startswith(b"\033[?1049h")
-    assert b"\033[?1002h" not in painted
+    assert b"\033[?1003h" not in painted
     assert b"\033[?1006h" not in painted
     assert b"\033[?25l" not in painted
     assert b"Restoring your workspace" in painted
@@ -3736,7 +3930,7 @@ def test_first_interactive_paint_activates_mouse_after_startup():
     painted = output.getvalue()
     assert b"\033[?1049h" not in painted
     assert b"\033[?25l" in painted
-    assert b"\033[?1002h\033[?1006h" in painted
+    assert b"\033[?1003h\033[?1006h" in painted
 
 
 def test_local_status_preserves_painted_status_left_and_background():
@@ -5149,8 +5343,8 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\n"
-            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t\t\n"
+            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
+            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t\t\t\n"
         ),
     )
 
@@ -5166,22 +5360,49 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     )
 
 
+def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
+    marker = fast_display_server.json.dumps(
+        {
+            "version": 1,
+            "outer_session_id": "$4",
+            "slot": "primary",
+            "kind": "shell",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: (
+            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
+            f"$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t\t\t{marker}\n"
+        ),
+    )
+
+    assert fast_display_server._list_agent_panes(
+        "$4",
+        claude_history_policy="ask",
+    ) == ()
+
+
 @pytest.mark.parametrize(
     ("rows", "expected"),
     [
         (
-            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\n"
-            "$4\t@1\t1\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\n",
+            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\t\n"
+            "$4\t@1\t1\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\t\n",
             (),
         ),
         (
-            "$4\t@1\t1\t0\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\n"
-            "$4\t@1\t1\t1\t%8\t108\t0\t0\t80\t24\t0\t0\t0\t\t\n",
+            "$4\t@1\t1\t0\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
+            "$4\t@1\t1\t1\t%8\t108\t0\t0\t80\t24\t0\t0\t0\t\t\t\n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\n"
-            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\n",
+            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\t\n"
+            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\t\n",
             (),
         ),
     ],
@@ -5205,9 +5426,9 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\n"
+            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
             "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t"
-            '{"source":1}\t\n'
+            '{"source":1}\t\t\n'
         ),
     )
     monkeypatch.setattr(

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 OPTION_POLICIES = frozenset({"always", "ask", "never"})
 SSH_CLAUDE_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
+SSH_PATH_OPEN_POLICIES = frozenset({"ask", "internal", "external"})
 SSH_HISTORY_MIN_LINES = 2000
 SSH_HISTORY_MAX_LINES = 20000
 SSH_HISTORY_DEFAULT_LINES = 10000
@@ -39,6 +40,11 @@ SETTING_CONTRACTS = {
         "ssh.claude_history",
         ("next_ssh_invocation", "next_remote_history_refresh"),
         choices=SSH_CLAUDE_HISTORY_POLICIES,
+    ),
+    "ssh.path_open": SettingContract(
+        "ssh.path_open",
+        ("next_path_click",),
+        choices=SSH_PATH_OPEN_POLICIES,
     ),
     "updates.auto_update": SettingContract(
         "updates.auto_update",
