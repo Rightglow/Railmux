@@ -368,6 +368,15 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
+  await expect(
+    page.getByText(
+      "Mode switches the sidebar between Claude Code and Codex",
+      { exact: false },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByText("agents in the other mode keep running", { exact: false }),
+  ).toBeVisible();
   const player = page.locator('[data-demo="controls-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
@@ -436,6 +445,24 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
+  const pointerNote = page.locator(".workflow-pointer-note");
+  await expect(pointerNote).toBeVisible();
+  await expect(pointerNote).toContainText("RIGHT-CLICK");
+  await expect(pointerNote).toContainText("MOUSE INPUT");
+  await expect(pointerNote).toContainText("COPY");
+  await expect(pointerNote).toContainText("railmux ssh");
+  await expect(
+    pointerNote.getByRole("link", { name: "Check terminal setup" }),
+  ).toHaveAttribute(
+    "href",
+    "https://github.com/Rightglow/Railmux#2-mouse-buttons-or-f8f9-dont-work--whats-wrong",
+  );
+  await expect(
+    pointerNote.getByRole("link", { name: "See every copy path" }),
+  ).toHaveAttribute(
+    "href",
+    "https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane",
+  );
   const player = page.locator('[data-demo="workflow-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();

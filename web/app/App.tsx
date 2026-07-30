@@ -218,8 +218,9 @@ export default function Home() {
                 <span>02 / FIND ANYTHING</span>
                 <h3>A sidebar that knows your work.</h3>
                 <p>
-                  Start a project or session from pinned actions, browse
-                  history, and return to anything already running.
+                  New Project and New Session stay pinned at the top. Start or
+                  resume there, browse history, and press <kbd>m</kbd>—or click
+                  Mode—to switch the whole sidebar between providers.
                 </p>
               </div>
             </article>
@@ -311,7 +312,8 @@ export default function Home() {
                   <div>
                     <span>SESSION MENU</span>
                     <small>
-                      Manage Claude Code or Codex work from the same menu.
+                      Right-click to preview, open, rename, star, copy its
+                      title, kill, or delete a session.
                     </small>
                   </div>
                 </article>
@@ -356,6 +358,31 @@ export default function Home() {
                   <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
                 </article>
               </div>
+              <aside className="workflow-pointer-note">
+                <p>
+                  <strong>RIGHT-CLICK</strong>
+                  Open the complete action menu from any Sessions or Running
+                  row.
+                </p>
+                <p>
+                  <strong>MOUSE INPUT</strong>
+                  Your terminal must report mouse events to Railmux.{" "}
+                  <a href="https://github.com/Rightglow/Railmux#2-mouse-buttons-or-f8f9-dont-work--whats-wrong">
+                    Check terminal setup
+                  </a>
+                  .
+                </p>
+                <p>
+                  <strong>COPY</strong>
+                  With <code>railmux ssh</code>, drag inside one agent pane to
+                  copy locally. Other connections depend on terminal clipboard
+                  support.{" "}
+                  <a href="https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane">
+                    See every copy path
+                  </a>
+                  .
+                </p>
+              </aside>
               <div className="workflow-player">
                 <div className="capture-meta capture-meta-dark">
                   <span><i /> GUIDED REAL TERMINAL</span>
@@ -394,6 +421,8 @@ export default function Home() {
               <div className="lifecycle-intro">
                 <p>
                   Use shortcuts or click the matching Button Bar control.
+                  Mode switches the sidebar between Claude Code and Codex;
+                  agents in the other mode keep running.
                   Running agents continue even when their mode or pane is not
                   visible. The recording shows the keyboard route and names
                   the equivalent mouse target where Railmux exposes one.
@@ -477,7 +506,7 @@ export default function Home() {
               <ul>
                 <li><span>↗</span> Skip superseded intermediate frames</li>
                 <li><span>↗</span> Scroll up to 20,000 configured history lines</li>
-                <li><span>↗</span> Drag-select one pane and copy locally</li>
+                <li><span>↗</span> Drag inside one agent pane and copy locally</li>
                 <li><span>↗</span> Reconnect without restarting remote agents</li>
                 <li><span>↗</span> Install a matching remote helper with consent</li>
               </ul>

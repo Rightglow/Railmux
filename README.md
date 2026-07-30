@@ -26,8 +26,10 @@ responsive layout changes do not interrupt in-progress work.
   </a>
 </p>
 
-- **Find existing work automatically** — Railmux indexes resumable Claude Code
-  and Codex sessions, including conversations started outside Railmux.
+- **Manage sessions from one sidebar** — start new work, preview or resume
+  history, and switch among live Claude Code and Codex agents.
+- **Find existing work automatically** — resumable conversations started
+  outside Railmux appear in the same project-aware sidebar.
 - **Run two agents together** — use single, side-by-side, or stacked layouts
   without stopping the agent hidden by a layout change.
 - **Leave without losing momentum** — detach one terminal or soft-quit the
@@ -38,6 +40,11 @@ responsive layout changes do not interrupt in-progress work.
 
 One-off non-resumable invocations such as `codex exec` are intentionally
 filtered from the sidebar.
+
+**Quick answers:** [use the mouse](#mouse) ·
+[switch Claude Code and Codex](#switching-between-claude-code-and-codex) ·
+[start or resume a session](#starting-and-resuming) ·
+[copy text from an agent pane](#1-how-do-i-copy-text-from-the-agent-pane)
 
 ## Why Railmux?
 
@@ -96,7 +103,26 @@ preflight. Multiple
 terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
 for focus and layout limits.
 
-## Keys
+## Controls
+
+### Mouse
+
+| Action | Effect |
+|--------|--------|
+| Left-click (non-running) | Preview session history in the Target pane |
+| Left-click (running) | Switch the Target pane to that session |
+| Double-click | Open/attach in the Target pane and move focus there |
+| Right-click | Context menu (Open, Preview, Info, Rename, Star, Copy title, Kill, Term, Delete) |
+
+Unavailable context-menu actions are hidden for the selected session state.
+Single-click and `␣` act in the Target pane without moving keyboard focus;
+double-click and `Enter` also move focus there. The terminal must report mouse
+buttons to applications for these actions to reach Railmux. Right-click
+reporting is sometimes a separate setting from ordinary mouse reporting; see
+[FAQ 2](#2-mouse-buttons-or-f8f9-dont-work--whats-wrong).
+
+Copying text out of an agent pane also depends on the connection and terminal;
+see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 
 ### Navigation
 
@@ -121,7 +147,7 @@ for focus and layout limits.
 | `d` | Delete the focused session (prompts for confirmation) |
 | `t` | Open or return to the managed terminal below the Target agent |
 | `T` | Return to that agent's managed Vim viewer, when open |
-| `m` | Cycle through available agent modes |
+| `m` | Switch agent mode (Claude Code ⇄ Codex) |
 | `o` | Open persistent Railmux options |
 | `␣` | Preview stopped or switch running target (like single-click) |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
@@ -189,6 +215,16 @@ support **Always**, **Ask every time**, and **Never**. Claude history over
 selected choice confirms and closes the screen; `Esc` or `o` also closes it.
 Layout changes do not resize the current workspace; Codex auto-run changes
 affect new launches, not agents that are already running.
+
+### Switching between Claude Code and Codex
+
+Press `m`, or select **More → Mode**, to switch the sidebar between Claude Code
+and Codex. The current mode controls which provider's Projects, Sessions, and
+Running lists are shown, while each mode remembers its selected project and
+Running filter. Agents running in the other mode keep running and reappear when
+you switch back; changing modes never stops them. Either CLI alone is enough to
+use Railmux; selecting a mode whose CLI is not installed shows a warning rather
+than stopping the workspace.
 
 ### Dual-agent layouts
 
@@ -264,19 +300,6 @@ searching message content. Add `project:<name>` to restrict the list to one
 project. Claude Code and Codex keep independent Running filters, and blocked
 sessions move ahead of the other results.
 
-### Mouse
-
-| Action | Effect |
-|--------|--------|
-| Left-click (non-running) | Preview session history in the Target pane |
-| Left-click (running) | Switch the Target pane to that session |
-| Double-click | Open/attach in the Target pane and move focus there |
-| Right-click | Context menu (Open, Preview, Info, Rename, Star, Kill, Term, Delete) |
-
-The terminal must report mouse buttons to applications for these actions to
-reach Railmux. Right-click reporting is sometimes a separate setting from
-ordinary mouse reporting; see [FAQ 2](#2-mouse-buttons-or-f8f9-dont-work--whats-wrong).
-
 ## History preview
 
 For a stopped session, left-click or press `␣` to view conversation history in
@@ -289,11 +312,6 @@ Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between
 matches, and `q` to exit and restore the pane. Double-click to skip preview and
 open the session directly.
-
-For a running session, single-click or `␣` switches the Target pane to it while
-focus stays in Railmux. For a stopped session, the same inputs open a read-only
-preview. Double-click or Enter opens either kind and transfers focus. The
-context-menu Preview action follows the single-click/`␣` rule.
 
 ## Status indicators
 
@@ -315,7 +333,20 @@ focused pane chrome and tmux status bar. The current cursor uses a deeper green
 background, while the session displayed in the agent pane remains marked in
 neutral slate after keyboard focus moves away.
 
-## Sessions and restarts
+## Managing sessions
+
+### Starting and resuming
+
+Start and resume from the Railmux sidebar: select a project, press `n` for a
+new session, or press `Enter` to resume the selected one. **+ New project**
+picks or creates its directory first. This is the recommended path because the
+new agent immediately belongs to Railmux's running workspace and Target pane.
+
+Railmux also indexes resumable Claude Code and Codex sessions started outside
+Railmux, so existing conversations appear in the sidebar and resume the same
+way. Non-resumable one-off runs such as `codex exec` are filtered out.
+
+### Restarts and quitting
 
 Each opened agent runs in a detached tmux session, so switching sessions does
 not interrupt it. To leave agents running when you quit Railmux, press `s` for
@@ -435,7 +466,9 @@ custom paths.
 ### 1. How do I copy text from the agent pane?
 
 Under tmux the sidebar and agent share the screen, and over SSH your clipboard
-lives on the *local* machine.
+lives on the *local* machine. Ordinary Railmux copying depends on terminal
+clipboard support; `railmux ssh` additionally provides direct, pane-bounded
+drag-to-local-copy.
 
 **With `railmux ssh`**: drag directly inside one agent pane. Railmux briefly
 highlights the visible selection and copies it to the local clipboard on
