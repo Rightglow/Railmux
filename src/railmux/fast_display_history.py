@@ -261,6 +261,8 @@ class LocalHistoryView:
         self,
         previous: HistorySnapshot,
         incoming: HistorySnapshot,
+        *,
+        prefer_deeper: bool = False,
     ) -> HistorySnapshot:
         """Retain already-fetched history when a later hot capture shrinks."""
         if not self._same_geometry(
@@ -269,13 +271,26 @@ class LocalHistoryView:
             return incoming
         delta = self._timeline_delta(previous.lines, incoming.lines)
         if delta is None:
-            # A full-screen TUI redraw can leave no trustworthy text anchor.
-            # Preserve the known history and replace only the mutable live
-            # viewport. Appending every unaligned 300-line prefetch would
-            # duplicate a full screen every three seconds.
-            live_count = min(incoming.height, len(incoming.lines))
-            retained = previous.lines[: -min(previous.height, len(previous.lines))]
-            lines = retained + incoming.lines[-live_count:]
+            if prefer_deeper and len(incoming.lines) > len(previous.lines):
+                # A deep response reaches here only after accept() proved that
+                # the user's immutable frozen viewport still exists in it.
+                # Rewind/full-screen diff output can make every individual
+                # line in that viewport non-unique, leaving the generic
+                # timeline voter without two anchors.  The larger cumulative
+                # capture is nevertheless stronger than the 300-line hot
+                # cache; keeping only its live tail would silently discard all
+                # intermediate output above the current screen.
+                lines = incoming.lines
+            else:
+                # A full-screen TUI redraw can leave no trustworthy text
+                # anchor. Preserve the known history and replace only the
+                # mutable live viewport. Appending every unaligned 300-line
+                # prefetch would duplicate a full screen every three seconds.
+                live_count = min(incoming.height, len(incoming.lines))
+                retained = previous.lines[
+                    : -min(previous.height, len(previous.lines))
+                ]
+                lines = retained + incoming.lines[-live_count:]
         else:
             start = min(0, delta)
             incoming_end = delta + len(incoming.lines)
@@ -303,6 +318,8 @@ class LocalHistoryView:
     def _remember_content(
         self,
         snapshot: HistorySnapshot,
+        *,
+        prefer_deeper: bool = False,
     ) -> HistorySnapshot:
         assert snapshot.pane_id is not None
         previous = self.content_cache.get(snapshot.pane_id)
@@ -320,7 +337,8 @@ class LocalHistoryView:
             stored = self._merge_content(previous, snapshot) if anchored else snapshot
             self._unverified_after_reconnect.discard(snapshot.pane_id)
         else:
-            stored = self._merge_content(previous, snapshot)
+            stored = self._merge_content(
+                previous, snapshot, prefer_deeper=prefer_deeper)
         # Reinsert an existing pane to keep insertion order as recency order.
         self.content_cache.pop(snapshot.pane_id, None)
         self.content_cache[snapshot.pane_id] = stored
@@ -814,7 +832,7 @@ class LocalHistoryView:
             # snapshot instead of jumping to newer or unrelated text.
             self._anchor_rejects += 1
             return HistoryAction()
-        stored = self._remember_content(snapshot)
+        stored = self._remember_content(snapshot, prefer_deeper=True)
         stored_offset = self._aligned_offset(stored, anchor)
         if stored_offset is None:
             # The raw response was valid, so this can only be an ambiguous

@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bound same-direction trackpad wheel packets accumulated during a busy remote
   repaint to one local-history row per terminal read, so scrolling down while
   an agent is producing output no longer jumps past the passage being read.
+- Preserve intermediate Codex output across rewind or full-screen redraws when
+  a validated deep history capture is larger than the unaligned hot cache,
+  instead of retaining only the newest screen and hiding the text above it.
 - Restore Termux taps, swipes, session activation, compact page navigation, and
   mouse control after soft-keyboard viewport changes.
 - Reassemble wrapped URLs and remote paths across pane coordinates, exclude

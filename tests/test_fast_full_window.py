@@ -3422,6 +3422,63 @@ def test_periodic_hot_prefetch_does_not_shrink_a_reusable_deep_snapshot():
     assert len(view.viewports["%8"].snapshot.lines) == 2000
 
 
+def test_validated_deep_capture_recovers_unanchored_rewind_output():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    repeated = b"\033[48;2;33;58;43mrewind-row"
+    hot_lines = (
+        *(f"old-{index}".encode() for index in range(296)),
+        repeated,
+        repeated,
+        repeated,
+        b"live-bottom",
+    )
+    hot = HistorySnapshot(
+        first_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        hot_lines,
+        more_available=True,
+    )
+    view.accept_prefetch(HistoryBatch(first_id, (hot,)))
+    wheel = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+    request_id = decode_history_request(
+        InputFrameDecoder().feed(wheel.protocol_frame)[0].data
+    )[0]
+    # The frozen three-row viewport is byte-identical and occurs once, so the
+    # deep response is safe. Its individually repeated text cannot provide the
+    # two unique votes used by the generic rolling-cache timeline matcher.
+    deep_lines = (
+        *(f"rewind-output-{index}".encode() for index in range(1000)),
+        repeated,
+        repeated,
+        repeated,
+        b"live-bottom",
+    )
+
+    action = view.accept(
+        HistorySnapshot(
+            request_id,
+            "%8",
+            30,
+            0,
+            30,
+            3,
+            deep_lines,
+            more_available=False,
+        )
+    )
+
+    assert action.render_history is True
+    assert len(view.content_cache["%8"].lines) == len(deep_lines)
+    assert view.content_cache["%8"].lines[0] == b"rewind-output-0"
+    assert view.overlays()[0][1] == (repeated, repeated, repeated)
+
+
 def test_local_history_cache_survives_remote_scrollback_shrinking():
     view = LocalHistoryView(history_limit=2000)
     first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
