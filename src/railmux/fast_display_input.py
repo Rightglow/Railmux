@@ -866,14 +866,25 @@ def _target_in_rows(
     """Resolve a semantic target across one bounded visual-wrap chain."""
     if not 0 <= row < len(rows) or route.width <= 0:
         return None
-    hard_wrapped = _hard_wrapped_target(
-        rows,
-        row,
-        column,
-        route=route,
+    # A full terminal row followed by a non-indented row is an authoritative
+    # visual soft-wrap chain.  Do not let the more permissive agent hard-wrap
+    # heuristic accept a shorter prefix first: on a three-row URL that made
+    # rows one and two resolve only the first two fragments, while hovering
+    # the final row happened to resolve the complete URL.
+    soft_wrapped = (
+        row > 0 and _rows_are_wrapped(rows, row - 1)
+    ) or (
+        row + 1 < len(rows) and _rows_are_wrapped(rows, row)
     )
-    if hard_wrapped is not None:
-        return hard_wrapped
+    if not soft_wrapped:
+        hard_wrapped = _hard_wrapped_target(
+            rows,
+            row,
+            column,
+            route=route,
+        )
+        if hard_wrapped is not None:
+            return hard_wrapped
     first = row
     while (
         first > 0

@@ -908,6 +908,49 @@ def test_local_text_selection_recognizes_wrapped_url_from_second_row():
     assert action.open_target.value == "https://example.test/docs"
 
 
+def test_local_text_selection_resolves_all_three_soft_wrapped_url_rows():
+    route = HistorySnapshot(1, "%8", 0, 0, 67, 3)
+    source = SelectionSource(
+        route,
+        (
+            b"    https://github.com/NVIDIA/TensorRT-LLM/blob/"
+            b"746e43a80b418b2e521",
+            b"38846b4789dd6e49f8466/tests/unittest/_torch/visual_gen/"
+            b"multi_gpu/te",
+            b"st_parallel_conv.py#L159-L271",
+        ),
+        0,
+    )
+    expected = (
+        "https://github.com/NVIDIA/TensorRT-LLM/blob/"
+        "746e43a80b418b2e52138846b4789dd6e49f8466/tests/unittest/"
+        "_torch/visual_gen/multi_gpu/test_parallel_conv.py#L159-L271"
+    )
+    expected_segments = (
+        (0, 4, source.rows[0][4:]),
+        (1, 0, source.rows[1]),
+        (2, 0, source.rows[2]),
+    )
+
+    for row, column in ((1, 10), (2, 10), (3, 10)):
+        selection = LocalTextSelection()
+        assert selection.hover(
+            SgrMouseEvent(b"hover", 35, column, row, True),
+            source,
+        )
+        assert selection.segments() == expected_segments
+        selection.pointer_event(
+            SgrMouseEvent(b"down", 0, column, row, True),
+            source,
+        )
+        action = selection.pointer_event(
+            SgrMouseEvent(b"up", 0, column, row, False),
+            source,
+        )
+        assert action.open_target is not None
+        assert action.open_target.value == expected
+
+
 def test_local_text_selection_strips_label_before_absolute_path():
     route = HistorySnapshot(1, "%8", 0, 0, 40, 1)
     source = SelectionSource(
@@ -1868,13 +1911,36 @@ def test_reconnect_releases_and_rearms_remote_input_modes():
     surface.begin_reconnect()
     assert surface.terminal_modes is TerminalMode.NONE
     assert surface._local_status_text is None
+    assert surface._last_screen is None
+    reconnect_rendered = stream.getvalue()
+    assert reconnect_rendered.count(b"\033[?2004l") == 1
+    assert reconnect_rendered.count(b"\033[?1004l") == 1
+    surface.show_local_status("Reconnected; waiting for a fresh screen")
+    stream.seek(0)
+    stream.truncate()
     assert surface.paint(screen) is True
+    assert surface._local_status_text is None
 
     rendered = stream.getvalue()
-    assert rendered.count(b"\033[?2004h") == 2
-    assert rendered.count(b"\033[?1004h") == 2
-    assert rendered.count(b"\033[?2004l") == 1
-    assert rendered.count(b"\033[?1004l") == 1
+    assert rendered.count(b"\033[?2004h") == 1
+    assert rendered.count(b"\033[?1004h") == 1
+    assert b"\033[?2004l" not in rendered
+    assert b"\033[?1004l" not in rendered
+    assert b"Reconnected; waiting" not in rendered
+    assert rendered.endswith(b"\033[1;2H\033[?25h")
+
+
+def test_bottom_right_local_status_cannot_leave_a_pending_wrap():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.set_physical_size(os.terminal_size((12, 4)))
+
+    surface.show_local_status("exactly-12ch")
+
+    painted = output.getvalue()
+    text = painted.index(b"exactly-12ch")
+    assert painted.rfind(b"\033[?7l", 0, text) >= 0
+    assert painted.find(b"\033[?7h", text) > text
 
 
 def test_ctrl_right_bracket_is_consumed_locally_with_trailing_data():
@@ -3674,6 +3740,33 @@ def test_reconnect_preserves_cache_only_after_a_fresh_timeline_anchor():
     assert view.content_cache["%8"].lines == tuple(
         f"line-{index}".encode() for index in range(110)
     )
+
+
+def test_reconnect_refreshes_routes_before_the_next_wheel_is_consumed():
+    view = LocalHistoryView()
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    lines = tuple(f"line-{index}".encode() for index in range(100))
+    route = HistorySnapshot(first_id, "%8", 30, 0, 30, 3, lines)
+    view.accept_prefetch(HistoryBatch(first_id, (route,)))
+    view.mark_reconnected()
+
+    waiting = view.wheel(SgrMouseEvent(b"up-before", 64, 40, 2, True))
+    assert waiting.refresh_routes is True
+    assert waiting.forwarded_input == b""
+
+    refresh = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    refresh_id, _limit = decode_history_prefetch(refresh.data)
+    view.accept_prefetch(
+        HistoryBatch(
+            refresh_id,
+            (replace(route, request_id=refresh_id),),
+        )
+    )
+    scrolled = view.wheel(SgrMouseEvent(b"up-after", 64, 40, 2, True))
+
+    assert scrolled.render_history is True
+    assert view.overlays()[0][1] == lines[-4:-1]
 
 
 def test_reconnect_rejects_unanchored_cache_for_a_reused_pane_id():

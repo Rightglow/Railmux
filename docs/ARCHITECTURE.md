@@ -219,12 +219,15 @@ helper's 45-second half-open lease, while each hello, attach wait, and backoff
 also watches local stdin so `Ctrl-]`, `Ctrl-C`, or EOF restores the terminal
 immediately. Only frames painted by the current helper qualify another
 automatic retry. The last valid frame and bounded history cache may remain
-painted with a local reconnect status; a new decoder/model accepts only a fresh
-keyframe, and cached pane content is reusable only after a fresh multi-line
-timeline anchor, as the new display authority. Before replacement, the local
-surface disables the old helper's bracketed-paste and focus-event modes so the
-fresh keyframe must re-arm them and can deliver focus-in to the new tmux
-client. Non-interactive retry SSH diagnostics never write directly into the
+painted with a local reconnect status, but their cursor and pointer geometry
+cease to be input authority immediately. A new decoder/model accepts only a
+fresh keyframe; that keyframe removes the reconnect status and refreshes pane
+routes, while cached pane content is reusable only after a fresh multi-line
+timeline anchor. Before replacement, the local surface disables the old
+helper's bracketed-paste and focus-event modes so the fresh keyframe must re-arm
+them and can deliver focus-in to the new tmux client. Reconnect status rendering
+must not leave terminal autowrap pending or override the keyframe's final cursor
+state. Non-interactive retry SSH diagnostics never write directly into the
 retained alternate-screen surface; bounded Railmux status remains its only
 reconnect feedback.
 

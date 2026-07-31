@@ -585,6 +585,10 @@ class TerminalSurface:
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
         self._last_screen: AppliedScreen | None = None
+        self._last_overlays: tuple[
+            tuple[HistorySnapshot, tuple[bytes, ...]], ...
+        ] = ()
+        self._awaiting_reconnect_frame = False
         self._startup_detail: str | None = None
         self._local_status_text: str | None = None
         self._local_status_level = "info"
@@ -747,7 +751,19 @@ class TerminalSurface:
         self._local_status_text = safe
         self._local_status_level = level
         self._local_status_interruptible = interruptible
-        self.stream.write(self._render_local_status())
+        rendered = [self._render_local_status()]
+        if self._last_screen is not None:
+            projection_top, visible_height = self._projection(
+                self._last_screen.height
+            )
+            self._append_cursor(
+                rendered,
+                self._last_screen,
+                self._last_overlays,
+                projection_top=projection_top,
+                visible_height=visible_height,
+            )
+        self.stream.write(b"".join(rendered))
         self.stream.flush()
 
     def _render_local_status(self) -> bytes:
@@ -764,7 +780,8 @@ class TerminalSurface:
                 safe = safe[: self.physical_size.columns]
             self._local_status_bounds = (max(1, height), 1, max(1, len(safe)))
             return (
-                f"\033[0m\033[{max(1, height)};1H\033[2K{safe}\033[?25l"
+                f"\033[?7l\033[0m\033[{max(1, height)};1H\033[2K{safe}"
+                "\033[0m\033[?7h\033[?25l"
             ).encode("utf-8")
         width = screen.width
         if self.physical_size is not None:
@@ -785,7 +802,7 @@ class TerminalSurface:
         }.get(level, b"\033[38;5;231m")
         return b"".join(
             (
-                b"\033[0m",
+                b"\033[?7l\033[0m",
                 f"\033[{max(1, height)};{reserved + 1}H".encode(),
                 background,
                 foreground,
@@ -1005,11 +1022,20 @@ class TerminalSurface:
         return enabled
 
     def begin_reconnect(self) -> None:
-        """Release input modes owned by the old helper before replacing it."""
+        """Discard stale presentation state before replacing one helper."""
         if not self.active:
             return
         self._reconcile_terminal_modes(TerminalMode.NONE)
         self.clear_local_status()
+        self._last_screen = None
+        self._last_overlays = ()
+        self._awaiting_reconnect_frame = True
+        # A status message can end in the terminal's bottom-right cell.  Leave
+        # the disconnected surface in a known wrap/cursor state so neither a
+        # retry message nor the next keyframe can consume a pending wrap and
+        # scroll the alternate screen.
+        self.stream.write(b"\033[0m\033[?7h\033[?25l")
+        self.stream.flush()
 
     @staticmethod
     def _cursor_is_covered(
@@ -1113,8 +1139,15 @@ class TerminalSurface:
         selection: tuple[SelectionSegment, ...] = (),
     ) -> bool:
         """Paint a screen and report whether focus reporting was just enabled."""
+        if self._awaiting_reconnect_frame:
+            # "Waiting for a fresh screen" has served its purpose.  It must
+            # not be redrawn after the authoritative keyframe or hide the
+            # agent cursor that keyframe restores.
+            self.clear_local_status()
+            self._awaiting_reconnect_frame = False
         self.start()
         self._last_screen = screen
+        self._last_overlays = overlays
         enabled_modes = self._reconcile_terminal_modes(screen.terminal_modes)
         projection_top, visible_height = self._projection(screen.height)
         rendered = [b"\033[?7l"]
@@ -1143,6 +1176,11 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
+        if self._local_status_text is not None:
+            rendered.append(self._render_local_status())
+        # Status and selection painting move and may temporarily hide the
+        # terminal cursor.  Restoring the authoritative cursor must therefore
+        # be the final operation in every complete paint.
         self._append_cursor(
             rendered,
             screen,
@@ -1150,8 +1188,6 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
-        if self._local_status_text is not None:
-            rendered.append(self._render_local_status())
         self.stream.write(b"".join(rendered))
         self.stream.flush()
         return bool(enabled_modes & TerminalMode.FOCUS_EVENTS)
@@ -1164,6 +1200,7 @@ class TerminalSurface:
     ) -> None:
         self.start()
         self._last_screen = screen
+        self._last_overlays = overlays
         projection_top, visible_height = self._projection(screen.height)
         rendered: list[bytes] = [b"\033[?7l"]
         self._append_overlay_rows(
@@ -1178,6 +1215,8 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
+        if self._local_status_text is not None:
+            rendered.append(self._render_local_status())
         self._append_cursor(
             rendered,
             screen,
@@ -1185,8 +1224,6 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
-        if self._local_status_text is not None:
-            rendered.append(self._render_local_status())
         self.stream.write(b"".join(rendered))
         self.stream.flush()
 
@@ -1208,6 +1245,9 @@ class TerminalSurface:
         self.mouse_suspended = False
         self.cursor_hidden = False
         self.clear_local_status()
+        self._last_screen = None
+        self._last_overlays = ()
+        self._awaiting_reconnect_frame = False
         self.active = False
         self.interaction_active = False
 
@@ -3095,6 +3135,12 @@ def run(args: argparse.Namespace) -> int:
                         model = ScreenModel()
                         terminal_input = TerminalInputDecoder()
                         history.mark_reconnected()
+                        # The retained pixels and history cache are useful as
+                        # reconnect feedback, but neither is input authority
+                        # for the replacement helper.  Do not route a wheel
+                        # against the old cursor/screen or prefetch against
+                        # stale geometry before the new keyframe arrives.
+                        latest_screen = None
                         selection = LocalTextSelection()
                         history_info_until = None
                         selection_clear_at = None
@@ -3110,7 +3156,10 @@ def run(args: argparse.Namespace) -> int:
                         # its release cannot leak into the replacement PTY.
                         remote_closed = False
                         awaiting_keyframe = False
-                        route_refresh_needed = False
+                        # The first accepted screen immediately refreshes
+                        # visible pane routes instead of making the user spend
+                        # and lose one wheel tick to discover them again.
+                        route_refresh_needed = True
                         reconnect_policy = claude_history_reconnect_frame(
                             claude_history_runtime_choice
                         )

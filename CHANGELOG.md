@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Re-anchor the local SSH display, cursor, and pane-history routes on the first
+  fresh keyframe after automatic reconnect, preventing subsequent typing from
+  scrolling retained pixels and restoring mouse-wheel history immediately.
+- Resolve and highlight every row of a three-or-more-line soft-wrapped URL as
+  one target, regardless of which wrapped row the user hovers or clicks.
+
 ## [0.2.20] - 2026-07-30
 
 ### Fixed
