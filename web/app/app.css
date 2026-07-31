@@ -1354,7 +1354,8 @@ code {
   display: block;
   margin-bottom: 7px;
   color: #557514;
-  font-size: 9px;
+  font-size: 11px;
+  font-weight: 800;
   letter-spacing: 0.09em;
 }
 
@@ -1467,7 +1468,7 @@ code {
 .workspace-control-grid article > span {
   color: var(--acid);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.1em;
 }
@@ -1492,11 +1493,30 @@ code {
   line-height: 1.65;
 }
 
+.status-click-note {
+  display: block;
+  margin-top: auto;
+  padding-top: 24px;
+  color: rgba(242,240,233,0.48);
+  border-top: 1px solid rgba(255,255,255,0.12);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.status-click-note strong {
+  display: block;
+  margin-bottom: 5px;
+  color: rgba(200,255,98,0.72);
+  font-size: 9px;
+  letter-spacing: 0.09em;
+}
+
 .mode-switch {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin: 62px 0 0;
+  margin: 52px 0 0;
 }
 
 .mode-switch strong {

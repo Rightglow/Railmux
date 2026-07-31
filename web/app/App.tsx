@@ -310,6 +310,11 @@ export default function Home() {
                   provider. Agents in the other mode stay alive and reappear
                   when you switch back.
                 </p>
+                <small className="status-click-note">
+                  <strong>BUTTON BAR FOLDED?</strong>
+                  On tmux 3.4+, click the provider name in the lower-left
+                  status bar.
+                </small>
               </article>
               <article>
                 <span>LAYOUT / <kbd>F8</kbd></span>
@@ -323,6 +328,11 @@ export default function Home() {
                   Cycle the visible workspace without stopping an agent hidden
                   by the new arrangement. The Target pane remains explicit.
                 </p>
+                <small className="status-click-note">
+                  <strong>BUTTON BAR FOLDED?</strong>
+                  On tmux 3.4+, click the layout symbol in the lower-left
+                  status bar.
+                </small>
               </article>
             </div>
             <div className="lifecycle-demo-grid">

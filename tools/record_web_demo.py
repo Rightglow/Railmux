@@ -56,7 +56,7 @@ WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # narrow width; the separately documented 105x21 Termux report was landscape.
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
 TOUR = RecordingProfile("tour", 160, 38, 10.0)
-CONTROLS = RecordingProfile("controls", 180, 38, 27.0)
+CONTROLS = RecordingProfile("controls", 180, 38, 21.0)
 STARTUP_HOLD_SECONDS = 2.4
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
 PASSTHROUGH_ENV = (
@@ -584,7 +584,9 @@ else:
         "[live]\n"
         "poll_interval_ms = 250\n\n"
         "[updates]\n"
-        'auto_update = "never"\n',
+        'auto_update = "never"\n\n'
+        "[ui]\n"
+        'layout_retention = "never"\n',
         encoding="utf-8",
     )
 
@@ -945,7 +947,6 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "cycle-layout",
                 "open-quit",
                 "soft-quit",
-                "finish-soft-quit",
             },
         }[profile.name]
 
@@ -1251,13 +1252,6 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             18.0,
                             b"s",
                             "key|S|Soft quit — keep agents running",
-                        )
-                    if "soft-quit" in sent and b"Keep this layout?" in raw_output:
-                        send_once(
-                            "finish-soft-quit",
-                            22.0,
-                            b"n",
-                            None,
                         )
 
                 readable, _, _ = select.select([master], [], [], 0.05)

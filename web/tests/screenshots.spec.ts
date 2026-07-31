@@ -393,6 +393,12 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await expect(page.locator(".workspace-control-grid")).toContainText("CC");
   await expect(page.locator(".workspace-control-grid")).toContainText("CODEX");
   await expect(page.locator(".workspace-control-grid")).toContainText("F8");
+  await expect(page.locator(".workspace-control-grid")).toContainText(
+    "click the provider name",
+  );
+  await expect(page.locator(".workspace-control-grid")).toContainText(
+    "click the layout symbol",
+  );
   const player = page.locator('[data-demo="controls-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
@@ -443,10 +449,12 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await expect(hud).toContainText("Soft quit", { timeout: 7_000 });
   await expect(pointer).toHaveCount(0);
   await expect(mouseTarget).toHaveCount(0);
-  await expect(player.locator(".ap-term")).toContainText("Keep this layout?");
   await expect(player.locator(".ap-term")).toContainText(
     "Keeping 1 agent session running.",
     { timeout: 7_000 },
+  );
+  await expect(player.locator(".ap-term")).not.toContainText(
+    "Keep this layout?",
   );
   await player.screenshot({
     path: join(outputDir, "soft-quit-complete.png"),
