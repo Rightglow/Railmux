@@ -382,14 +382,17 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
   await expect(
-    page.getByText(
-      "Mode switches the sidebar between Claude Code and Codex",
-      { exact: false },
-    ),
+    page.getByText("Switch the whole sidebar.", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByText("agents in the other mode keep running", { exact: false }),
+    page.getByText("Agents in the other mode stay alive", { exact: false }),
   ).toBeVisible();
+  await expect(
+    page.getByText("One, side by side, or stacked.", { exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".workspace-control-grid")).toContainText("CC");
+  await expect(page.locator(".workspace-control-grid")).toContainText("CODEX");
+  await expect(page.locator(".workspace-control-grid")).toContainText("F8");
   const player = page.locator('[data-demo="controls-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
@@ -461,8 +464,11 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   const sectionIds = await page.locator("main > section").evaluateAll(
     (sections) => sections.map((section) => section.id).filter(Boolean),
   );
-  expect(sectionIds.indexOf("features")).toBeLessThan(
-    sectionIds.indexOf("workflow"),
+  expect(sectionIds.indexOf("workflow")).toBeLessThan(
+    sectionIds.indexOf("controls"),
+  );
+  expect(sectionIds.indexOf("controls")).toBeLessThan(
+    sectionIds.indexOf("features"),
   );
   const workflowSteps = page.locator(".workflow-steps");
   await expect(workflowSteps.getByText("Preview", { exact: true })).toBeVisible();

@@ -71,9 +71,9 @@ export default function Home() {
           <span>RAILMUX</span>
         </a>
         <nav aria-label="Main navigation">
-          <a href="#features">Features</a>
           <a href="#workflow">Workflow</a>
           <a href="#controls">Controls</a>
+          <a href="#features">Features</a>
           <a href="#ssh">SSH</a>
           <a href="https://github.com/Rightglow/Railmux">GitHub</a>
         </nav>
@@ -159,6 +159,222 @@ export default function Home() {
               Railmux turns scattered agent work into one visible, durable
               workspace.
             </p>
+          </div>
+        </section>
+
+        <section className="workflow" id="workflow">
+          <div className="section-wrap">
+            <div className="section-heading workflow-heading">
+              <p className="section-kicker section-kicker-light">ONE LOOP</p>
+              <h2>Browse. Open. Keep moving.</h2>
+            </div>
+            <div className="workflow-demo-grid">
+              <div className="workflow-steps">
+                <article>
+                  <span>01</span>
+                  <h3>Preview</h3>
+                  <p>
+                    Single-click a stopped session to inspect its transcript
+                    without starting it.
+                  </p>
+                  <kbd>CLICK</kbd>
+                </article>
+                <article>
+                  <span>02</span>
+                  <h3>Resume</h3>
+                  <p>
+                    Press Enter after preview—or double-click—to continue the
+                    conversation.
+                  </p>
+                  <div><kbd>ENTER</kbd><kbd>DOUBLE-CLICK</kbd></div>
+                </article>
+                <article>
+                  <span>03</span>
+                  <h3>Switch</h3>
+                  <p>
+                    Click another running session to switch the Target pane
+                    instantly.
+                  </p>
+                  <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
+                </article>
+                <article>
+                  <span>04</span>
+                  <h3>Manage</h3>
+                  <p>
+                    Right-click a Sessions or Running row for every action
+                    available in its current state.
+                  </p>
+                  <kbd>RIGHT-CLICK</kbd>
+                </article>
+              </div>
+              <div className="workflow-player">
+                <div className="capture-meta capture-meta-dark">
+                  <span><i /> GUIDED REAL TERMINAL</span>
+                  <small>keyboard cue shown · pointer marks the matching mouse target</small>
+                </div>
+                <TerminalRecording
+                  source="railmux-workflow-demo.cast"
+                  className="workflow-terminal-recording"
+                  poster="npt:0.6"
+                  controls={false}
+                  loop
+                  playWhenVisible
+                  inputHud
+                  cueCols={160}
+                  cueRows={38}
+                  dataDemo="workflow-recording"
+                />
+              </div>
+              <article className="workflow-menu-proof">
+                <div className="workflow-menu-copy">
+                  <span>RIGHT-CLICK / SESSION MENU</span>
+                  <h3>Manage without leaving the sidebar.</h3>
+                  <p>
+                    Preview, open, rename, star, copy the title, kill, open a
+                    terminal, or delete. Railmux hides actions that do not
+                    apply to the selected session.
+                  </p>
+                </div>
+                <div className="workflow-menu-viewport">
+                  <TerminalRecording
+                    source="railmux-workflow-demo.cast"
+                    className="workflow-menu-recording"
+                    poster="npt:17.2"
+                    controls={false}
+                    dataDemo="session-menu-recording"
+                  />
+                </div>
+              </article>
+              <aside className="workflow-pointer-note">
+                <p>
+                  <strong>MOUSE INPUT</strong>
+                  Your terminal must report mouse events to Railmux.{" "}
+                  <a href="https://github.com/Rightglow/Railmux#2-mouse-buttons-or-f8f9-dont-work--whats-wrong">
+                    Check terminal setup
+                  </a>
+                  .
+                </p>
+                <p>
+                  <strong>COPY</strong>
+                  With <code>railmux ssh</code>, drag inside one agent pane to
+                  copy locally. Other connections depend on terminal clipboard
+                  support.{" "}
+                  <a href="https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane">
+                    See every copy path
+                  </a>
+                  .
+                </p>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section className="lifecycle-section" id="controls">
+          <div className="section-wrap">
+            <div className="lifecycle-heading">
+              <div>
+                <p className="section-kicker section-kicker-light">
+                  WORKSPACE CONTROL
+                </p>
+                <h2>
+                  Shape the workspace.
+                  <br />
+                  Leave on your terms.
+                </h2>
+              </div>
+              <div className="lifecycle-intro">
+                <p>
+                  Change the provider view or reshape the panes without
+                  interrupting hidden work. Use the keyboard or click the
+                  matching Button Bar control; destructive choices still
+                  require an explicit confirmation.
+                </p>
+                <div>
+                  <span><kbd>+</kbd> or click <strong>More</strong></span>
+                  <span><kbd>m</kbd> or click <strong>Mode</strong></span>
+                  <span><kbd>F8</kbd> or click <strong>Layout</strong></span>
+                </div>
+              </div>
+            </div>
+            <div className="workspace-control-grid">
+              <article>
+                <span>MODE / <kbd>m</kbd></span>
+                <div className="mode-switch" aria-hidden="true">
+                  <strong>CC</strong>
+                  <i>↔</i>
+                  <strong>CODEX</strong>
+                </div>
+                <h3>Switch the whole sidebar.</h3>
+                <p>
+                  Projects, Sessions, and Running follow the selected
+                  provider. Agents in the other mode stay alive and reappear
+                  when you switch back.
+                </p>
+              </article>
+              <article>
+                <span>LAYOUT / <kbd>F8</kbd></span>
+                <div className="layout-switch" aria-hidden="true">
+                  <i><b /></i>
+                  <i><b /><b /></i>
+                  <i><b /><b /></i>
+                </div>
+                <h3>One, side by side, or stacked.</h3>
+                <p>
+                  Cycle the visible workspace without stopping an agent hidden
+                  by the new arrangement. The Target pane remains explicit.
+                </p>
+              </article>
+            </div>
+            <div className="lifecycle-demo-grid">
+              <div className="lifecycle-player">
+                <div className="capture-meta capture-meta-dark">
+                  <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
+                  <small>keyboard recorded · pointer marks supported mouse equivalents</small>
+                </div>
+                <TerminalRecording
+                  source="railmux-controls-demo.cast"
+                  className="controls-terminal-recording"
+                  poster="npt:10.6"
+                  controls={false}
+                  loop
+                  playWhenVisible
+                  inputHud
+                  cueCols={180}
+                  cueRows={38}
+                  dataDemo="controls-recording"
+                />
+              </div>
+              <div className="lifecycle-choices">
+                <article>
+                  <span>DETACH</span>
+                  <h3><kbd>Ctrl-B d</kbd></h3>
+                  <p>
+                    Leave this terminal only. Railmux and every agent keep
+                    running exactly where they were. This tmux-level action
+                    intentionally remains the keyboard exception.
+                  </p>
+                </article>
+                <article>
+                  <span>SOFT QUIT</span>
+                  <h3><kbd>q</kbd> then <kbd>s</kbd></h3>
+                  <p>
+                    Close the shared Railmux UI in every attached terminal.
+                    Agent sessions stay alive and are recovered next start.
+                    Click <strong>Quit</strong>, then press <kbd>s</kbd> in
+                    the confirmation.
+                  </p>
+                </article>
+                <article>
+                  <span>QUIT</span>
+                  <h3><kbd>q</kbd> then <kbd>y</kbd></h3>
+                  <p>
+                    Close Railmux and stop every running agent session after
+                    explicit confirmation. Click <strong>Quit</strong>, then
+                    press <kbd>y</kbd> in the confirmation.
+                  </p>
+                </article>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -302,196 +518,6 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="workflow" id="workflow">
-          <div className="section-wrap">
-            <div className="section-heading workflow-heading">
-              <p className="section-kicker section-kicker-light">ONE LOOP</p>
-              <h2>Browse. Open. Keep moving.</h2>
-            </div>
-            <div className="workflow-demo-grid">
-              <div className="workflow-steps">
-                <article>
-                  <span>01</span>
-                  <h3>Preview</h3>
-                  <p>
-                    Single-click a stopped session to inspect its transcript
-                    without starting it.
-                  </p>
-                  <kbd>CLICK</kbd>
-                </article>
-                <article>
-                  <span>02</span>
-                  <h3>Resume</h3>
-                  <p>
-                    Press Enter after preview—or double-click—to continue the
-                    conversation.
-                  </p>
-                  <div><kbd>ENTER</kbd><kbd>DOUBLE-CLICK</kbd></div>
-                </article>
-                <article>
-                  <span>03</span>
-                  <h3>Switch</h3>
-                  <p>
-                    Click another running session to switch the Target pane
-                    instantly.
-                  </p>
-                  <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
-                </article>
-                <article>
-                  <span>04</span>
-                  <h3>Manage</h3>
-                  <p>
-                    Right-click a Sessions or Running row for every action
-                    available in its current state.
-                  </p>
-                  <kbd>RIGHT-CLICK</kbd>
-                </article>
-              </div>
-              <div className="workflow-player">
-                <div className="capture-meta capture-meta-dark">
-                  <span><i /> GUIDED REAL TERMINAL</span>
-                  <small>keyboard cue shown · pointer marks the matching mouse target</small>
-                </div>
-                <TerminalRecording
-                  source="railmux-workflow-demo.cast"
-                  className="workflow-terminal-recording"
-                  poster="npt:0.6"
-                  controls={false}
-                  loop
-                  playWhenVisible
-                  inputHud
-                  cueCols={160}
-                  cueRows={38}
-                  dataDemo="workflow-recording"
-                />
-              </div>
-              <article className="workflow-menu-proof">
-                <div className="workflow-menu-copy">
-                  <span>RIGHT-CLICK / SESSION MENU</span>
-                  <h3>Manage without leaving the sidebar.</h3>
-                  <p>
-                    Preview, open, rename, star, copy the title, kill, open a
-                    terminal, or delete. Railmux hides actions that do not
-                    apply to the selected session.
-                  </p>
-                </div>
-                <div className="workflow-menu-viewport">
-                  <TerminalRecording
-                    source="railmux-workflow-demo.cast"
-                    className="workflow-menu-recording"
-                    poster="npt:17.2"
-                    controls={false}
-                    dataDemo="session-menu-recording"
-                  />
-                </div>
-              </article>
-              <aside className="workflow-pointer-note">
-                <p>
-                  <strong>MOUSE INPUT</strong>
-                  Your terminal must report mouse events to Railmux.{" "}
-                  <a href="https://github.com/Rightglow/Railmux#2-mouse-buttons-or-f8f9-dont-work--whats-wrong">
-                    Check terminal setup
-                  </a>
-                  .
-                </p>
-                <p>
-                  <strong>COPY</strong>
-                  With <code>railmux ssh</code>, drag inside one agent pane to
-                  copy locally. Other connections depend on terminal clipboard
-                  support.{" "}
-                  <a href="https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane">
-                    See every copy path
-                  </a>
-                  .
-                </p>
-              </aside>
-            </div>
-          </div>
-        </section>
-
-        <section className="lifecycle-section" id="controls">
-          <div className="section-wrap">
-            <div className="lifecycle-heading">
-              <div>
-                <p className="section-kicker">
-                  WORKSPACE CONTROL
-                </p>
-                <h2>
-                  Shape the workspace.
-                  <br />
-                  Leave on your terms.
-                </h2>
-              </div>
-              <div className="lifecycle-intro">
-                <p>
-                  Use shortcuts or click the matching Button Bar control.
-                  Mode switches the sidebar between Claude Code and Codex;
-                  agents in the other mode keep running.
-                  Running agents continue even when their mode or pane is not
-                  visible. The recording shows the keyboard route and names
-                  the equivalent mouse target where Railmux exposes one.
-                  Safety confirmations remain explicit keyboard choices.
-                </p>
-                <div>
-                  <span><kbd>+</kbd> or click <strong>More</strong></span>
-                  <span><kbd>m</kbd> or click <strong>Mode</strong></span>
-                  <span><kbd>F8</kbd> or click <strong>Layout</strong></span>
-                </div>
-              </div>
-            </div>
-            <div className="lifecycle-demo-grid">
-              <div className="lifecycle-player">
-                <div className="capture-meta capture-meta-dark">
-                  <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
-                  <small>keyboard recorded · pointer marks supported mouse equivalents</small>
-                </div>
-                <TerminalRecording
-                  source="railmux-controls-demo.cast"
-                  className="controls-terminal-recording"
-                  poster="npt:10.6"
-                  controls={false}
-                  loop
-                  playWhenVisible
-                  inputHud
-                  cueCols={180}
-                  cueRows={38}
-                  dataDemo="controls-recording"
-                />
-              </div>
-              <div className="lifecycle-choices">
-                <article>
-                  <span>DETACH</span>
-                  <h3><kbd>Ctrl-B d</kbd></h3>
-                  <p>
-                    Leave this terminal only. Railmux and every agent keep
-                    running exactly where they were. This tmux-level action
-                    intentionally remains the keyboard exception.
-                  </p>
-                </article>
-                <article>
-                  <span>SOFT QUIT</span>
-                  <h3><kbd>q</kbd> then <kbd>s</kbd></h3>
-                  <p>
-                    Close the shared Railmux UI in every attached terminal.
-                    Agent sessions stay alive and are recovered next start.
-                    Click <strong>Quit</strong>, then press <kbd>s</kbd> in
-                    the confirmation.
-                  </p>
-                </article>
-                <article>
-                  <span>QUIT</span>
-                  <h3><kbd>q</kbd> then <kbd>y</kbd></h3>
-                  <p>
-                    Close Railmux and stop every running agent session after
-                    explicit confirmation. Click <strong>Quit</strong>, then
-                    press <kbd>y</kbd> in the confirmation.
-                  </p>
-                </article>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <section className="ssh-section" id="ssh">
           <div className="section-wrap ssh-grid">
             <div className="ssh-copy">
@@ -588,39 +614,41 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="install section-wrap" id="install">
-          <p className="section-kicker">QUICK START</p>
-          <div className="install-grid">
-            <div>
-              <h2>
-                Your agents are already working.
-                <br />
-                Give them a better station.
-              </h2>
-              <p>
-                Railmux requires Python 3.9+, tmux, and at least one supported
-                agent CLI. Install locally for ordinary use and for the fast SSH
-                client.
-              </p>
-              <aside className="install-remote-note">
-                <span>REMOTE WORK</span>
+        <section className="install" id="install">
+          <div className="section-wrap install-inner">
+            <p className="section-kicker">QUICK START</p>
+            <div className="install-grid">
+              <div>
+                <h2>
+                  Your agents are already working.
+                  <br />
+                  Give them a better station.
+                </h2>
                 <p>
-                  If ordinary SSH cannot keep up with full-screen redraws,
-                  use <code>railmux ssh</code> from macOS, Linux, or Windows
-                  through WSL.
+                  Railmux requires Python 3.9+, tmux, and at least one supported
+                  agent CLI. Install locally for ordinary use and for the fast
+                  SSH client.
                 </p>
-              </aside>
-            </div>
-            <div className="install-commands">
-              <CopyCommand command="pip install railmux" />
-              <CopyCommand command="railmux" />
-              <div className="install-links">
-                <a href="https://github.com/Rightglow/Railmux#quick-start">
-                  Read the full guide <span>→</span>
-                </a>
-                <a href="https://pypi.org/project/railmux/">
-                  View on PyPI <span>→</span>
-                </a>
+                <aside className="install-remote-note">
+                  <span>REMOTE WORK</span>
+                  <p>
+                    If ordinary SSH cannot keep up with full-screen redraws,
+                    use <code>railmux ssh</code> from macOS, Linux, or Windows
+                    through WSL.
+                  </p>
+                </aside>
+              </div>
+              <div className="install-commands">
+                <CopyCommand command="pip install railmux" />
+                <CopyCommand command="railmux" />
+                <div className="install-links">
+                  <a href="https://github.com/Rightglow/Railmux#quick-start">
+                    Read the full guide <span>→</span>
+                  </a>
+                  <a href="https://pypi.org/project/railmux/">
+                    View on PyPI <span>→</span>
+                  </a>
+                </div>
               </div>
             </div>
           </div>
