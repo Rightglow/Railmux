@@ -20,6 +20,21 @@ heuristic adoption when its complete pre-launch fence is unavailable.
 
 ## Follow-up candidates
 
+### Native Windows latest-state SSH client
+
+Windows Terminal running a WSL distribution already uses Railmux's supported
+Linux client path. The remaining platform target is native Windows Python in
+Windows Terminal or PowerShell, while the remote helper continues to run on a
+POSIX host with tmux.
+
+Treat this as a local platform adapter rather than a collection of
+`sys.platform` conditionals. It must replace POSIX raw-TTY and selectable-pipe
+assumptions, add Windows console/resize/clipboard/browser/terminal-launch
+boundaries, and retain the existing protocol and remote session-safety model.
+The complete functional baseline and acceptance checklist live in
+`docs/SUPPORT_MATRIX.md`; WSL unit coverage alone is not sufficient evidence
+for the native Windows support claim.
+
 ### Dual-agent workspace follow-ups
 
 Railmux 0.2 ships the bounded two-slot workspace, layout cycling, Target-pane

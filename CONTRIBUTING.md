@@ -48,6 +48,12 @@ entry in [`docs/README.md`](docs/README.md). Keep durable invariants and runtime
 evidence there; completed task prompts and generated diffs should not become
 parallel sources of truth.
 
+Changes that add a provider, operating system, terminal integration, or
+user-visible capability must also update the stable inventory and applicable
+acceptance checklist in
+[`docs/SUPPORT_MATRIX.md`](docs/SUPPORT_MATRIX.md). Unit tests that mock an OS
+branch do not by themselves establish real-platform support.
+
 Keep the root [`README.md`](README.md) focused on installing and using Railmux.
 Implementation rationale, recovery rules, compatibility boundaries, and other
 maintainer-only detail belong under [`docs/`](docs/README.md).

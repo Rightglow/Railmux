@@ -12,6 +12,10 @@ Read the smallest relevant document before changing behavior:
   for providers, restart and orphan recovery, session indexing, agent
   workspaces, display transports, layout, focus colours, lifecycle state, and
   attention state. Update it whenever a change alters one of those contracts.
+- [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md) inventories the supported providers,
+  local/remote platforms, terminal capabilities, and user-visible features.
+  Use its stable feature IDs and acceptance checklists when extending Railmux
+  to a new provider, operating system, or terminal emulator.
 - [`DENESTED_AGENT_PANE.md`](DENESTED_AGENT_PANE.md) records the evidence,
   transaction model, fallbacks, benchmarks, default-transport decision, and
   unresolved limitations for the swap transport. Keep measurements explicit
@@ -35,6 +39,9 @@ Related repository-level documents have different roles:
 
 - Preserve decisions, constraints, recovery authority, compatibility limits,
   reproducible evidence, and unresolved risks.
+- Update the support matrix together with any provider, platform, terminal, or
+  product capability claim; mocked platform branches are not real-platform
+  evidence.
 - Prefer updating an existing authoritative document over adding overlapping
   design notes.
 - Move a proven roadmap item into the appropriate architecture/evidence

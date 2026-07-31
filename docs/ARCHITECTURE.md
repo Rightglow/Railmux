@@ -145,6 +145,13 @@ bounded so a missing or inexact keyboard-close resize cannot leave touch input
 permanently owned by Termux. If that bounded timer expires while the keyboard
 is still open, only a passive close-reassert marker remains; it captures no
 input and is consumed by the later usable resize.
+While this confirmed keyboard handoff owns the local transition, an exact
+Termux focus-out is consumed instead of being forwarded as a real application
+blur. The client reasserts focus-in at the keyboard projection, input, close,
+or bounded recovery boundary only when the current remote application requested
+terminal focus events. This keeps its prompt cursor visible without changing
+desktop focus semantics or exposing a focus sequence to applications that did
+not request one.
 Desktop terminals and direct Railmux launches never enter this path.
 
 Managed Claude Code panes may advertise a verified transcript source without
