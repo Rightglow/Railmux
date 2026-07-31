@@ -200,6 +200,13 @@ def full_repaint(screen: AppliedScreen) -> AppliedScreen:
     )
 
 
+def focus_in_frame_for_screen(screen: AppliedScreen | None) -> bytes | None:
+    """Reassert focus only while the remote application requested events."""
+    if screen is None or not screen.terminal_modes & TerminalMode.FOCUS_EVENTS:
+        return None
+    return encode_input(b"\033[I")
+
+
 def compact_status_row(screen: AppliedScreen) -> int | None:
     """Return the 1-based compact navigation row at either tmux bar edge."""
     prefixes = (
@@ -2289,6 +2296,12 @@ def run(args: argparse.Namespace) -> int:
         elif claude_history_prompt_input is not None:
             surface.show_claude_history_prompt()
 
+    def reassert_remote_focus() -> None:
+        """Keep an agent focused across Termux's soft-keyboard view handoff."""
+        frame = focus_in_frame_for_screen(latest_screen)
+        if frame is not None:
+            send_protocol_frame(frame)
+
     def apply_history_action(action: HistoryAction) -> None:
         nonlocal route_refresh_needed
         nonlocal history_info_until, claude_history_prompt_input
@@ -2644,11 +2657,20 @@ def run(args: argparse.Namespace) -> int:
             return
         if not part:
             return
+        if touch_keyboard.consumes_focus_out(part):
+            # Opening Android's input view can briefly remove focus from the
+            # terminal View even though the user is still interacting with
+            # this SSH client. Forwarding that synthetic focus-out makes
+            # Codex/Claude hide their prompt cursor until Android happens to
+            # emit another focus-in. The projection/input transition below
+            # reasserts the authoritative focus-in instead.
+            return
         if (
             part not in (b"\x1b[I", b"\x1b[O")
             and touch_keyboard.keyboard_input()
         ):
             surface.resume_mouse()
+            reassert_remote_focus()
             if latest_screen is not None:
                 surface.paint(
                     full_repaint(latest_screen),
@@ -2735,6 +2757,7 @@ def run(args: argparse.Namespace) -> int:
                     if _is_soft_keyboard_projection(observed_size, current_size):
                         if touch_keyboard.observe_projection(True):
                             surface.resume_mouse()
+                            reassert_remote_focus()
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if latest_screen is not None:
@@ -2771,6 +2794,7 @@ def run(args: argparse.Namespace) -> int:
                     elif observed_size == current_size:
                         if touch_keyboard.observe_projection(False):
                             surface.resume_mouse(reassert=True)
+                            reassert_remote_focus()
                         # The soft keyboard closed. Restore the complete
                         # logical screen even if no remote patch is pending.
                         surface.set_physical_size(observed_size)
@@ -2786,8 +2810,10 @@ def run(args: argparse.Namespace) -> int:
                         keyboard_projected = touch_keyboard.keyboard_projected
                         if touch_keyboard.observe_projection(False):
                             surface.resume_mouse(reassert=True)
+                            reassert_remote_focus()
                         elif touch_keyboard.cancel():
                             surface.resume_mouse(reassert=keyboard_projected)
+                            reassert_remote_focus()
                         surface.set_physical_size(observed_size)
                         local_size = observed_size
                         if history.active and latest_screen is not None:
@@ -3011,6 +3037,7 @@ def run(args: argparse.Namespace) -> int:
                 keyboard_projected = touch_keyboard.keyboard_projected
                 if touch_keyboard.expire(now):
                     surface.resume_mouse(reassert=keyboard_projected)
+                    reassert_remote_focus()
                     if latest_screen is not None:
                         surface.paint(
                             full_repaint(latest_screen),

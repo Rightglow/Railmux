@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep the mobile prompt cursor visible in `railmux ssh` by treating Termux's
+  soft-keyboard View handoff as local UI focus, suppressing its transient
+  focus-out, and reasserting focus only for remote applications that requested
+  terminal focus events. Desktop terminals and applications without focus
+  reporting retain their existing input behavior.
+
 - Re-anchor the local SSH display, cursor, and pane-history routes on the first
   fresh keyframe after automatic reconnect, preventing subsequent typing from
   scrolling retained pixels and restoring mouse-wheel history immediately.

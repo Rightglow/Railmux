@@ -350,7 +350,12 @@ Display protocol v14 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
-local terminal. Arbitrary remote private modes never become local control
+local terminal. During a confirmed Termux soft-keyboard handoff, the client's
+Android terminal View can emit a transient focus-out even though the Railmux
+surface remains active. That local transition is consumed and focus-in is
+reasserted only when the remote application requested focus events, preserving
+the prompt cursor without changing desktop focus behavior. Arbitrary remote
+private modes never become local control
 sequences. A gap or geometry mismatch makes the client request a new keyframe.
 Remote stdout is non-blocking: at most one partially transmitted update must
 finish, while a wholly unsent old update can be replaced by the latest screen.

@@ -726,8 +726,10 @@ ordinary cooked mode for the keyboard to close instead of corrupting the remote
 layout. During an attached session, it keeps the remote logical terminal size
 unchanged and shows a bottom-anchored local projection so the tmux status bar
 and nearby input rows remain visible. Railmux mouse gestures resume as soon as
-that keyboard projection appears; closing the keyboard restores and repaints
-the full view even if Termux reports a slightly different height. This
+that keyboard projection appears. The Android input-View handoff is kept local,
+so an agent that requested terminal focus events retains its prompt cursor.
+Closing the keyboard restores and repaints the full view even if Termux reports
+a slightly different height. This
 projection expects the terminal's column count to remain stable; close the
 keyboard before rotating the device. A terminal narrower than 40 columns is
 rejected immediately; hide the keyboard or reduce the terminal font size before

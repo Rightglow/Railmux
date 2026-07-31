@@ -78,6 +78,7 @@ from railmux.fast_display_client import (
     encode_input as encode_client_input,
     encode_keyframe_request as encode_client_keyframe_request,
     encode_resize as encode_client_resize,
+    focus_in_frame_for_screen,
     parse_args as parse_client_args,
     parse_remote_hello,
     prepare_remote_process,
@@ -1398,6 +1399,9 @@ def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
 
     assert action.handled and action.suspend_mouse and action.show_hint
     assert touch.active
+    assert touch.owns_local_focus
+    assert touch.consumes_focus_out(b"\033[O")
+    assert not touch.consumes_focus_out(b"\033[I")
     assert touch.pointer_event(
         release,
         clicked_pane_id="%8",
@@ -1409,6 +1413,32 @@ def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
     ).handled
     assert touch.keyboard_input()
     assert not touch.active
+    assert not touch.owns_local_focus
+    assert not touch.consumes_focus_out(b"\033[O")
+
+
+def test_termux_focus_reassertion_requires_remote_focus_events():
+    screen = AppliedScreen(
+        width=20,
+        height=4,
+        cursor_x=2,
+        cursor_y=2,
+        cursor_visible=False,
+        terminal_modes=TerminalMode.FOCUS_EVENTS,
+        rows=(b"one", b"two", b"three", b"four"),
+        changed_rows=(),
+        clear=False,
+    )
+
+    frame = focus_in_frame_for_screen(screen)
+    assert frame is not None
+    decoded = InputFrameDecoder().feed(frame)
+    assert len(decoded) == 1
+    assert decoded[0].data == b"\033[I"
+    assert focus_in_frame_for_screen(
+        replace(screen, terminal_modes=TerminalMode.NONE)
+    ) is None
+    assert focus_in_frame_for_screen(None) is None
 
 
 def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():

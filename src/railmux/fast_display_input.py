@@ -105,6 +105,15 @@ class TermuxTouchKeyboard:
         """Whether Termux has reported the shortened keyboard viewport."""
         return self._keyboard_projected or self._close_reassert_pending
 
+    @property
+    def owns_local_focus(self) -> bool:
+        """Whether a Termux keyboard handoff still owns the focus transition."""
+        return self._active or self.keyboard_projected
+
+    def consumes_focus_out(self, data: bytes) -> bool:
+        """Keep Android's input-View handoff local to the Termux client."""
+        return self.enabled and self.owns_local_focus and data == b"\033[O"
+
     @staticmethod
     def _is_plain_left_press(event: SgrMouseEvent) -> bool:
         return (
