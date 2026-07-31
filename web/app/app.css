@@ -841,10 +841,6 @@ code {
   transform: translateX(-18.75%);
 }
 
-.entrypoint-recording-left {
-  transform: translateX(0);
-}
-
 .entrypoint-terminal-viewport {
   min-width: 0;
   overflow: hidden;
@@ -1192,7 +1188,7 @@ code {
 
 .workflow-steps {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   border-top: 1px solid rgba(255,255,255,0.15);
   border-left: 1px solid rgba(255,255,255,0.15);
 }
@@ -1251,9 +1247,62 @@ code {
   margin-top: 0;
 }
 
+.workflow-menu-proof {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 0.58fr) minmax(0, 1.42fr);
+  border: 1px solid rgba(255,255,255,0.15);
+}
+
+.workflow-menu-copy {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: clamp(28px, 4vw, 52px);
+  border-right: 1px solid rgba(255,255,255,0.15);
+}
+
+.workflow-menu-copy > span {
+  margin-bottom: auto;
+  color: var(--acid);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.09em;
+}
+
+.workflow-menu-copy h3 {
+  margin: 90px 0 18px;
+  font-size: clamp(29px, 2.8vw, 43px);
+  font-weight: 560;
+  line-height: 1;
+  letter-spacing: -0.05em;
+}
+
+.workflow-menu-copy p {
+  margin: 0;
+  color: rgba(242,240,233,0.58);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.workflow-menu-viewport {
+  min-width: 0;
+  overflow: hidden;
+  padding: clamp(22px, 3vw, 38px);
+  background: #090d0f;
+}
+
+.workflow-menu-recording {
+  width: 138%;
+  max-width: none;
+  border-color: rgba(255,255,255,0.13);
+  border-radius: 3px;
+  box-shadow: 0 20px 55px rgba(0,0,0,0.32);
+}
+
 .workflow-pointer-note {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   border-top: 1px solid rgba(255,255,255,0.15);
   border-left: 1px solid rgba(255,255,255,0.15);
 }
@@ -1592,6 +1641,20 @@ footer {
     grid-template-columns: 1fr;
   }
 
+  .workflow-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .workflow-menu-proof {
+    grid-template-columns: 1fr;
+  }
+
+  .workflow-menu-copy {
+    min-height: 310px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+  }
+
   .lifecycle-heading {
     grid-template-columns: 1fr;
     gap: 35px;
@@ -1801,6 +1864,18 @@ footer {
 
   .workflow-pointer-note {
     grid-template-columns: 1fr;
+  }
+
+  .workflow-menu-copy {
+    min-height: 280px;
+  }
+
+  .workflow-menu-viewport {
+    padding: 18px;
+  }
+
+  .workflow-menu-recording {
+    width: 170%;
   }
 
   .workflow-steps article {

@@ -249,7 +249,7 @@ test("show a native sidebar evidence frame", async ({ page }) => {
   expect(pageErrors).toEqual([]);
 });
 
-test("show real New Project, Help, and session menu entry points", async ({ page }) => {
+test("show real entry points and the workflow session menu", async ({ page }) => {
   const pageErrors: Error[] = [];
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -276,7 +276,22 @@ test("show real New Project, Help, and session menu entry points", async ({ page
     scale: "css",
   });
 
-  const sessionMenu = page.locator('[data-demo="session-menu-recording"]');
+  await expect(
+    page.locator(".feature-entrypoints [data-demo]"),
+  ).toHaveCount(2);
+  await expect(
+    page.locator(".feature-entrypoints").getByText(
+      "Start fresh. Get help.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const sessionMenu = page.locator(
+    '#workflow [data-demo="session-menu-recording"]',
+  );
+  await expect(
+    page.locator('#features [data-demo="session-menu-recording"]'),
+  ).toHaveCount(0);
+  await sessionMenu.scrollIntoViewIfNeeded();
   await expect(sessionMenu.locator(".ap-term")).toContainText("Copy title");
   await expect(sessionMenu.locator(".ap-term")).toContainText("Rename");
   await expect(sessionMenu.locator(".ap-term")).toContainText("Codex");
@@ -286,7 +301,7 @@ test("show real New Project, Help, and session menu entry points", async ({ page
   await expect(sessionMenu.locator(".ap-term")).toContainText(
     "Read-only history preview",
   );
-  await sessionMenu.locator("xpath=..").screenshot({
+  await page.locator(".workflow-menu-proof").screenshot({
     path: join(outputDir, "session-menu.png"),
     animations: "disabled",
     scale: "css",
@@ -445,9 +460,20 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
+  const sectionIds = await page.locator("main > section").evaluateAll(
+    (sections) => sections.map((section) => section.id).filter(Boolean),
+  );
+  expect(sectionIds.indexOf("workflow")).toBeLessThan(
+    sectionIds.indexOf("features"),
+  );
+  const workflowSteps = page.locator(".workflow-steps");
+  await expect(workflowSteps.getByText("Preview", { exact: true })).toBeVisible();
+  await expect(workflowSteps.getByText("Resume", { exact: true })).toBeVisible();
+  await expect(workflowSteps.getByText("Switch", { exact: true })).toBeVisible();
+  await expect(workflowSteps.getByText("Manage", { exact: true })).toBeVisible();
+  await expect(workflowSteps).toContainText("RIGHT-CLICK");
   const pointerNote = page.locator(".workflow-pointer-note");
   await expect(pointerNote).toBeVisible();
-  await expect(pointerNote).toContainText("RIGHT-CLICK");
   await expect(pointerNote).toContainText("MOUSE INPUT");
   await expect(pointerNote).toContainText("COPY");
   await expect(pointerNote).toContainText("railmux ssh");

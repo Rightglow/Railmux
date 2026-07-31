@@ -71,8 +71,8 @@ export default function Home() {
           <span>RAILMUX</span>
         </a>
         <nav aria-label="Main navigation">
-          <a href="#features">Features</a>
           <a href="#workflow">Workflow</a>
+          <a href="#features">Features</a>
           <a href="#controls">Controls</a>
           <a href="#ssh">SSH</a>
           <a href="https://github.com/Rightglow/Railmux">GitHub</a>
@@ -159,6 +159,113 @@ export default function Home() {
               Railmux turns scattered agent work into one visible, durable
               workspace.
             </p>
+          </div>
+        </section>
+
+        <section className="workflow" id="workflow">
+          <div className="section-wrap">
+            <div className="section-heading workflow-heading">
+              <p className="section-kicker section-kicker-light">ONE LOOP</p>
+              <h2>Browse. Open. Keep moving.</h2>
+            </div>
+            <div className="workflow-demo-grid">
+              <div className="workflow-steps">
+                <article>
+                  <span>01</span>
+                  <h3>Preview</h3>
+                  <p>
+                    Single-click a stopped session to inspect its transcript
+                    without starting it.
+                  </p>
+                  <kbd>CLICK</kbd>
+                </article>
+                <article>
+                  <span>02</span>
+                  <h3>Resume</h3>
+                  <p>
+                    Press Enter after preview—or double-click—to continue the
+                    conversation.
+                  </p>
+                  <div><kbd>ENTER</kbd><kbd>DOUBLE-CLICK</kbd></div>
+                </article>
+                <article>
+                  <span>03</span>
+                  <h3>Switch</h3>
+                  <p>
+                    Click another running session to switch the Target pane
+                    instantly.
+                  </p>
+                  <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
+                </article>
+                <article>
+                  <span>04</span>
+                  <h3>Manage</h3>
+                  <p>
+                    Right-click a Sessions or Running row for every action
+                    available in its current state.
+                  </p>
+                  <kbd>RIGHT-CLICK</kbd>
+                </article>
+              </div>
+              <div className="workflow-player">
+                <div className="capture-meta capture-meta-dark">
+                  <span><i /> GUIDED REAL TERMINAL</span>
+                  <small>keyboard cue shown · pointer marks the matching mouse target</small>
+                </div>
+                <TerminalRecording
+                  source="railmux-workflow-demo.cast"
+                  className="workflow-terminal-recording"
+                  poster="npt:0.6"
+                  controls={false}
+                  loop
+                  playWhenVisible
+                  inputHud
+                  cueCols={160}
+                  cueRows={38}
+                  dataDemo="workflow-recording"
+                />
+              </div>
+              <article className="workflow-menu-proof">
+                <div className="workflow-menu-copy">
+                  <span>RIGHT-CLICK / SESSION MENU</span>
+                  <h3>Manage without leaving the sidebar.</h3>
+                  <p>
+                    Preview, open, rename, star, copy the title, kill, open a
+                    terminal, or delete. Railmux hides actions that do not
+                    apply to the selected session.
+                  </p>
+                </div>
+                <div className="workflow-menu-viewport">
+                  <TerminalRecording
+                    source="railmux-tour-demo.cast"
+                    className="workflow-menu-recording"
+                    poster="npt:14.2"
+                    controls={false}
+                    dataDemo="session-menu-recording"
+                  />
+                </div>
+              </article>
+              <aside className="workflow-pointer-note">
+                <p>
+                  <strong>MOUSE INPUT</strong>
+                  Your terminal must report mouse events to Railmux.{" "}
+                  <a href="https://github.com/Rightglow/Railmux#2-mouse-buttons-or-f8f9-dont-work--whats-wrong">
+                    Check terminal setup
+                  </a>
+                  .
+                </p>
+                <p>
+                  <strong>COPY</strong>
+                  With <code>railmux ssh</code>, drag inside one agent pane to
+                  copy locally. Other connections depend on terminal clipboard
+                  support.{" "}
+                  <a href="https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane">
+                    See every copy path
+                  </a>
+                  .
+                </p>
+              </aside>
+            </div>
           </div>
         </section>
 
@@ -258,14 +365,12 @@ export default function Home() {
             <div className="feature-entrypoints">
               <div className="feature-entrypoints-heading">
                 <span>06 / ENTRY POINTS</span>
-                <h3>Start fresh. Get help. Manage in place.</h3>
+                <h3>Start fresh. Get help.</h3>
                 <p>
                   New Project opens a keyboard-and-mouse directory browser.
                   Help keeps shortcuts nearby and can launch a separate,
                   read-only support session in Railmux&apos;s own help
                   workspace against the installed guide—not in your project.
-                  Right-click any session for its complete, mouse-friendly
-                  action menu.
                 </p>
               </div>
               <div className="entrypoint-grid">
@@ -299,107 +404,6 @@ export default function Home() {
                     <small>Read-only Railmux support, outside your project.</small>
                   </div>
                 </article>
-                <article>
-                  <div className="entrypoint-terminal-viewport">
-                    <TerminalRecording
-                      source="railmux-tour-demo.cast"
-                      className="entrypoint-recording entrypoint-recording-left"
-                      poster="npt:14.2"
-                      controls={false}
-                      dataDemo="session-menu-recording"
-                    />
-                  </div>
-                  <div>
-                    <span>SESSION MENU</span>
-                    <small>
-                      Right-click to preview, open, rename, star, copy its
-                      title, kill, or delete a session.
-                    </small>
-                  </div>
-                </article>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="workflow" id="workflow">
-          <div className="section-wrap">
-            <div className="section-heading workflow-heading">
-              <p className="section-kicker section-kicker-light">ONE LOOP</p>
-              <h2>Browse. Open. Keep moving.</h2>
-            </div>
-            <div className="workflow-demo-grid">
-              <div className="workflow-steps">
-                <article>
-                  <span>01</span>
-                  <h3>Preview</h3>
-                  <p>
-                    Single-click a stopped session to inspect its transcript
-                    without starting it.
-                  </p>
-                  <kbd>CLICK</kbd>
-                </article>
-                <article>
-                  <span>02</span>
-                  <h3>Resume</h3>
-                  <p>
-                    Press Enter after preview—or double-click—to continue the
-                    conversation.
-                  </p>
-                  <div><kbd>ENTER</kbd><kbd>DOUBLE-CLICK</kbd></div>
-                </article>
-                <article>
-                  <span>03</span>
-                  <h3>Keep moving</h3>
-                  <p>
-                    Keep two sessions running, then click the other one to
-                    switch the agent pane instantly.
-                  </p>
-                  <div><kbd>C-b Tab</kbd><kbd>RUNNING</kbd></div>
-                </article>
-              </div>
-              <aside className="workflow-pointer-note">
-                <p>
-                  <strong>RIGHT-CLICK</strong>
-                  Open the complete action menu from any Sessions or Running
-                  row.
-                </p>
-                <p>
-                  <strong>MOUSE INPUT</strong>
-                  Your terminal must report mouse events to Railmux.{" "}
-                  <a href="https://github.com/Rightglow/Railmux#2-mouse-buttons-or-f8f9-dont-work--whats-wrong">
-                    Check terminal setup
-                  </a>
-                  .
-                </p>
-                <p>
-                  <strong>COPY</strong>
-                  With <code>railmux ssh</code>, drag inside one agent pane to
-                  copy locally. Other connections depend on terminal clipboard
-                  support.{" "}
-                  <a href="https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane">
-                    See every copy path
-                  </a>
-                  .
-                </p>
-              </aside>
-              <div className="workflow-player">
-                <div className="capture-meta capture-meta-dark">
-                  <span><i /> GUIDED REAL TERMINAL</span>
-                  <small>keyboard cue shown · pointer marks the matching mouse target</small>
-                </div>
-                <TerminalRecording
-                  source="railmux-workflow-demo.cast"
-                  className="workflow-terminal-recording"
-                  poster="npt:0.6"
-                  controls={false}
-                  loop
-                  playWhenVisible
-                  inputHud
-                  cueCols={160}
-                  cueRows={38}
-                  dataDemo="workflow-recording"
-                />
               </div>
             </div>
           </div>
