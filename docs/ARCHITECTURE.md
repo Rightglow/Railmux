@@ -861,6 +861,11 @@ columns place tools below, while stacked agent rows place tools on the right.
 F9 zooms the focused tool when one owns focus, otherwise it retains the Target
 agent behavior. Tool panes carry a pane-local marker so the SSH history and
 semantic-click router can exclude them without extra polling subprocesses.
+Pane-local user options require tmux 3.0, so tmux 2.7/2.8 retain the core
+workspace but fail closed with an explicit warning instead of creating an
+unidentifiable managed terminal or Vim pane. For the same reason, nested
+transport cannot publish its per-pane SSH history source on those versions;
+swap-backed agent history remains available.
 
 Vertical wheel input also fails closed while agent geometry is unknown
 and on the one-cell tmux border around a known agent; losing one transitional

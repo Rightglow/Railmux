@@ -235,6 +235,15 @@ class ToolPaneManager:
             return False
         return result.returncode == 0
 
+    def _pane_options_supported(self) -> bool:
+        """Whether this exact server can safely identify a tool per pane."""
+        raw = self._output("display-message", "-p", "#{version}")
+        match = re.search(r"(\d+)\.(\d+)", raw or "")
+        return bool(
+            match
+            and (int(match.group(1)), int(match.group(2))) >= (3, 0)
+        )
+
     def _pane_ref(self, pane_id: str) -> PaneRef | None:
         if not re.fullmatch(r"%[0-9]+", pane_id):
             return None
@@ -750,6 +759,12 @@ class ToolPaneManager:
     def open_shell(self, slot: str, owner_pane_id: str, cwd: Path) -> ToolResult:
         if slot not in _SLOTS:
             return ToolResult(False, "Unknown agent slot", level="error")
+        if not self._pane_options_supported():
+            return ToolResult(
+                False,
+                "Managed terminal and Vim require tmux 3.0 or newer",
+                level="warning",
+            )
         owner = self._pane_ref(owner_pane_id)
         if owner is None or owner.session_id != self.outer_session_id:
             return ToolResult(False, "Agent pane is no longer available", level="warning")
@@ -852,6 +867,12 @@ class ToolPaneManager:
         line: int | None = None,
         column: int | None = None,
     ) -> ToolResult:
+        if not self._pane_options_supported():
+            return ToolResult(
+                False,
+                "Managed terminal and Vim require tmux 3.0 or newer",
+                level="warning",
+            )
         owner = self._pane_ref(owner_pane_id)
         if slot not in _SLOTS or owner is None:
             return ToolResult(False, "Agent pane is no longer available", level="warning")

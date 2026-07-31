@@ -148,11 +148,118 @@ def _wait_until(predicate, timeout: float = 3.0) -> bool:
     return False
 
 
+def _require_tmux(minimum: tuple[int, int], feature: str) -> None:
+    version = tmux_ctl.tmux_version()
+    if version < minimum:
+        pytest.skip(
+            f"{feature} requires tmux {minimum[0]}.{minimum[1]}+; "
+            f"running {version[0]}.{version[1]}"
+        )
+
+
+def test_real_railmux_inside_tmux_reaches_first_interactive_frame(tmp_path):
+    """Boot the actual TUI on every supported tmux, including the 2.7 floor."""
+    socket_root = Path(tempfile.mkdtemp(prefix="rx-start-", dir="/tmp"))
+    socket_root.chmod(0o700)
+    label = f"rx-start-{os.getpid()}"
+    home = tmp_path / "home"
+    home.mkdir()
+    env = _source_subprocess_env()
+    env.update({
+        "HOME": str(home),
+        "RAILMUX_TMUX_LABEL": label,
+        "TERM": "xterm-256color",
+        "TMUX_TMPDIR": str(socket_root),
+        "XDG_RUNTIME_DIR": str(socket_root),
+    })
+    command = shlex.join((
+        "env",
+        *(f"{key}={value}" for key, value in env.items()
+          if key in {
+              "HOME", "PATH", "PYTHONPATH", "RAILMUX_TMUX_LABEL", "TERM",
+              "TMUX_TMPDIR", "XDG_RUNTIME_DIR",
+          }),
+        sys.executable,
+        "-m",
+        "railmux",
+        "--inside-tmux",
+        "--claude-home",
+        str(home / ".claude"),
+    ))
+    tmux = ["tmux", "-L", label]
+    latest = ""
+
+    try:
+        subprocess.run(
+            [
+                *tmux,
+                "-f",
+                "/dev/null",
+                "new-session",
+                "-d",
+                "-x",
+                "120",
+                "-y",
+                "30",
+                "-s",
+                "railmux",
+                command,
+            ],
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        def interactive_frame() -> bool:
+            nonlocal latest
+            result = subprocess.run(
+                [*tmux, "capture-pane", "-p", "-t", "railmux"],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            latest = result.stdout + result.stderr
+            return (
+                result.returncode == 0
+                and "PROJECTS" in latest
+                and "RUNNING" in latest
+                and "Help" in latest
+            )
+
+        assert _wait_until(interactive_frame, timeout=8.0), latest
+        identity = subprocess.check_output(
+            [
+                *tmux,
+                "display-message",
+                "-p",
+                "-t",
+                "railmux",
+                "#{pane_dead}\t#{pane_current_command}",
+            ],
+            env=env,
+            text=True,
+        ).strip().split("\t", 1)
+        assert len(identity) == 2 and identity[0] == "0"
+        assert Path(identity[1]).name.lower().startswith("python")
+    finally:
+        subprocess.run(
+            [*tmux, "kill-server"],
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        shutil.rmtree(socket_root, ignore_errors=True)
+
+
 def test_real_managed_tool_surface_reuses_shell_and_vim_tabs(
     isolated_tmux,
     tmp_path,
     monkeypatch,
 ):
+    _require_tmux((3, 0), "managed terminal/Vim pane metadata")
     if shutil.which("vim") is None:
         pytest.skip("vim is not installed")
     session_name, controller_pane, socket_path = isolated_tmux
@@ -365,6 +472,7 @@ def test_real_managed_tool_surface_preserves_compact_zoom(
     isolated_tmux,
     tmp_path,
 ):
+    _require_tmux((3, 0), "managed terminal/Vim pane metadata")
     session_name, controller_pane, socket_path = isolated_tmux
     server_pid = int(subprocess.check_output(
         [
@@ -749,6 +857,7 @@ def test_remote_compatibility_hello_precedes_any_tmux_server(monkeypatch):
 
 def test_nested_history_prefetch_reads_real_source_pane(monkeypatch):
     """A nested wrapper's zero scrollback must not hide its source history."""
+    _require_tmux((3, 0), "pane-local nested history metadata")
     dedicated_root = Path(tempfile.mkdtemp(prefix="rx-history-d-", dir="/tmp"))
     source_root = Path(tempfile.mkdtemp(prefix="rx-history-s-", dir="/tmp"))
     dedicated_root.chmod(0o700)
@@ -1711,6 +1820,7 @@ def test_real_remote_display_soft_quit_keeps_tmux_responsive(
 
 def test_real_tmux_single_sidebar_focus_clears_stale_target_format(isolated_tmux):
     """A restored single pane cannot leave half the divider dim green."""
+    _require_tmux((3, 0), "nested pane-border format fixture")
     display_session, _sidebar_pane, _socket_path = isolated_tmux
     primary = subprocess.check_output(
         [
@@ -1819,6 +1929,7 @@ def test_real_private_tmux_client_applies_runtime_pty_resize(isolated_tmux):
 
 
 def test_real_transient_compact_profile_restores_both_dividers(isolated_tmux):
+    _require_tmux((2, 9), "resize-window compact profile fixture")
     display_session, sidebar, _socket_path = isolated_tmux
     subprocess.run(
         ["tmux", "resize-window", "-t", display_session, "-x", "180", "-y", "40"],
@@ -2184,6 +2295,7 @@ def test_real_local_workspace_restore_rebuilds_layout_target_and_focus(
 
 def test_real_compact_parking_keeps_hidden_provider_geometry_stable(
         isolated_tmux):
+    _require_tmux((2, 9), "resize-window compact parking fixture")
     display_session, sidebar_pane, _socket_path = isolated_tmux
     subprocess.run(
         ["tmux", "resize-window", "-t", display_session, "-x", "180", "-y", "40"],
@@ -2445,7 +2557,10 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     assert tmux_ctl.RAILMUX_TARGET_OPTION in current_prefix_tab
     assert current_right_click is not None
     assert "railmux-right-click-forward-v1-" in current_right_click
-    assert "select-pane -t =" in current_right_click
+    assert (
+        "select-pane -t =" in current_right_click
+        or "select-pane -t=" in current_right_click
+    )
     assert "send-keys -M" in current_right_click
     if tmux_ctl.tmux_version() >= (3, 4):
         assert manager.status_navigation_available
@@ -2489,6 +2604,22 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
         stderr=subprocess.STDOUT,
     )
     client_name = ""
+
+    def send_client_key(key: str) -> None:
+        if tmux_ctl.tmux_version() >= (3, 0):
+            subprocess.run(
+                ["tmux", "send-keys", "-K", "-c", client_name, key],
+                check=True,
+            )
+            return
+        # tmux 2.7 predates send-keys -K. Feed the corresponding xterm bytes
+        # to the same attached client so the binding still executes through
+        # the real terminal input path.
+        sequence = {"F8": b"\x1b[19~", "C-b": b"\x02", "Tab": b"\t"}[key]
+        assert client_process.stdin is not None
+        client_process.stdin.write(sequence)
+        client_process.stdin.flush()
+
     try:
         assert _wait_until(
             lambda: bool(subprocess.check_output(
@@ -2522,10 +2653,7 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
         )
         subprocess.run(
             ["tmux", "select-pane", "-t", other_pane], check=True)
-        subprocess.run(
-            ["tmux", "send-keys", "-K", "-c", client_name, "F8"],
-            check=True,
-        )
+        send_client_key("F8")
         assert _wait_until(
             lambda: "$ ~" in subprocess.check_output(
                 ["tmux", "capture-pane", "-p", "-t", owner_pane],
@@ -2536,36 +2664,30 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
             owner_pane, tmux_ctl.RAILMUX_TARGET_OPTION, other_pane)
         subprocess.run(
             ["tmux", "resize-pane", "-Z", "-t", other_pane], check=True)
-        subprocess.run(
-            ["tmux", "send-keys", "-K", "-c", client_name, "C-b"],
-            check=True,
-        )
-        subprocess.run(
-            ["tmux", "send-keys", "-K", "-c", client_name, "Tab"],
-            check=True,
-        )
+        send_client_key("C-b")
+        send_client_key("Tab")
         assert _wait_until(
-            lambda: tmux_ctl.active_pane_id(owner_pane) == owner_pane)
-        assert subprocess.check_output(
-            ["tmux", "display-message", "-p", "-t", owner_pane,
-             "#{window_zoomed_flag}"],
-            text=True,
-        ).strip() == "1"
-        subprocess.run(
-            ["tmux", "send-keys", "-K", "-c", client_name, "C-b"],
-            check=True,
+            lambda: (
+                tmux_ctl.active_pane_id(owner_pane) == owner_pane
+                and subprocess.check_output(
+                    ["tmux", "display-message", "-p", "-t", owner_pane,
+                     "#{window_zoomed_flag}"],
+                    text=True,
+                ).strip() == "1"
+            )
         )
-        subprocess.run(
-            ["tmux", "send-keys", "-K", "-c", client_name, "Tab"],
-            check=True,
-        )
+        send_client_key("C-b")
+        send_client_key("Tab")
         assert _wait_until(
-            lambda: tmux_ctl.active_pane_id(owner_pane) == other_pane)
-        assert subprocess.check_output(
-            ["tmux", "display-message", "-p", "-t", other_pane,
-             "#{window_zoomed_flag}"],
-            text=True,
-        ).strip() == "1"
+            lambda: (
+                tmux_ctl.active_pane_id(owner_pane) == other_pane
+                and subprocess.check_output(
+                    ["tmux", "display-message", "-p", "-t", other_pane,
+                     "#{window_zoomed_flag}"],
+                    text=True,
+                ).strip() == "1"
+            )
+        )
         subprocess.run(
             ["tmux", "detach-client", "-t", client_name], check=True)
         output = client_process.communicate(timeout=2)[0]

@@ -111,6 +111,19 @@ def test_tool_split_is_orthogonal_to_workspace_layout():
     )
 
 
+def test_tmux_27_reports_managed_tools_as_an_explicit_version_limit(tmp_path):
+    manager = object.__new__(ToolPaneManager)
+    manager._output = MagicMock(return_value="2.7")
+
+    shell = manager.open_shell("primary", "%8", tmp_path)
+    viewer = manager.open_viewer("primary", "%8", str(tmp_path / "a.py"))
+
+    assert not shell.ok and shell.level == "warning"
+    assert not viewer.ok and viewer.level == "warning"
+    assert "tmux 3.0 or newer" in shell.message
+    assert viewer.message == shell.message
+
+
 def test_owner_slot_falls_back_to_existing_selection_marker(monkeypatch):
     manager = object.__new__(ToolPaneManager)
     manager.outer_session_id = "$4"

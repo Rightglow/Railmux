@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Build the checksum-pinned official tmux 2.7 release in CI and run the real
+  private-server integration suite, including an actual first interactive
+  Railmux frame, as a required compatibility-floor job.
+
 ### Fixed
 
 - Re-anchor the local SSH display, cursor, and pane-history routes on the first
@@ -14,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scrolling retained pixels and restoring mouse-wheel history immediately.
 - Resolve and highlight every row of a three-or-more-line soft-wrapped URL as
   one target, regardless of which wrapped row the user hovers or clicks.
+- Accept and safely replay tmux 2.7's unescaped stock copy-mode wheel bindings,
+  use its quoted right-click branch grammar, and preserve zoom across the
+  pre-3.1 Prefix-Tab pane switch.
+- Report the tmux 3.0 requirement for managed terminal/Vim panes explicitly
+  instead of partially creating a pane that cannot carry safe identity metadata.
 
 ## [0.2.20] - 2026-07-30
 

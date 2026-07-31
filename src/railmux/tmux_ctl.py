@@ -1636,9 +1636,11 @@ def _select_pane_preserving_zoom_shell(target: str) -> str:
     if tmux_version() >= (3, 1):
         return f"tmux select-pane -Z -t {shlex.quote(target)}"
     quoted = shlex.quote(target)
-    # select-pane before 3.1 has no -Z.  Only reapply zoom when the window was
-    # zoomed and selecting the target actually removed it; blindly toggling
-    # resize-pane -Z would unzoom servers which already preserved the state.
+    # select-pane before 3.1 has no -Z and switching to a different pane
+    # unzooms the window. tmux 2.7 briefly reports a stale zoomed flag after
+    # the select, so a post-select probe cannot decide whether to restore it.
+    # Prefix-Tab always changes pane; when the pre-select window was zoomed,
+    # reapply zoom unconditionally to the newly selected explicit target.
     zoom_probe = (
         f"tmux display-message -p -t {quoted} "
         "'#{window_zoomed_flag}'"
@@ -1646,8 +1648,7 @@ def _select_pane_preserving_zoom_shell(target: str) -> str:
     return (
         f"railmux_was_zoomed=$({zoom_probe}); "
         f"tmux select-pane -t {quoted} || exit; "
-        'if [ "$railmux_was_zoomed" = 1 ] && '
-        f'[ "$({zoom_probe})" != 1 ]; then '
+        'if [ "$railmux_was_zoomed" = 1 ]; then '
         f"tmux resize-pane -Z -t {quoted}; fi"
     )
 
@@ -1779,7 +1780,10 @@ def _bindings_are_tmux_defaults(backup: ScrollBindingBackup) -> bool:
         direction = "scroll-up" if key == "WheelUpPane" else "scroll-down"
         pattern = re.compile(
             rf"^bind-key\s+-T\s+{re.escape(table)}\s+{re.escape(key)}\s+"
-            rf"select-pane\s+\\;\s+send-keys\s+-X\s+-N\s+\d+\s+"
+            # tmux 2.7 prints the command separator as ``;`` while newer
+            # releases escape it as ``\;`` in list-keys output. Both spellings
+            # describe the same stock binding and are replayable by Railmux.
+            rf"select-pane\s+\\?;\s+send-keys\s+-X\s+-N\s+\d+\s+"
             rf"{direction}$"
         )
         if binding is None or not pattern.match(" ".join(binding.split())):
@@ -2130,11 +2134,22 @@ def set_root_right_click_forwarding(
         "#{!=:#{@railmux_controller_pane},},"
         f"#{{==:{marker},{marker}}}}}"
     )
-    railmux_action = (
-        'if-shell -F -t = "#{mouse_any_flag}" '
-        '{ select-pane -t = ; send-keys -M } '
-        '{ run-shell "true" }'
-    )
+    if tmux_version() >= (3, 0):
+        railmux_action = (
+            'if-shell -F -t = "#{mouse_any_flag}" '
+            '{ select-pane -t = ; send-keys -M } '
+            '{ run-shell "true" }'
+        )
+    else:
+        # Braced command groups are not executable by tmux 2.7. Preserve the
+        # older quoted branch grammar through the outer if-shell's second
+        # parsing pass; this is the same shape used by tmux 2.7's stock mouse
+        # binding, with its menu-producing false branch replaced by a no-op.
+        railmux_action = (
+            'if-shell -F -t = "#{mouse_any_flag}" '
+            '"select-pane -t=; send-keys -M" '
+            '"run-shell \\"true\\""'
+        )
     original = backup.get(_ROOT_RIGHT_CLICK_KEY)
     try:
         fallback = (
@@ -2559,7 +2574,19 @@ def rebind_scroll_agent(agent_pane_id: str,
 
 def restore_scroll_bindings(backup: ScrollBindingBackup) -> None:
     """Restore bindings returned by :func:`install_scroll_bindings`."""
-    configured = [binding for binding in backup.values() if binding]
+    configured = [
+        # tmux 2.7 list-keys omits the backslash on the command separator.
+        # Reinsert it only for the stock select-pane/send-keys sequence before
+        # replaying the line as config; otherwise source-file binds only the
+        # first command and executes the second immediately.
+        re.sub(
+            r"(\bselect-pane)\s+;\s+(send-keys\b)",
+            r"\1 \\; \2",
+            binding,
+        )
+        for binding in backup.values()
+        if binding
+    ]
     if configured:
         path = None
         try:

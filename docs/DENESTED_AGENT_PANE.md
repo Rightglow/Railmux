@@ -1,8 +1,9 @@
 # De-nested agent pane feasibility and experiment record
 
 This document records the evidence behind Railmux's `swap` display transport.
-Lifecycle safety is covered on Linux with tmux 2.7 and 3.4 and by the Linux and
-macOS private-tmux CI matrix. A reproducible local server-side benchmark shows
+Lifecycle safety is covered by a pinned official tmux 2.7 build on Linux and
+the current Linux and macOS private-tmux CI matrix. A reproducible local
+server-side benchmark shows
 a narrow pipeline improvement on tmux 3.4, while field use found session
 switching more responsive and exposed recovery/selection defects that were
 fixed before the 0.1.2 default change. The measurements still do not claim to
@@ -68,8 +69,9 @@ critical cases in `tests/test_tmux_integration.py`.
    tmux 2.7 supports the required cross-session `swap-pane`, window user
    options, session grouping, and immutable IDs. It does not have
    `resize-window`, so de-nested geometry changes may visibly reflow content on
-   2.7/2.8. The existing CI smoke matrix runs the same private-socket tests on
-   Linux and macOS; the macOS result must be confirmed after an approved push.
+   2.7/2.8. CI builds the checksum-pinned official tmux 2.7 release and runs
+   the applicable private-socket suite, including a real first-frame TUI boot;
+   the current-version matrix runs the same suite on Linux and macOS.
 10. **Two slots.** Two distinct placeholders displayed A and B concurrently,
     then returned both home with unchanged PIDs. `AgentWorkspace` and durable
     transaction ownership reject a second claim on the same real pane. The

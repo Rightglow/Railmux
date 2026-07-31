@@ -679,6 +679,8 @@ ssh**, where the inside choice is likewise labelled **managed Vim**.
 
 The inside-Railmux choice gives each agent slot at most one reusable shell and
 one reusable Vim viewer. `t` selects the shell and `T` returns to Vim.
+These managed tool panes require tmux 3.0 or newer; Railmux's core workspace
+and swap transport continue to support the tmux 2.7 compatibility floor.
 Clicking another supported code, text, log, or HTML file reuses that Vim
 process and opens a native tab instead of closing the previous file; use
 Vim's `gt` / `gT` to move between tabs. If a managed shell already exists,
