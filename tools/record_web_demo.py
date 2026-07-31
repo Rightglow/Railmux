@@ -55,7 +55,7 @@ WORKFLOW = RecordingProfile("workflow", 160, 38, 20.0)
 # A representative portrait phone geometry. Compact mode is selected by the
 # narrow width; the separately documented 105x21 Termux report was landscape.
 MOBILE = RecordingProfile("mobile", 46, 38, 10.0)
-TOUR = RecordingProfile("tour", 160, 38, 17.0)
+TOUR = RecordingProfile("tour", 160, 38, 10.0)
 CONTROLS = RecordingProfile("controls", 180, 38, 27.0)
 STARTUP_HOLD_SECONDS = 2.4
 TEMP_FIXTURE_PATTERN = re.compile(rb"/tmp/railmux-web-demo-[A-Za-z0-9_-]*")
@@ -922,6 +922,8 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "launch-second",
                 "return-sidebar-again",
                 "switch-running-agent",
+                "open-context-menu",
+                "context-menu-visible",
             },
             MOBILE.name: {
                 "launch-primary-cue",
@@ -934,10 +936,6 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "close-new-project",
                 "open-help",
                 "close-help",
-                "switch-codex",
-                "preview-codex",
-                "open-context-menu",
-                "context-menu-visible",
             },
             CONTROLS.name: {
                 "launch-primary",
@@ -1095,6 +1093,23 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             b"\x1b[<0;10;27M\x1b[<0;10;27m",
                             None,
                         )
+                    if "switch-running-agent" in sent:
+                        cue_once(
+                            "context-menu-cue",
+                            15.6,
+                            "mouse|10|27|Right-click the running session",
+                        )
+                        send_once(
+                            "open-context-menu",
+                            16.2,
+                            b"\x1b[<2;10;27M\x1b[<2;10;27m",
+                            None,
+                        )
+                    if (
+                        "open-context-menu" in sent
+                        and b"Copy title" in raw_output
+                    ):
+                        sent.add("context-menu-visible")
                 elif profile is MOBILE:
                     # Real compact projection: tap New session to open Agent 1,
                     # then exercise the actual [R] and [1] page controls. This
@@ -1125,9 +1140,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             "touch|5|38|Tap [1] agent",
                         )
                 elif profile is TOUR:
-                    # Show discoverable entry points and the real session
-                    # context menu without creating, changing, or deleting
-                    # project/session data.
+                    # Show the two discoverable entry points without creating
+                    # or changing project/session data. Session management is
+                    # demonstrated in the main guided workflow recording.
                     cue_once(
                         "new-project-cue",
                         0.6,
@@ -1163,48 +1178,6 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             b"\x1b",
                             "key|Esc|Close Help",
                         )
-                    if "close-help" in sent:
-                        send_once(
-                            "switch-codex",
-                            9.2,
-                            b"m",
-                            "key|M|Switch to Codex sessions",
-                        )
-                    if (
-                        "switch-codex" in sent
-                        and b"Explain workspace layout" in raw_output
-                    ):
-                        cue_once(
-                            "preview-codex-cue",
-                            10.2,
-                            "mouse|10|12|Preview a Codex session",
-                        )
-                        send_once(
-                            "preview-codex",
-                            10.8,
-                            b"\x1b[<0;10;12M\x1b[<0;10;12m",
-                            None,
-                        )
-                    if (
-                        "preview-codex" in sent
-                        and b"Read-only history preview" in raw_output
-                    ):
-                        cue_once(
-                            "context-menu-cue",
-                            12.2,
-                            "mouse|10|12|Right-click the Codex session",
-                        )
-                        send_once(
-                            "open-context-menu",
-                            12.8,
-                            b"\x1b[<2;10;12M\x1b[<2;10;12m",
-                            None,
-                        )
-                    if (
-                        "open-context-menu" in sent
-                        and b"Copy title" in raw_output
-                    ):
-                        sent.add("context-menu-visible")
                 else:
                     # One bounded control story: keep a Claude session alive,
                     # expose More, switch the sidebar to Codex, cycle layout,

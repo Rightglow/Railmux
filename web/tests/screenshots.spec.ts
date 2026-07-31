@@ -98,6 +98,8 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[2].cast).toContain("Start an empty session");
   expect(headers[2].cast).not.toContain("Verify responsive layout gates");
   expect(headers[2].cast).toContain("Switch to Polish SSH history");
+  expect(headers[2].cast).toContain("Right-click the running session");
+  expect(headers[2].cast).toContain("Copy title");
   expect(headers[2].cast).not.toContain('"key|');
   expect(headers[2].cast).toContain(
     "keymouse|Enter|10|12|Resume this conversation",
@@ -294,12 +296,8 @@ test("show real entry points and the workflow session menu", async ({ page }) =>
   await sessionMenu.scrollIntoViewIfNeeded();
   await expect(sessionMenu.locator(".ap-term")).toContainText("Copy title");
   await expect(sessionMenu.locator(".ap-term")).toContainText("Rename");
-  await expect(sessionMenu.locator(".ap-term")).toContainText("Codex");
   await expect(sessionMenu.locator(".ap-term")).toContainText(
-    "Explain workspace layout",
-  );
-  await expect(sessionMenu.locator(".ap-term")).toContainText(
-    "Read-only history preview",
+    "Polish SSH history",
   );
   await page.locator(".workflow-menu-proof").screenshot({
     path: join(outputDir, "session-menu.png"),
@@ -463,8 +461,8 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   const sectionIds = await page.locator("main > section").evaluateAll(
     (sections) => sections.map((section) => section.id).filter(Boolean),
   );
-  expect(sectionIds.indexOf("workflow")).toBeLessThan(
-    sectionIds.indexOf("features"),
+  expect(sectionIds.indexOf("features")).toBeLessThan(
+    sectionIds.indexOf("workflow"),
   );
   const workflowSteps = page.locator(".workflow-steps");
   await expect(workflowSteps.getByText("Preview", { exact: true })).toBeVisible();
@@ -509,12 +507,14 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   });
   await expect(hud).toContainText("Resume this conversation");
   await expect(hud).toContainText("Enter");
+  await expect(hud).toContainText("DOUBLE-CLICK");
   await expect(pointer).toBeVisible();
   await expect(player.getByTestId("terminal-mouse-target")).toContainText(
     "Double-click the selected session",
   );
   await expect(pointer).toHaveAttribute("data-clicks", "2");
   await expect(pointer.locator("i")).toHaveCount(2);
+  await expect(player.getByTestId("terminal-double-click")).toContainText("×2");
   await expect(player.locator(".ap-term")).toContainText(
     "Polish SSH history",
   );
@@ -560,6 +560,17 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   );
   await player.screenshot({
     path: join(outputDir, "mouse-cue-workspace.png"),
+    animations: "disabled",
+    scale: "css",
+  });
+  await expect(hud).toContainText("Right-click the running session", {
+    timeout: 5_000,
+  });
+  await expect(hud).toContainText("RIGHT-CLICK");
+  await expect(pointer).toBeVisible();
+  await expect(player.locator(".ap-term")).toContainText("Copy title");
+  await player.screenshot({
+    path: join(outputDir, "manage-cue-workspace.png"),
     animations: "disabled",
     scale: "css",
   });

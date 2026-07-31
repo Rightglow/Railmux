@@ -79,11 +79,21 @@ function parseInputCue(
     const x = Number(parts[1]);
     const y = Number(parts[2]);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const detail = parts.slice(3).join(" · ");
+    const isDoubleClick = detail.toLowerCase().startsWith("double-click");
+    const isRightClick = detail.toLowerCase().startsWith("right-click");
     return {
       id,
       kind: parts[0],
-      label: parts[0] === "touch" ? "TAP" : "CLICK",
-      detail: parts.slice(3).join(" · "),
+      label: parts[0] === "touch"
+        ? "TAP"
+        : isDoubleClick
+          ? "DOUBLE-CLICK"
+          : isRightClick
+            ? "RIGHT-CLICK"
+            : "CLICK",
+      detail,
+      mouseClicks: isDoubleClick ? 2 : 1,
       left: `${((x - 0.5) / cols) * 100}%`,
       top: `${((y - 0.5) / rows) * 100}%`,
     };
@@ -199,6 +209,9 @@ export default function TerminalRecording({
             >
               <i />
               {cue.mouseClicks === 2 ? <i className="second-click" /> : null}
+              {cue.mouseClicks === 2 ? (
+                <b aria-hidden="true" data-testid="terminal-double-click">×2</b>
+              ) : null}
             </span>
           ) : null}
           {cue.kind === "touch" ? (
@@ -224,7 +237,12 @@ export default function TerminalRecording({
                     ? "KEY + MOUSE"
                     : "KEY"}
             </span>
-            <strong>{cue.label}</strong>
+            <strong>
+              {cue.label}
+              {cue.kind === "key" && cue.mouseClicks === 2
+                ? " / DOUBLE-CLICK"
+                : null}
+            </strong>
             <small>
               {cue.detail}
               {cue.mouseDetail ? (
