@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21.dev202607311] - 2026-07-31
+
 ### Added
 
 - Build the checksum-pinned official tmux 2.7 release in CI and run the real
@@ -1554,7 +1556,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.20...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202607311...HEAD
+[0.2.21.dev202607311]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21.dev202607311
 [0.2.20]: https://github.com/Rightglow/Railmux/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19
 [0.2.19.dev202607308]: https://github.com/Rightglow/Railmux/compare/v0.2.19.dev202607307...v0.2.19.dev202607308
