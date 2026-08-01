@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   category pages retain compact parent context, setting pages use breadcrumbs,
   Back restores a clean parent page, and action feedback remains visible until
   the next input.
+- Surface local and remote `railmux config` setup in Quick start while keeping
+  the complete editor and SSH provisioning details in the Configuration guide.
 
 ### Fixed
 

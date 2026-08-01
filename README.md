@@ -85,6 +85,12 @@ not permanent traps: press `o`, or choose **More → Options**, to change them
 later. One-time safety confirmations such as dependency installation and
 session deletion are intentionally asked at the action itself.
 
+For setup outside the full-screen UI, run `railmux config`; it edits the same
+settings as Options and also covers executable paths, SSH history capacity,
+and the runtime locale. Use `railmux config --remote your-server` to configure
+that host without opening or resizing its tmux workspace. See
+[Configuration](#configuration) for the complete interface.
+
 If ordinary SSH cannot keep up with full-screen redraws, install Railmux on
 your local macOS, Linux, or Windows WSL environment and use its responsive,
 locally cached SSH display:
