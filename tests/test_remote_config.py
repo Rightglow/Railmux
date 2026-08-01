@@ -185,6 +185,7 @@ def test_run_remote_config_launches_cooked_editor(monkeypatch):
 
 def test_remote_config_progress_is_transient(monkeypatch):
     stderr = _TTYBuffer()
+    monkeypatch.setenv("NO_COLOR", "1")
     monkeypatch.setattr(remote_config.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(remote_config.sys.stdout, "isatty", lambda: True)
     monkeypatch.setattr(remote_config.sys, "stderr", stderr)

@@ -159,6 +159,7 @@ def test_remote_ssh_doctor_reports_invalid_remote_config(monkeypatch):
 def test_remote_doctor_progress_is_transient_and_private(monkeypatch):
     stdout = _TTYBuffer()
     stderr = _TTYBuffer()
+    monkeypatch.setenv("NO_COLOR", "1")
     snapshot = MagicMock(compatible=True)
     monkeypatch.setattr(
         "railmux.ssh_doctor.collect_remote_ssh_snapshot",
