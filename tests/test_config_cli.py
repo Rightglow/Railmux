@@ -29,6 +29,42 @@ def test_interactive_editor_uses_and_restores_alternate_screen(monkeypatch, tmp_
     assert rendered.endswith("\033[0m\033[?25h\033[?1049l")
 
 
+def test_back_redraws_a_clean_parent_page(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    output = _TTYStringIO()
+
+    result = main(stdin=_TTYStringIO("1\nb\nq\n"), stdout=output)
+
+    assert result == 0
+    pages = output.getvalue().split(config_cli._PAGE_CLEAR)[1:]
+    assert len(pages) == 3
+    root, behavior, restored_root = pages
+    assert "Layout retention" not in root
+    assert "> 1. Behavior / Options" in behavior
+    assert "Layout retention" in behavior
+    assert "Layout retention" not in restored_root
+    assert "r. Reset all Railmux-managed settings" in restored_root
+
+
+def test_setting_page_uses_breadcrumb_and_returns_feedback(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    output = _TTYStringIO()
+
+    result = main(stdin=_TTYStringIO("1\n1\n1\nq\n"), stdout=output)
+
+    assert result == 0
+    pages = output.getvalue().split(config_cli._PAGE_CLEAR)[1:]
+    editor = next(page for page in pages if "> Layout retention" in page)
+    category_after_save = pages[-1]
+    assert (
+        "Railmux configuration > Behavior / Options > Layout retention"
+        in editor
+    )
+    assert "Current: ask" in editor
+    assert "Saved." in category_after_save
+    assert "Layout retention [always]" in category_after_save
+
+
 def test_redirected_editor_does_not_emit_terminal_control_sequences(
     monkeypatch,
     tmp_path,
@@ -152,6 +188,7 @@ def test_remote_context_hides_and_preserves_local_history_limit(
     )
 
     assert result == 0
+    assert "Remote Railmux configuration" in output.getvalue()
     assert "railmux ssh history lines" not in output.getvalue()
     assert load_config().ssh_history_lines == 12345
     text = path.read_text()

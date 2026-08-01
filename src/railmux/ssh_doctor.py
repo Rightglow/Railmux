@@ -1,4 +1,5 @@
 """Read-only compatibility preflight for ``railmux doctor --remote HOST``."""
+
 from __future__ import annotations
 
 import json
@@ -10,6 +11,18 @@ from typing import Sequence, TextIO
 from railmux import __version__
 from railmux.fast_display_protocol import PROTOCOL_VERSION
 from railmux.ssh_compat import CompatibilityFacts, decide as decide_compatibility
+from railmux.terminal_status import (
+    STYLE_ACCENT,
+    STYLE_ERROR,
+    STYLE_HEADING,
+    STYLE_MUTED,
+    STYLE_SUCCESS,
+    STYLE_WARNING,
+    TransientStatusLine,
+    command_status,
+    stream_is_tty,
+    styled,
+)
 
 
 SSH_DOCTOR_SCHEMA_VERSION = 2
@@ -149,17 +162,11 @@ def collect_remote_ssh_snapshot(
         decision = decide_compatibility(facts, {"remote_install": False})
     if decision.action == "attach":
         status = (
-            "ready_with_version_difference"
-            if offered_prompt is not None
-            else "ready"
+            "ready_with_version_difference" if offered_prompt is not None else "ready"
         )
         compatible = True
     elif decision.action == "tmux_missing":
-        status = (
-            "configured_tmux_missing"
-            if hello.tmux_configured
-            else "tmux_missing"
-        )
+        status = "configured_tmux_missing" if hello.tmux_configured else "tmux_missing"
         compatible = False
     else:
         status = "incompatible"
@@ -223,18 +230,88 @@ def render_remote_ssh_text(snapshot: RemoteSshDoctorSnapshot) -> str:
     return "\n".join(lines)
 
 
+def render_remote_ssh_terminal_text(
+    snapshot: RemoteSshDoctorSnapshot,
+    stream: TextIO,
+) -> str:
+    """Add restrained terminal styling without changing the plain contract."""
+    lines = render_remote_ssh_text(snapshot).splitlines()
+    rendered: list[str] = []
+    failure_statuses = {
+        "connection_failed",
+        "incompatible",
+        "ssh_missing",
+        "ssh_unavailable",
+        "timeout",
+    }
+    for index, line in enumerate(lines):
+        if index == 0:
+            title, marker, suffix = line.partition(" (")
+            rendered.append(
+                styled(title, STYLE_ACCENT, stream=stream)
+                + (
+                    styled(marker + suffix, STYLE_MUTED, stream=stream)
+                    if marker
+                    else ""
+                )
+            )
+            continue
+        if line.startswith(("Read-only:", "Privacy:")):
+            rendered.append(styled(line, STYLE_MUTED, stream=stream))
+            continue
+        label, separator, value = line.partition(": ")
+        if not separator:
+            rendered.append(line)
+            continue
+        value_style = ""
+        if label == "Status":
+            if snapshot.status in failure_statuses:
+                value_style = STYLE_ERROR
+            elif snapshot.status == "ready":
+                value_style = STYLE_SUCCESS
+            else:
+                value_style = STYLE_WARNING
+        elif label == "Compatible now":
+            value_style = STYLE_SUCCESS if snapshot.compatible else STYLE_ERROR
+        elif label == "Detail":
+            value_style = STYLE_WARNING
+        rendered_value = (
+            styled(value, value_style, stream=stream) if value_style else value
+        )
+        rendered.append(
+            f"{styled(label + ':', STYLE_HEADING, stream=stream)} {rendered_value}"
+        )
+    return "\n".join(rendered)
+
+
 def run_remote_ssh_doctor(
     destination: str,
     *,
     ssh_args: Sequence[str] = (),
     stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
     json_output: bool = False,
 ) -> int:
     stdout = sys.stdout if stdout is None else stdout
-    snapshot = collect_remote_ssh_snapshot(destination, ssh_args=ssh_args)
+    stderr = sys.stderr if stderr is None else stderr
+    status = TransientStatusLine(
+        stderr,
+        enabled=not json_output and stream_is_tty(stdout),
+    )
+    status.show(
+        command_status(
+            "railmux doctor",
+            "Checking remote SSH compatibility…",
+            stream=stderr,
+        )
+    )
+    try:
+        snapshot = collect_remote_ssh_snapshot(destination, ssh_args=ssh_args)
+    finally:
+        status.clear()
     if json_output:
         json.dump(asdict(snapshot), stdout, indent=2, sort_keys=True)
         print(file=stdout)
     else:
-        print(render_remote_ssh_text(snapshot), file=stdout)
+        print(render_remote_ssh_terminal_text(snapshot, stdout), file=stdout)
     return 0 if snapshot.compatible else 2

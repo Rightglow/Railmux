@@ -1687,6 +1687,27 @@ def test_terminal_surface_hides_cursor_covered_by_a_frozen_pane():
     assert stream.getvalue().endswith(b"\033[?25l")
 
 
+def test_terminal_surface_reasserts_cached_cursor_without_repainting():
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=12, height=3))
+        )[0],
+        os.terminal_size((12, 3)),
+    )
+    assert screen is not None
+    screen = replace(screen, cursor_x=4, cursor_y=1, cursor_visible=True)
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+    surface.paint(screen)
+    stream.seek(0)
+    stream.truncate()
+
+    surface.reassert_cursor()
+
+    assert stream.getvalue() == b"\033[0m\033[?7h\033[2;5H\033[?25h"
+    assert b"\033[2J" not in stream.getvalue()
+
+
 def test_terminal_surface_projects_short_local_viewport_from_logical_bottom():
     screen = ScreenModel().apply(
         ClientScreenUpdateDecoder().feed(

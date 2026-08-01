@@ -20,6 +20,18 @@ from railmux.ssh_display_diagnostics import (
     SshDisplayDiagnostic,
     read_diagnostic as read_ssh_display_diagnostic,
 )
+from railmux.terminal_status import (
+    STYLE_ACCENT,
+    STYLE_ERROR,
+    STYLE_HEADING,
+    STYLE_MUTED,
+    STYLE_SUCCESS,
+    STYLE_WARNING,
+    TransientStatusLine,
+    command_status,
+    stream_is_tty,
+    styled,
+)
 
 
 _VERSION_RE = re.compile(
@@ -518,22 +530,80 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
     return "\n".join(lines)
 
 
+def render_doctor_terminal_text(snapshot: DoctorSnapshot, stream: TextIO) -> str:
+    """Style the human report while leaving redirection and JSON unchanged."""
+    lines = render_doctor_text(snapshot).splitlines()
+    rendered: list[str] = []
+    for index, line in enumerate(lines):
+        if index == 0:
+            rendered.append(styled(line, STYLE_ACCENT, stream=stream))
+            continue
+        if line.startswith("Privacy:"):
+            rendered.append(styled(line, STYLE_MUTED, stream=stream))
+            continue
+        label, separator, value = line.partition(": ")
+        if not separator:
+            rendered.append(line)
+            continue
+        value_style = ""
+        lowered = value.lower()
+        if label == "Config":
+            value_style = STYLE_ERROR if "valid=no" in lowered else STYLE_SUCCESS
+        elif label in {"tmux", "Claude Code", "Codex"}:
+            if "not found" in lowered or "missing" in lowered:
+                value_style = STYLE_WARNING
+        elif label == "Dedicated Railmux tmux":
+            if lowered.startswith("healthy"):
+                value_style = STYLE_SUCCESS
+            elif lowered.startswith("unavailable"):
+                value_style = STYLE_ERROR
+            else:
+                value_style = STYLE_WARNING
+        elif label == "Last tmux incident" and not lowered.startswith("none"):
+            value_style = STYLE_WARNING
+        elif label == "Settings repair":
+            value_style = STYLE_ACCENT
+        rendered_value = (
+            styled(value, value_style, stream=stream) if value_style else value
+        )
+        rendered.append(
+            f"{styled(label + ':', STYLE_HEADING, stream=stream)} {rendered_value}"
+        )
+    return "\n".join(rendered)
+
+
 def run_doctor(
     *,
     claude_home: Path,
     stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
     environ: dict[str, str] | None = None,
     json_output: bool = False,
 ) -> int:
     """Print a shareable diagnostic report without exposing user data."""
     stdout = sys.stdout if stdout is None else stdout
-    snapshot = collect_doctor_snapshot(
-        claude_home=claude_home,
-        environ=environ,
+    stderr = sys.stderr if stderr is None else stderr
+    status = TransientStatusLine(
+        stderr,
+        enabled=not json_output and stream_is_tty(stdout),
     )
+    status.show(
+        command_status(
+            "railmux doctor",
+            "Collecting local diagnostics…",
+            stream=stderr,
+        )
+    )
+    try:
+        snapshot = collect_doctor_snapshot(
+            claude_home=claude_home,
+            environ=environ,
+        )
+    finally:
+        status.clear()
     if json_output:
         json.dump(asdict(snapshot), stdout, indent=2, sort_keys=True)
         print(file=stdout)
     else:
-        print(render_doctor_text(snapshot), file=stdout)
+        print(render_doctor_terminal_text(snapshot, stdout), file=stdout)
     return 0

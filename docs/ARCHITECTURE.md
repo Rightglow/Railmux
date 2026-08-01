@@ -320,9 +320,12 @@ shell fragments. It never discovers or queries a tmux server while editing;
 server/client compatibility is enforced at the next ordinary launch. Claude
 and Codex use their configured executable directly. When both streams are
 TTYs, the editor owns one alternate-screen lifetime and restores it in a
-`finally` boundary, so menu redraws cannot enter the caller's primary
-scrollback. Help and redirected streams never enter terminal presentation
-mode.
+`finally` boundary. Navigation is state-driven: category pages redraw a compact
+root navigator above their contents, setting pages use a breadcrumb, and one
+action result survives in the footer until the next input. Back redraws only
+the parent state, so neither stale child content nor menu history can enter the
+caller's primary scrollback. Help and redirected streams never enter terminal
+presentation mode.
 
 `railmux config --remote HOST` uses a versioned remote-config capability that
 is independent of the binary display protocol. Phase one reuses the bounded

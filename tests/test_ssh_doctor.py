@@ -6,10 +6,17 @@ from unittest.mock import MagicMock
 from railmux import __version__, fast_display_client
 from railmux.fast_display_protocol import PROTOCOL_VERSION
 from railmux.ssh_doctor import (
+    RemoteSshDoctorSnapshot,
     collect_remote_ssh_snapshot,
     render_remote_ssh_text,
+    render_remote_ssh_terminal_text,
     run_remote_ssh_doctor,
 )
+
+
+class _TTYBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def test_remote_ssh_doctor_reads_hello_without_attaching_or_leaking_host(
@@ -71,11 +78,14 @@ def test_remote_ssh_doctor_json_failure_is_scriptable_and_private(monkeypatch):
     )
     output = io.StringIO()
 
-    assert run_remote_ssh_doctor(
-        destination,
-        stdout=output,
-        json_output=True,
-    ) == 2
+    assert (
+        run_remote_ssh_doctor(
+            destination,
+            stdout=output,
+            json_output=True,
+        )
+        == 2
+    )
     payload = output.getvalue()
     assert '"status": "connection_failed"' in payload
     assert destination not in payload
@@ -144,3 +154,78 @@ def test_remote_ssh_doctor_reports_invalid_remote_config(monkeypatch):
     assert snapshot.status == "config_invalid"
     assert not snapshot.compatible
     assert "railmux config" in (snapshot.detail or "")
+
+
+def test_remote_doctor_progress_is_transient_and_private(monkeypatch):
+    stdout = _TTYBuffer()
+    stderr = _TTYBuffer()
+    snapshot = MagicMock(compatible=True)
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.collect_remote_ssh_snapshot",
+        lambda *_args, **_kwargs: snapshot,
+    )
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.render_remote_ssh_text",
+        lambda _snapshot: "doctor result",
+    )
+
+    result = run_remote_ssh_doctor(
+        "private-host",
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert stdout.getvalue() == "doctor result\n"
+    assert stderr.getvalue() == (
+        "\r\033[2Krailmux doctor: Checking remote SSH compatibility…\r\033[2K"
+    )
+    assert "private-host" not in stderr.getvalue()
+
+
+def test_remote_doctor_json_never_emits_progress(monkeypatch):
+    stdout = _TTYBuffer()
+    stderr = _TTYBuffer()
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.collect_remote_ssh_snapshot",
+        lambda *_args, **_kwargs: RemoteSshDoctorSnapshot(
+            2,
+            "connection_failed",
+            __version__,
+            PROTOCOL_VERSION,
+        ),
+    )
+
+    result = run_remote_ssh_doctor(
+        "private-host",
+        stdout=stdout,
+        stderr=stderr,
+        json_output=True,
+    )
+
+    assert result == 2
+    assert stderr.getvalue() == ""
+    assert '"status": "connection_failed"' in stdout.getvalue()
+
+
+def test_remote_doctor_terminal_report_colors_only_interactive_output(monkeypatch):
+    snapshot = RemoteSshDoctorSnapshot(
+        2,
+        "ready",
+        __version__,
+        PROTOCOL_VERSION,
+        remote_version=__version__,
+        remote_protocol=PROTOCOL_VERSION,
+        compatible=True,
+    )
+    stream = _TTYBuffer()
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+
+    rendered = render_remote_ssh_terminal_text(snapshot, stream)
+
+    assert "\033[" in rendered
+    assert "Compatible now:" in rendered
+    assert render_remote_ssh_terminal_text(snapshot, io.StringIO()) == (
+        render_remote_ssh_text(snapshot)
+    )

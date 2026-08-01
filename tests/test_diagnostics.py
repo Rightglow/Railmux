@@ -1,5 +1,6 @@
 import json
 from io import StringIO
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -14,6 +15,11 @@ from railmux.ssh_display_diagnostics import (
     SshDisplayStats,
 )
 from railmux.tmux_health import TmuxIncident
+
+
+class _TTYStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def test_version_preserves_tmux_letter_suffix(monkeypatch):
@@ -134,6 +140,31 @@ def test_doctor_report_is_useful_and_redacts_user_values(
         "/private/socket", "private-codex-wrapper",
     ):
         assert secret not in report
+
+
+def test_local_doctor_progress_is_transient(monkeypatch):
+    stdout = _TTYStringIO()
+    stderr = _TTYStringIO()
+    snapshot = MagicMock()
+    monkeypatch.setattr(
+        "railmux.diagnostics.collect_doctor_snapshot",
+        lambda **_kwargs: snapshot,
+    )
+    monkeypatch.setattr(
+        "railmux.diagnostics.render_doctor_terminal_text",
+        lambda _snapshot, _stream: "doctor result",
+    )
+
+    result = run_doctor(
+        claude_home=Path("unused"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert stdout.getvalue() == "doctor result\n"
+    assert "Collecting local diagnostics" in stderr.getvalue()
+    assert stderr.getvalue().endswith("\r\033[2K")
 
 
 def test_doctor_reports_missing_tools_and_invalid_config(

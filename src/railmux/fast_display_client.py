@@ -1272,6 +1272,22 @@ class TerminalSurface:
         self.stream.write(b"".join(rendered))
         self.stream.flush()
 
+    def reassert_cursor(self) -> None:
+        """Restore the last authoritative cursor without repainting the frame."""
+        if self._last_screen is None:
+            return
+        projection_top, visible_height = self._projection(self._last_screen.height)
+        rendered: list[bytes] = []
+        self._append_cursor(
+            rendered,
+            self._last_screen,
+            self._last_overlays,
+            projection_top=projection_top,
+            visible_height=visible_height,
+        )
+        self.stream.write(b"".join(rendered))
+        self.stream.flush()
+
     def close(self) -> None:
         if not self.active:
             return
@@ -2914,6 +2930,14 @@ def run(args: argparse.Namespace) -> int:
         if may_change_routes:
             history.invalidate_routes()
             route_refresh_needed = True
+        if termux_touch and part == b"\033[I":
+            # Android may restore the terminal View with its cursor a few
+            # cells away from the last painted application cursor. A remote
+            # patch would correct it, but an idle provider can otherwise leave
+            # the two cursor positions visibly alternating until the user
+            # types. Reassert only the cached cursor on Termux focus-in; the
+            # remote focus event remains authoritative and is still forwarded.
+            surface.reassert_cursor()
         send_protocol_frame(encode_input(part))
 
     surface.show_local_status(

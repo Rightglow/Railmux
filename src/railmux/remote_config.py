@@ -1,4 +1,5 @@
 """Interactive configuration of one SSH destination without touching tmux."""
+
 from __future__ import annotations
 
 import shutil
@@ -26,6 +27,12 @@ from railmux.fast_display_client import (
     remote_install_help,
 )
 from railmux.fast_display_protocol import REMOTE_CONFIG_PROTOCOL
+from railmux.terminal_status import (
+    STYLE_PROMPT,
+    TransientStatusLine,
+    command_status,
+    styled,
+)
 
 
 _PROBE_WIDTH = 80
@@ -35,7 +42,7 @@ _PROBE_FPS = 20.0
 
 def _confirm(question: str) -> bool:
     try:
-        answer = input(f"{question} [y/N] ")
+        answer = input(styled(f"{question} [y/N] ", STYLE_PROMPT, stream=sys.stdout))
     except (EOFError, KeyboardInterrupt):
         print(file=sys.stderr)
         return False
@@ -98,11 +105,14 @@ def _validate_config_protocol(
     hello: RemoteHello,
     *,
     raw_argv: Sequence[str],
+    status: TransientStatusLine | None = None,
 ) -> bool:
     if hello.config_protocol == REMOTE_CONFIG_PROTOCOL:
         return True
     order = _version_order(hello.version)
     if hello.config_protocol > REMOTE_CONFIG_PROTOCOL and order == 1:
+        if status is not None:
+            status.clear()
         if _confirm(
             f"Remote Railmux {hello.version} uses newer remote-config "
             f"protocol v{hello.config_protocol}. Upgrade local Railmux?"
@@ -122,6 +132,8 @@ def _validate_config_protocol(
             "version is not newer; install matching Railmux versions manually"
         )
     if order == 1:
+        if status is not None:
+            status.clear()
         if _confirm(
             f"Remote Railmux {hello.version} does not advertise a compatible "
             "remote-config protocol. Upgrade local Railmux to that version?"
@@ -159,6 +171,8 @@ def _ensure_remote_config_cli(
     destination: str,
     ssh_args: Sequence[str],
     raw_argv: Sequence[str],
+    *,
+    status: TransientStatusLine | None = None,
 ) -> None:
     process, startup = _start_probe(destination, ssh_args)
     if startup.kind is RemoteStartKind.TIMEOUT:
@@ -173,7 +187,11 @@ def _ensure_remote_config_cli(
     hello = _installed_probe_or_error(process, startup)
     if hello is not None:
         _stop_unstarted_remote(process)
-        supported = _validate_config_protocol(hello, raw_argv=raw_argv)
+        supported = _validate_config_protocol(
+            hello,
+            raw_argv=raw_argv,
+            status=status,
+        )
         if supported:
             return
         reason = (
@@ -183,6 +201,8 @@ def _ensure_remote_config_cli(
     else:
         reason = "Railmux is not installed or discoverable remotely."
 
+    if status is not None:
+        status.clear()
     if not _confirm(
         f"{reason} Install Railmux {__version__} with SSH support into the "
         f"remote user environment on {destination}?"
@@ -193,7 +213,11 @@ def _ensure_remote_config_cli(
     hello = _installed_probe_or_error(process, startup)
     if hello is not None:
         _stop_unstarted_remote(process)
-        supported = _validate_config_protocol(hello, raw_argv=raw_argv)
+        supported = _validate_config_protocol(
+            hello,
+            raw_argv=raw_argv,
+            status=status,
+        )
         if supported:
             return
         raise ProbeError(
@@ -201,6 +225,8 @@ def _ensure_remote_config_cli(
             "remote configuration command"
         )
 
+    if status is not None:
+        status.clear()
     if not _confirm(
         "Remote user-site installation failed or timed out. Create the isolated "
         "~/.local/share/railmux/ssh-venv environment and install Railmux "
@@ -219,7 +245,11 @@ def _ensure_remote_config_cli(
             f"compatible Railmux.\n{remote_install_help(destination, __version__)}"
         )
     _stop_unstarted_remote(process)
-    supported = _validate_config_protocol(hello, raw_argv=raw_argv)
+    supported = _validate_config_protocol(
+        hello,
+        raw_argv=raw_argv,
+        status=status,
+    )
     if not supported:
         raise ProbeError(
             "automatic private-environment installation completed but did not "
@@ -243,8 +273,28 @@ def run_remote_config(
     if shutil.which("ssh") is None:
         print("error: ssh is not installed or not on PATH", file=sys.stderr)
         return 2
+    status = TransientStatusLine(sys.stderr)
     try:
-        _ensure_remote_config_cli(destination, ssh_args, raw_argv)
+        status.show(
+            command_status(
+                "railmux config",
+                "Connecting and checking remote Railmux…",
+                stream=sys.stderr,
+            )
+        )
+        _ensure_remote_config_cli(
+            destination,
+            ssh_args,
+            raw_argv,
+            status=status,
+        )
+        status.show(
+            command_status(
+                "railmux config",
+                "Opening remote settings…",
+                stream=sys.stderr,
+            )
+        )
         argv = build_remote_command_argv(
             destination,
             remote_args=("config", "--remote-context"),
@@ -253,16 +303,23 @@ def run_remote_config(
         )
         result = subprocess.run(argv, check=False)
     except KeyboardInterrupt:
+        status.clear()
         print(file=sys.stderr)
         return 130
     except ProbeError as exc:
+        status.clear()
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:
+        status.clear()
         print(f"error: could not start ssh: {exc}", file=sys.stderr)
         return 2
+    finally:
+        status.clear()
     if result.returncode == 255:
-        print("error: ssh connection failed while editing remote config", file=sys.stderr)
+        print(
+            "error: ssh connection failed while editing remote config", file=sys.stderr
+        )
         return 2
     if result.returncode < 0:
         return 128 + abs(result.returncode)

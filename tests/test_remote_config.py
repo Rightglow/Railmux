@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +12,11 @@ from railmux.fast_display_client import (
     build_remote_command_argv,
 )
 from railmux.fast_display_protocol import PROTOCOL_VERSION, REMOTE_CONFIG_PROTOCOL
+
+
+class _TTYBuffer(io.StringIO):
+    def isatty(self) -> bool:
+        return True
 
 
 def _hello(*, config_protocol: int = REMOTE_CONFIG_PROTOCOL) -> RemoteStartup:
@@ -175,3 +181,89 @@ def test_run_remote_config_launches_cooked_editor(monkeypatch):
     assert observed["argv"][:5] == ["ssh", "-p", "2222", "-tt", "work"]
     assert "config --remote-context" in observed["argv"][-1]
     assert observed["check"] is False
+
+
+def test_remote_config_progress_is_transient(monkeypatch):
+    stderr = _TTYBuffer()
+    monkeypatch.setattr(remote_config.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(remote_config.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(remote_config.sys, "stderr", stderr)
+    monkeypatch.setattr(remote_config.shutil, "which", lambda _name: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        remote_config,
+        "_ensure_remote_config_cli",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        remote_config.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0),
+    )
+
+    result = remote_config.run_remote_config(
+        "private-host",
+        ssh_args=(),
+        raw_argv=("--remote", "private-host"),
+    )
+
+    assert result == 0
+    assert stderr.getvalue() == (
+        "\r\033[2Krailmux config: Connecting and checking remote Railmux…"
+        "\r\033[2Krailmux config: Opening remote settings…"
+        "\r\033[2K"
+    )
+    assert "private-host" not in stderr.getvalue()
+
+
+def test_remote_config_clears_progress_before_install_prompt(monkeypatch):
+    status = MagicMock()
+    process = MagicMock()
+    startup = RemoteStartup(RemoteStartKind.MISSING, returncode=127)
+    monkeypatch.setattr(
+        remote_config,
+        "_start_probe",
+        lambda *_args, **_kwargs: (process, startup),
+    )
+    monkeypatch.setattr(remote_config, "_stop_unstarted_remote", lambda _process: None)
+    monkeypatch.setattr(remote_config, "_confirm", lambda _question: False)
+
+    try:
+        remote_config._ensure_remote_config_cli(
+            "work",
+            (),
+            ("--remote", "work"),
+            status=status,
+        )
+    except remote_config.ProbeError:
+        pass
+    else:
+        raise AssertionError("declining installation did not stop remote config")
+
+    status.clear.assert_called_once_with()
+
+
+def test_remote_config_clears_progress_before_error(monkeypatch):
+    stderr = _TTYBuffer()
+    monkeypatch.setattr(remote_config.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(remote_config.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(remote_config.sys, "stderr", stderr)
+    monkeypatch.setattr(remote_config.shutil, "which", lambda _name: "/usr/bin/ssh")
+
+    def fail_probe(*_args, **_kwargs):
+        raise remote_config.ProbeError("probe failed")
+
+    monkeypatch.setattr(
+        remote_config,
+        "_ensure_remote_config_cli",
+        fail_probe,
+    )
+
+    result = remote_config.run_remote_config(
+        "private-host",
+        ssh_args=(),
+        raw_argv=("--remote", "private-host"),
+    )
+
+    assert result == 2
+    assert "\r\033[2Kerror: probe failed\n" in stderr.getvalue()
+    assert "private-host" not in stderr.getvalue()

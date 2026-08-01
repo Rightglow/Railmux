@@ -398,6 +398,10 @@ remote user environment (and, if needed, Railmux's private SSH venv) requires
 explicit consent and never uses `sudo`.
 
 In an interactive terminal the editor uses a temporary full-screen surface.
+Category pages keep a compact parent navigator above their settings; setting
+pages use a breadcrumb, and Back redraws a clean parent page instead of leaving
+menu history behind. Save and validation results remain visible until the next
+input.
 Exiting, cancelling, or encountering an error restores the original shell
 screen and leaves its scrollback unchanged. Redirected input/output and
 `--help` remain plain text without terminal control sequences.
