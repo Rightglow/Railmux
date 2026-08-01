@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21.dev202608010] - 2026-08-01
+
 ### Added
 
 - Add `railmux config`, a tmux-independent two-level editor for persistent
@@ -1584,7 +1586,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202607311...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202608010...HEAD
+[0.2.21.dev202608010]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202607311...v0.2.21.dev202608010
 [0.2.21.dev202607311]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21.dev202607311
 [0.2.20]: https://github.com/Rightglow/Railmux/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/Rightglow/Railmux/compare/v0.2.18...v0.2.19
