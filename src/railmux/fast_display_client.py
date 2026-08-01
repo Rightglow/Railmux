@@ -82,6 +82,7 @@ from railmux.fast_display_protocol import (
 )
 from railmux.pane_surface import render_startup_surface
 from railmux.ssh_compat import CompatibilityFacts, decide as decide_compatibility
+from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
 from railmux.ssh_display_diagnostics import SshDisplayRecorder, SshDisplayStats
 
 LOCAL_ESCAPE = b"\x1d"  # Ctrl-]
@@ -241,6 +242,9 @@ class RemoteHello:
     protocol: int
     ready: bool
     tmux: bool = True
+    config_status: str = "valid"
+    tmux_configured: bool = False
+    config_protocol: int = 0
 
 
 @dataclass(frozen=True)
@@ -326,6 +330,9 @@ def parse_remote_hello(line: bytes) -> RemoteHello:
     protocol = value.get("protocol")
     ready = value.get("ready")
     tmux = value.get("tmux")
+    config_status = value.get("config_status", "valid")
+    tmux_configured = value.get("tmux_configured", False)
+    config_protocol = value.get("config_protocol", 0)
     if (
         not isinstance(version, str)
         or not version
@@ -335,13 +342,26 @@ def parse_remote_hello(line: bytes) -> RemoteHello:
         or not 1 <= protocol <= 65535
         or not isinstance(ready, bool)
         or not isinstance(tmux, bool)
+        or config_status not in {"valid", "invalid"}
+        or not isinstance(tmux_configured, bool)
+        or not isinstance(config_protocol, int)
+        or isinstance(config_protocol, bool)
+        or not 0 <= config_protocol <= 65535
     ):
         raise ValueError("invalid Railmux remote hello")
     try:
         version.encode("ascii")
     except UnicodeEncodeError as exc:
         raise ValueError("invalid Railmux remote version") from exc
-    return RemoteHello(version, protocol, ready, tmux)
+    return RemoteHello(
+        version,
+        protocol,
+        ready,
+        tmux,
+        config_status,
+        tmux_configured,
+        config_protocol,
+    )
 
 
 def await_remote_startup(
@@ -1309,6 +1329,23 @@ def _remote_launch_command(server_args: Sequence[str]) -> str:
     return "; ".join(branches)
 
 
+def build_remote_command_argv(
+    destination: str,
+    *,
+    remote_args: Sequence[str],
+    ssh_args: Sequence[str],
+    force_tty: bool = False,
+) -> list[str]:
+    """Build SSH argv through the shared remote Railmux discovery ladder."""
+    return [
+        "ssh",
+        "-tt" if force_tty else "-T",
+        *ssh_args,
+        destination,
+        _remote_launch_command(remote_args),
+    ]
+
+
 def build_ssh_argv(
     destination: str,
     *,
@@ -1328,24 +1365,21 @@ def build_ssh_argv(
         replace_existing_client=replace_existing_client,
         existing_session_only=existing_session_only,
     )
-    command = _remote_launch_command(server_args)
-    return ["ssh", "-T", *ssh_args, destination, command]
+    return build_remote_command_argv(
+        destination,
+        remote_args=server_args,
+        ssh_args=ssh_args,
+    )
 
 
-def build_ssh_install_argv(
+def build_remote_install_argv(
     destination: str,
     *,
     version: str,
-    session: str,
-    width: int,
-    height: int,
-    fps: float,
+    remote_args: Sequence[str],
     ssh_args: Sequence[str],
 ) -> list[str]:
-    """Install into the remote user environment, then exec the same session."""
-    server_args = _remote_server_args(
-        session=session, width=width, height=height, fps=fps
-    )
+    """Install into the remote user environment, then exec Railmux args."""
     requirement = f"railmux[ssh]=={version}"
     managed_python = f'"$HOME/{_REMOTE_VENV}/bin/python"'
     managed_install = shlex.join(
@@ -1357,7 +1391,7 @@ def build_ssh_install_argv(
             requirement,
         ]
     )
-    managed_launch = shlex.join(["-m", "railmux", *server_args])
+    managed_launch = shlex.join(["-m", "railmux", *remote_args])
     branches = [
         f"if [ -x {managed_python} ] "
         f"&& {managed_python} -m pip --version >/dev/null 2>&1; "
@@ -1388,7 +1422,7 @@ def build_ssh_install_argv(
                 requirement,
             ]
         )
-        launch = shlex.join([*runner, *server_args])
+        launch = shlex.join([*runner, *remote_args])
         branches.append(
             f"elif {condition}; then {install} 1>&2 && exec {launch}; exit $?"
         )
@@ -1399,7 +1433,7 @@ def build_ssh_install_argv(
     return ["ssh", "-T", *ssh_args, destination, "; ".join(branches)]
 
 
-def build_ssh_private_venv_install_argv(
+def build_ssh_install_argv(
     destination: str,
     *,
     version: str,
@@ -1409,10 +1443,26 @@ def build_ssh_private_venv_install_argv(
     fps: float,
     ssh_args: Sequence[str],
 ) -> list[str]:
-    """Create Railmux's private remote venv, install, and start it."""
+    """Install into the remote user environment, then exec the same session."""
     server_args = _remote_server_args(
         session=session, width=width, height=height, fps=fps
     )
+    return build_remote_install_argv(
+        destination,
+        version=version,
+        remote_args=server_args,
+        ssh_args=ssh_args,
+    )
+
+
+def build_remote_private_venv_install_argv(
+    destination: str,
+    *,
+    version: str,
+    remote_args: Sequence[str],
+    ssh_args: Sequence[str],
+) -> list[str]:
+    """Install into Railmux's private remote venv, then exec Railmux args."""
     requirement = f"railmux[ssh]=={version}"
     managed_dir = f'"$HOME/{_REMOTE_VENV}"'
     managed_python = f"{managed_dir}/bin/python"
@@ -1425,7 +1475,7 @@ def build_ssh_private_venv_install_argv(
             requirement,
         ]
     )
-    launch = shlex.join(["-m", "railmux", *server_args])
+    launch = shlex.join(["-m", "railmux", *remote_args])
     branches = [
         f"if [ -x {managed_python} ] "
         f"&& {managed_python} -m pip --version >/dev/null 2>&1; "
@@ -1444,6 +1494,28 @@ def build_ssh_private_venv_install_argv(
         "the private Railmux environment' >&2; exit 127; fi"
     )
     return ["ssh", "-T", *ssh_args, destination, "; ".join(branches)]
+
+
+def build_ssh_private_venv_install_argv(
+    destination: str,
+    *,
+    version: str,
+    session: str,
+    width: int,
+    height: int,
+    fps: float,
+    ssh_args: Sequence[str],
+) -> list[str]:
+    """Create Railmux's private remote venv, install, and start it."""
+    server_args = _remote_server_args(
+        session=session, width=width, height=height, fps=fps
+    )
+    return build_remote_private_venv_install_argv(
+        destination,
+        version=version,
+        remote_args=server_args,
+        ssh_args=ssh_args,
+    )
 
 
 def remote_install_help(destination: str, version: str) -> str:
@@ -1467,6 +1539,17 @@ def remote_tmux_help(destination: str) -> str:
         f"tmux is not installed or not on PATH on {destination}. Install it "
         "with the remote operating system's package manager, then retry. "
         "Railmux will not run sudo or install system packages automatically."
+    )
+
+
+def remote_config_help(destination: str, *, tmux: bool = False) -> str:
+    if tmux:
+        problem = "The tmux executable selected by remote Railmux is unavailable."
+    else:
+        problem = "The remote Railmux configuration is invalid."
+    return (
+        f"{problem} Log in to {destination}, run 'railmux config', and "
+        "repair or reset the affected setting before retrying."
     )
 
 
@@ -1511,12 +1594,18 @@ def _local_upgrade_argv(version: str) -> list[str]:
     return upgrade_argv(version)
 
 
-def _upgrade_local_and_restart(version: str, raw_args: Sequence[str]) -> NoReturn:
+def _upgrade_local_and_restart(
+    version: str,
+    raw_args: Sequence[str],
+    *,
+    subcommand: str = "ssh",
+) -> NoReturn:
     from railmux.self_update import installed_version_matches
 
     argv = _local_upgrade_argv(version)
+    command_label = f"railmux {subcommand}"
     print(
-        f"railmux ssh: upgrading local Railmux to {version}...",
+        f"{command_label}: upgrading local Railmux to {version}...",
         file=sys.stderr,
     )
     try:
@@ -1535,8 +1624,11 @@ def _upgrade_local_and_restart(version: str, raw_args: Sequence[str]) -> NoRetur
             "pip reported success, but a fresh Railmux process did not import "
             f"version {version}. Run manually, then retry:\n  {shlex.join(argv)}"
         )
-    restart = [sys.executable, "-m", "railmux", "ssh", *raw_args]
-    print("railmux ssh: local upgrade succeeded; restarting...", file=sys.stderr)
+    restart = [sys.executable, "-m", "railmux", subcommand, *raw_args]
+    print(
+        f"{command_label}: local upgrade succeeded; restarting...",
+        file=sys.stderr,
+    )
     try:
         os.execv(sys.executable, restart)
     except OSError as exc:
@@ -1928,6 +2020,12 @@ def prepare_remote_process(
     else:
         assert startup.hello is not None
         hello = startup.hello
+        if hello.config_status != "valid":
+            _stop_unstarted_remote(process)
+            raise ProbeError(remote_config_help(args.destination))
+        if not hello.tmux and hello.tmux_configured:
+            _stop_unstarted_remote(process)
+            raise ProbeError(remote_config_help(args.destination, tmux=True))
         if on_stage is not None:
             on_stage("Checking Railmux versions…")
         facts = CompatibilityFacts(
@@ -2009,10 +2107,21 @@ def prepare_remote_process(
     if (
         startup.kind is RemoteStartKind.HELLO
         and startup.hello is not None
+        and startup.hello.config_status != "valid"
+    ):
+        _stop_unstarted_remote(process)
+        raise ProbeError(remote_config_help(args.destination))
+    if (
+        startup.kind is RemoteStartKind.HELLO
+        and startup.hello is not None
         and not startup.hello.tmux
     ):
         _stop_unstarted_remote(process)
-        raise ProbeError(remote_tmux_help(args.destination))
+        raise ProbeError(
+            remote_config_help(args.destination, tmux=True)
+            if startup.hello.tmux_configured
+            else remote_tmux_help(args.destination)
+        )
     if startup.kind in (
         RemoteStartKind.MISSING,
         RemoteStartKind.FAILED,
@@ -2034,10 +2143,21 @@ def prepare_remote_process(
         if (
             startup.kind is RemoteStartKind.HELLO
             and startup.hello is not None
+            and startup.hello.config_status != "valid"
+        ):
+            _stop_unstarted_remote(process)
+            raise ProbeError(remote_config_help(args.destination))
+        if (
+            startup.kind is RemoteStartKind.HELLO
+            and startup.hello is not None
             and not startup.hello.tmux
         ):
             _stop_unstarted_remote(process)
-            raise ProbeError(remote_tmux_help(args.destination))
+            raise ProbeError(
+                remote_config_help(args.destination, tmux=True)
+                if startup.hello.tmux_configured
+                else remote_tmux_help(args.destination)
+            )
     if (
         startup.kind is not RemoteStartKind.HELLO
         or startup.hello is None
@@ -2073,8 +2193,17 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("destination", help="SSH destination or configured host alias")
-    parser.add_argument("--session", default="railmux")
-    parser.add_argument("--fps", type=float, default=20.0)
+    parser.add_argument(
+        "--session",
+        default="railmux",
+        help="managed remote tmux session name (default: railmux)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=20.0,
+        help="maximum coalesced display update rate, 1-60 (default: 20)",
+    )
     parser.add_argument(
         "--no-mouse",
         action="store_true",
@@ -2110,9 +2239,21 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--ssh-arg",
-        action="append",
+        action=AppendSshArgument,
+        dest="ssh_arg",
         default=[],
-        help="extra ssh argument; repeat and use --ssh-arg=VALUE",
+        metavar="VALUE",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--ssh-args",
+        action=ExtendSshArguments,
+        dest="ssh_arg",
+        metavar="ARGS",
+        help=(
+            "a quoted group of ssh arguments, split locally without running "
+            "a shell"
+        ),
     )
     args = parser.parse_args(raw_argv)
     args.raw_argv = tuple(raw_argv)
@@ -2136,7 +2277,10 @@ def run(args: argparse.Namespace) -> int:
         try:
             config = load_config()
         except ConfigError as exc:
-            raise ProbeError(f"configuration error: {exc}") from exc
+            raise ProbeError(
+                f"configuration error: {exc}; run 'railmux config' to repair "
+                "or reset it"
+            ) from exc
         history_limit = (
             config.ssh_history_lines
             if args.history_lines is None

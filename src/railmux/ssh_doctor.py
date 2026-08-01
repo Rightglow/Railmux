@@ -1,4 +1,4 @@
-"""Read-only compatibility preflight for ``railmux doctor --ssh HOST``."""
+"""Read-only compatibility preflight for ``railmux doctor --remote HOST``."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ from railmux.fast_display_protocol import PROTOCOL_VERSION
 from railmux.ssh_compat import CompatibilityFacts, decide as decide_compatibility
 
 
-SSH_DOCTOR_SCHEMA_VERSION = 1
+SSH_DOCTOR_SCHEMA_VERSION = 2
 _PROBE_TIMEOUT = 15.0
 
 
@@ -28,6 +28,8 @@ class RemoteSshDoctorSnapshot:
     remote_protocol: int | None = None
     remote_dependency_ready: bool | None = None
     remote_tmux: bool | None = None
+    remote_config_status: str | None = None
+    remote_tmux_configured: bool | None = None
     compatible: bool = False
     detail: str | None = None
     read_only: bool = True
@@ -114,6 +116,20 @@ def collect_remote_ssh_snapshot(
         )
 
     hello = startup.hello
+    if hello.config_status != "valid":
+        return RemoteSshDoctorSnapshot(
+            SSH_DOCTOR_SCHEMA_VERSION,
+            "config_invalid",
+            __version__,
+            PROTOCOL_VERSION,
+            remote_version=hello.version,
+            remote_protocol=hello.protocol,
+            remote_dependency_ready=hello.ready,
+            remote_tmux=hello.tmux,
+            remote_config_status=hello.config_status,
+            remote_tmux_configured=hello.tmux_configured,
+            detail="run 'railmux config' on the remote host to repair or reset it",
+        )
     facts = CompatibilityFacts(
         local_version=__version__,
         local_protocol=PROTOCOL_VERSION,
@@ -139,7 +155,11 @@ def collect_remote_ssh_snapshot(
         )
         compatible = True
     elif decision.action == "tmux_missing":
-        status = "tmux_missing"
+        status = (
+            "configured_tmux_missing"
+            if hello.tmux_configured
+            else "tmux_missing"
+        )
         compatible = False
     else:
         status = "incompatible"
@@ -153,8 +173,15 @@ def collect_remote_ssh_snapshot(
         remote_protocol=hello.protocol,
         remote_dependency_ready=hello.ready,
         remote_tmux=hello.tmux,
+        remote_config_status=hello.config_status,
+        remote_tmux_configured=hello.tmux_configured,
         compatible=compatible,
-        detail=decision.reason or decision.warning,
+        detail=(
+            "run 'railmux config' on the remote host to correct or reset the "
+            "tmux executable"
+            if status == "configured_tmux_missing"
+            else decision.reason or decision.warning
+        ),
     )
 
 
@@ -180,6 +207,10 @@ def render_remote_ssh_text(snapshot: RemoteSshDoctorSnapshot) -> str:
         lines.append(
             "Remote tmux: " + ("available" if snapshot.remote_tmux else "missing")
         )
+    if snapshot.remote_config_status is not None:
+        lines.append(f"Remote config: {snapshot.remote_config_status}")
+    if snapshot.remote_tmux_configured:
+        lines.append("Remote tmux source: configured executable")
     lines.append("Compatible now: " + ("yes" if snapshot.compatible else "no"))
     if snapshot.detail:
         lines.append(f"Detail: {snapshot.detail}")

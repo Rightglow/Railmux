@@ -49,6 +49,7 @@ from railmux import (
     tmux_server,
 )
 from railmux import transcript as transcript_renderer
+from railmux.config import Config, ConfigError, load_config
 from railmux.fast_display_protocol import (
     HistoryBatch,
     HistorySnapshot,
@@ -60,6 +61,7 @@ from railmux.fast_display_protocol import (
     PathOpenResult,
     PathResult,
     PROTOCOL_VERSION,
+    REMOTE_CONFIG_PROTOCOL,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
     REMOTE_HELLO_PREFIX,
@@ -88,6 +90,11 @@ from railmux.ui.workspace import (
     COMPACT_RESIZE_SEQUENCE,
 )
 from railmux.settings import Settings
+from railmux.runtime_config import (
+    activate_runtime_environment,
+    check_executable,
+    check_utf8_locale,
+)
 from railmux.tool_panes import (
     TOOL_PANE_OPTION,
     is_tool_pane_marker,
@@ -220,13 +227,26 @@ def _fast_dependency_ready() -> bool:
     return True
 
 
-def _emit_remote_hello(ready: bool) -> None:
+def _emit_remote_hello(
+    ready: bool,
+    *,
+    config_status: str = "valid",
+    tmux_configured: bool = False,
+    tmux_available: bool | None = None,
+) -> None:
     """Describe compatibility before acquiring or attaching any tmux state."""
     payload = json.dumps(
         {
             "protocol": PROTOCOL_VERSION,
             "ready": ready,
-            "tmux": shutil.which("tmux") is not None,
+            "tmux": (
+                shutil.which("tmux") is not None
+                if tmux_available is None
+                else tmux_available
+            ),
+            "config_status": config_status,
+            "tmux_configured": tmux_configured,
+            "config_protocol": REMOTE_CONFIG_PROTOCOL,
             "version": __version__,
         },
         separators=(",", ":"),
@@ -498,14 +518,14 @@ def _live_controller(session_id: str) -> str | None:
             "-p",
             "-t",
             controller,
-            "#{session_id}\t#{pane_id}",
+            "#{session_id} #{pane_id}",
         )
     except DisplayServerError:
         return None
     if (
         controller.startswith("%")
         and controller[1:].isdigit()
-        and identity == f"{session_id}\t{controller}"
+        and identity == f"{session_id} {controller}"
     ):
         return controller
     return None
@@ -580,9 +600,9 @@ def _validate_railmux(session: str) -> str:
         "-p",
         "-t",
         controller,
-        "#{session_id}\t#{pane_id}",
+        "#{session_id} #{pane_id}",
     )
-    if controller_identity != f"{session_id}\t{controller}":
+    if controller_identity != f"{session_id} {controller}":
         raise DisplayServerError("the Railmux controller identity changed")
 
     return session_id
@@ -808,12 +828,12 @@ def _list_agent_panes(
                 "-t",
                 session_id,
                 "-F",
-                "#{session_id}\t#{window_id}\t#{window_zoomed_flag}\t"
-                "#{pane_active}\t#{pane_id}\t#{pane_pid}\t#{pane_left}\t"
-                "#{pane_top}\t#{pane_width}\t#{pane_height}\t"
-                "#{history_size}\t#{alternate_on}\t#{mouse_any_flag}\t"
-                f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}}\t"
-                f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}}\t"
+                "#{session_id} #{window_id} #{window_zoomed_flag} "
+                "#{pane_active} #{pane_id} #{pane_pid} #{pane_left} "
+                "#{pane_top} #{pane_width} #{pane_height} "
+                "#{history_size} #{alternate_on} #{mouse_any_flag} "
+                f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}} "
+                f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}} "
                 f"#{{{TOOL_PANE_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
@@ -827,7 +847,7 @@ def _list_agent_panes(
     rows: list[tuple[bool, bool, _PaneGeometry]] = []
     seen: set[str] = set()
     for raw_row in output.splitlines():
-        fields = raw_row.split("\t")
+        fields = raw_row.split(" ")
         if (
             len(fields) != 16
             or fields[0] != session_id
@@ -1587,11 +1607,10 @@ def _request_compact_resize_preparation(
     try:
         raw = _compact_tmux_output(
             "display-message", "-p", "-t", session_id,
-            "#{window_width}\t#{window_height}\t#{window_panes}"
-            "\t#{@railmux_controller_pane}",
+            "#{window_width} #{window_height} #{window_panes}"
+            " #{@railmux_controller_pane}",
         )
-        current_width, current_height, pane_count, controller = raw.split(
-            "\t", 3)
+        current_width, current_height, pane_count, controller = raw.split(" ", 3)
         current = int(current_width), int(current_height)
         panes = int(pane_count)
     except (AttributeError, TypeError, ValueError):
@@ -1703,7 +1722,7 @@ def _wait_until_attached(session_id: str, pid: int, timeout: float = 2.0) -> boo
         try:
             clients = subprocess.check_output(
                 tmux_server.tmux_argv(
-                    "list-clients", "-F", "#{session_id}\t#{client_pid}"
+                    "list-clients", "-F", "#{session_id} #{client_pid}"
                 ),
                 stderr=subprocess.DEVNULL,
                 text=True,
@@ -1715,7 +1734,7 @@ def _wait_until_attached(session_id: str, pid: int, timeout: float = 2.0) -> boo
             subprocess.TimeoutExpired,
         ):
             clients = []
-        if f"{session_id}\t{pid}" in clients:
+        if f"{session_id} {pid}" in clients:
             return True
         time.sleep(0.01)
     return False
@@ -1726,7 +1745,7 @@ def _detach_session_clients(session_id: str) -> None:
     try:
         rows = subprocess.check_output(
             tmux_server.tmux_argv(
-                "list-clients", "-F", "#{session_id}\t#{client_name}"
+                "list-clients", "-F", "#{session_id} #{client_name}"
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -1742,7 +1761,7 @@ def _detach_session_clients(session_id: str) -> None:
         ) from exc
     names: list[str] = []
     for row in rows:
-        fields = row.split("\t", 1)
+        fields = row.split(" ", 1)
         if len(fields) != 2 or fields[0] != session_id:
             continue
         name = fields[1]
@@ -1959,11 +1978,11 @@ def _remote_watchdog_tripped(
             "-p",
             "-t",
             session_id,
-            "#{pid}\t#{session_id}",
+            "#{pid} #{session_id}",
         )
     except DisplayServerError:
         raw_identity = ""
-    healthy = raw_identity == f"{expected_server_pid}\t{session_id}"
+    healthy = raw_identity == f"{expected_server_pid} {session_id}"
     if not watchdog.observe(healthy, now):
         return False
     tmux_health.record_incident(
@@ -1996,6 +2015,22 @@ def serve(
             "pyte is required remotely; install railmux[ssh]"
         ) from exc
     pyte = _extended_pyte(pyte)
+
+    try:
+        existing_target = tmux_server.discover_target(timeout=2.0)
+    except tmux_server.TmuxServerError as exc:
+        raise DisplayServerError(
+            "the selected tmux cannot inspect the existing Railmux server; "
+            "run 'railmux config' on the remote host"
+        ) from exc
+    if (
+        existing_target is not None
+        and not tmux_server.sync_server_environment(existing_target)
+    ):
+        raise DisplayServerError(
+            "could not apply the configured environment to the existing "
+            "Railmux tmux server; run 'railmux config' on the remote host"
+        )
 
     if replace_existing_client or existing_session_only:
         initial_session_id = _validate_railmux(session)
@@ -2436,11 +2471,35 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         prog="railmux remote-server",
         description="Internal coalesced full-window Railmux display server",
     )
-    parser.add_argument("--protocol", type=int, required=True)
-    parser.add_argument("--session", default="railmux")
-    parser.add_argument("--width", type=int, required=True)
-    parser.add_argument("--height", type=int, required=True)
-    parser.add_argument("--fps", type=float, default=20.0)
+    parser.add_argument(
+        "--protocol",
+        type=int,
+        required=True,
+        help="private display protocol version expected by the local client",
+    )
+    parser.add_argument(
+        "--session",
+        default="railmux",
+        help="managed remote tmux session name (default: railmux)",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        required=True,
+        help="local terminal width in columns (40-1000)",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        required=True,
+        help="local terminal height in rows (12-500)",
+    )
+    parser.add_argument(
+        "--fps",
+        type=float,
+        default=20.0,
+        help="maximum coalesced display update rate, 1-60 (default: 20)",
+    )
     parser.add_argument(
         "--replace-existing-client",
         action="store_true",
@@ -2462,8 +2521,44 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    effective_argv = list(sys.argv[1:] if argv is None else argv)
+    if any(value in {"-h", "--help"} for value in effective_argv):
+        # Help is ordinary CLI output, not a transport handshake. In
+        # particular, do not print REMOTE_HELLO_PREFIX before argparse.
+        parse_args(effective_argv)
+        return 0
+    config: Config | None = None
+    config_error: ConfigError | None = None
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        config_error = exc
+    tmux_available: bool | None = None
+    if config is not None:
+        locale_valid, _locale_detail = check_utf8_locale(config.locale)
+        if not locale_valid:
+            config_error = ConfigError("configured locale is unavailable or not UTF-8")
+            config = None
+    if config is not None:
+        if config.tmux_binary != "tmux":
+            tmux_available = check_executable(
+                "tmux", config.tmux_binary
+            ).valid
+        if tmux_available is not False:
+            activate_runtime_environment(config)
+        if tmux_available is None:
+            tmux_available = shutil.which("tmux") is not None
     ready = _fast_dependency_ready()
-    _emit_remote_hello(ready)
+    tmux_configured = bool(config is not None and config.tmux_binary != "tmux")
+    if config_error is None and not tmux_configured:
+        _emit_remote_hello(ready)
+    else:
+        _emit_remote_hello(
+            ready,
+            config_status="invalid" if config_error is not None else "valid",
+            tmux_configured=tmux_configured,
+            tmux_available=tmux_available,
+        )
     args = parse_args(argv)
     # Compatibility probes intentionally stop after the hello. Do not emit
     # remote argparse/dependency diagnostics while the local client is asking
@@ -2473,6 +2568,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.protocol != PROTOCOL_VERSION:
         print(
             "fast display server: incompatible client protocol",
+            file=sys.stderr,
+        )
+        return 2
+    if config_error is not None:
+        print(
+            "remote display: Railmux configuration is invalid; run "
+            "'railmux config' on the remote host to repair or reset it",
+            file=sys.stderr,
+        )
+        return 2
+    if tmux_available is False:
+        print(
+            "remote display: the configured tmux executable is unavailable; "
+            "run 'railmux config' on the remote host to correct or reset it",
             file=sys.stderr,
         )
         return 2

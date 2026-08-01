@@ -10,7 +10,7 @@ from railmux.cli import (
     is_ssh_session,
     main,
 )
-from railmux.config import ConfigError
+from railmux.config import Config, ConfigError
 from railmux.tmux_server import TmuxServerTarget
 
 
@@ -119,6 +119,19 @@ def test_doctor_runs_before_tmux_preflight(monkeypatch, tmp_path):
     preflight.assert_not_called()
 
 
+def test_config_runs_before_tmux_preflight(monkeypatch):
+    config_main = MagicMock(return_value=0)
+    preflight = MagicMock(return_value=False)
+    monkeypatch.setattr("railmux.config_cli.main", config_main)
+    monkeypatch.setattr("railmux.cli.ensure_tmux_available", preflight)
+
+    result = main(["config"])
+
+    assert result == 0
+    config_main.assert_called_once_with([])
+    preflight.assert_not_called()
+
+
 def test_doctor_json_is_forwarded_before_tmux_preflight(monkeypatch, tmp_path):
     doctor = MagicMock(return_value=0)
     preflight = MagicMock(return_value=False)
@@ -132,7 +145,7 @@ def test_doctor_json_is_forwarded_before_tmux_preflight(monkeypatch, tmp_path):
     preflight.assert_not_called()
 
 
-def test_doctor_ssh_dispatches_read_only_remote_preflight(monkeypatch):
+def test_doctor_remote_dispatches_read_only_remote_preflight(monkeypatch):
     remote_doctor = MagicMock(return_value=2)
     preflight = MagicMock(return_value=False)
     monkeypatch.setattr(
@@ -143,7 +156,7 @@ def test_doctor_ssh_dispatches_read_only_remote_preflight(monkeypatch):
 
     result = main([
         "doctor",
-        "--ssh",
+        "--remote",
         "example",
         "--ssh-arg=-J",
         "--ssh-arg=jump",
@@ -157,6 +170,124 @@ def test_doctor_ssh_dispatches_read_only_remote_preflight(monkeypatch):
         json_output=True,
     )
     preflight.assert_not_called()
+
+
+def test_doctor_ssh_accepts_grouped_arguments(monkeypatch):
+    remote_doctor = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.run_remote_ssh_doctor",
+        remote_doctor,
+    )
+
+    result = main([
+        "doctor",
+        "--remote",
+        "example",
+        "--ssh-args=-J jump -p 2222",
+    ])
+
+    assert result == 0
+    remote_doctor.assert_called_once_with(
+        "example",
+        ssh_args=["-J", "jump", "-p", "2222"],
+        json_output=False,
+    )
+
+
+def test_doctor_legacy_ssh_alias_remains_compatible(monkeypatch):
+    remote_doctor = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.run_remote_ssh_doctor",
+        remote_doctor,
+    )
+
+    result = main(["doctor", "--ssh", "example"])
+
+    assert result == 0
+    remote_doctor.assert_called_once_with(
+        "example",
+        ssh_args=[],
+        json_output=False,
+    )
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_doctor_help_hides_legacy_ssh_alias_and_exact_arg(help_flag, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        main(["doctor", help_flag])
+
+    assert stopped.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--remote HOST" in help_text
+    assert "--ssh HOST" not in help_text
+    assert "--ssh-arg VALUE" not in help_text
+    assert "--ssh-args ARGS" in help_text
+    assert "--claude-home" not in help_text
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_root_help_is_public_command_summary_only(help_flag, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        main([help_flag])
+
+    assert stopped.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "railmux ssh HOST" in help_text
+    assert "railmux config" in help_text
+    assert "railmux doctor" in help_text
+    assert "railmux COMMAND --help" in help_text
+    assert "remote-server" not in help_text
+    assert "--inside-tmux" not in help_text
+    assert "--claude-home" not in help_text
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_ssh_help_is_complete_and_side_effect_free(
+    help_flag,
+    monkeypatch,
+    capsys,
+):
+    def unexpected_config_load():
+        raise AssertionError("ssh help must not load configuration")
+
+    monkeypatch.setattr("railmux.cli.load_config", unexpected_config_load)
+
+    with pytest.raises(SystemExit) as stopped:
+        main(["ssh", help_flag])
+
+    assert stopped.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "--session SESSION" in help_text
+    assert "--fps FPS" in help_text
+    assert "--ssh-args ARGS" in help_text
+    assert "--ssh-arg VALUE" not in help_text
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_config_help_is_complete_and_hides_internal_options(help_flag, capsys):
+    assert main(["config", help_flag]) == 0
+
+    help_text = capsys.readouterr().out
+    assert "--remote HOST" in help_text
+    assert "--ssh-args ARGS" in help_text
+    assert "--ssh-arg VALUE" not in help_text
+    assert "--remote-context" not in help_text
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_remote_server_help_has_no_protocol_handshake(help_flag, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        main(["remote-server", help_flag])
+
+    assert stopped.value.code == 0
+    help_text = capsys.readouterr().out
+    assert help_text.startswith("usage: railmux remote-server")
+    assert "--protocol PROTOCOL" in help_text
+    assert "--width WIDTH" in help_text
+    assert "--height HEIGHT" in help_text
+    assert "--replace-existing-client" not in help_text
+    assert "--existing-session-only" not in help_text
+    assert "RAILMUX-REMOTE/" not in help_text
 
 
 def test_legacy_doctor_flag_is_removed():
@@ -187,6 +318,22 @@ def test_ssh_subcommand_dispatches_before_local_tmux_preflight(monkeypatch):
     assert settings.update_policy == "ask"
     ssh_main.assert_called_once_with(["example", "--fps", "30"])
     preflight.assert_not_called()
+
+
+def test_ssh_does_not_require_the_locally_configured_tmux(monkeypatch):
+    monkeypatch.setattr(
+        "railmux.cli.load_config",
+        lambda: Config(tmux_binary="/missing/bin/tmux"),
+    )
+    check = MagicMock()
+    monkeypatch.setattr("railmux.cli.check_executable", check)
+    ssh_main = MagicMock(return_value=0)
+    monkeypatch.setattr("railmux.fast_display_client.main", ssh_main)
+
+    assert main(["ssh", "example"]) == 0
+
+    check.assert_not_called()
+    ssh_main.assert_called_once_with(["example"])
 
 
 def test_remote_server_subcommand_dispatches_to_internal_helper(monkeypatch):

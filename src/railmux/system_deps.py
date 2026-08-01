@@ -135,7 +135,10 @@ def _confirm_install(
 
 
 def ensure_tmux_available(
-    *, stdin: TextIO | None = None, stderr: TextIO | None = None
+    *,
+    stdin: TextIO | None = None,
+    stderr: TextIO | None = None,
+    configured: bool = False,
 ) -> bool:
     """Ensure ``tmux`` is on PATH, optionally installing it with consent.
 
@@ -148,8 +151,20 @@ def ensure_tmux_available(
 
     stdin = sys.stdin if stdin is None else stdin
     stderr = sys.stderr if stderr is None else stderr
+    print(
+        "tmux is required but was not found. If it is installed outside PATH, "
+        "run 'railmux config' and choose Program paths > tmux.",
+        file=stderr,
+    )
+    if configured:
+        print(
+            "A custom tmux executable is configured; Railmux will not install "
+            "a system package over that choice. Reset or correct it with "
+            "'railmux config'.",
+            file=stderr,
+        )
+        return False
     plan = tmux_install_plan()
-    print("tmux is required but was not found on PATH.", file=stderr)
 
     if plan.command is not None and _is_interactive(stdin, stderr):
         try:

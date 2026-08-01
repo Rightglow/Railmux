@@ -17,7 +17,20 @@ from tomlkit.exceptions import TOMLKitError
 
 from railmux.atomic_file import atomic_write_text
 from railmux.config import default_config_path
-from railmux.setting_contracts import choices_for
+from railmux.setting_contracts import bounds_for, choices_for
+
+
+MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
+    "tmux": ("binary",),
+    "claude": ("binary",),
+    "codex": ("binary", "home", "auto_run"),
+    "environment": ("locale",),
+    "ui": ("layout_retention", "layout_profile"),
+    "updates": ("auto_update",),
+    "projects": ("show_empty_projects",),
+    "live": ("poll_interval_ms", "agent_transport"),
+    "ssh": ("history_lines", "claude_history", "path_open"),
+}
 
 
 def _config_path() -> Path:
@@ -155,6 +168,48 @@ class Settings:
         for key, value in values.items():
             section[key] = value
         return self._replace(updated)
+
+    def _remove_keys(self, keys: dict[str, tuple[str, ...]]) -> bool:
+        """Remove only Railmux-owned keys while preserving every unknown key."""
+        updated = self._read_document()
+        if updated is None:
+            return False
+        for section_name, names in keys.items():
+            section = updated.get(section_name)
+            if not isinstance(section, MutableMapping):
+                continue
+            for name in names:
+                section.pop(name, None)
+            if not section:
+                updated.pop(section_name, None)
+        return self._replace(updated)
+
+    def reset_keys(self, keys: dict[str, tuple[str, ...]]) -> bool:
+        return self._remove_keys(keys)
+
+    def reset_all(self) -> bool:
+        return self._remove_keys(MANAGED_CONFIG_KEYS)
+
+    # -- Program paths and locale --------------------------------------
+    def set_program_binary(self, section: str, value: str) -> bool:
+        if section not in {"tmux", "claude", "codex"} or not value.strip():
+            return False
+        return self._update_section(section, {"binary": value})
+
+    def set_locale(self, value: str) -> bool:
+        if not value.strip():
+            return False
+        return self._update_section("environment", {"locale": value})
+
+    def set_ssh_history_lines(self, value: int) -> bool:
+        minimum, maximum = bounds_for("ssh.history_lines")
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not minimum <= value <= maximum
+        ):
+            return False
+        return self._update_section("ssh", {"history_lines": value})
 
     # -- Codex auto-run --------------------------------------------------
     @property

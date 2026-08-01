@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `railmux config`, a tmux-independent two-level editor for persistent
+  behavior, tmux/Claude/Codex executable paths, SSH history capacity, and a
+  scoped UTF-8 locale, with validation plus setting/category/global resets.
+- Add `railmux config --remote HOST` with shared SSH discovery, consent-based
+  user/private-venv setup, a separate cooked PTY, and no tmux attach or query.
+- Add ordered `--ssh-args='...'` groups to `railmux ssh`, remote config, and
+  remote doctor; older exact `--ssh-arg=VALUE` remains hidden compatibility.
+- Standardize remote operations on `config/doctor --remote HOST`; the released
+  `doctor --ssh HOST` remains a hidden compatibility alias until 0.4.0.
+- Report bounded local and remote config, locale, and configured-tmux status in
+  `railmux doctor` and the pre-attach SSH compatibility handshake.
+
+### Fixed
+
+- Keep root help focused on public command discovery, document each
+  subcommand's own options, and hide deprecated compatibility or internal
+  flags from `-h`/`--help` output.
+- Classify tmux client/server version mismatch instead of hiding tmux stderr as
+  an invalid server identity, and keep configured PATH/locale selection
+  consistent for future children of the exact dedicated server without
+  restarting or replacing live sessions.
+- Keep the standalone config editor independent of live tmux-server discovery,
+  and preserve the local-only SSH history capacity during remote config resets.
+- Keep identity and remote-pane format parsing compatible with tmux 2.7 under
+  the `C` locale, where tmux sanitizes tab delimiters in formatted output.
+
 ## [0.2.21.dev202607311] - 2026-07-31
 
 ### Added

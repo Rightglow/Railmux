@@ -1,10 +1,12 @@
 import json
 from io import StringIO
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from railmux.diagnostics import (
     TmuxServerDiagnostic,
     _tool_diagnostic,
+    collect_doctor_snapshot,
     run_doctor,
 )
 from railmux.ssh_display_diagnostics import (
@@ -165,6 +167,27 @@ def test_doctor_reports_missing_tools_and_invalid_config(
     assert "file=absent" not in report
 
 
+def test_doctor_never_falls_back_when_configured_tmux_is_missing(
+    monkeypatch, tmp_path,
+):
+    home = tmp_path / "home"
+    config_dir = home / ".config" / "railmux"
+    config_dir.mkdir(parents=True)
+    config_dir.joinpath("config.toml").write_text(
+        '[tmux]\nbinary = "/missing/bin/tmux"\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    probe = MagicMock()
+    monkeypatch.setattr("railmux.diagnostics._dedicated_tmux_diagnostic", probe)
+    monkeypatch.setattr("railmux.diagnostics._legacy_tmux_diagnostic", probe)
+
+    snapshot = collect_doctor_snapshot(claude_home=home / ".claude")
+
+    assert snapshot.tools["tmux"].status == "missing"
+    assert snapshot.dedicated_tmux.status == "unavailable"
+    probe.assert_not_called()
+
+
 def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
     home = tmp_path / "private-user"
     config_dir = home / ".config" / "railmux"
@@ -239,7 +262,8 @@ def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
     ) == 0
 
     payload = json.loads(output.getvalue())
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
+    assert payload["locale_configured"] is False
     assert set(payload["ssh_display"]) == {
         "age",
         "client_version",
@@ -277,6 +301,7 @@ def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
         "remote-display-watchdog-timeout"
     )
     assert payload["tools"]["claude_code"] == {
+        "configured": True,
         "status": "available",
         "version": "9.8.7",
     }

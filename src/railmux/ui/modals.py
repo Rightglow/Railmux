@@ -813,6 +813,10 @@ class OptionsModal(urwid.WidgetWrap):
                 ("dim", "Settings are saved in "
                  "~/.config/railmux/config.toml")
             ),
+            urwid.Text(
+                ("dim", "For program paths, SSH history capacity, locale, "
+                 "or resets, run railmux config outside the workspace.")
+            ),
         ])
         self._walker = urwid.SimpleFocusListWalker(rows)
         initial_focus = next(

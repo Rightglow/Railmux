@@ -111,3 +111,36 @@ def test_remote_ssh_doctor_treats_same_protocol_version_drift_as_usable(
 
     assert snapshot.status == "ready_with_version_difference"
     assert snapshot.compatible
+
+
+def test_remote_ssh_doctor_reports_invalid_remote_config(monkeypatch):
+    process = MagicMock()
+    monkeypatch.setattr("railmux.ssh_doctor.shutil.which", lambda _name: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        fast_display_client,
+        "build_ssh_argv",
+        lambda *_args, **_kwargs: ["ssh", "host"],
+    )
+    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
+    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", lambda _p: None)
+    monkeypatch.setattr(
+        fast_display_client,
+        "await_remote_startup",
+        lambda _process, timeout: fast_display_client.RemoteStartup(
+            fast_display_client.RemoteStartKind.HELLO,
+            fast_display_client.RemoteHello(
+                __version__,
+                PROTOCOL_VERSION,
+                True,
+                False,
+                "invalid",
+                True,
+            ),
+        ),
+    )
+
+    snapshot = collect_remote_ssh_snapshot("host")
+
+    assert snapshot.status == "config_invalid"
+    assert not snapshot.compatible
+    assert "railmux config" in (snapshot.detail or "")

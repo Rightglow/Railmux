@@ -93,12 +93,15 @@ locally cached SSH display:
 railmux ssh your-server
 ```
 
+For several SSH options, use a single quoted group, for example
+`railmux ssh your-server --ssh-args='-J jump-host -p 2222'`.
+
 The remote needs Python 3.9+ and `tmux`. With permission, the local client can
 install a matching Railmux into the remote user environment; it never uses
 `sudo`. Railmux keeps its managed tmux workspace isolated from your default
 tmux server and never rewrites provider histories under `~/.codex` or
 `~/.claude`. Run `railmux doctor` for a privacy-safe local setup report, or
-`railmux doctor --ssh your-server` for a read-only remote compatibility
+`railmux doctor --remote your-server` for a read-only remote compatibility
 preflight. Multiple
 terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
 for focus and layout limits.
@@ -368,9 +371,34 @@ safely.
 
 ## Configuration
 
-Optional config at `~/.config/railmux/config.toml`:
+Use the standalone editor for normal changes; it does not require tmux to be
+installed or working:
+
+```bash
+railmux config
+# Or edit the configuration owned by an SSH destination:
+railmux config --remote your-server
+```
+
+Use `--ssh-args='-J jump-host -p 2222'` for SSH options. Its contents are
+parsed locally into an argv without executing a shell. Remote editing
+first performs a bounded package/capability probe, then opens a fresh cooked
+SSH PTY for the editor. It never attaches to, creates, resizes, or queries a
+tmux server. If Railmux is absent or too old remotely, installation into the
+remote user environment (and, if needed, Railmux's private SSH venv) requires
+explicit consent and never uses `sudo`.
+
+Choose **Behavior / Options**, **Program paths**, or **Environment**, then the
+specific setting. Every category supports Back, Exit, and a confirmed category
+reset; individual settings can also be reset to their default. The editor
+validates executable paths and UTF-8 locales before saving. It updates the same
+optional `~/.config/railmux/config.toml` used by in-app Options:
 
 ```toml
+[tmux]
+# Command name, or an executable path ending in /tmux (default: "tmux")
+binary = "tmux"
+
 [claude]
 # Path to the claude binary (default: "claude")
 binary = "claude"
@@ -381,6 +409,10 @@ binary = "codex"
 home = "~/.codex"
 # New Codex launches: "always", "ask", or "never" (default: "ask")
 auto_run = "ask"
+
+[environment]
+# "inherit", or an installed UTF-8 locale such as C.UTF-8 / en_US.UTF-8
+locale = "inherit"
 
 [ui]
 # Save custom pane proportions: "always", "ask", or "never"
@@ -415,8 +447,8 @@ Most users should leave `agent_transport` unchanged. Railmux automatically uses
 the compatible `nested` display when the default `swap` mode is not safe for the
 current tmux environment.
 
-This is Railmux's only user settings file. Manual edits and the in-app Options
-screen update the same values that Options exposes; Options preserves comments,
+This is Railmux's only user settings file. Manual edits, `railmux config`, and
+the in-app Options screen share the same authority and preserve comments,
 formatting, order, and unknown keys. The local-only `ssh.history_lines` setting
 is intentionally file/command-line controlled because the remote TUI cannot
 configure the machine that initiated `railmux ssh`. By contrast,
@@ -424,6 +456,22 @@ configure the machine that initiated `railmux ssh`. By contrast,
 exposed in that workspace's Options screen. A one-run Codex choice is kept only in memory. A
 `This time` layout profile is stored here until it is successfully applied on
 the next launch, then removed.
+
+Program and locale changes affect new Railmux-managed processes. They never
+restart, replace, or kill an existing tmux server or running agent. If a newly
+selected tmux client cannot communicate with an existing Railmux server, the
+next launch stops with a bounded compatibility message; run `railmux config`
+to select the matching executable. `railmux doctor` reports configured command
+status and whether the effective locale is UTF-8 without printing custom paths.
+
+For `railmux ssh`, local display settings come from the local config, while
+tmux, provider paths, locale, and in-workspace policies come from the remote
+host's config. Run `railmux config --remote HOST`, or log in and run
+`railmux config`, to change them. The remote editor intentionally hides the
+local-client-only `ssh.history_lines` value and preserves it during category or
+global resets. The compatibility preflight distinguishes an invalid remote config or a
+missing configured tmux from a missing Railmux installation; it never repairs
+either by mutating tmux.
 
 When the default `auto_update = "ask"` finds a newer stable PyPI release,
 Railmux offers **Always**, **This time**, **No**, or **Never** before opening
@@ -443,11 +491,11 @@ railmux doctor
 Use `railmux doctor --json` for the same privacy-safe snapshot in a versioned,
 machine-readable form suitable for issue tooling.
 
-Before connecting, `railmux doctor --ssh your-server` checks SSH reachability,
+Before connecting, `railmux doctor --remote your-server` checks SSH reachability,
 the remote Railmux and protocol versions, the optional SSH display dependency,
-and remote `tmux`. It stops after the compatibility hello: it does not attach,
+remote config status, and remote `tmux`. It stops after the compatibility hello: it does not attach,
 create, resize, replace, install, or upgrade anything. Repeat
-`--ssh-arg=VALUE` when the connection needs options such as a jump host. The
+`--ssh-args='-J jump-host -p 2222'` when the connection needs SSH options. The
 hostname is omitted from both text and JSON output.
 
 The doctor command works even when `tmux` is missing. It reports component versions, terminal capability

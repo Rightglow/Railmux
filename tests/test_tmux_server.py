@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -86,7 +87,7 @@ def test_discover_target_uses_explicit_label_and_times_out(monkeypatch):
         observed["timeout"] = kwargs["timeout"]
         raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
 
-    monkeypatch.setattr(subprocess, "check_output", timeout)
+    monkeypatch.setattr(subprocess, "run", timeout)
 
     with pytest.raises(tmux_server.TmuxServerUnresponsive):
         tmux_server.discover_target(timeout=0.25)
@@ -94,10 +95,44 @@ def test_discover_target_uses_explicit_label_and_times_out(monkeypatch):
     assert observed == {
         "argv": [
             "tmux", "-L", "railmux", "display-message", "-p",
-            "#{socket_path}\t#{pid}",
+            "#{socket_path} #{pid}",
         ],
         "timeout": 0.25,
     }
+
+
+def test_discover_target_classifies_tmux_client_server_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="",
+            stderr="server version is too old for client\n",
+            returncode=0,
+        ),
+    )
+
+    with pytest.raises(
+        tmux_server.TmuxClientServerMismatch, match="railmux config"
+    ):
+        tmux_server.discover_target()
+
+
+def test_discover_target_preserves_spaces_in_socket_path(monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            stdout="/tmp/private socket/railmux 123\n",
+            stderr="",
+            returncode=0,
+        ),
+    )
+
+    assert tmux_server.discover_target() == tmux_server.TmuxServerTarget(
+        "/tmp/private socket/railmux",
+        123,
+    )
 
 
 def test_scoped_target_environment_restores_the_caller(monkeypatch):
@@ -113,13 +148,37 @@ def test_scoped_target_environment_restores_the_caller(monkeypatch):
     assert tmux_server.os.environ["TMUX_PANE"] == "%4"
 
 
+def test_runtime_environment_sync_targets_only_the_proven_server(monkeypatch):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    calls = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: calls.append((argv, kwargs))
+        or SimpleNamespace(returncode=0),
+    )
+
+    assert tmux_server.sync_server_environment(
+        target,
+        {"PATH": "/opt/tmux/bin:/usr/bin", "LANG": "C.UTF-8"},
+    )
+
+    assert calls[0][0] == [
+        "tmux", "-S", "/tmp/private", "set-environment", "-g",
+        "-u", "LC_ALL",
+    ]
+    assert all(call[0][1:3] == ["-S", "/tmp/private"] for call in calls)
+
+
 def test_legacy_discovery_uses_default_label_without_relaxing_socket_label(
     monkeypatch,
 ):
     monkeypatch.setattr(
         subprocess,
-        "check_output",
-        lambda argv, **_kwargs: "/tmp/default\t44\n",
+        "run",
+        lambda argv, **_kwargs: SimpleNamespace(
+            stdout="/tmp/default 44\n", stderr="", returncode=0
+        ),
     )
 
     assert tmux_server.discover_legacy_target() == (
@@ -158,7 +217,7 @@ def test_target_session_id_matches_exact_name_and_server(monkeypatch):
         subprocess,
         "check_output",
         lambda argv, **_kwargs: (
-            "44\tother\t$1\n44\trailmux\t$7\n45\trailmux\t$8\n"
+            "44 $1 other\n44 $7 railmux\n45 $8 railmux\n"
         ),
     )
 
@@ -170,7 +229,7 @@ def test_target_session_id_rejects_ambiguous_or_malformed_output(monkeypatch):
     monkeypatch.setattr(
         subprocess,
         "check_output",
-        lambda argv, **_kwargs: "44\trailmux\t$7\n44\trailmux\t$8\n",
+        lambda argv, **_kwargs: "44 $7 railmux\n44 $8 railmux\n",
     )
 
     assert tmux_server.target_session_id(target, "railmux") is None
@@ -216,8 +275,8 @@ def test_nested_history_source_rejects_changed_server_or_extra_fields(monkeypatc
 def test_target_single_pane_id_requires_one_live_exact_pane(monkeypatch):
     target = tmux_server.TmuxServerTarget("/tmp/default", 44)
     outputs = iter((
-        "44\t$7\t%2\t0\n",
-        "44\t$7\t%2\t0\n44\t$7\t%3\t0\n",
+        "44 $7 %2 0\n",
+        "44 $7 %2 0\n44 $7 %3 0\n",
     ))
     monkeypatch.setattr(
         subprocess, "check_output", lambda *_args, **_kwargs: next(outputs))

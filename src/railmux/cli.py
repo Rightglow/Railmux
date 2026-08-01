@@ -6,15 +6,22 @@ import subprocess
 import sys
 import termios
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from railmux import __version__
 from railmux.config import ConfigError, default_config_path, load_config
 from railmux.diagnostics import is_ssh_session, run_doctor
 from railmux.pane_surface import render_startup_surface
+from railmux.runtime_config import (
+    activate_runtime_environment,
+    check_executable,
+    check_utf8_locale,
+)
 from railmux import tmux_health
 from railmux import tmux_server
 from railmux.system_deps import ensure_tmux_available
+from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
 
 
 def _show_startup_message() -> None:
@@ -146,7 +153,37 @@ def _run_tmux_client_with_watchdog(
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args and raw_args[0] == "config":
+        from railmux.config_cli import main as config_main
+
+        return config_main(raw_args[1:])
     if raw_args and raw_args[0] == "ssh":
+        from railmux.fast_display_client import main as ssh_main
+
+        # Help is configuration- and side-effect-free even when the user's
+        # config, locale, tmux, or update state currently needs repair.
+        if any(value in {"-h", "--help"} for value in raw_args[1:]):
+            return ssh_main(raw_args[1:])
+        try:
+            config = load_config()
+        except ConfigError as exc:
+            print(
+                f"error: Railmux configuration is invalid: {exc}; "
+                "run 'railmux config' to repair or reset it",
+                file=sys.stderr,
+            )
+            return 2
+        locale_valid, locale_detail = check_utf8_locale(config.locale)
+        if not locale_valid:
+            print(
+                f"error: configured locale is unusable: {locale_detail}; run "
+                "'railmux config' to correct or reset it",
+                file=sys.stderr,
+            )
+            return 2
+        # The local latest-state client does not use local tmux. Only local
+        # locale applies here; the remote helper reads its own tmux setting.
+        activate_runtime_environment(replace(config, tmux_binary="tmux"))
         # The SSH client is a user-facing launcher too. Check the local
         # installation before connecting so an accepted upgrade can restart
         # the exact ``railmux ssh ...`` command on the new version.
@@ -154,7 +191,6 @@ def main(argv: list[str] | None = None) -> int:
         from railmux.settings import Settings
         maybe_upgrade_before_launch(raw_args, Settings())
 
-        from railmux.fast_display_client import main as ssh_main
         return ssh_main(raw_args[1:])
     if raw_args and raw_args[0] == "remote-server":
         from railmux.fast_display_server import main as remote_server_main
@@ -162,38 +198,62 @@ def main(argv: list[str] | None = None) -> int:
     if raw_args and raw_args[0] == "doctor":
         doctor_parser = argparse.ArgumentParser(
             prog="railmux doctor",
-            description="Print privacy-safe Railmux diagnostics and exit",
+            description=(
+                "Print privacy-safe local diagnostics, or use --remote for a "
+                "read-only SSH compatibility preflight"
+            ),
         )
         doctor_parser.add_argument(
             "--claude-home",
             default=str(Path.home() / ".claude"),
-            help="Override ~/.claude location (testing)",
+            help=argparse.SUPPRESS,
         )
         doctor_parser.add_argument(
             "--json",
             action="store_true",
             help="print the versioned privacy-safe diagnostic snapshot as JSON",
         )
-        doctor_parser.add_argument(
-            "--ssh",
+        remote_group = doctor_parser.add_mutually_exclusive_group()
+        remote_group.add_argument(
+            "--remote",
+            dest="remote",
             metavar="HOST",
             help=(
                 "run a read-only remote SSH compatibility preflight; "
                 "the host is omitted from output"
             ),
         )
+        # Deprecated compatibility for the released v0.2.x CLI. Remove this
+        # alias when Railmux 0.4.0 is developed; --remote is authoritative.
+        remote_group.add_argument(
+            "--ssh",
+            dest="remote",
+            metavar="HOST",
+            help=argparse.SUPPRESS,
+        )
         doctor_parser.add_argument(
             "--ssh-arg",
-            action="append",
+            action=AppendSshArgument,
+            dest="ssh_arg",
             default=[],
-            help="extra ssh argument for --ssh; repeat and use --ssh-arg=VALUE",
+            metavar="VALUE",
+            help=argparse.SUPPRESS,
+        )
+        doctor_parser.add_argument(
+            "--ssh-args",
+            action=ExtendSshArguments,
+            dest="ssh_arg",
+            metavar="ARGS",
+            help="a quoted group of ssh arguments for --remote",
         )
         doctor_args = doctor_parser.parse_args(raw_args[1:])
-        if doctor_args.ssh:
+        if doctor_args.ssh_arg and not doctor_args.remote:
+            doctor_parser.error("--ssh-args requires --remote")
+        if doctor_args.remote:
             from railmux.ssh_doctor import run_remote_ssh_doctor
 
             return run_remote_ssh_doctor(
-                doctor_args.ssh,
+                doctor_args.remote,
                 ssh_args=doctor_args.ssh_arg,
                 json_output=doctor_args.json,
             )
@@ -205,20 +265,41 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="railmux",
         usage=(
-            "railmux [OPTIONS] | railmux doctor [OPTIONS] | "
-            "railmux ssh HOST [OPTIONS]"
+            "railmux [OPTIONS]\n"
+            "       railmux ssh HOST [OPTIONS]\n"
+            "       railmux config [--remote HOST] [OPTIONS]\n"
+            "       railmux doctor [--remote HOST] [OPTIONS]"
         ),
         description="Terminal workspace for Claude Code and Codex sessions",
         epilog=(
-            "Commands: railmux doctor (diagnostics); railmux ssh HOST "
-            "(fast remote display). "
-            "The remote-server command is an internal transport entry point."
+            "Commands:\n"
+            "  railmux ssh HOST       responsive remote workspace\n"
+            "  railmux config         edit local settings\n"
+            "  railmux config --remote HOST\n"
+            "                         edit settings on an SSH destination\n"
+            "  railmux doctor         inspect the local installation\n"
+            "  railmux doctor --remote HOST\n"
+            "                         inspect remote compatibility\n\n"
+            "Run 'railmux COMMAND --help' for command-specific options."
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"railmux {__version__}")
-    parser.add_argument("--project", help="Launch focused on a single project path")
-    parser.add_argument("--claude-home", default=str(Path.home() / ".claude"), help="Override ~/.claude location (testing)")
-    parser.add_argument("--inside-tmux", action="store_true", help="Internal: skip the auto-tmux-launch step")
+    parser.add_argument(
+        "--project",
+        metavar="PATH",
+        help="open with this project path selected",
+    )
+    parser.add_argument(
+        "--claude-home",
+        default=str(Path.home() / ".claude"),
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--inside-tmux",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     scroll_group = parser.add_mutually_exclusive_group()
     scroll_group.add_argument(
         "--scroll-coalescing",
@@ -235,10 +316,48 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(raw_args)
 
+    try:
+        config = load_config()
+    except ConfigError as exc:
+        path = default_config_path()
+        try:
+            display_path = f"~/{path.relative_to(Path.home()).as_posix()}"
+        except ValueError:
+            display_path = "the Railmux configuration file"
+        print(
+            f"error: {display_path}: {exc}; run 'railmux config' to repair "
+            "or reset it",
+            file=sys.stderr,
+        )
+        return 2
+    locale_valid, locale_detail = check_utf8_locale(config.locale)
+    if not locale_valid:
+        print(
+            f"error: configured locale is unusable: {locale_detail}; run "
+            "'railmux config' to correct or reset it",
+            file=sys.stderr,
+        )
+        return 2
+    if config.tmux_binary != "tmux":
+        tmux_check = check_executable("tmux", config.tmux_binary)
+        if not tmux_check.valid:
+            print(
+                f"error: configured tmux is unusable: {tmux_check.error}; run "
+                "'railmux config' to correct or reset it",
+                file=sys.stderr,
+            )
+            return 2
+    activate_runtime_environment(config)
+
     # tmux is required even when TMUX is already set: an inherited TMUX value
     # with no tmux binary on PATH otherwise enters a TUI whose controls cannot
     # work. Keep this preflight ahead of every TUI startup path.
-    if not ensure_tmux_available():
+    tmux_available = (
+        ensure_tmux_available(configured=True)
+        if config.tmux_binary != "tmux"
+        else ensure_tmux_available()
+    )
+    if not tmux_available:
         return 2
 
     try:
@@ -256,6 +375,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    if (
+        dedicated_target is not None
+        and not tmux_server.sync_server_environment(dedicated_target)
+    ):
+        print(
+            "warning: the existing Railmux tmux server did not accept the "
+            "configured runtime environment; run 'railmux doctor' or "
+            "'railmux config' before starting new agents",
+            file=sys.stderr,
+        )
 
     if args.inside_tmux and not on_dedicated_server:
         print(
@@ -304,18 +434,8 @@ def main(argv: list[str] | None = None) -> int:
             expected_session_id=dedicated_session_id,
         )
 
-    # Inside tmux now.
-    try:
-        config = load_config()
-    except ConfigError as exc:
-        path = default_config_path()
-        try:
-            display_path = f"~/{path.relative_to(Path.home()).as_posix()}"
-        except ValueError:
-            display_path = "the Railmux configuration file"
-        print(f"error: {display_path}: {exc}", file=sys.stderr)
-        return 2
-    # App construction performs bounded initial provider/tmux discovery before
+    # Inside tmux now. App construction performs bounded initial provider/tmux
+    # discovery before
     # Urwid can paint its first frame. A tiny terminal-native surface prevents
     # that interval from looking like a hung empty tmux pane.
     _show_startup_message()

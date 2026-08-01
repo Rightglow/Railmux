@@ -62,6 +62,34 @@ def _mock_check_call():
     return patch("subprocess.check_call")
 
 
+def test_tmux_version_uses_server_authority_inside_tmux(monkeypatch):
+    monkeypatch.setenv("TMUX", "/private/socket,123,0")
+    tmux_ctl.tmux_version.cache_clear()
+    with patch.object(
+        tmux_ctl.subprocess,
+        "check_output",
+        return_value="2.7\n",
+    ) as check:
+        assert tmux_ctl.tmux_version() == (2, 7)
+
+    assert check.call_args.args[0] == [
+        "tmux", "display-message", "-p", "#{version}",
+    ]
+
+
+def test_tmux_version_uses_client_authority_outside_tmux(monkeypatch):
+    monkeypatch.delenv("TMUX", raising=False)
+    tmux_ctl.tmux_version.cache_clear()
+    with patch.object(
+        tmux_ctl.subprocess,
+        "check_output",
+        return_value="tmux 3.4\n",
+    ) as check:
+        assert tmux_ctl.tmux_version() == (3, 4)
+
+    assert check.call_args.args[0] == ["tmux", "-V"]
+
+
 def test_clipboard_adds_override_when_missing():
     with _mock_check_output(""), _mock_check_call() as call:
         enable_clipboard_passthrough()
@@ -554,6 +582,15 @@ def test_root_function_forwarding_captures_custom_and_unbound_originals():
          patch("railmux.tmux_ctl.read_root_function_bindings",
                return_value=owned):
         assert tmux_ctl.prepare_root_function_bindings() is None
+
+
+def test_run_shell_uses_the_explicit_configured_tmux(monkeypatch):
+    monkeypatch.setenv("RAILMUX_TMUX_BINARY", "/opt/tmux 3/bin/tmux")
+
+    with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 4)):
+        command = tmux_ctl._select_pane_preserving_zoom_shell("%7")
+
+    assert command == "'/opt/tmux 3/bin/tmux' select-pane -Z -t %7"
 
 
 def test_root_function_forwarding_scopes_and_preserves_fallbacks():

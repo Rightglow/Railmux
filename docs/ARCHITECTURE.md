@@ -298,6 +298,67 @@ invocation, persistent Claude history applies to the next remote history
 refresh (and subsequent connections), and the remaining saved policies apply
 only at their documented launch/exit boundary.
 
+The standalone cooked-mode `railmux config` editor is another view of this same
+TOML authority and dispatches before the tmux dependency check, so a broken or
+missing tmux path cannot prevent its own repair. Category and setting resets
+remove only declared Railmux keys and preserve unknown tables; malformed TOML
+is replaced only after explicit consent and a sibling backup. Persistent menus
+never store action-local `This time` choices. Program values remain argv-only:
+the editor checks executability with a bounded version probe and never accepts
+shell fragments. It never discovers or queries a tmux server while editing;
+server/client compatibility is enforced at the next ordinary launch. Claude
+and Codex use their configured executable directly.
+
+`railmux config --remote HOST` uses a versioned remote-config capability that
+is independent of the binary display protocol. Phase one reuses the bounded
+remote executable/bootstrap ladder over `ssh -T`, reads one compatibility
+hello, and terminates without sending the display start token. It may run only
+bounded executable/version checks; it never discovers, creates, attaches,
+resizes, detaches, or kills tmux. A missing/older remote package can be
+installed only with the same user/private-venv consent boundaries as
+`railmux ssh`. Phase two is a fresh `ssh -tt` process invoking the discovered
+entry point's cooked `config --remote-context` command. The remote context
+hides and preserves `ssh.history_lines`, which belongs to the initiating local
+display client, while retaining remote-workspace Claude history and clicked
+path policies. Public SSH-facing commands use grouped `--ssh-args` values with
+one ordered argv authority across both phases. Group parsing uses bounded
+POSIX quoting locally and never invokes a shell. The released singular
+`--ssh-arg` remains a hidden exact-argv compatibility input.
+
+The tmux executable is a process-wide authority. An absolute override must keep
+the conventional `tmux` basename; Railmux prepends only its directory for
+Python calls and embeds that argv-only executable into generated tmux
+run-shell helpers, so the two paths cannot select different clients. After an
+existing dedicated server is identity-validated, Railmux synchronizes only the
+standard locale variables for future server children through the exact socket.
+Existing panes and providers are never restarted. A
+client/server protocol mismatch fails closed, preserves every session, and
+directs the user to `railmux config`; stderr is classified into bounded error
+categories rather than exposed raw.
+Feature gates inside tmux query the proven server's `#{version}` rather than
+the selected client's `tmux -V`. The bounded cache key includes the inherited
+tmux socket/PID authority and configured client, so changing either cannot
+reuse capabilities from another server lifecycle. Outside tmux, where there is
+no proven server, the selected client's version remains the only available
+preflight authority.
+Identity-critical formats use printable, positionally parsed separators for
+the tmux 2.7 floor: tmux 2.7 under `LC_ALL=C` rewrites literal tab delimiters
+to underscores. Fixed identifiers are placed before any final free-form field,
+and every parser fails closed on count, type, or identity mismatch.
+
+Railmux does not expose arbitrary environment dictionaries. The optional
+locale setting is `inherit` or one validated installed UTF-8 locale and applies
+only to Railmux-owned future processes. Direct launch and the SSH remote helper
+validate it before touching tmux. The SSH hello carries only bounded config
+validity and configured-tmux booleans, allowing the local client and
+`doctor --remote` to distinguish remote configuration repair from package or
+system-tmux installation without disclosing paths or environment values.
+
+Remote subcommands use `--remote HOST` as their public destination spelling.
+The released `doctor --ssh HOST` spelling is a hidden compatibility alias only;
+remove it when Railmux 0.4.0 is developed. It must not appear in help or new
+documentation before then.
+
 The three lists use horizontal labelled rules instead of independent boxes, so
 adjacent section borders do not consume duplicate terminal rows. The sidebar is
 deliberately flat: it has no decorative outer vertical rails, leaving the outer

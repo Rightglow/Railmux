@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from railmux.config import Config
 from railmux.fast_display_protocol import (
     ClipboardCopy,
     ClaudeHistoryPolicyResult,
@@ -27,6 +28,7 @@ from railmux.fast_display_protocol import (
     PathOpenResult,
     PathResult,
     PROTOCOL_VERSION,
+    REMOTE_CONFIG_PROTOCOL,
     REMOTE_ATTACH_ACCEPTED,
     REMOTE_ATTACH_BUSY,
     REMOTE_HELLO_PREFIX,
@@ -4086,6 +4088,13 @@ def test_remote_hello_is_strictly_bounded_and_typed():
     )
 
     assert hello == RemoteHello("1.2.3", 6, True)
+    configured = parse_remote_hello(
+        REMOTE_HELLO_PREFIX
+        + b'{"config_status":"invalid","protocol":6,"ready":true,'
+        b'"tmux":false,"tmux_configured":true,"version":"1.2.3"}\n'
+    )
+    assert configured.config_status == "invalid"
+    assert configured.tmux_configured is True
     with pytest.raises(ValueError):
         parse_remote_hello(
             REMOTE_HELLO_PREFIX + b'{"protocol":true,"ready":true,"tmux":true,'
@@ -4380,6 +4389,25 @@ def test_reconnect_window_outlives_the_remote_half_open_lease():
         fast_display_client._RECONNECT_WINDOW
         > fast_display_server._CLIENT_LEASE_TIMEOUT
     )
+
+
+def test_ssh_parser_accepts_ordered_exact_and_grouped_arguments():
+    args = parse_client_args([
+        "server",
+        "--ssh-arg=-F",
+        "--ssh-args=config -J jump -p 2222",
+        "--ssh-arg=ProxyCommand=ssh -W %h:%p gateway",
+    ])
+
+    assert args.ssh_arg == [
+        "-F",
+        "config",
+        "-J",
+        "jump",
+        "-p",
+        "2222",
+        "ProxyCommand=ssh -W %h:%p gateway",
+    ]
 
 
 def test_reconnect_attach_forces_noninteractive_bounded_ssh(monkeypatch):
@@ -5468,7 +5496,12 @@ def test_remote_server_hello_reports_version_protocol_and_dependency(monkeypatch
     fast_display_server._emit_remote_hello(True)
 
     hello = parse_remote_hello(output.getvalue())
-    assert hello == RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True)
+    assert hello == RemoteHello(
+        fast_display_client.__version__,
+        PROTOCOL_VERSION,
+        True,
+        config_protocol=REMOTE_CONFIG_PROTOCOL,
+    )
 
 
 def test_remote_server_waits_for_exact_start_confirmation(monkeypatch):
@@ -5507,6 +5540,40 @@ def test_remote_server_missing_dependency_never_touches_tmux(monkeypatch):
 
     assert result == 2
     emit.assert_called_once_with(False)
+    socket_label.assert_not_called()
+
+
+def test_remote_server_reports_missing_configured_tmux_without_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        fast_display_server,
+        "load_config",
+        lambda: Config(tmux_binary="/missing/bin/tmux"),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "check_executable",
+        lambda *_args, **_kwargs: MagicMock(valid=False),
+    )
+    monkeypatch.setattr(fast_display_server, "_fast_dependency_ready", lambda: True)
+    emit = MagicMock()
+    monkeypatch.setattr(fast_display_server, "_emit_remote_hello", emit)
+    monkeypatch.setattr(fast_display_server, "_await_client_start", lambda: True)
+    socket_label = MagicMock()
+    monkeypatch.setattr(fast_display_server.tmux_server, "socket_label", socket_label)
+
+    result = fast_display_server.main(
+        ["--protocol", str(PROTOCOL_VERSION), "--width", "80", "--height", "24"]
+    )
+
+    assert result == 2
+    emit.assert_called_once_with(
+        True,
+        config_status="valid",
+        tmux_configured=True,
+        tmux_available=False,
+    )
     socket_label.assert_not_called()
 
 
@@ -5825,7 +5892,7 @@ def test_display_lock_reports_busy_without_unlinking_live_owner(
 
 
 def test_attach_confirmation_matches_exact_child_pid(monkeypatch):
-    rows = iter(("$4\t998\n", "$4\t123\n"))
+    rows = iter(("$4 998\n", "$4 123\n"))
     monkeypatch.setattr(
         fast_display_server.subprocess,
         "check_output",
@@ -5839,7 +5906,7 @@ def test_attach_confirmation_matches_exact_child_pid(monkeypatch):
 
 def test_compact_resize_preparation_waits_for_exact_controller_ack(monkeypatch):
     outputs = iter((
-        "180\t40\t3\t%8",
+        "180 40 3 %8",
         "ready:0011223344556677:105:20",
     ))
     monkeypatch.setattr(
@@ -5874,7 +5941,7 @@ def test_compact_resize_preparation_times_out_fail_open(monkeypatch):
     monkeypatch.setattr(
         fast_display_server,
         "_compact_tmux_output",
-        lambda *_args: "180\t40\t3\t%8",
+        lambda *_args: "180 40 3 %8",
     )
     set_option = MagicMock(return_value=True)
     clear = MagicMock()
@@ -6106,8 +6173,8 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
-            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t\t\t\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0   \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1   \n"
         ),
     )
 
@@ -6139,8 +6206,8 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
-            f"$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t\t\t{marker}\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0   \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}\n"
         ),
     )
 
@@ -6154,18 +6221,18 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
     ("rows", "expected"),
     [
         (
-            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\t\n"
-            "$4\t@1\t1\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\t\n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0   \n"
+            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0   \n",
             (),
         ),
         (
-            "$4\t@1\t1\t0\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
-            "$4\t@1\t1\t1\t%8\t108\t0\t0\t80\t24\t0\t0\t0\t\t\t\n",
+            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0   \n"
+            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0   \n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4\t@1\t1\t1\t%1\t101\t0\t0\t80\t24\t0\t0\t0\t\t\t\n"
-            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t0\t\t\t\n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0   \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0   \n",
             (),
         ),
     ],
@@ -6189,9 +6256,9 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            "$4\t@1\t0\t1\t%1\t101\t0\t0\t30\t20\t0\t0\t0\t\t\t\n"
-            "$4\t@1\t0\t0\t%8\t108\t31\t0\t49\t20\t0\t0\t1\t"
-            '{"source":1}\t\t\n'
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0   \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1 "
+            '{"source":1}  \n'
         ),
     )
     monkeypatch.setattr(

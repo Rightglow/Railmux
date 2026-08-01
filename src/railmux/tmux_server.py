@@ -32,6 +32,10 @@ class TmuxServerUnresponsive(TmuxServerError):
     """The dedicated tmux socket exists but did not answer promptly."""
 
 
+class TmuxClientServerMismatch(TmuxServerError):
+    """The selected tmux client cannot communicate with the live server."""
+
+
 @dataclass(frozen=True)
 class TmuxServerTarget:
     socket_path: str
@@ -55,32 +59,67 @@ def target_argv(target: TmuxServerTarget, *args: str) -> list[str]:
 
 
 def _discover_label_target(
-    label: str, *, timeout: float,
+    label: str,
+    *,
+    timeout: float,
+    env: Mapping[str, str] | None = None,
 ) -> TmuxServerTarget | None:
     """Resolve *label* without allowing the caller's ``TMUX`` to redirect it."""
     try:
-        raw = subprocess.check_output(
+        result = subprocess.run(
             ["tmux", "-L", label, "display-message", "-p",
-             "#{socket_path}\t#{pid}"],
-            stderr=subprocess.DEVNULL,
+             "#{socket_path} #{pid}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
-        ).strip()
+            check=False,
+            env=None if env is None else dict(env),
+        )
     except subprocess.TimeoutExpired as exc:
         raise TmuxServerUnresponsive(
-            f"the tmux server '{label}' is not responding"
+            f"the tmux server '{label}' is not responding; run 'railmux "
+            "doctor' for diagnostics or 'railmux config' to check the "
+            "selected tmux"
         ) from exc
-    except (OSError, subprocess.CalledProcessError):
+    except OSError:
         return None
-    fields = raw.split("\t", 1)
+    stderr = result.stderr.strip().lower()
+    mismatch = (
+        "server version is too old for client" in stderr
+        or "client version is too old for server" in stderr
+        or "protocol version mismatch" in stderr
+    )
+    if mismatch:
+        raise TmuxClientServerMismatch(
+            "the selected tmux client is incompatible with the existing "
+            "Railmux tmux server; choose a matching executable with 'railmux "
+            "config' (existing sessions were left untouched)"
+        )
+    if result.returncode != 0:
+        return None
+    raw = result.stdout.strip()
+    # tmux 2.7 under the C locale sanitizes a literal tab in formatted output
+    # to ``_``. A final ASCII space remains stable; split from the right so a
+    # valid socket path containing spaces is preserved verbatim.
+    fields = raw.rsplit(" ", 1)
     if len(fields) != 2 or not fields[0]:
-        raise TmuxServerError("tmux returned an invalid server identity")
+        raise TmuxServerError(
+            "tmux returned an invalid server identity; run 'railmux doctor' "
+            "for diagnostics or 'railmux config' to check the selected tmux"
+        )
     try:
         server_pid = int(fields[1])
     except ValueError as exc:
-        raise TmuxServerError("tmux returned an invalid server identity") from exc
+        raise TmuxServerError(
+            "tmux returned an invalid server identity; run 'railmux doctor' "
+            "for diagnostics or 'railmux config' to check the selected tmux"
+        ) from exc
     if server_pid <= 0:
-        raise TmuxServerError("tmux returned an invalid server identity")
+        raise TmuxServerError(
+            "tmux returned an invalid server identity; run 'railmux doctor' "
+            "for diagnostics or 'railmux config' to check the selected tmux"
+        )
     return TmuxServerTarget(fields[0], server_pid)
 
 
@@ -138,18 +177,29 @@ def current_target(
     return TmuxServerTarget(fields[0], server_pid)
 
 
-def discover_target(*, timeout: float = 2.0) -> TmuxServerTarget | None:
+def discover_target(
+    *,
+    timeout: float = 2.0,
+    env: Mapping[str, str] | None = None,
+) -> TmuxServerTarget | None:
     """Resolve the live dedicated server without starting a new server."""
-    return _discover_label_target(socket_label(), timeout=timeout)
+    return _discover_label_target(socket_label(env), timeout=timeout, env=env)
 
 
-def discover_legacy_target(*, timeout: float = 1.0) -> TmuxServerTarget | None:
+def discover_legacy_target(
+    *,
+    timeout: float = 1.0,
+    env: Mapping[str, str] | None = None,
+) -> TmuxServerTarget | None:
     """Resolve tmux's historical ``default`` server without starting it."""
-    return _discover_label_target("default", timeout=timeout)
+    return _discover_label_target("default", timeout=timeout, env=env)
 
 
 def target_is_live(
-    target: TmuxServerTarget, *, timeout: float = 1.0,
+    target: TmuxServerTarget,
+    *,
+    timeout: float = 1.0,
+    env: Mapping[str, str] | None = None,
 ) -> bool:
     """Revalidate an immutable server identity through its exact socket."""
     try:
@@ -158,6 +208,7 @@ def target_is_live(
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=timeout,
+            env=None if env is None else dict(env),
         ).strip()
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
@@ -177,7 +228,7 @@ def target_has_session(
         raw = subprocess.check_output(
             target_argv(
                 target, "display-message", "-t", session_id, "-p",
-                "#{pid}\t#{session_id}",
+                "#{pid} #{session_id}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -185,7 +236,7 @@ def target_has_session(
         ).strip()
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return False
-    return raw == f"{target.server_pid}\t{session_id}"
+    return raw == f"{target.server_pid} {session_id}"
 
 
 def target_session_id(
@@ -201,7 +252,7 @@ def target_session_id(
         output = subprocess.check_output(
             target_argv(
                 target, "list-sessions", "-F",
-                "#{pid}\t#{session_name}\t#{session_id}",
+                "#{pid} #{session_id} #{session_name}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -211,10 +262,14 @@ def target_session_id(
         return None
     matches: list[str] = []
     for line in output.splitlines():
-        fields = line.split("\t", 2)
-        if len(fields) != 3 or fields[:2] != [str(target.server_pid), session_name]:
+        fields = line.split(" ", 2)
+        if (
+            len(fields) != 3
+            or fields[0] != str(target.server_pid)
+            or fields[2] != session_name
+        ):
             continue
-        session_id = fields[2]
+        session_id = fields[1]
         if session_id.startswith("$") and session_id[1:].isdigit():
             matches.append(session_id)
     return matches[0] if len(matches) == 1 else None
@@ -398,7 +453,7 @@ def target_single_pane_id(
         output = subprocess.check_output(
             target_argv(
                 target, "list-panes", "-s", "-t", session_id, "-F",
-                "#{pid}\t#{session_id}\t#{pane_id}\t#{pane_dead}",
+                "#{pid} #{session_id} #{pane_id} #{pane_dead}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -408,7 +463,7 @@ def target_single_pane_id(
         return None
     panes: list[str] = []
     for line in output.splitlines():
-        fields = line.split("\t")
+        fields = line.split(" ")
         if len(fields) != 4 or fields[:2] != [str(target.server_pid), session_id]:
             return None
         pane_id, dead = fields[2:]
@@ -468,6 +523,38 @@ def exec_environment(
     result.pop("TMUX", None)
     result.pop("TMUX_PANE", None)
     return result
+
+
+def sync_server_environment(
+    target: TmuxServerTarget,
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout: float = 1.0,
+) -> bool:
+    """Synchronize the bounded runtime environment on one proven server.
+
+    Existing provider processes are intentionally untouched. This affects only
+    future panes and tmux run-shell helpers on Railmux's dedicated server.
+    """
+    source = os.environ if env is None else env
+    for name in ("LC_ALL", "LC_CTYPE", "LANG"):
+        value = source.get(name)
+        argv = target_argv(target, "set-environment", "-g")
+        if value is None:
+            argv.extend(["-u", name])
+        else:
+            argv.extend([name, value])
+        try:
+            subprocess.run(
+                argv,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout,
+                check=True,
+            )
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return False
+    return True
 
 
 @contextmanager

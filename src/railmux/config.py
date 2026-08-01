@@ -1,13 +1,15 @@
 """Load railmux configuration from TOML with sensible defaults."""
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.9-3.10
     import tomli as tomllib
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
 
 from railmux.setting_contracts import (
     SSH_HISTORY_DEFAULT_LINES,
@@ -24,8 +26,10 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True)
 class Config:
+    tmux_binary: str = "tmux"
     claude_binary: str = "claude"
     codex_binary: str = "codex"
+    locale: str = "inherit"
     codex_home: str = "~/.codex"
     poll_interval_ms: int = 1000
     agent_transport: str = "swap"
@@ -68,6 +72,37 @@ def _string(table: dict[str, Any], key: str, default: str, label: str) -> str:
     return value
 
 
+def _command(table: dict[str, Any], key: str, default: str, label: str) -> str:
+    value = _string(table, key, default, label)
+    if any(character in value for character in ("\0", "\r", "\n")):
+        raise ConfigError(f"{label} must be one executable name or path")
+    return value
+
+
+_LOCALE_RE = re.compile(r"[A-Za-z0-9_.@-]{1,128}\Z")
+
+
+def _locale(table: dict[str, Any]) -> str:
+    value = table.get("locale", "inherit")
+    if (
+        not isinstance(value, str)
+        or not _LOCALE_RE.fullmatch(value)
+    ):
+        raise ConfigError(
+            "environment.locale must be 'inherit' or a locale name"
+        )
+    return value
+
+
+def _tmux_binary(table: dict[str, Any]) -> str:
+    value = _command(table, "binary", "tmux", "tmux.binary")
+    if value != "tmux" and ("/" not in value or Path(value).name != "tmux"):
+        raise ConfigError(
+            "tmux.binary must be 'tmux' or an executable path ending in /tmux"
+        )
+    return value
+
+
 def load_config(config_path: Path | None = None) -> Config:
     if config_path is None:
         config_path = default_config_path()
@@ -82,8 +117,10 @@ def load_config(config_path: Path | None = None) -> Config:
     except OSError as exc:
         raise ConfigError("configuration file could not be read") from exc
 
+    tmux = _table(data, "tmux")
     claude = _table(data, "claude")
     codex = _table(data, "codex")
+    environment = _table(data, "environment")
     live = _table(data, "live")
     projects = _table(data, "projects")
     ssh = _table(data, "ssh")
@@ -133,9 +170,11 @@ def load_config(config_path: Path | None = None) -> Config:
         )
 
     return Config(
-        claude_binary=_string(
+        tmux_binary=_tmux_binary(tmux),
+        claude_binary=_command(
             claude, "binary", "claude", "claude.binary"),
-        codex_binary=_string(codex, "binary", "codex", "codex.binary"),
+        codex_binary=_command(codex, "binary", "codex", "codex.binary"),
+        locale=_locale(environment),
         codex_home=_string(codex, "home", "~/.codex", "codex.home"),
         poll_interval_ms=poll_interval_ms,
         agent_transport=agent_transport,

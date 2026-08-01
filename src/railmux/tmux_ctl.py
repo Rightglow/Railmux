@@ -19,6 +19,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+from railmux.runtime_config import TMUX_BINARY_ENV
+
 
 @dataclass(frozen=True)
 class ServerSnapshot:
@@ -84,17 +86,47 @@ def has_tmux() -> bool:
     return shutil.which("tmux") is not None
 
 
-@lru_cache(maxsize=1)
-def tmux_version() -> tuple[int, int]:
-    """Return the installed tmux (major, minor) version, or (0, 0) if unknown."""
+@lru_cache(maxsize=8)
+def _tmux_version_for_authority(
+    authority: tuple[str, str],
+) -> tuple[int, int]:
+    """Resolve one client/server authority without crossing cache identities."""
+    inside_server = bool(authority[0])
+    argv = (
+        ["tmux", "display-message", "-p", "#{version}"]
+        if inside_server
+        else ["tmux", "-V"]
+    )
     try:
         out = subprocess.check_output(
-            ["tmux", "-V"], stderr=subprocess.DEVNULL
-        ).decode()
-    except (subprocess.CalledProcessError, FileNotFoundError):
+            argv,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2.0,
+        )
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        UnicodeError,
+    ):
         return (0, 0)
     m = re.search(r"(\d+)\.(\d+)", out)
     return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def tmux_version() -> tuple[int, int]:
+    """Return the effective tmux server/client version, failing closed."""
+    authority = (
+        os.environ.get("TMUX", ""),
+        os.environ.get(TMUX_BINARY_ENV, "tmux"),
+    )
+    return _tmux_version_for_authority(authority)
+
+
+# Preserve the established test/repair hook while the cache itself is keyed by
+# the effective authority instead of one process-global client version.
+tmux_version.cache_clear = _tmux_version_for_authority.cache_clear  # type: ignore[attr-defined]
 
 
 def enable_clipboard_passthrough() -> None:
@@ -1631,10 +1663,16 @@ def status_action_range(action: str, content: str) -> str:
     return f"#[range=user|{action}]{content}#[norange]"
 
 
+def _tmux_shell_executable() -> str:
+    """Return the configured tmux for commands evaluated by run-shell."""
+    return shlex.quote(os.environ.get(TMUX_BINARY_ENV, "tmux"))
+
+
 def _select_pane_preserving_zoom_shell(target: str) -> str:
     """Return shell source selecting *target* without losing window zoom."""
+    tmux = _tmux_shell_executable()
     if tmux_version() >= (3, 1):
-        return f"tmux select-pane -Z -t {shlex.quote(target)}"
+        return f"{tmux} select-pane -Z -t {shlex.quote(target)}"
     quoted = shlex.quote(target)
     # select-pane before 3.1 has no -Z and switching to a different pane
     # unzooms the window. tmux 2.7 briefly reports a stale zoomed flag after
@@ -1642,14 +1680,14 @@ def _select_pane_preserving_zoom_shell(target: str) -> str:
     # Prefix-Tab always changes pane; when the pre-select window was zoomed,
     # reapply zoom unconditionally to the newly selected explicit target.
     zoom_probe = (
-        f"tmux display-message -p -t {quoted} "
+        f"{tmux} display-message -p -t {quoted} "
         "'#{window_zoomed_flag}'"
     )
     return (
         f"railmux_was_zoomed=$({zoom_probe}); "
-        f"tmux select-pane -t {quoted} || exit; "
+        f"{tmux} select-pane -t {quoted} || exit; "
         'if [ "$railmux_was_zoomed" = 1 ]; then '
-        f"tmux resize-pane -Z -t {quoted}; fi"
+        f"{tmux} resize-pane -Z -t {quoted}; fi"
     )
 
 
@@ -2016,7 +2054,7 @@ def set_root_function_forwarding(
             # start of a comment and reduce this to ``send-keys -t``.  Let
             # run-shell expand the quoted format before invoking tmux again.
             forward = (
-                'run-shell "tmux send-keys -t '
+                f'run-shell "{_tmux_shell_executable()} send-keys -t '
                 f"'#{{@railmux_controller_pane}}' {key}"
                 '"'
             )
@@ -2275,12 +2313,13 @@ def set_root_status_click_forwarding(
         )
         dispatch = (
             'run-shell "case \'#{mouse_status_range}\' in '
-            '%*) tmux select-pane -Z -t \'#{mouse_status_range}\' ;; '
-            f'{STATUS_ACTION_MODE}) tmux send-keys -t '
+            f'%*) {_tmux_shell_executable()} select-pane -Z -t '
+            "'#{mouse_status_range}' ;; "
+            f'{STATUS_ACTION_MODE}) {_tmux_shell_executable()} send-keys -t '
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F5 ;; '
-            f'{STATUS_ACTION_LAYOUT}) tmux send-keys -t '
+            f'{STATUS_ACTION_LAYOUT}) {_tmux_shell_executable()} send-keys -t '
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F7 ;; '
-            f'{STATUS_ACTION_COPY}) tmux send-keys -t '
+            f'{STATUS_ACTION_COPY}) {_tmux_shell_executable()} send-keys -t '
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F6 ;; '
             'esac"'
         )

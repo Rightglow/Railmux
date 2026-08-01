@@ -100,7 +100,7 @@ product capability.
 | W09 | Detach one view, Soft Quit shared UI, and confirmed hard quit | Supported | Supported | Soft Quit leaves provider sessions alive; views of one UI are not independent workspaces. |
 | W10 | Soft restart and exact workspace/session recovery | Supported | Supported | Ambiguous identity becomes visible unresolved state rather than a guessed binding. |
 | W11 | Multiple attached terminals | Conditional | Conditional | Shared focus/layout and tmux `smallest` geometry; simultaneous input can interfere. |
-| W12 | Config file and in-product subset of persistent options | Supported | Supported | Options apply immediately where documented; one-time confirmations stay action-local. |
+| W12 | Shared config file, standalone editor, and in-product persistent Options | Supported | Supported | `railmux config` works without tmux, validates program/locale overrides, and edits the same remote or local TOML authority; one-time confirmations stay action-local. |
 | W13 | Local and remote privacy-safe diagnostics | Supported | Supported | `doctor --json` and text share one redacted snapshot authority. |
 | W14 | Dedicated tmux watchdog and incident reporting | Supported | Supported | A client may exit after repeated failures but never kills/restarts tmux or a provider. |
 
@@ -108,7 +108,7 @@ product capability.
 
 | ID | Capability | Status | Important boundary |
 |---|---|---|---|
-| S01 | Pre-attach package/protocol/tmux compatibility handshake | Supported | Runs before tmux lookup, creation, lock, PTY allocation, or attach. |
+| S01 | Pre-attach package/protocol/config/tmux compatibility handshake | Supported | Runs before tmux lookup, creation, lock, PTY allocation, or attach; invalid remote config and configured-tmux failures remain distinct. |
 | S02 | Consent-based remote user install or private venv repair | Supported | Exact compatible package; never `sudo`, system package installation, or shell-profile edits. |
 | S03 | Consent-based local upgrade when remote is newer | Supported on POSIX local runtimes | Re-execs only after the same interpreter imports the requested version. |
 | S04 | Immediate restoring surface and bounded startup stages | Supported | First validated keyframe replaces it; setup prompts remain cooked-mode. |
@@ -127,6 +127,7 @@ product capability.
 | S17 | Bracketed paste and terminal focus-event projection | Supported | Only allowlisted modes cross the display protocol; modes are restored on every exit path. |
 | S18 | Termux soft-keyboard projection, touch recovery, and prompt cursor | Field-validated | Android-specific behavior is entered only from Termux environment evidence. |
 | S19 | Emergency local `Ctrl-]`, normal tmux detach, and lifecycle exit classification | Supported | Local escape never becomes provider input. |
+| S20 | Consent-based `railmux config --remote HOST` | Supported on POSIX local runtimes | Two SSH phases; the probe never sends the display start token or touches a tmux server, and the cooked editor preserves local-only history capacity. |
 
 ## Terminal emulator validation
 

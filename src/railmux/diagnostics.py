@@ -15,6 +15,7 @@ from typing import TextIO
 from railmux import __version__
 from railmux import legacy_sessions, tmux_health, tmux_server
 from railmux.config import Config, ConfigError, default_config_path, load_config
+from railmux.runtime_config import normalized_command, runtime_environment
 from railmux.ssh_display_diagnostics import (
     SshDisplayDiagnostic,
     read_diagnostic as read_ssh_display_diagnostic,
@@ -24,13 +25,14 @@ from railmux.ssh_display_diagnostics import (
 _VERSION_RE = re.compile(
     r"(?<![A-Za-z0-9])v?(\d+(?:\.\d+){1,3}(?:[A-Za-z]|[-+][0-9A-Za-z.-]+)?)"
 )
-DOCTOR_SCHEMA_VERSION = 2
+DOCTOR_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
 class ToolDiagnostic:
     status: str
     version: str | None = None
+    configured: bool = False
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,8 @@ class DoctorSnapshot:
     ssh_transport: bool
     terminal_256_colour: bool
     terminal_true_colour: bool
+    locale_utf8: bool
+    locale_configured: bool
     config: ConfigDiagnostic
     preferred_agent_display: str
     data_directories: dict[str, DirectoryDiagnostic]
@@ -110,31 +114,44 @@ def _display_path(path: Path) -> str:
     return "~" if not relative.parts else f"~/{relative.as_posix()}"
 
 
-def _tool_diagnostic(binary: str, *version_args: str) -> ToolDiagnostic:
+def _tool_diagnostic(
+    binary: str,
+    *version_args: str,
+    environ: dict[str, str] | None = None,
+    configured: bool = False,
+) -> ToolDiagnostic:
     """Return a bounded tool status without retaining configured commands."""
     try:
-        found = shutil.which(binary)
+        command = normalized_command(binary)
+        search_path = None if environ is None else environ.get("PATH")
+        found = (
+            shutil.which(command)
+            if search_path is None
+            else shutil.which(command, path=search_path)
+        )
     except (OSError, TypeError):
         found = None
     if found is None:
-        return ToolDiagnostic("missing")
+        return ToolDiagnostic("missing", configured=configured)
     try:
         result = subprocess.run(
-            [binary, *(version_args or ("--version",))],
+            [found, *(version_args or ("--version",))],
+            env=environ,
             capture_output=True,
             text=True,
             timeout=3,
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return ToolDiagnostic("timeout")
+        return ToolDiagnostic("timeout", configured=configured)
     except OSError:
-        return ToolDiagnostic("unavailable")
+        return ToolDiagnostic("unavailable", configured=configured)
     text = f"{result.stdout}\n{result.stderr}"
     match = _VERSION_RE.search(text)
     return ToolDiagnostic(
         "available" if match else "unavailable",
         match.group(1) if match else None,
+        configured,
     )
 
 
@@ -161,12 +178,22 @@ def _terminal_diagnostic(environ: dict[str, str]) -> tuple[bool, bool]:
     return colours_256, truecolour
 
 
-def _dedicated_tmux_diagnostic() -> TmuxServerDiagnostic:
+def _dedicated_tmux_diagnostic(
+    environ: dict[str, str] | None = None,
+) -> TmuxServerDiagnostic:
     """Return a bounded health result without exposing the socket pathname."""
-    if shutil.which("tmux") is None:
+    search_path = None if environ is None else environ.get("PATH")
+    found = (
+        shutil.which("tmux")
+        if search_path is None
+        else shutil.which("tmux", path=search_path)
+    )
+    if found is None:
         return TmuxServerDiagnostic("unavailable")
     try:
-        target = tmux_server.discover_target(timeout=1.0)
+        target = tmux_server.discover_target(timeout=1.0, env=environ)
+    except tmux_server.TmuxClientServerMismatch:
+        return TmuxServerDiagnostic("client_server_mismatch")
     except tmux_server.TmuxServerUnresponsive:
         return TmuxServerDiagnostic("unresponsive")
     except tmux_server.TmuxServerError:
@@ -181,9 +208,12 @@ def _dedicated_tmux_diagnostic() -> TmuxServerDiagnostic:
     return TmuxServerDiagnostic("healthy", context=context)
 
 
-def _legacy_tmux_diagnostic() -> TmuxServerDiagnostic:
+def _legacy_tmux_diagnostic(
+    environ: dict[str, str] | None = None,
+) -> TmuxServerDiagnostic:
     """Report only a bounded count; never expose session names or paths."""
-    target, sessions, complete = legacy_sessions.discover(timeout=1.0)
+    target, sessions, complete = legacy_sessions.discover(
+        timeout=1.0, env=environ)
     if not complete:
         return TmuxServerDiagnostic("unavailable")
     if target is None:
@@ -247,26 +277,77 @@ def collect_doctor_snapshot(
             status="absent",
         )
 
+    effective_env = runtime_environment(config, env)
     colours_256, truecolour = _terminal_diagnostic(env)
+    locale_name = effective_env.get("LC_ALL") or effective_env.get("LC_CTYPE") or ""
+    locale_utf8 = "UTF-8" in locale_name.upper() or "UTF8" in locale_name.upper()
+    if not locale_utf8:
+        try:
+            locale_probe = subprocess.run(
+                ["locale", "charmap"],
+                env=effective_env,
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired, UnicodeError):
+            pass
+        else:
+            locale_utf8 = (
+                locale_probe.returncode == 0
+                and locale_probe.stdout.strip().upper().replace("-", "") == "UTF8"
+            )
+    tools = {
+        "tmux": _tool_diagnostic(
+            config.tmux_binary, "-V", environ=effective_env,
+            configured=config.tmux_binary != "tmux"),
+        "claude_code": _tool_diagnostic(
+            config.claude_binary, environ=effective_env,
+            configured=config.claude_binary != "claude"),
+        "codex": _tool_diagnostic(
+            config.codex_binary, environ=effective_env,
+            configured=config.codex_binary != "codex"),
+    }
+    configured_tmux_missing = (
+        config.tmux_binary != "tmux"
+        and tools["tmux"].status == "missing"
+    )
+    dedicated_tmux = (
+        TmuxServerDiagnostic("unavailable")
+        if configured_tmux_missing
+        else (
+            _dedicated_tmux_diagnostic(effective_env)
+            if config.tmux_binary != "tmux"
+            else _dedicated_tmux_diagnostic()
+        )
+    )
+    legacy_tmux = (
+        TmuxServerDiagnostic("unavailable")
+        if configured_tmux_missing
+        else (
+            _legacy_tmux_diagnostic(effective_env)
+            if config.tmux_binary != "tmux"
+            else _legacy_tmux_diagnostic()
+        )
+    )
     return DoctorSnapshot(
         schema_version=DOCTOR_SCHEMA_VERSION,
         railmux_version=__version__,
         python_version=platform.python_version(),
         platform_system=platform.system() or "unknown",
         platform_machine=platform.machine() or "unknown",
-        tools={
-            "tmux": _tool_diagnostic("tmux", "-V"),
-            "claude_code": _tool_diagnostic(config.claude_binary),
-            "codex": _tool_diagnostic(config.codex_binary),
-        },
-        dedicated_tmux=_dedicated_tmux_diagnostic(),
-        legacy_tmux=_legacy_tmux_diagnostic(),
+        tools=tools,
+        dedicated_tmux=dedicated_tmux,
+        legacy_tmux=legacy_tmux,
         watchdog_enabled=True,
         last_tmux_incident=_last_tmux_incident_diagnostic(),
         inside_tmux=bool(env.get("TMUX")),
         ssh_transport=is_ssh_session(env),
         terminal_256_colour=colours_256,
         terminal_true_colour=truecolour,
+        locale_utf8=locale_utf8,
+        locale_configured=config.locale != "inherit",
         config=config_diagnostic,
         preferred_agent_display=config.agent_transport,
         data_directories={
@@ -280,13 +361,14 @@ def collect_doctor_snapshot(
 
 
 def _tool_text(diagnostic: ToolDiagnostic) -> str:
+    suffix = " (configured; manage with 'railmux config')" if diagnostic.configured else ""
     if diagnostic.status == "missing":
-        return "not found"
+        return "not found" + suffix
     if diagnostic.version is not None:
-        return diagnostic.version
+        return diagnostic.version + suffix
     if diagnostic.status == "timeout":
-        return "available (version timed out)"
-    return "available (version unavailable)"
+        return "available (version timed out)" + suffix
+    return "available (version unavailable)" + suffix
 
 
 def _dedicated_tmux_text(diagnostic: TmuxServerDiagnostic) -> str:
@@ -296,6 +378,8 @@ def _dedicated_tmux_text(diagnostic: TmuxServerDiagnostic) -> str:
         return "unresponsive (watchdog will not kill or restart it)"
     if diagnostic.status == "configuration_error":
         return "configuration error"
+    if diagnostic.status == "client_server_mismatch":
+        return "selected client is incompatible with the existing server"
     if diagnostic.status == "not_running":
         return "not running"
     context = (
@@ -412,7 +496,13 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
             f"256-colour={_yes_no(snapshot.terminal_256_colour)}, "
             f"true-colour={_yes_no(snapshot.terminal_true_colour)}"
         ),
+        (
+            "Locale: UTF-8="
+            f"{_yes_no(snapshot.locale_utf8)}, source="
+            f"{'configured' if snapshot.locale_configured else 'inherited'}"
+        ),
         f"Config: {_config_text(snapshot.config)}",
+        "Settings repair: run 'railmux config' (no tmux required)",
         f"Preferred agent display: {snapshot.preferred_agent_display}",
         (
             "Most recent railmux ssh (host not recorded): "

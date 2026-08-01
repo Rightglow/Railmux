@@ -12,6 +12,7 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 from railmux import tmux_server
 
@@ -29,7 +30,9 @@ class LegacySession:
 
 
 def discover(
-    *, timeout: float = 1.0,
+    *,
+    timeout: float = 1.0,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[
     tmux_server.TmuxServerTarget | None,
     tuple[LegacySession, ...],
@@ -41,7 +44,7 @@ def discover(
     action-time checks still pin both its server PID and immutable session ID.
     """
     try:
-        target = tmux_server.discover_legacy_target(timeout=timeout)
+        target = tmux_server.discover_legacy_target(timeout=timeout, env=env)
     except tmux_server.TmuxServerError:
         return None, (), False
     if target is None:
@@ -57,10 +60,11 @@ def discover(
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=timeout,
+            env=None if env is None else dict(env),
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None, (), False
-    if not tmux_server.target_is_live(target, timeout=timeout):
+    if not tmux_server.target_is_live(target, timeout=timeout, env=env):
         return None, (), False
 
     records: list[LegacySession] = []

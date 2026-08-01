@@ -900,7 +900,7 @@ class App:
         # discover it by getting a cryptic error in the right pane.
         if not tmux_ctl.has_tmux():
             self._set_status(
-                "ERROR: tmux not found on PATH — railmux cannot run without tmux")
+                "ERROR: tmux not found — run railmux config to select its path")
 
         # Three horizontal title rules replace stacked boxes without spending
         # two extra columns on decorative side rails. Sessions receives half
@@ -7382,7 +7382,8 @@ class App:
         if shutil.which(binary) is not None:
             return False
         self._set_status(
-            f"{mode.label} executable not found; install it or configure its binary.",
+            f"{mode.label} executable not found; install it or run railmux "
+            "config to select its path.",
             "warn",
         )
         return True

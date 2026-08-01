@@ -6,7 +6,9 @@ from railmux.config import Config, ConfigError, load_config
 
 def test_load_with_no_file_uses_defaults(tmp_path):
     cfg = load_config(config_path=tmp_path / "does-not-exist.toml")
+    assert cfg.tmux_binary == "tmux"
     assert cfg.claude_binary == "claude"
+    assert cfg.locale == "inherit"
     assert cfg.poll_interval_ms == 1000
     assert cfg.agent_transport == "swap"
     assert cfg.show_empty_projects is False
@@ -22,6 +24,45 @@ def test_load_partial_overrides(tmp_path):
     assert cfg.claude_binary == "/usr/local/bin/claude"
     # Untouched values stay default.
     assert cfg.poll_interval_ms == 1000
+
+
+def test_loads_tmux_and_locale_overrides(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[tmux]\nbinary = "/opt/tmux/bin/tmux"\n'
+        '[environment]\nlocale = "C.UTF-8"\n'
+    )
+
+    config = load_config(config_path=path)
+
+    assert config.tmux_binary == "/opt/tmux/bin/tmux"
+    assert config.locale == "C.UTF-8"
+
+
+@pytest.mark.parametrize("value", ("tmux-3.4", "/opt/bin/tmux-3.4"))
+def test_tmux_override_must_keep_the_tmux_basename(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f'[tmux]\nbinary = "{value}"\n')
+
+    with pytest.raises(ConfigError, match="ending in /tmux"):
+        load_config(config_path=path)
+
+
+def test_program_command_rejects_embedded_newline(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[claude]\nbinary = """claude\nother"""\n')
+
+    with pytest.raises(ConfigError, match="one executable"):
+        load_config(config_path=path)
+
+
+@pytest.mark.parametrize("value", ('""', '"bad locale"', "true", "3"))
+def test_invalid_locale_is_rejected(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[environment]\nlocale = {value}\n")
+
+    with pytest.raises(ConfigError, match="environment.locale"):
+        load_config(config_path=path)
 
 
 def test_load_full_override(tmp_path):

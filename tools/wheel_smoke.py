@@ -107,7 +107,7 @@ def main() -> int:
                 "-c",
                 (
                     "import json, pathlib, railmux, "
-                    "railmux.fast_display_client, pyte; "
+                    "railmux.fast_display_client, railmux.remote_config, pyte; "
                     "print(json.dumps({'version': railmux.__version__, "
                     "'path': str(pathlib.Path(railmux.__file__).resolve())}))"
                 ),
@@ -131,7 +131,7 @@ def main() -> int:
             cwd=root,
             env=env,
         ))
-        if doctor.get("schema_version") != 2:
+        if doctor.get("schema_version") != 3:
             raise RuntimeError("wheel doctor emitted an unexpected schema")
     return 0
 
