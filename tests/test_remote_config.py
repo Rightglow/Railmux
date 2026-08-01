@@ -33,7 +33,7 @@ def test_remote_command_uses_shared_discovery_and_forced_tty():
         force_tty=True,
     )
 
-    assert argv[:5] == ["ssh", "-tt", "-J", "jump", "work"]
+    assert argv[:5] == ["ssh", "-J", "jump", "-tt", "work"]
     assert "remote-server" not in argv[-1]
     assert "config --remote-context" in argv[-1]
     assert "command -v railmux" in argv[-1]
@@ -172,6 +172,6 @@ def test_run_remote_config_launches_cooked_editor(monkeypatch):
     )
 
     assert result == 0
-    assert observed["argv"][:5] == ["ssh", "-tt", "-p", "2222", "work"]
+    assert observed["argv"][:5] == ["ssh", "-p", "2222", "-tt", "work"]
     assert "config --remote-context" in observed["argv"][-1]
     assert observed["check"] is False

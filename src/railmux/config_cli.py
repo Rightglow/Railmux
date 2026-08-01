@@ -529,12 +529,12 @@ def main(
     )
     try:
         args = parser.parse_args([] if argv is None else argv)
+        if args.remote_context and args.remote:
+            parser.error("--remote and --remote-context cannot be combined")
+        if args.ssh_arg and not args.remote:
+            parser.error("--ssh-args requires --remote")
     except SystemExit as exc:
         return int(exc.code)
-    if args.remote_context and args.remote:
-        parser.error("--remote and --remote-context cannot be combined")
-    if args.ssh_arg and not args.remote:
-        parser.error("--ssh-args requires --remote")
     if args.remote:
         from railmux.remote_config import run_remote_config
 

@@ -17,6 +17,7 @@ def _app():
     app._last_workspace_size = None
     app._last_size_class = None
     app._set_status = MagicMock()
+    app._window_is_zoomed = MagicMock(return_value=False)
     return app
 
 

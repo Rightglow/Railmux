@@ -2447,7 +2447,7 @@ class App:
         owner = getattr(self, "_railmux_pane_id", None)
         if (prepared.get("owned_zoom")
                 and owner is not None
-                and self._window_is_zoomed()):
+                and self._window_is_zoomed() is True):
             active = tmux_ctl.active_pane_id(owner)
             if active is not None:
                 tmux_ctl.toggle_pane_zoom(active)
@@ -2513,6 +2513,12 @@ class App:
         active = tmux_ctl.active_pane_id(owner)
         page = self._page_for_active_pane(active)
         was_zoomed = self._window_is_zoomed()
+        if was_zoomed is None:
+            if restored_adaptive:
+                self._enter_adaptive_single_view()
+            tmux_ctl.set_window_user_option(
+                owner, COMPACT_RESIZE_OPTION, response)
+            return
         profile = (
             None if was_zoomed
             else self._capture_layout_profile("always")
@@ -2559,14 +2565,14 @@ class App:
             self._remote_compact_rollback_alarm = self._loop.set_alarm_in(
                 3.0, self._rollback_remote_compact_prepare, token)
 
-    def _window_is_zoomed(self) -> bool:
+    def _window_is_zoomed(self) -> bool | None:
         """Best-effort zoom query scoped to Railmux's current window."""
         pane_id = (
             getattr(self, "_railmux_pane_id", None)
             or self._agent_workspace().primary.pane_id
         )
         if pane_id is None:
-            return False
+            return None
         try:
             import subprocess as _sp
             result = _sp.run(
@@ -2574,9 +2580,12 @@ class App:
                  "-F", "#{window_zoomed_flag}"],
                 stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True,
             )
-            return result.returncode == 0 and result.stdout.strip() == "1"
+            if result.returncode != 0:
+                return None
+            value = result.stdout.strip()
+            return value == "1" if value in {"0", "1"} else None
         except Exception:
-            return False
+            return None
 
     def _zoom_pane(
         self, pane_id: str, *, toggle_if_current: bool = False,
@@ -2585,17 +2594,35 @@ class App:
         owner = getattr(self, "_railmux_pane_id", None) or pane_id
         active = tmux_ctl.active_pane_id(owner)
         zoomed = self._window_is_zoomed()
+        if zoomed is None:
+            return False
         if zoomed and active == pane_id:
             return (
                 tmux_ctl.toggle_pane_zoom(pane_id)
                 if toggle_if_current else True
             )
+        previous_active = active
+        removed_previous_zoom = False
+
+        def restore_previous() -> None:
+            if previous_active is None or previous_active == pane_id:
+                return
+            if not tmux_ctl.select_pane(previous_active):
+                return
+            if removed_previous_zoom:
+                tmux_ctl.toggle_pane_zoom(previous_active)
+
         if zoomed:
             if active is None or not tmux_ctl.toggle_pane_zoom(active):
                 return False
+            removed_previous_zoom = True
         if active != pane_id and not tmux_ctl.select_pane(pane_id):
+            restore_previous()
             return False
-        return tmux_ctl.toggle_pane_zoom(pane_id)
+        if tmux_ctl.toggle_pane_zoom(pane_id):
+            return True
+        restore_previous()
+        return False
 
     def _select_workspace_page(
         self,
@@ -2714,6 +2741,8 @@ class App:
             else:
                 active = tmux_ctl.active_pane_id(owner) if owner else None
                 was_zoomed = self._window_is_zoomed()
+                if was_zoomed is None:
+                    return False
                 captured_profile = (
                     None
                     if was_zoomed
@@ -2755,7 +2784,10 @@ class App:
             return True
 
         # Leaving compact mode must remove only Railmux's current page zoom.
-        if self._window_is_zoomed():
+        zoomed = self._window_is_zoomed()
+        if zoomed is None:
+            return False
+        if zoomed:
             owner = (
                 getattr(self, "_railmux_pane_id", None)
                 or workspace.primary.pane_id
@@ -4818,9 +4850,11 @@ class App:
             active = tmux_ctl.active_pane_id(owner) if owner else None
             was_zoomed = self._window_is_zoomed()
             self._full_sidebar_return_zoom_pane = (
-                active if was_zoomed and active != owner else None)
-            self._full_sidebar_owned_zoom = not (
-                was_zoomed and active == owner)
+                active if was_zoomed is True and active != owner else None)
+            self._full_sidebar_owned_zoom = (
+                was_zoomed is not None
+                and not (was_zoomed and active == owner)
+            )
         # In wide presentation, zooming the sidebar instead of shrinking the
         # agent prevents transcript reflow and history corruption.
         if (workspace.presentation is WorkspacePresentation.WIDE
@@ -4858,7 +4892,7 @@ class App:
         owner = getattr(self, "_railmux_pane_id", None)
         active = tmux_ctl.active_pane_id(owner) if owner else None
         if (owned and owner is not None and active == owner
-                and self._window_is_zoomed()
+                and self._window_is_zoomed() is True
                 and tmux_ctl.toggle_pane_zoom(owner)
                 and return_zoom is not None
                 and tmux_ctl.pane_alive(return_zoom)):
@@ -9522,7 +9556,7 @@ class App:
               is WorkspacePresentation.COMPACT):
             self._apply_tmux_bar(self._tmux_error_bar)
         if (workspace.presentation is WorkspacePresentation.COMPACT
-                and not self._window_is_zoomed()):
+                and self._window_is_zoomed() is False):
             # Retry a transient failed zoom and heal manual/unexpected unzoom;
             # compact presentation is defined by exactly one visible page.
             self._restore_compact_page()

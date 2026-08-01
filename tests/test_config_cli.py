@@ -202,3 +202,13 @@ def test_remote_option_accepts_ordered_grouped_ssh_arguments(monkeypatch):
     assert observed["ssh_args"] == (
         "-F", "config", "-J", "jump", "-p", "2222",
     )
+
+
+def test_remote_only_argument_errors_return_cli_status(capsys):
+    assert main(["--ssh-args=-J jump"]) == 2
+    assert "--ssh-args requires --remote" in capsys.readouterr().err
+
+
+def test_remote_context_conflict_returns_cli_status(capsys):
+    assert main(["--remote", "work", "--remote-context"]) == 2
+    assert "--remote and --remote-context" in capsys.readouterr().err

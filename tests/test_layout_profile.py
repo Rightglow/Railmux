@@ -376,6 +376,73 @@ def test_remote_compact_prepare_rebuilds_adaptive_dual_before_parking(
     app._enter_adaptive_single_view.assert_called_once_with()
 
 
+def test_remote_compact_prepare_fails_closed_when_zoom_state_is_unknown(
+    monkeypatch,
+):
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    app._frame = object()
+    app._loop = MagicMock()
+    app._loop.widget = app._frame
+    app._window_is_zoomed = MagicMock(return_value=None)
+    app._park_compact_hidden_agents = MagicMock()
+    request = "request:0011223344556677:70:20"
+    set_option = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.show_window_user_option",
+        MagicMock(return_value=request),
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_user_option", set_option,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%2",
+    )
+
+    app._handle_remote_compact_prepare()
+
+    app._park_compact_hidden_agents.assert_not_called()
+    set_option.assert_called_once_with(
+        "%1",
+        COMPACT_RESIZE_OPTION,
+        "failed:0011223344556677:70:20",
+    )
+
+
+def test_zoom_query_and_compact_transition_fail_without_layout_mutation(
+    monkeypatch,
+):
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        MagicMock(return_value=MagicMock(returncode=1, stdout="")),
+    )
+
+    assert app._window_is_zoomed() is None
+
+    app._window_is_zoomed = MagicMock(return_value=None)
+    app._select_workspace_page = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%2",
+    )
+    assert app._set_workspace_presentation(
+        WorkspacePresentation.COMPACT,
+    ) is False
+    assert app._workspace.presentation is WorkspacePresentation.WIDE
+    app._select_workspace_page.assert_not_called()
+
+    select = MagicMock(return_value=True)
+    toggle = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.select_pane", select)
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.toggle_pane_zoom", toggle)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%1",
+    )
+    assert app._zoom_pane("%2") is False
+    select.assert_not_called()
+    toggle.assert_not_called()
+
+
 def test_parked_compact_agent_is_not_published_as_tool_owner():
     app = _app(WorkspaceLayout.SIDE_BY_SIDE)
     workspace = app._agent_workspace()
@@ -404,6 +471,19 @@ def test_compact_exit_without_snapshot_restores_safe_dual_ratio(monkeypatch):
     app._restore_transient_layout_profile.assert_called_once_with(
         LayoutProfile("always", "side-by-side", 200, 500))
     assert app._pre_compact_layout_profile is None
+
+
+def test_compact_exit_keeps_presentation_when_zoom_state_is_unknown():
+    app = _app(WorkspaceLayout.SIDE_BY_SIDE)
+    app._workspace.presentation = WorkspacePresentation.COMPACT
+    app._window_is_zoomed = MagicMock(return_value=None)
+    app._restore_transient_layout_profile = MagicMock()
+
+    assert app._set_workspace_presentation(
+        WorkspacePresentation.WIDE,
+    ) is False
+    assert app._workspace.presentation is WorkspacePresentation.COMPACT
+    app._restore_transient_layout_profile.assert_not_called()
 
 
 def test_adaptive_single_view_keeps_secondary_target_attached_in_primary(

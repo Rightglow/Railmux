@@ -7,16 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.21] - 2026-08-01
+
+### Added
+
+- Add `railmux config`, a tmux-independent local and remote configuration
+  editor for persistent behavior, executable paths, SSH history capacity, and
+  locale settings, with validation and scoped reset actions.
+- Add ordered `--ssh-args='...'` groups across `railmux ssh`, remote config,
+  and remote doctor, and standardize the public remote spelling on
+  `config/doctor --remote HOST`.
+- Add a documented product support contract and a required CI job that builds
+  tmux 2.7 from its checksum-pinned official source and exercises Railmux's
+  real private-server integration path.
+
 ### Changed
 
 - Run the interactive `railmux config` editor on a temporary alternate screen,
   restoring the caller's shell and scrollback unchanged on every exit path.
+- Keep root help focused on public command discovery while each subcommand
+  documents its complete interface; deprecated and internal compatibility
+  arguments remain hidden.
+- Refresh the README and product website around everyday session management,
+  mouse/keyboard parity, Mode and Layout controls, remote usage, and clean
+  recorded workflows.
 
 ### Fixed
 
 - Keep automatic SSH reconnect progress visible in Railmux's bottom-right
-  status area while the last frame remains frozen, and bound black-holed
-  display-connection detection with overridable OpenSSH keepalive defaults.
+  status area while the last frame remains frozen, re-anchor display, cursor,
+  and history state after recovery, and bound black-holed connection detection
+  with overridable OpenSSH keepalive defaults.
 - Keep the current modal geometry while replacing quit or layout confirmation
   with exit progress, avoiding a transient mixed-window frame on slow displays.
 - Align the website's More pointer with the real button, remove an unnecessary
@@ -25,6 +46,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Validate compact agent pages against their visible zoomed viewport instead
   of a hidden narrow split, preventing false pane-size errors on phone-sized
   terminals and in the product demo.
+- Preserve an explicit SSH `ConnectTimeout` during automatic reconnect while
+  keeping non-interactive authentication mandatory, and make Railmux's required
+  PTY/no-PTY mode authoritative after user SSH arguments.
+- Fail compact/fullscreen zoom operations closed when tmux cannot report the
+  current zoom state, and restore the prior pane/zoom if a later select or zoom
+  step fails, avoiding ownership guesses or partial fullscreen mutations.
+- Return normal CLI error status from conflicting standalone-config arguments
+  instead of leaking an unexpected `SystemExit` to embedded callers.
+- Preserve the mobile prompt cursor in Termux and resolve and highlight every
+  row of deeply wrapped URLs as one target.
+- Keep Railmux compatible with tmux 2.7's format, binding, locale, and zoom
+  behavior while reporting the tmux 3.0 requirement before managed terminal or
+  Vim panes can be partially created.
+- Classify tmux client/server version mismatches accurately, keep configured
+  PATH and locale selection consistent, and preserve local-only SSH history
+  capacity during remote configuration resets.
 
 ## [0.2.21.dev202608010] - 2026-08-01
 
@@ -1605,7 +1642,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202608010...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.21...HEAD
+[0.2.21]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21
 [0.2.21.dev202608010]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202607311...v0.2.21.dev202608010
 [0.2.21.dev202607311]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21.dev202607311
 [0.2.20]: https://github.com/Rightglow/Railmux/compare/v0.2.19...v0.2.20

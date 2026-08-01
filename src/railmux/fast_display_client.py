@@ -1346,8 +1346,11 @@ def build_remote_command_argv(
     """Build SSH argv through the shared remote Railmux discovery ladder."""
     return [
         "ssh",
-        "-tt" if force_tty else "-T",
         *ssh_args,
+        # Railmux owns RequestTTY because the binary display protocol requires
+        # no PTY while the remote config editor requires one. Keep this after
+        # user arguments so a copied -t/-T flag cannot invert the transport.
+        "-tt" if force_tty else "-T",
         destination,
         _remote_launch_command(remote_args),
     ]
@@ -1446,7 +1449,7 @@ def build_remote_install_argv(
         "else echo 'error: no usable python/pip, python3/pip3, or pip was found' "
         ">&2; exit 127; fi"
     )
-    return ["ssh", "-T", *ssh_args, destination, "; ".join(branches)]
+    return ["ssh", *ssh_args, "-T", destination, "; ".join(branches)]
 
 
 def build_ssh_install_argv(
@@ -1509,7 +1512,7 @@ def build_remote_private_venv_install_argv(
         "else echo 'error: no usable python3 or python was found to create "
         "the private Railmux environment' >&2; exit 127; fi"
     )
-    return ["ssh", "-T", *ssh_args, destination, "; ".join(branches)]
+    return ["ssh", *ssh_args, "-T", destination, "; ".join(branches)]
 
 
 def build_ssh_private_venv_install_argv(
@@ -1766,9 +1769,12 @@ def _reconnect_remote_attach(
         ssh_args = [
             "-o",
             "BatchMode=yes",
+            *ssh_args,
+            # OpenSSH keeps the first scalar -o value. BatchMode is a safety
+            # invariant for raw-mode reconnects, while a user-supplied
+            # ConnectTimeout should remain authoritative.
             "-o",
             f"ConnectTimeout={max(1, int(timeout or 5))}",
-            *ssh_args,
         ]
     argv = build_ssh_argv(
         args.destination,

@@ -73,6 +73,7 @@ from railmux.fast_display_client import (
     ScreenModel,
     TerminalSurface,
     UpdateKind as ClientUpdateKind,
+    build_remote_command_argv,
     build_ssh_argv,
     build_ssh_install_argv,
     build_ssh_private_venv_install_argv,
@@ -3959,13 +3960,13 @@ def test_full_window_ssh_command_uses_railmux_remote_subcommand_and_protocol():
 
     assert argv[:9] == [
         "ssh",
-        "-T",
         "-J",
         "jump",
         "-o",
         "ServerAliveInterval=5",
         "-o",
         "ServerAliveCountMax=3",
+        "-T",
         "server",
     ]
     assert "then exec railmux remote-server" in argv[-1]
@@ -4030,7 +4031,7 @@ def test_remote_install_command_uses_user_pip_then_matching_python_module():
         ssh_args=("-J", "jump"),
     )
 
-    assert argv[:5] == ["ssh", "-T", "-J", "jump", "server"]
+    assert argv[:5] == ["ssh", "-J", "jump", "-T", "server"]
     assert "python3 -m pip --version" in argv[-1]
     assert "python3 -m pip install --user --upgrade" in argv[-1]
     assert "'railmux[ssh]==1.2.3'" in argv[-1]
@@ -4089,7 +4090,7 @@ def test_private_remote_install_creates_managed_venv_without_sudo():
         ssh_args=("-J", "jump"),
     )
 
-    assert argv[:5] == ["ssh", "-T", "-J", "jump", "server"]
+    assert argv[:5] == ["ssh", "-J", "jump", "-T", "server"]
     command = argv[-1]
     assert 'python3 -m venv "$HOME/.local/share/railmux/ssh-venv"' in command
     assert '"$HOME/.local/share/railmux/ssh-venv"/bin/python' in command
@@ -4476,18 +4477,77 @@ def test_reconnect_attach_forces_noninteractive_bounded_ssh(monkeypatch):
     assert selected is process
     assert status is RemoteAttachKind.ACCEPTED
     ssh_args = built.call_args.kwargs["ssh_args"]
-    assert ssh_args[:4] == [
+    assert ssh_args == [
         "-o",
         "BatchMode=yes",
+        "-J",
+        "jump",
         "-o",
         "ConnectTimeout=5",
     ]
-    assert ssh_args[4:] == ["-J", "jump"]
     assert built.call_args.kwargs["replace_existing_client"] is False
     spawn.assert_called_once_with(
         ["ssh", "remote"],
         suppress_stderr=True,
     )
+
+
+def test_reconnect_connect_timeout_keeps_user_first_value(monkeypatch):
+    process = _PreflightProcess()
+    built = MagicMock(return_value=["ssh", "remote"])
+    monkeypatch.setattr(fast_display_client, "build_ssh_argv", built)
+    monkeypatch.setattr(
+        fast_display_client,
+        "_spawn_remote",
+        MagicMock(return_value=process),
+    )
+    monkeypatch.setattr(
+        fast_display_client,
+        "await_remote_startup",
+        lambda *_args, **_kwargs: RemoteStartup(
+            RemoteStartKind.HELLO,
+            RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True),
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_client,
+        "await_remote_attach_status",
+        lambda *_args, **_kwargs: RemoteAttachKind.ACCEPTED,
+    )
+    args = parse_client_args([
+        "server",
+        "--ssh-args=-o ConnectTimeout=30",
+    ])
+
+    fast_display_client._reconnect_remote_attach(
+        args,
+        os.terminal_size((120, 40)),
+        replace_existing_client=False,
+        timeout=5.0,
+        noninteractive=True,
+    )
+
+    ssh_args = built.call_args.kwargs["ssh_args"]
+    assert ssh_args.index("ConnectTimeout=30") < ssh_args.index(
+        "ConnectTimeout=5"
+    )
+
+
+def test_remote_command_keeps_railmux_tty_mode_after_user_flags():
+    binary = build_remote_command_argv(
+        "server",
+        remote_args=("remote-server",),
+        ssh_args=("-t",),
+    )
+    cooked = build_remote_command_argv(
+        "server",
+        remote_args=("config", "--remote-context"),
+        ssh_args=("-T",),
+        force_tty=True,
+    )
+
+    assert binary[:4] == ["ssh", "-t", "-T", "server"]
+    assert cooked[:4] == ["ssh", "-T", "-tt", "server"]
 
 
 def test_local_reconnect_status_is_bounded_to_terminal_bottom_row():

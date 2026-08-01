@@ -227,8 +227,13 @@ also watches local stdin so `Ctrl-]`, `Ctrl-C`, or EOF restores the terminal
 immediately. The full-window SSH argv appends a five-second OpenSSH server-alive
 interval and three-miss limit after user arguments; OpenSSH's first-value
 authority therefore bounds a default network black hole while preserving an
-explicit user override. Only frames painted by the current helper qualify
-another automatic retry. The last valid frame and bounded history cache may remain
+explicit user override. Railmux's protocol-critical `-T` (or remote config's
+`-tt`) follows user SSH arguments so a copied tty flag cannot invert binary or
+cooked transport. Reconnect similarly keeps its safety-critical `BatchMode=yes`
+before user options while placing its bounded `ConnectTimeout` afterward, which
+prevents prompting in raw mode without overriding an explicit user timeout.
+Only frames painted by the current helper qualify another automatic retry. The
+last valid frame and bounded history cache may remain
 painted with a local reconnect status, but their cursor and pointer geometry
 cease to be input authority immediately. A new decoder/model accepts only a
 fresh keyframe; that keyframe removes the reconnect status and refreshes pane

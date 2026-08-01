@@ -334,6 +334,7 @@ def test_fullscreen_uses_actual_focused_secondary(monkeypatch):
     workspace.primary.pane_id = "%2"
     workspace.secondary.pane_id = "%3"
     workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._window_is_zoomed = MagicMock(return_value=False)
     toggled = []
     monkeypatch.setattr(
         "railmux.ui.app.tmux_ctl.active_pane_id", lambda _target: "%3")
@@ -358,6 +359,7 @@ def test_fullscreen_uses_focused_managed_tool(monkeypatch):
         _managed_tool_panes=manager,
     )
     app._get_tool_pane_manager = MagicMock(return_value=manager)
+    app._window_is_zoomed = MagicMock(return_value=False)
     app._sync_target_slot_from_tmux = MagicMock()
     toggled = []
     monkeypatch.setattr(
@@ -371,6 +373,59 @@ def test_fullscreen_uses_focused_managed_tool(monkeypatch):
 
     assert toggled == ["%9"]
     app._sync_target_slot_from_tmux.assert_not_called()
+
+
+def test_zoom_failure_restores_preexisting_focus_and_zoom(monkeypatch):
+    app = _bare_app(_railmux_pane_id="%1")
+    app._window_is_zoomed = MagicMock(return_value=True)
+    active = {"pane": "%2"}
+    selections = []
+    toggles = []
+
+    def select(pane):
+        selections.append(pane)
+        active["pane"] = pane
+        return True
+
+    def toggle(pane):
+        toggles.append(pane)
+        return pane != "%3"
+
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id",
+        lambda _target: active["pane"],
+    )
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.select_pane", select)
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.toggle_pane_zoom", toggle)
+
+    assert app._zoom_pane("%3") is False
+    assert selections == ["%3", "%2"]
+    assert toggles == ["%2", "%3", "%2"]
+    assert active["pane"] == "%2"
+
+
+def test_select_failure_reapplies_preexisting_zoom(monkeypatch):
+    app = _bare_app(_railmux_pane_id="%1")
+    app._window_is_zoomed = MagicMock(return_value=True)
+    selections = []
+    toggles = []
+
+    def select(pane):
+        selections.append(pane)
+        return pane == "%2"
+
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _target: "%2",
+    )
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.select_pane", select)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.toggle_pane_zoom",
+        lambda pane: toggles.append(pane) or True,
+    )
+
+    assert app._zoom_pane("%3") is False
+    assert selections == ["%3", "%2"]
+    assert toggles == ["%2", "%2"]
 
 
 def test_f9_is_noop_in_compact_presentation(monkeypatch):
@@ -494,6 +549,22 @@ def test_full_sidebar_modal_restores_preexisting_agent_zoom(monkeypatch):
 
     app._close_full_sidebar_modal()
     assert toggles == ["%2", "%1", "%1", "%2"]
+
+
+def test_full_sidebar_modal_does_not_claim_unknown_zoom_state(monkeypatch):
+    app = _bare_app(_railmux_pane_id="%1")
+    app._show_overlay = MagicMock()
+    app._window_is_zoomed = MagicMock(return_value=None)
+    app._zoom_pane = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%2",
+    )
+
+    app._open_full_sidebar_modal(MagicMock(), MagicMock())
+
+    assert app._full_sidebar_owned_zoom is False
+    assert app._full_sidebar_return_zoom_pane is None
+    app._zoom_pane.assert_not_called()
 
 
 def test_f9_remains_global_while_modal_is_open():
