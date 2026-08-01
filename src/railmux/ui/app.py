@@ -5243,14 +5243,32 @@ class App:
         self._exit_in_progress = True
         if soft:
             self._soft_quit_flag = True
-        self._close_modal()
-        self._show_overlay(
-            ExitProgressModal(len(self._running), soft=soft),
-            width=44,
-            height=7,
-            fixed_width=True,
-            fixed_height=True,
+        # Keep the current modal's outer geometry while replacing its content.
+        # A quit confirmation or layout-policy prompt can be taller than the
+        # progress modal; swapping to a differently-sized Overlay lets a slow
+        # terminal briefly show the top of one window and the bottom of the
+        # other. Reusing the existing Overlay makes the transition one stable
+        # window while preserving _close_modal's selection cleanup.
+        current_overlay = (
+            self._loop.widget
+            if self._loop is not None
+            and isinstance(self._loop.widget, urwid.Overlay)
+            else None
         )
+        self._close_modal()
+        progress = ExitProgressModal(len(self._running), soft=soft)
+        if current_overlay is not None and self._loop is not None:
+            current_overlay.top_w = progress
+            current_overlay._invalidate()
+            self._loop.widget = current_overlay
+        else:
+            self._show_overlay(
+                progress,
+                width=44,
+                height=7,
+                fixed_width=True,
+                fixed_height=True,
+            )
         if self._loop is not None:
             try:
                 self._loop.draw_screen()
@@ -9592,16 +9610,25 @@ class App:
                 # Hidden panes retain their narrow unzoomed rectangle, which
                 # is not the viewport the user receives when selecting them.
                 return
-        size = tmux_ctl.pane_size(slot.pane_id)
+            # A compact page is tmux-zoomed to the full window.  Its stored
+            # split rectangle can remain narrow (and briefly reports that
+            # value while a page is opening), so it is not authoritative for
+            # the display area the user actually receives.
+            size = self._workspace_size()
+        else:
+            size = tmux_ctl.pane_size(slot.pane_id)
         if size is None:
             return
         width, height = size
-        min_width, min_height = (
-            (40, 12)
-            if workspace.presentation is WorkspacePresentation.COMPACT
-            else self._MINIMUM_AGENT_PANE_SIZE
-        )
-        rec_width, rec_height = self._RECOMMENDED_AGENT_PANE_SIZE
+        if workspace.presentation is WorkspacePresentation.COMPACT:
+            # Compact is a deliberate supported presentation, not a cramped
+            # desktop pane.  Valid compact geometry should not warn merely
+            # because it is below the desktop recommendation.
+            min_width, min_height = self._MINIMUM_TERMINAL_SIZE
+            rec_width, rec_height = self._MINIMUM_TERMINAL_SIZE
+        else:
+            min_width, min_height = self._MINIMUM_AGENT_PANE_SIZE
+            rec_width, rec_height = self._RECOMMENDED_AGENT_PANE_SIZE
         if width < min_width or height < min_height:
             current = "critical"
         elif width < rec_width or height < rec_height:

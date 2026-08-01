@@ -6,6 +6,7 @@ from railmux.ui.app import App, PALETTE
 from railmux.ui.workspace import (
     AgentWorkspace,
     WorkspaceLayout,
+    WorkspacePage,
     WorkspacePresentation,
     presentation_for_geometry,
 )
@@ -207,3 +208,39 @@ def test_agent_pane_warns_after_divider_makes_its_area_too_small(monkeypatch):
     assert slot.last_size_class == "critical"
     assert app._set_status.call_args.args[1] == "error"
     assert app._set_status.call_args.kwargs == {"force": True}
+
+
+def test_compact_agent_uses_visible_workspace_not_hidden_split(monkeypatch):
+    app = _app()
+    workspace = app._agent_workspace()
+    workspace.presentation = WorkspacePresentation.COMPACT
+    workspace.compact_page = WorkspacePage.PRIMARY
+    slot = workspace.primary
+    slot.pane_id = "%9"
+    app._workspace_size = MagicMock(return_value=(46, 38))
+    pane_size = MagicMock(return_value=(32, 37))
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.pane_size", pane_size)
+
+    app._check_agent_slot_size(slot)
+
+    assert slot.last_size == (46, 38)
+    assert slot.last_size_class == "comfortable"
+    app._set_status.assert_not_called()
+    pane_size.assert_not_called()
+
+
+def test_compact_agent_reports_outer_viewport_below_supported_minimum():
+    app = _app()
+    workspace = app._agent_workspace()
+    workspace.presentation = WorkspacePresentation.COMPACT
+    workspace.compact_page = WorkspacePage.PRIMARY
+    slot = workspace.primary
+    slot.pane_id = "%9"
+    app._workspace_size = MagicMock(return_value=(39, 11))
+
+    app._check_agent_slot_size(slot)
+
+    assert slot.last_size == (39, 11)
+    assert slot.last_size_class == "critical"
+    assert "40×12" in app._set_status.call_args.args[0]
+    assert app._set_status.call_args.args[1] == "error"

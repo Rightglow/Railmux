@@ -615,6 +615,10 @@ class TerminalSurface:
         self._last_overlays: tuple[
             tuple[HistorySnapshot, tuple[bytes, ...]], ...
         ] = ()
+        # A disconnected frame is never input authority, but retaining its
+        # status row lets local reconnect feedback use Railmux's normal
+        # status-right placement instead of replacing status-left.
+        self._reconnect_status_screen: AppliedScreen | None = None
         self._awaiting_reconnect_frame = False
         self._startup_detail: str | None = None
         self._local_status_text: str | None = None
@@ -801,7 +805,7 @@ class TerminalSurface:
         safe = self._local_status_text
         level = self._local_status_level
         height = 1 if self.physical_size is None else self.physical_size.lines
-        screen = self._last_screen
+        screen = self._last_screen or self._reconnect_status_screen
         if screen is None:
             if self.physical_size is not None:
                 safe = safe[: self.physical_size.columns]
@@ -1054,6 +1058,7 @@ class TerminalSurface:
             return
         self._reconcile_terminal_modes(TerminalMode.NONE)
         self.clear_local_status()
+        self._reconnect_status_screen = self._last_screen
         self._last_screen = None
         self._last_overlays = ()
         self._awaiting_reconnect_frame = True
@@ -1171,6 +1176,7 @@ class TerminalSurface:
             # not be redrawn after the authoritative keyframe or hide the
             # agent cursor that keyframe restores.
             self.clear_local_status()
+            self._reconnect_status_screen = None
             self._awaiting_reconnect_frame = False
         self.start()
         self._last_screen = screen
@@ -1273,6 +1279,7 @@ class TerminalSurface:
         self.cursor_hidden = False
         self.clear_local_status()
         self._last_screen = None
+        self._reconnect_status_screen = None
         self._last_overlays = ()
         self._awaiting_reconnect_frame = False
         self.active = False
@@ -1368,7 +1375,16 @@ def build_ssh_argv(
     return build_remote_command_argv(
         destination,
         remote_args=server_args,
-        ssh_args=ssh_args,
+        # User arguments come first because OpenSSH keeps the first value for
+        # scalar options.  These display-only defaults bound black-hole
+        # detection without preventing an explicit user override.
+        ssh_args=(
+            *ssh_args,
+            "-o",
+            "ServerAliveInterval=5",
+            "-o",
+            "ServerAliveCountMax=3",
+        ),
     )
 
 

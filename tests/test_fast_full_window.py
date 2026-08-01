@@ -1944,6 +1944,7 @@ def test_reconnect_releases_and_rearms_remote_input_modes():
     assert surface.terminal_modes is TerminalMode.NONE
     assert surface._local_status_text is None
     assert surface._last_screen is None
+    assert surface._reconnect_status_screen is screen
     reconnect_rendered = stream.getvalue()
     assert reconnect_rendered.count(b"\033[?2004l") == 1
     assert reconnect_rendered.count(b"\033[?1004l") == 1
@@ -1952,6 +1953,7 @@ def test_reconnect_releases_and_rearms_remote_input_modes():
     stream.truncate()
     assert surface.paint(screen) is True
     assert surface._local_status_text is None
+    assert surface._reconnect_status_screen is None
 
     rendered = stream.getvalue()
     assert rendered.count(b"\033[?2004h") == 1
@@ -3955,13 +3957,38 @@ def test_full_window_ssh_command_uses_railmux_remote_subcommand_and_protocol():
         ssh_args=("-J", "jump"),
     )
 
-    assert argv[:5] == ["ssh", "-T", "-J", "jump", "server"]
+    assert argv[:9] == [
+        "ssh",
+        "-T",
+        "-J",
+        "jump",
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=3",
+        "server",
+    ]
     assert "then exec railmux remote-server" in argv[-1]
     assert f"--protocol {PROTOCOL_VERSION}" in argv[-1]
     assert "python3 -m railmux remote-server" in argv[-1]
     assert '"$HOME/.local/share/railmux/ssh-venv/bin/python"' in argv[-1]
     assert "--session 'rail mux'" in argv[-1]
     assert "--width 120 --height 40 --fps 20.0" in argv[-1]
+
+
+def test_full_window_ssh_keepalive_defaults_follow_user_overrides():
+    argv = build_ssh_argv(
+        "server",
+        session="railmux",
+        width=120,
+        height=40,
+        fps=20.0,
+        ssh_args=("-o", "ServerAliveInterval=20"),
+    )
+
+    user_interval = argv.index("ServerAliveInterval=20")
+    default_interval = argv.index("ServerAliveInterval=5")
+    assert user_interval < default_interval < argv.index("server")
 
 
 def test_takeover_flag_is_private_remote_server_argument():
@@ -4609,6 +4636,42 @@ def test_local_status_preserves_painted_status_left_and_background():
     assert b"\033[4;21H" in painted
     assert b"\033[48;2;95;175;0m\033[1;38;5;17m\033[K" in painted
     assert b"Copied 12 chars." in painted
+
+
+def test_reconnect_status_uses_retained_status_right_without_stale_cursor():
+    output = io.BytesIO()
+    surface = TerminalSurface(output)
+    surface.set_physical_size(os.terminal_size((40, 4)))
+    screen = AppliedScreen(
+        width=40,
+        height=4,
+        cursor_x=2,
+        cursor_y=2,
+        cursor_visible=True,
+        terminal_modes=TerminalMode.NONE,
+        rows=(
+            b"one",
+            b"two",
+            b"three",
+            b"\033[0;30;48;2;95;175;0m Railmux [R][1][2]                    \033[0m",
+        ),
+        changed_rows=(0, 1, 2, 3),
+        clear=True,
+    )
+    surface.paint(screen)
+    surface.begin_reconnect()
+    output.seek(0)
+    output.truncate()
+
+    surface.show_local_status("Reconnecting (attempt 1)")
+
+    painted = output.getvalue()
+    assert b"\033[4;1H\033[2K" not in painted
+    assert b"\033[4;21H" in painted
+    assert b"\033[48;2;95;175;0m" in painted
+    assert b"Reconnecting (attem" in painted
+    assert painted.endswith(b"\033[0m\033[?25l")
+    assert b"\033[3;3H\033[?25h" not in painted
 
 
 def test_local_status_is_one_clickable_source_and_survives_remote_paint():

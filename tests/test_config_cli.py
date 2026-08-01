@@ -4,10 +4,59 @@ import sys
 import stat
 from io import StringIO
 
+import pytest
+
 from railmux import config_cli
 from railmux.config import load_config
 from railmux.config_cli import main
 from railmux.runtime_config import ExecutableCheck
+
+
+class _TTYStringIO(StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
+def test_interactive_editor_uses_and_restores_alternate_screen(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    output = _TTYStringIO()
+
+    result = main(stdin=_TTYStringIO("q\n"), stdout=output)
+
+    assert result == 0
+    rendered = output.getvalue()
+    assert rendered.startswith("\033[?1049h\033[2J\033[H")
+    assert rendered.endswith("\033[0m\033[?25h\033[?1049l")
+
+
+def test_redirected_editor_does_not_emit_terminal_control_sequences(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    output = StringIO()
+
+    result = main(stdin=StringIO("q\n"), stdout=output)
+
+    assert result == 0
+    assert "\033[" not in output.getvalue()
+
+
+def test_interactive_editor_restores_alternate_screen_after_error(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    output = _TTYStringIO()
+
+    def fail_load():
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(config_cli, "load_config", fail_load)
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        main(stdin=_TTYStringIO(""), stdout=output)
+
+    assert output.getvalue().endswith("\033[0m\033[?25h\033[?1049l")
 
 
 def test_program_menu_validates_and_persists_codex_path(monkeypatch, tmp_path):

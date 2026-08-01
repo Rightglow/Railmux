@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Run the interactive `railmux config` editor on a temporary alternate screen,
+  restoring the caller's shell and scrollback unchanged on every exit path.
+
+### Fixed
+
+- Keep automatic SSH reconnect progress visible in Railmux's bottom-right
+  status area while the last frame remains frozen, and bound black-holed
+  display-connection detection with overridable OpenSSH keepalive defaults.
+- Keep the current modal geometry while replacing quit or layout confirmation
+  with exit progress, avoiding a transient mixed-window frame on slow displays.
+- Align the website's More pointer with the real button, remove an unnecessary
+  sidebar-focus click before switching Running sessions, and publish soft-quit
+  progress as one complete recorded frame.
+- Validate compact agent pages against their visible zoomed viewport instead
+  of a hidden narrow split, preventing false pane-size errors on phone-sized
+  terminals and in the product demo.
+
 ## [0.2.21.dev202608010] - 2026-08-01
 
 ### Added

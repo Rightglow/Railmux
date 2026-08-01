@@ -77,6 +77,11 @@ FORBIDDEN_TRANSCRIPT_FRAGMENTS = (
     b"sk-ant-",
     b"ghp_",
 )
+FORBIDDEN_DEMO_OUTPUT = (
+    b"Agent pane ",
+    b" is too small;",
+    b" may render poorly;",
+)
 
 
 def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
@@ -791,6 +796,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         sent: set[str] = set()
         typed: dict[str, tuple[int, float]] = {}
         controls_exit_frozen = False
+        controls_exit_output = bytearray()
 
         def elapsed() -> float:
             return time.monotonic() - ready_at if ready_at is not None else -1.0
@@ -922,7 +928,6 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "resume-session",
                 "return-sidebar",
                 "launch-second",
-                "return-sidebar-again",
                 "switch-running-agent",
                 "open-context-menu",
                 "context-menu-visible",
@@ -1070,39 +1075,30 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             ),
                         )
                     if "launch-second" in sent:
-                        send_once(
-                            "return-sidebar-again",
-                            12.2,
-                            b"\x02\t",
-                            (
-                                "keymouse|C-b Tab|10|4|See both running sessions"
-                                "|mouse|Click the sidebar"
-                            ),
-                        )
-                    if (
-                        "return-sidebar-again" in sent
-                        and b"RUNNING" in raw_output.upper()
-                    ):
                         cue_once(
                             "switch-running-agent-cue",
-                            13.7,
+                            12.2,
                             "mouse|10|27|Switch to Polish SSH history",
                         )
+                    if (
+                        "launch-second" in sent
+                        and b"RUNNING" in raw_output.upper()
+                    ):
                         send_once(
                             "switch-running-agent",
-                            14.3,
+                            12.8,
                             b"\x1b[<0;10;27M\x1b[<0;10;27m",
                             None,
                         )
                     if "switch-running-agent" in sent:
                         cue_once(
                             "context-menu-cue",
-                            15.6,
+                            14.2,
                             "mouse|10|27|Right-click the running session",
                         )
                         send_once(
                             "open-context-menu",
-                            16.2,
+                            14.8,
                             b"\x1b[<2;10;27M\x1b[<2;10;27m",
                             None,
                         )
@@ -1209,7 +1205,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             6.2,
                             b"+",
                             (
-                                "keymouse|+|48|37|Show Mode, Layout, and Options"
+                                "keymouse|+|30|37|Show Mode, Layout, and Options"
                                 "|mouse|Click More"
                             ),
                         )
@@ -1309,7 +1305,10 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                     )
                     if resized:
                         post_resize_output.extend(chunk)
-                    events.append(_event(cast_time(), "o", chunk))
+                    if profile is CONTROLS and "soft-quit" in sent:
+                        controls_exit_output.extend(chunk)
+                    else:
+                        events.append(_event(cast_time(), "o", chunk))
                     if (
                         profile is DUAL
                         and "launch-secondary" in sent
@@ -1318,12 +1317,16 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         sent.add("secondary-running")
                     if (
                         profile is CONTROLS
-                        and b"Keeping 1 agent session running." in chunk
+                        and b"Keeping 1 agent session" in controls_exit_output
+                        and b"running." in controls_exit_output
                     ):
-                        # Teardown can repaint the outer tmux client a few
-                        # milliseconds later. End on the complete, product-
-                        # native progress surface so viewers can actually read
-                        # the successful soft-quit result.
+                        # A single terminal draw can arrive through the PTY in
+                        # several chunks. Commit the final transition as one
+                        # cast event so a browser animation frame cannot expose
+                        # a half-updated modal that no user could act on.
+                        events.append(
+                            _event(cast_time(), "o", bytes(controls_exit_output))
+                        )
                         controls_exit_frozen = True
                         sanitizer_tail.clear()
                         break
@@ -1374,7 +1377,10 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             )
         if (
             profile is CONTROLS
-            and b"Keeping 1 agent session running." not in raw_output
+            and (
+                b"Keeping 1 agent session" not in raw_output
+                or b"running." not in raw_output
+            )
         ):
             raise RuntimeError(
                 "Railmux controls demo did not reach the soft-quit exit state"
@@ -1408,6 +1414,16 @@ def _record(output: Path, profile: RecordingProfile) -> None:
         final_duration = max(total_duration, last_event_at + 1.0)
         header["duration"] = final_duration
         events.append(_event(final_duration - 0.1, "o", b"\x1b7\x1b8"))
+        if (
+            FORBIDDEN_DEMO_OUTPUT[0] in raw_output
+            and any(
+                fragment in raw_output
+                for fragment in FORBIDDEN_DEMO_OUTPUT[1:]
+            )
+        ):
+            raise RuntimeError(
+                f"{profile.name} demo contains an agent-size warning"
+            )
         output.write_text(
             json.dumps(header, ensure_ascii=False) + "\n" + "\n".join(events) + "\n",
             encoding="utf-8",

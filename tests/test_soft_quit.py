@@ -17,7 +17,7 @@ from railmux import orphan_marker, restart_state, tmux_ctl, tmux_server
 from railmux.modes import CLAUDE_MODE, CODEX_MODE
 from railmux.restart_state import OuterTmuxIdentity
 from railmux.ui.app import App, _Running
-from railmux.ui.modals import QuitConfirmModal
+from railmux.ui.modals import ExitProgressModal, QuitConfirmModal
 from railmux.ui.workspace import (
     AgentWorkspace,
     SlotRestoreState,
@@ -2443,6 +2443,37 @@ def test_begin_exit_paints_progress_before_synchronous_cleanup():
         "fixed_height": True,
     }
     app._teardown_tmux.assert_called_once_with(defer_outer=True)
+
+
+def test_begin_exit_reuses_current_modal_geometry_for_clean_transition():
+    app = _minimal_app()
+    app._exit_in_progress = False
+    app._soft_quit_flag = False
+    app._frame = urwid.SolidFill(" ")
+    previous = urwid.Overlay(
+        urwid.SolidFill("x"),
+        app._frame,
+        align="center",
+        width=56,
+        valign="middle",
+        height=13,
+    )
+    app._loop = MagicMock()
+    app._loop.widget = previous
+    app._close_modal = MagicMock(
+        side_effect=lambda: setattr(app._loop, "widget", app._frame)
+    )
+    app._show_overlay = MagicMock()
+    app._teardown_tmux = MagicMock()
+
+    with pytest.raises(urwid.ExitMainLoop):
+        app._begin_exit(soft=True)
+
+    assert app._loop.widget is previous
+    assert isinstance(previous.top_w, ExitProgressModal)
+    assert previous.width_amount == 56
+    assert previous.height_amount == 13
+    app._show_overlay.assert_not_called()
 
 
 def test_teardown_phases_are_idempotent():

@@ -224,19 +224,25 @@ upgrade, confirmation, or takeover paths and never detaches or kills a tmux
 client, session, pane, or provider. The bounded retry window exceeds the remote
 helper's 45-second half-open lease, while each hello, attach wait, and backoff
 also watches local stdin so `Ctrl-]`, `Ctrl-C`, or EOF restores the terminal
-immediately. Only frames painted by the current helper qualify another
-automatic retry. The last valid frame and bounded history cache may remain
+immediately. The full-window SSH argv appends a five-second OpenSSH server-alive
+interval and three-miss limit after user arguments; OpenSSH's first-value
+authority therefore bounds a default network black hole while preserving an
+explicit user override. Only frames painted by the current helper qualify
+another automatic retry. The last valid frame and bounded history cache may remain
 painted with a local reconnect status, but their cursor and pointer geometry
 cease to be input authority immediately. A new decoder/model accepts only a
 fresh keyframe; that keyframe removes the reconnect status and refreshes pane
 routes, while cached pane content is reusable only after a fresh multi-line
 timeline anchor. Before replacement, the local surface disables the old
 helper's bracketed-paste and focus-event modes so the fresh keyframe must re-arm
-them and can deliver focus-in to the new tmux client. Reconnect status rendering
-must not leave terminal autowrap pending or override the keyframe's final cursor
-state. Non-interactive retry SSH diagnostics never write directly into the
-retained alternate-screen surface; bounded Railmux status remains its only
-reconnect feedback.
+them and can deliver focus-in to the new tmux client. A presentation-only
+reference to the stale status row may survive until that keyframe solely to
+place and colour local reconnect progress in status-right; it never restores
+stale cursor, pointer, or routing authority. Reconnect status rendering must not
+leave terminal autowrap pending or override the keyframe's final cursor state.
+Non-interactive retry SSH diagnostics never write directly into the retained
+alternate-screen surface; bounded Railmux status remains its only reconnect
+feedback.
 
 ## Modes are registered providers, not a boolean
 
@@ -307,7 +313,11 @@ never store action-local `This time` choices. Program values remain argv-only:
 the editor checks executability with a bounded version probe and never accepts
 shell fragments. It never discovers or queries a tmux server while editing;
 server/client compatibility is enforced at the next ordinary launch. Claude
-and Codex use their configured executable directly.
+and Codex use their configured executable directly. When both streams are
+TTYs, the editor owns one alternate-screen lifetime and restores it in a
+`finally` boundary, so menu redraws cannot enter the caller's primary
+scrollback. Help and redirected streams never enter terminal presentation
+mode.
 
 `railmux config --remote HOST` uses a versioned remote-config capability that
 is independent of the binary display protocol. Phase one reuses the bounded
@@ -733,7 +743,10 @@ routing with focus, selection, or history.
   `railmux ssh` controller handshake performs that parking before the helper's
   compact `TIOCSWINSZ`; missing, nested, busy, or older controllers fail open
   to the established resize path and never stop or restart an agent. Compact
-  changes presentation, never the logical layout. Returning wide reapplies the
+  size validation uses the outer zoomed viewport rather than a placeholder's
+  hidden split rectangle; valid 40x12-or-larger compact geometry is not judged
+  against the desktop pane recommendation. Compact changes presentation,
+  never the logical layout. Returning wide reapplies the
   pre-compact proportions (or safe 20% sidebar and 50/50 agent defaults) rather
   than retaining the zoomed page's tmux reflow. Single-agent layout assigns
   about 30% of the outer width to the sidebar; either dual layout assigns about

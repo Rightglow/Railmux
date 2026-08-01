@@ -98,6 +98,7 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[2].cast).toContain("Start an empty session");
   expect(headers[2].cast).not.toContain("Verify responsive layout gates");
   expect(headers[2].cast).toContain("Switch to Polish SSH history");
+  expect(headers[2].cast).not.toContain("See both running sessions");
   expect(headers[2].cast).toContain("Right-click the running session");
   expect(headers[2].cast).toContain("Copy title");
   expect(headers[2].cast).not.toContain('"key|');
@@ -111,9 +112,13 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[3].cast).toContain("touch|2|38|Tap [R] sidebar");
   expect(headers[3].cast).toContain("touch|5|38|Tap [1] agent");
   expect(headers[3].cast).not.toContain("key|");
+  expect(headers.every((header) => !header.cast.includes(" is too small;")))
+    .toBe(true);
+  expect(headers.every((header) => !header.cast.includes(" may render poorly;")))
+    .toBe(true);
   expect(headers[5].cast).toContain("Soft quit — keep agents running");
   expect(headers[5].cast).toContain(
-    "keymouse|+|48|37|Show Mode, Layout, and Options",
+    "keymouse|+|30|37|Show Mode, Layout, and Options",
   );
   expect(headers[5].cast).toContain(
     "key|S|Soft quit — keep agents running",
@@ -121,7 +126,22 @@ test("reserve compact projection for the mobile recording", async () => {
   expect(headers[5].cast).not.toContain(
     "Skip layout save and finish soft quit",
   );
-  expect(headers[5].cast).toContain("Keeping 1 agent session running.");
+  expect(headers[5].cast).toContain("Keeping 1 agent session");
+  expect(headers[5].cast).toContain("running.");
+  const controlEvents = headers[5].cast
+    .trimEnd()
+    .split("\n")
+    .slice(1)
+    .map((line) => JSON.parse(line) as [number, string, string]);
+  const softQuitIndex = controlEvents.findIndex(
+    ([, kind, data]) => kind === "i" && data.includes("Soft quit —"),
+  );
+  const exitPaints = controlEvents
+    .slice(softQuitIndex + 1)
+    .filter(([, kind, data]) => kind === "o" && data !== "\u001b7\u001b8");
+  expect(softQuitIndex).toBeGreaterThanOrEqual(0);
+  expect(exitPaints).toHaveLength(1);
+  expect(exitPaints[0][2]).toContain("Keeping 1 agent session");
 });
 
 test("capture deterministic desktop and social previews", async ({ page }) => {
@@ -450,9 +470,10 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await expect(pointer).toHaveCount(0);
   await expect(mouseTarget).toHaveCount(0);
   await expect(player.locator(".ap-term")).toContainText(
-    "Keeping 1 agent session running.",
+    "Keeping 1 agent session",
     { timeout: 7_000 },
   );
+  await expect(player.locator(".ap-term")).toContainText("running.");
   await expect(player.locator(".ap-term")).not.toContainText(
     "Keep this layout?",
   );
@@ -556,13 +577,6 @@ test("play the guided recording with durable mouse and key cues", async ({ page 
   await expect(player.locator(".ap-term")).not.toContainText(
     "●",
     { timeout: 5_000 },
-  );
-  await expect(hud).toContainText("See both running sessions", {
-    timeout: 6_000,
-  });
-  await expect(pointer).toBeVisible();
-  await expect(player.getByTestId("terminal-mouse-target")).toContainText(
-    "Click the sidebar",
   );
   await expect(pointer).toBeVisible({ timeout: 5_000 });
   await expect(player.getByTestId("terminal-input-hud")).toContainText(

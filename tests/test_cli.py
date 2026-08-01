@@ -15,8 +15,11 @@ from railmux.tmux_server import TmuxServerTarget
 
 
 @pytest.fixture(autouse=True)
-def tmux_preflight_succeeds(monkeypatch):
-    """CLI behaviour tests must not depend on the host's tmux installation."""
+def tmux_preflight_succeeds(monkeypatch, tmp_path):
+    """CLI tests must not depend on the host's tmux or Railmux settings."""
+    monkeypatch.setattr(
+        "railmux.settings._config_path", lambda: tmp_path / "config.toml"
+    )
     monkeypatch.setattr("railmux.cli.ensure_tmux_available", lambda: True)
     monkeypatch.setattr(
         "railmux.self_update.maybe_upgrade_before_launch", lambda *_args: None

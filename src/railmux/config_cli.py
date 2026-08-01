@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import argparse
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, TextIO
+from typing import Callable, Iterator, TextIO
 
 from railmux.config import ConfigError, default_config_path, load_config
 from railmux.runtime_config import (
@@ -19,6 +20,28 @@ from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
 
 _BACK = object()
 _EXIT = object()
+
+
+def _is_tty(stream: TextIO) -> bool:
+    try:
+        return bool(stream.isatty())
+    except (AttributeError, OSError):
+        return False
+
+
+@contextmanager
+def _editor_screen(stdin: TextIO, stdout: TextIO) -> Iterator[None]:
+    """Keep an interactive editor transcript out of primary scrollback."""
+    active = _is_tty(stdin) and _is_tty(stdout)
+    if active:
+        stdout.write("\033[?1049h\033[2J\033[H")
+        stdout.flush()
+    try:
+        yield
+    finally:
+        if active:
+            stdout.write("\033[0m\033[?25h\033[?1049l")
+            stdout.flush()
 
 
 @dataclass(frozen=True)
@@ -398,6 +421,71 @@ def _managed_reset_keys(*, remote_context: bool) -> dict[str, tuple[str, ...]]:
     return keys
 
 
+def _run_editor(
+    *,
+    remote_context: bool,
+    stdin: TextIO,
+    stdout: TextIO,
+) -> int:
+    try:
+        load_config()
+    except ConfigError as exc:
+        if not _recover_invalid_config(exc, stdin, stdout):
+            return 2
+
+    def behavior_menu(menu_stdin: TextIO, menu_stdout: TextIO) -> object | None:
+        return _behavior_menu(
+            menu_stdin,
+            menu_stdout,
+            remote_context=remote_context,
+        )
+
+    categories: tuple[tuple[str, Callable[[TextIO, TextIO], object | None]], ...] = (
+        ("Behavior / Options", behavior_menu),
+        ("Program paths", _program_menu),
+        ("Environment", _environment_menu),
+    )
+    while True:
+        _write(stdout, "\nRailmux configuration")
+        _write(stdout, f"  {default_config_path()}")
+        for index, (title, _callback) in enumerate(categories, 1):
+            _write(stdout, f"  {index}. {title}")
+        reset_label = (
+            "Reset all remote-workspace settings"
+            if remote_context
+            else "Reset all Railmux-managed settings"
+        )
+        _write(stdout, f"  r. {reset_label}")
+        _write(stdout, "  q. Exit")
+        choice = _read(stdin, stdout, "Choose: ").lower()
+        if choice == "q":
+            return 0
+        if choice == "r":
+            reset_scope = (
+                "all remote-workspace settings"
+                if remote_context
+                else "all Railmux-managed settings"
+            )
+            if _confirm(
+                stdin,
+                stdout,
+                f"Reset {reset_scope} and preserve unknown keys?",
+            ):
+                _saved(
+                    Settings().reset_keys(
+                        _managed_reset_keys(remote_context=remote_context)
+                    ),
+                    stdout,
+                )
+            continue
+        if not choice.isdigit() or not 1 <= int(choice) <= len(categories):
+            _write(stdout, "Choose one of the listed entries.")
+            continue
+        result = categories[int(choice) - 1][1](stdin, stdout)
+        if result is _EXIT:
+            return 0
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -458,59 +546,9 @@ def main(
     remote_context = bool(args.remote_context)
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
-    try:
-        load_config()
-    except ConfigError as exc:
-        if not _recover_invalid_config(exc, stdin, stdout):
-            return 2
-
-    def behavior_menu(menu_stdin: TextIO, menu_stdout: TextIO) -> object | None:
-        return _behavior_menu(
-            menu_stdin,
-            menu_stdout,
+    with _editor_screen(stdin, stdout):
+        return _run_editor(
             remote_context=remote_context,
+            stdin=stdin,
+            stdout=stdout,
         )
-    categories: tuple[tuple[str, Callable[[TextIO, TextIO], object | None]], ...] = (
-        ("Behavior / Options", behavior_menu),
-        ("Program paths", _program_menu),
-        ("Environment", _environment_menu),
-    )
-    while True:
-        _write(stdout, "\nRailmux configuration")
-        _write(stdout, f"  {default_config_path()}")
-        for index, (title, _callback) in enumerate(categories, 1):
-            _write(stdout, f"  {index}. {title}")
-        reset_label = (
-            "Reset all remote-workspace settings"
-            if remote_context
-            else "Reset all Railmux-managed settings"
-        )
-        _write(stdout, f"  r. {reset_label}")
-        _write(stdout, "  q. Exit")
-        choice = _read(stdin, stdout, "Choose: ").lower()
-        if choice == "q":
-            return 0
-        if choice == "r":
-            reset_scope = (
-                "all remote-workspace settings"
-                if remote_context
-                else "all Railmux-managed settings"
-            )
-            if _confirm(
-                stdin,
-                stdout,
-                f"Reset {reset_scope} and preserve unknown keys?",
-            ):
-                _saved(
-                    Settings().reset_keys(
-                        _managed_reset_keys(remote_context=remote_context)
-                    ),
-                    stdout,
-                )
-            continue
-        if not choice.isdigit() or not 1 <= int(choice) <= len(categories):
-            _write(stdout, "Choose one of the listed entries.")
-            continue
-        result = categories[int(choice) - 1][1](stdin, stdout)
-        if result is _EXIT:
-            return 0

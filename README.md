@@ -12,7 +12,7 @@ Railmux gives tmux a project-aware sidebar and one or two live agent panes.
 Every agent runs independently, so browsing, switching, detaching, and
 responsive layout changes do not interrupt in-progress work.
 
-**[Product website](https://rightglow.github.io/Railmux/)** ·
+**[Website & live demo](https://rightglow.github.io/Railmux/)** ·
 **[Releases](https://github.com/Rightglow/Railmux/releases)** ·
 **[PyPI](https://pypi.org/project/railmux/)**
 
@@ -388,6 +388,11 @@ tmux server. If Railmux is absent or too old remotely, installation into the
 remote user environment (and, if needed, Railmux's private SSH venv) requires
 explicit consent and never uses `sudo`.
 
+In an interactive terminal the editor uses a temporary full-screen surface.
+Exiting, cancelling, or encountering an error restores the original shell
+screen and leaves its scrollback unchanged. Redirected input/output and
+`--help` remain plain text without terminal control sequences.
+
 Choose **Behavior / Options**, **Program paths**, or **Environment**, then the
 specific setting. Every category supports Back, Exit, and a confirmed category
 reset; individual settings can also be reset to their default. The editor
@@ -588,226 +593,128 @@ terminal session.
 
 ### 3. Using railmux over SSH
 
-There are two supported ways to use Railmux over SSH:
+#### Choose a connection mode
+
+Railmux supports two SSH workflows:
 
 - Run ordinary `ssh your-server`, then `railmux`. This uses the terminal's
-  normal tmux rendering path. If large Codex or Claude redraws feel slow, the
-  Cursor integrated terminal is a practical option to try; in our testing it
-  handles queued terminal updates especially well.
-- Run `railmux ssh your-server` locally. This latest-state display discards
-  superseded intermediate frames, sends compressed row-level changes, and
-  keeps bounded agent history locally for responsive scrolling. It is usually
-  the better choice when ordinary SSH suffers during full-screen redraws.
+  normal tmux rendering path and works without a local Railmux installation.
+- Install Railmux locally and run `railmux ssh your-server`. Its latest-state
+  display coalesces superseded redraws and keeps bounded history locally. This
+  is usually smoother for Codex rewinds, Claude redraws, and slower links.
 
-The ordinary SSH path works out of the box, including mouse scrolling in the
-agent pane. These tweaks can improve its responsiveness and scrollback:
+The local SSH client supports macOS, Linux, and Windows WSL. The remote host
+needs Python 3.9+ and tmux; Linux and other Unix-like servers are the primary
+targets.
 
-**Server** (`~/.tmux.conf` on the remote machine):
-
-```tmux
-set -sg escape-time 0         # eliminate delay after Escape key
-set -g  history-limit 10000   # generous scrollback per pane
-```
-
-**Client** (`~/.ssh/config` on your local machine):
-
-```
-Host your-server
-    Compression yes           # smoother tmux pane scrolling over SSH
-```
-
-If the ordinary connection is so slow that the sidebar cannot refresh one
-frame per second, try `railmux ssh` or switch to keyboard navigation —
-`↑↓ / Tab / Enter` cover every operation and do not depend on mouse redraws.
-
-#### Latest-state SSH display
-
-For terminals that struggle with large tmux redraw bursts, Railmux also has an
-SSH client that transmits coalesced screen state instead of every intermediate
-terminal update. Install Railmux locally, then run:
+#### Quick start with `railmux ssh`
 
 ```bash
 railmux ssh your-server
+# Multiple OpenSSH arguments belong in one quoted group:
+railmux ssh your-server --ssh-args='-J jump-host -p 2222'
 ```
 
-Automatic reconnect is enabled by default and retries for up to 60 seconds
-while leaving the last screen visible. Press `Ctrl-]` or `Ctrl-C` while it is
-retrying to stop immediately.
-It starts only after the first screen has arrived and never retries an explicit
-detach, soft quit, hard quit, or local disconnect. Retries use non-interactive
-SSH authentication and never install, upgrade, replace, detach, or kill
-anything remotely. A retry attaches only when the same managed Railmux session
-still exists, so it cannot recreate a workspace that was Soft Quit during a
-network race. If the connection needs a new password or MFA interaction,
-Railmux restores the terminal and asks you to rerun the ordinary command.
-Use `--no-reconnect` when diagnosing a connection or when the local client
-should exit immediately after an established display is lost.
+If Railmux is missing remotely, the client can install the matching version
+into the remote user environment. It never uses `sudo`; when user-site installs
+are blocked, it can offer an isolated private environment. Compatible package
+versions may connect directly, while an incompatible or newer remote version
+produces a guided update prompt.
 
-Before the remote helper attaches to tmux, both ends exchange package and
-private-protocol versions. If Railmux is absent remotely, the local client asks
-before installing the exact local version with its `ssh` extra into the remote
-user environment. It checks `python3 -m pip`, `python -m pip`, `pip3`, then
-`pip`; it never runs `sudo` or installs system packages, so tmux must already be
-available remotely. If the remote version is newer, the client asks before
-upgrading local Railmux with the current Python and then restarts the same
-command. Different package versions can connect when their protocol version is
-compatible. Installation first uses per-user site packages. If PEP 668 or the
-server's Python policy rejects that location, a second prompt offers to create
-the isolated `~/.local/share/railmux/ssh-venv` and continue without `sudo` or
-system-Python changes. Declined or failed setup prints equivalent commands for
-manual recovery. Later connections discover the private environment without
-PATH changes. Unpublished development versions may require copying the matching
-wheel or source checkout.
+The default remote workspace starts automatically when absent. Use `Ctrl-B d`
+to detach normally or `Ctrl-]` for an emergency local disconnect.
 
-The default remote session is started automatically when absent. `Ctrl-B d`
-detaches normally; `Ctrl-]` is an emergency local disconnect. Mouse forwarding
-is on by default. The client refreshes a 300-line hot cache for each agent pane;
-wheel-up displays it immediately and loads the first 2000 lines in the
-background. Once that periodic cache is current, Railmux waits for new screen
-output before capturing it again; reconnects and route changes still refresh
-immediately. When scrolling approaches the oldest loaded content, Railmux
-fetches another 2000-line cumulative page until it reaches the local history
-cap. The default cap is 10000 lines; set `history_lines` under `[ssh]` in
-`~/.config/railmux/config.toml`, or override it for one connection:
+#### Reconnect and startup
+
+Automatic reconnect is on by default for an established display. For up to 60
+seconds Railmux leaves the last frame visible and reports each attempt in the
+bottom-right status area. `Ctrl-]` or `Ctrl-C` cancels locally; `--no-reconnect`
+disables retries for one invocation. Explicit detach, quit, soft quit, or local
+disconnect is never retried, and reconnect never recreates or kills the remote
+workspace.
+
+Startup shows **Restoring your workspace** plus the current connection stage.
+The first validated frame replaces it; a 30-second first-frame timeout exits
+only the local display and leaves remote agents running. Password or MFA input
+is supported during the initial connection, but automatic reconnect is
+non-interactive and asks you to rerun the command when authentication changes.
+
+#### History, Claude behavior, and copying
+
+Mouse-wheel and `Page Up` / `Page Down` browsing use a responsive local cache
+in agent panes. Each pane keeps its own position; scroll to the bottom, press
+`Esc`, or type to return that pane to live output. The default cap is 10000
+lines and the supported range is 2000-20000:
 
 ```bash
 railmux ssh --history-lines 10000 your-server
 ```
 
-The supported range is 2000-20000. Higher limits consume more local memory and
-make deep background captures more expensive, but do not change the remote
-tmux history limit. On the first wheel gesture that reaches the complete
-history or the configured local cap, the client shows a one-time local
-`History top` message; scrolling down rearms that notification.
-With the keyboard cursor inside an agent pane, `Page Up` and `Page Down` move
-through this same local cache by one visible page. In the sidebar and dialogs,
-the keys remain ordinary Railmux navigation.
+Set `ssh.history_lines` persistently with `railmux config`. Reaching the
+available top shows a one-time `History top` message. Higher caps use more local
+memory and do not change remote tmux's own history limit.
 
-Agent panes with tmux scrollback are handled locally. Claude Code normally uses
-an alternate screen with no tmux history. On the first upward scroll in a
-managed Claude pane, the default `claude_history = "ask"` shows a local dialog:
-choose **Always smooth local**, **Smooth local this time**,
-**Always Claude native**, or **Claude native this time**. Local history is a
-smooth cached, read-only JSONL reconstruction styled like Claude Code; native
-history keeps Claude Code's clickable but redraw-heavier UI. **Always** saves
-the choice in the remote workspace's `~/.config/railmux/config.toml`;
-**this time** lasts for the current `railmux ssh` invocation, including its
-automatic reconnects. Persistent behavior can be changed later under
-**More → Options → Claude history in railmux ssh**. Press `Esc` to decide later.
-Unrelated mouse-aware terminal applications keep their native wheel behavior.
-Sidebar scrolling continues to reach Railmux normally. Scroll to the bottom or
-press `Esc` to
-return to live output. Each agent pane keeps an independent history position;
-the sidebar and other agents continue updating, and reaching the bottom or
-typing restores only that pane. Reported clicks and drags are ignored while
-history is visible if the gesture starts inside that same pane; clicking an
-other agent changes focus without moving either history pane, while a sidebar
-click safely restores them all. F8/F9,
-Help's controller-pane zoom, modal close, and resize invalidate the old pointer
-map before it can be reused. Terminal-native selection overrides remain
-terminal-dependent. Agent-pane clicks still change focus; a reported left drag
-instead selects within that pane and copies locally without invoking tmux
-copy-mode. Selection is limited to the current visible viewport and cannot
-cross a pane divider; keyboard input, resize, reconnect, and layout changes
-clear it.
+Claude Code can use either Railmux's smooth read-only transcript or Claude's
+native clickable history. The first upward scroll asks which behavior to use,
+with **Always** and **this time** choices; change it later under **More →
+Options → Claude history in railmux ssh**.
 
-Visible URLs and paths gain a local hover highlight in either agent pane where
-mouse-motion reporting is supported. A clean click recognizes and opens them
-only in the **focused** agent pane; the first click in the other pane continues
-to mean focus. Plain `http://` and `https://` URLs open in the initiating
-machine's default browser.
+Dragging inside a visible agent pane selects and copies locally without tmux
+copy-mode. Selection stays within that pane and viewport. `Ctrl-B [` remains
+available for explicit tmux copy-mode; `--no-mouse` gives terminal-native
+selection priority instead.
 
-Paths are checked read-only against the remote pane's current working
-directory. The default `path_open = "ask"` dialog makes the inside choice
-explicit: it opens files directly in Railmux's managed Vim. It offers
-**Always use Railmux managed Vim**, **Use Railmux managed Vim this time**,
-**Always separate terminal**, and **Separate terminal this time**. Persistent
-behavior can be changed under **More → Options → Clicked paths in railmux
-ssh**, where the inside choice is likewise labelled **managed Vim**.
+#### Click URLs and remote paths
 
-The inside-Railmux choice gives each agent slot at most one reusable shell and
-one reusable Vim viewer. `t` selects the shell and `T` returns to Vim.
-These managed tool panes require tmux 3.0 or newer; Railmux's core workspace
-and swap transport continue to support the tmux 2.7 compatibility floor.
-Clicking another supported code, text, log, or HTML file reuses that Vim
-process and opens a native tab instead of closing the previous file; use
-Vim's `gt` / `gT` to move between tabs. If a managed shell already exists,
-exiting Vim restores it; a click that opened only Vim returns directly to the
-agent instead of leaving an empty shell. Directories and unsupported file
-types select the shell and use the relevant directory when creating it. An
-existing shell keeps its working directory and running command instead of
-accepting injected `cd` keystrokes. With side-by-side agents the tool is below
-its agent; with stacked agents it moves to the right. F9 follows the currently
-focused tool. Managed processes are parked by exact tmux identity during
-Railmux layout rebuilds rather than being killed.
+Hoverable URLs and paths are recognized in either agent pane. A clean click on
+a URL opens the local browser. Remote paths are checked read-only and can open
+in a managed Vim pane inside Railmux or in a separate local terminal, with
+**Always** and **this time** choices. The first click in an unfocused agent pane
+only focuses it.
 
-The separate-terminal choice SSHes into a directory or opens supported files
-in remote Vim at a detected `:line[:column]`. The Vim check is remote; no local
-Vim installation is needed. Unsupported file types or a remote without Vim
-fall back to the containing directory and print that fallback in the new
-terminal. The Railmux status can confirm only that the detached local terminal
-launcher started, not the later SSH/Vim outcome. On a local terminal for which
-Railmux has no safe window launcher, the equivalent quoted SSH command is
-copied instead. The launcher supports Terminal.app on macOS, common Linux
-terminal emulators, and Windows Terminal from WSL; Termux uses command-copy
-when a separate terminal is selected. A first click in another agent pane only
-focuses it, preserving normal preview/resume behavior; dragging still selects
-and copies.
+Each agent slot has at most one reusable managed shell and one Vim viewer. Use
+`t` for the shell, `T` for Vim, and Vim's `gt` / `gT` for multiple file tabs.
+Managed tool panes require tmux 3.0+; core Railmux remains compatible with tmux
+2.7. Paths with spaces must be quoted. Relative paths from old output resolve
+against the pane's current directory, and remote localhost URLs still require
+your own SSH port forwarding.
 
-This first version deliberately recognizes unquoted paths without spaces.
-Relative paths printed in old history resolve against the pane's **current**
-working directory, and localhost URLs still refer to the remote host unless the
-user has configured SSH port forwarding.
-
-`Ctrl-B [` remains the explicit copy-mode path. Use `--no-mouse` when reliable
-ordinary terminal selection is more important than local history. History
-preserves text colours and common
-character styles. For upgrade-only legacy sessions displayed through a nested
-tmux client, Railmux reads scrollback from the identity-validated real agent
-pane rather than the zero-history wrapper; it does not resize or alter the old
-session.
-Bracketed paste and terminal focus events follow the active remote application.
+#### Mobile and small terminals
 
 On mobile terminals such as Termux, opening the soft keyboard may temporarily
-make `stty size` report fewer than 12 rows. At startup, `railmux ssh` waits in
-ordinary cooked mode for the keyboard to close instead of corrupting the remote
-layout. During an attached session, it keeps the remote logical terminal size
-unchanged and shows a bottom-anchored local projection so the tmux status bar
-and nearby input rows remain visible. Railmux mouse gestures resume as soon as
-that keyboard projection appears. The Android input-View handoff is kept local,
-so an agent that requested terminal focus events retains its prompt cursor.
-Closing the keyboard restores and repaints the full view even if Termux reports
-a slightly different height. This
-projection expects the terminal's column count to remain stable; close the
-keyboard before rotating the device. A terminal narrower than 40 columns is
-rejected immediately; hide the keyboard or reduce the terminal font size before
-connecting.
+report fewer than 12 rows. At startup, `railmux ssh` waits for the keyboard to
+close. While attached, a bottom-anchored local projection keeps the status bar,
+prompt cursor, and nearby input visible without shrinking the remote layout.
+Close the keyboard before rotating the device. Terminals narrower than 40
+columns are rejected; hide the keyboard or reduce the font size.
 
-The local client paints **Restoring your workspace** immediately, with a
-smaller live stage for connecting, checking versions, attaching, and waiting
-for the first frame. The first validated remote frame replaces it. Waiting for
-that frame is bounded to 30 seconds; a timeout exits only the local display and
-leaves the remote Railmux workspace and agents intact.
+#### Ordinary SSH tuning and diagnostics
 
-Both the ordinary launcher and SSH display keep a low-frequency watchdog
-outside the attached tmux client. Three consecutive dedicated-server health
-failures restore the local terminal, end only that display client, and record a
-privacy-safe incident shown by `railmux doctor`. The watchdog never kills or
-restarts tmux or a system crash collector; provider rollout files are untouched.
-The SSH client also sends a private heartbeat. If a network outage leaves SSH
-half-open, the remote helper expires its own 45-second lease and detaches only
-the exact private tmux client it created; the Railmux session, panes, and agents
-stay alive. Current helpers use only a short attach mutex, so another
-current client can connect during that cleanup. If an older helper still owns
-the historical lifetime lock, reconnecting presents an explicit replacement
-prompt. Approving it may detach every terminal attached to that managed
-Railmux session, but never kills the session or its agents.
+For ordinary SSH, these optional settings reduce Escape latency and increase
+remote tmux scrollback:
 
-Automatic reconnect affects only an established display after at least one
-frame has been painted; it does not alter the initial SSH command or attach
-handshake. During its 60-second retry window, Ctrl-] or Ctrl-C cancels locally
-without stopping the remote workspace. `--no-reconnect` disables it for one
-invocation.
+```tmux
+# ~/.tmux.conf on the server
+set -sg escape-time 0
+set -g history-limit 10000
+```
+
+OpenSSH compression can help some links:
+
+```sshconfig
+# ~/.ssh/config on the client
+Host your-server
+    Compression yes
+```
+
+If mouse redraws remain slow, `↑↓`, `Tab`, and `Enter` cover the full UI without
+mouse traffic. Cursor's integrated terminal is also worth trying for ordinary
+SSH because it handles queued full-screen redraws well. Run `railmux doctor
+--remote your-server` for a read-only compatibility check. Railmux's display
+watchdog and remote heartbeat detach only the exact failed display client; they
+do not kill tmux, the shared workspace, or its agents. See
+[the architecture document](docs/ARCHITECTURE.md) for protocol, lease,
+history-cache, and failure-containment details.
 
 ### 4. Will automated review sessions pollute my session list?
 

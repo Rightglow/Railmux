@@ -100,7 +100,7 @@ product capability.
 | W09 | Detach one view, Soft Quit shared UI, and confirmed hard quit | Supported | Supported | Soft Quit leaves provider sessions alive; views of one UI are not independent workspaces. |
 | W10 | Soft restart and exact workspace/session recovery | Supported | Supported | Ambiguous identity becomes visible unresolved state rather than a guessed binding. |
 | W11 | Multiple attached terminals | Conditional | Conditional | Shared focus/layout and tmux `smallest` geometry; simultaneous input can interfere. |
-| W12 | Shared config file, standalone editor, and in-product persistent Options | Supported | Supported | `railmux config` works without tmux, validates program/locale overrides, and edits the same remote or local TOML authority; one-time confirmations stay action-local. |
+| W12 | Shared config file, standalone editor, and in-product persistent Options | Supported | Supported | `railmux config` works without tmux, uses a temporary interactive screen, validates program/locale overrides, and edits the same remote or local TOML authority; one-time confirmations stay action-local. |
 | W13 | Local and remote privacy-safe diagnostics | Supported | Supported | `doctor --json` and text share one redacted snapshot authority. |
 | W14 | Dedicated tmux watchdog and incident reporting | Supported | Supported | A client may exit after repeated failures but never kills/restarts tmux or a provider. |
 
@@ -113,7 +113,7 @@ product capability.
 | S03 | Consent-based local upgrade when remote is newer | Supported on POSIX local runtimes | Re-execs only after the same interpreter imports the requested version. |
 | S04 | Immediate restoring surface and bounded startup stages | Supported | First validated keyframe replaces it; setup prompts remain cooked-mode. |
 | S05 | Coalesced latest-state keyframes and row patches | Supported | Slow display output must not flow-control the real provider pane. |
-| S06 | Default-on bounded automatic reconnect | Supported | Only after a first frame; no install, takeover, session creation, detach, or provider mutation. |
+| S06 | Default-on bounded automatic reconnect | Supported | Only after a first frame; bottom-right retry status and display-only SSH keepalives bound silent outages; no install, takeover, session creation, detach, or provider mutation. |
 | S07 | Heartbeat lease and stale-helper cleanup | Supported | Stops only the helper's exact private tmux client, never the workspace or agents. |
 | S08 | Independent cached local history per agent pane | Supported | 300-line hot cache, 2,000-line cumulative expansion, configurable 2,000–20,000 cap. |
 | S09 | Page Up/Down through verified agent history | Supported | Sidebar and dialogs retain their ordinary keys. |

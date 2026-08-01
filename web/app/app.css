@@ -1425,12 +1425,12 @@ code {
 }
 
 .lifecycle-intro span {
-  padding: 8px 10px;
+  padding: 9px 12px;
   color: rgba(242, 240, 233, 0.78);
   background: rgba(8,11,13,0.72);
   border: 1px solid rgba(255,255,255,0.12);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .lifecycle-section kbd {
