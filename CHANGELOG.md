@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-01
+
+### Changed
+
+- Show transient, scrollback-free progress while remote configuration and
+  local or remote doctor commands perform checks, without adding noise to
+  redirected or JSON output, and label the remote config editor explicitly.
+- Add restrained, `NO_COLOR`-aware hierarchy and outcome colours to the
+  standalone configuration editor and human-readable doctor reports.
+- Redraw the standalone configuration editor from explicit navigation state:
+  category pages retain compact parent context, setting pages use breadcrumbs,
+  Back restores a clean parent page, and action feedback remains visible until
+  the next input.
+
+### Fixed
+
+- Reassert Termux's last authoritative application cursor after returning to
+  the app, without repainting the screen or changing remote focus behavior.
+
 ## [0.3.1.dev202608010] - 2026-08-01
 
 ### Changed
@@ -1702,7 +1721,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.1.dev202608010...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Rightglow/Railmux/compare/v0.3.0...v0.3.1
 [0.3.1.dev202608010]: https://github.com/Rightglow/Railmux/compare/v0.3.0...v0.3.1.dev202608010
 [0.3.0]: https://github.com/Rightglow/Railmux/compare/v0.2.21...v0.3.0
 [0.2.21]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21
