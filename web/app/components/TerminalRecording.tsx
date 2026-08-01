@@ -29,6 +29,27 @@ type TerminalRecordingProps = {
   dataDemo?: string;
 };
 
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReduced(query.matches);
+    update();
+    if (typeof query.addEventListener === "function") {
+      query.addEventListener("change", update);
+      return () => query.removeEventListener("change", update);
+    }
+    // Safari 13 and earlier expose only the legacy MediaQueryList listener.
+    query.addListener(update);
+    return () => query.removeListener(update);
+  }, []);
+
+  return reduced;
+}
+
 function parseInputCue(
   data: string,
   id: number,
@@ -120,6 +141,7 @@ export default function TerminalRecording({
   const cueTimer = useRef<number | null>(null);
   const cueId = useRef(0);
   const [cue, setCue] = useState<InputCue | null>(null);
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     if (!container.current) return;
@@ -127,17 +149,20 @@ export default function TerminalRecording({
       `${import.meta.env.BASE_URL}generated/${source}`,
       container.current,
       {
-        autoPlay,
-        loop,
+        autoPlay: autoPlay && !reducedMotion,
+        loop: loop && !reducedMotion,
         poster,
         startAt,
         idleTimeLimit,
         fit: "width",
-        controls,
+        controls: controls || reducedMotion,
         cursorMode: "hidden",
         keystrokeOverlay: false,
         terminalFontFamily:
-          '"SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace',
+          '"DejaVu Sans Mono", "SFMono-Regular", "Cascadia Code", "Liberation Mono", Menlo, monospace',
+        // Match a terminal cell grid so box-drawing glyphs have no extra
+        // browser line-height gap between rows.
+        terminalLineHeight: 1,
       },
     );
     if (inputHud) {
@@ -157,7 +182,7 @@ export default function TerminalRecording({
         }, 2_200);
       });
     }
-    const observer = playWhenVisible
+    const observer = playWhenVisible && !reducedMotion
       ? new IntersectionObserver(
           ([entry]) => {
             if (entry.isIntersecting) {
@@ -184,6 +209,7 @@ export default function TerminalRecording({
     loop,
     playWhenVisible,
     poster,
+    reducedMotion,
     source,
     startAt,
   ]);
@@ -192,6 +218,7 @@ export default function TerminalRecording({
     <div
       className={`terminal-recording-player ${className}`.trim()}
       data-demo={dataDemo}
+      data-reduced-motion={reducedMotion ? "true" : "false"}
     >
       <div className="terminal-recording-host" ref={container} />
       {inputHud && cue ? (

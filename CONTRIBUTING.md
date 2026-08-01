@@ -72,3 +72,6 @@ File an issue at https://github.com/Rightglow/Railmux/issues with:
 
 - output from `railmux doctor` (designed to omit private environment data)
 - Steps to reproduce and what you expected vs. what happened
+
+Please do not file suspected vulnerabilities in a public issue. Follow the
+private-reporting guidance in [`SECURITY.md`](SECURITY.md) instead.

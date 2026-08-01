@@ -144,3 +144,9 @@ def test_options_failed_write_keeps_modal_and_app_state(tmp_path, monkeypatch):
     assert modal._policies["layout"] == "ask"
     assert app._layout_profile is None
     assert app._set_status.call_args.args[1] == "error"
+
+
+def test_persistent_policy_labels_distinguish_never_from_one_time_no():
+    assert App._policy_label("always") == "Always"
+    assert App._policy_label("ask") == "Ask every time"
+    assert App._policy_label("never") == "Never"

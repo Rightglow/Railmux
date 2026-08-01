@@ -5012,7 +5012,7 @@ class App:
         return {
             "always": "Always",
             "ask": "Ask every time",
-            "never": "No",
+            "never": "Never",
         }[policy]
 
     def _open_quit_confirm(self) -> None:

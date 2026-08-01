@@ -2094,6 +2094,34 @@ def test_ssh_paints_startup_surface_before_remote_preflight(monkeypatch):
     ]
 
 
+def test_ssh_missing_client_fails_before_terminal_display(monkeypatch):
+    stdin = MagicMock()
+    stdout = MagicMock()
+    stdin.isatty.return_value = True
+    stdout.isatty.return_value = True
+    recorder = MagicMock()
+    wait_for_size = MagicMock()
+    monkeypatch.setattr(fast_display_client.sys, "stdin", stdin)
+    monkeypatch.setattr(fast_display_client.sys, "stdout", stdout)
+    monkeypatch.setattr(fast_display_client, "load_config", lambda: MagicMock())
+    monkeypatch.setattr(fast_display_client.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        fast_display_client, "SshDisplayRecorder", lambda *_args: recorder
+    )
+    monkeypatch.setattr(
+        fast_display_client, "wait_for_usable_terminal_size", wait_for_size
+    )
+
+    with pytest.raises(
+        fast_display_client.ProbeError,
+        match="ssh is not installed or not on PATH",
+    ):
+        fast_display_client.run(parse_client_args(["server"]))
+
+    wait_for_size.assert_not_called()
+    recorder.finish.assert_called_once()
+
+
 def test_ctrl_c_during_masked_remote_setup_restores_terminal(
     monkeypatch,
     capsys,

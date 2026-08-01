@@ -13,6 +13,10 @@ The single source of truth is `__version__` in `src/railmux/__init__.py`;
 - **MINOR** — backwards-compatible new features
 - **MAJOR** — breaking changes
 
+Before 1.0, a MINOR release may also establish a documented product-maturity
+baseline for compatible capabilities delivered across earlier releases. Keep
+that milestone narrative in `CHANGELOG.md`; this file remains process-only.
+
 Field-test builds for the next patch may use the PEP 440 form
 `MAJOR.MINOR.PATCH.devN`, where `N` is a monotonically increasing numeric
 identifier. A development tag is published to PyPI normally and marked as a
@@ -55,12 +59,19 @@ credential and publishes only after its build and test job succeeds.
    RAILMUX_RUN_TMUX_INTEGRATION=1 python -m pytest -q tests/test_tmux_integration.py
    ```
 
+   When authenticated current Claude Code and Codex installations are
+   available, open **Help → Ask Railmux** in both modes. Confirm ordinary
+   reads/searches work without approval and requests to write files or run a
+   shell fail closed. Provider-free tests continue to enforce the exact
+   safety-restricted command shape.
+
 3. Build and validate clean artifacts locally:
 
    ```bash
    rm -rf dist build src/*.egg-info
    python -m build
    python -m twine check dist/*
+   python tools/release_notes.py X.Y.Z
    ```
 
 4. Commit and push the release preparation. Wait for every Python 3.9–3.13

@@ -16,6 +16,39 @@ test("honor direct section links after React mounts", async ({ page }) => {
 
   await page.goto("./#install");
 
+  await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+    "href",
+    "https://rightglow.github.io/Railmux/",
+  );
+  await expect(page.locator('meta[property="og:image:alt"]')).toHaveAttribute(
+    "content",
+    /Railmux managing Claude Code and Codex/,
+  );
+
+  await page.keyboard.press("Tab");
+  const focusStyle = await page.locator(":focus").evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { style: style.outlineStyle, width: style.outlineWidth };
+  });
+  expect(focusStyle.style).toBe("solid");
+  expect(Number.parseFloat(focusStyle.width)).toBeGreaterThanOrEqual(2);
+
+  const reducedRecording = page.locator('[data-demo="desktop-recording"]');
+  await expect(reducedRecording).toHaveAttribute(
+    "data-reduced-motion",
+    "true",
+  );
+  await expect(reducedRecording.locator(".ap-player")).toBeVisible();
+  await expect(reducedRecording.locator(".ap-control-bar")).toBeVisible();
+  await expect(
+    reducedRecording.getByRole("button", { name: "Play" }),
+  ).toBeVisible();
+  const reducedText = await reducedRecording.locator(".ap-term").textContent();
+  await page.waitForTimeout(500);
+  await expect(reducedRecording.locator(".ap-term")).toHaveText(
+    reducedText ?? "",
+  );
+
   const install = page.locator("#install");
   await expect(install).toBeVisible();
   await install.evaluate((element) => {
@@ -159,7 +192,7 @@ test("capture deterministic desktop and social previews", async ({ page }) => {
     .toContain("Restoring your workspace");
   await expect(page.locator("h1")).toContainText("Keep every");
   await expect(
-    page.getByText("CLAUDE CODE 2.1.220 STARTUP · ISOLATED RAILMUX"),
+    page.getByText("CAPTURED CLAUDE CODE 2.1.220 · ISOLATED RAILMUX"),
   ).toBeVisible();
   await page.waitForTimeout(1_000);
   const startOverlay = desktopDemo.locator(".ap-overlay-start");

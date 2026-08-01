@@ -25,8 +25,30 @@ def atomic_write_text(
         fd = -1
         with stream:
             stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
         stream = None
         os.replace(tmp, path)
+        # The replace is already atomic, but persisting the parent directory
+        # makes the new name durable across a sudden power loss where the
+        # filesystem supports directory fsync. Some Unix-like filesystems and
+        # Android storage layers reject it, so durability remains best-effort
+        # after the successful replacement.
+        directory_fd = -1
+        try:
+            directory_fd = os.open(
+                path.parent,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+        finally:
+            if directory_fd >= 0:
+                try:
+                    os.close(directory_fd)
+                except OSError:
+                    pass
     finally:
         if stream is not None:
             stream.close()

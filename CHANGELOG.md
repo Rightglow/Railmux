@@ -7,11 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-01
+
+Railmux 0.3.0 is the first productized maturity baseline for the compatible
+0.2.x feature arc: provider-aware Claude Code and Codex session management, a
+responsive two-agent workspace, isolated tmux lifecycle and recovery, the
+latest-state `railmux ssh` client, unified configuration and diagnostics, and
+an explicit platform-support contract. The sections below list only changes
+made after 0.2.21.
+
+### Added
+
+- Add a public security policy describing private reporting, supported
+  versions, and Railmux's provider, SSH, terminal, clipboard, and semantic-link
+  trust boundaries.
+- Validate the package version against a non-empty curated changelog section
+  before tagging, and expand isolated-wheel smoke coverage across every public
+  command's help path without creating user state.
+
+### Changed
+
+- Make Railmux-owned atomic replacements durable before publication and
+  best-effort durable at the parent-directory boundary, without failing a
+  successful write on filesystems that reject directory synchronization.
+- Make the README's repository assets render from PyPI, clarify confirmed
+  provider-history deletion and Ask Railmux's fail-closed provider-version
+  boundary, and retain the Beta support classification for the 0.x line.
+- Pause product-site terminal recordings for reduced-motion visitors while
+  keeping an explicit playback control, improve keyboard focus and small-text
+  contrast, describe replayed provider material consistently, and align the
+  browser terminal grid to remove extra gaps between box-drawing rows.
+
 ### Fixed
 
 - Make the Termux “tap the prompt again” keyboard hint transient and
   interruptible, so it yields to later status messages and restores Railmux's
   normal status-right content after two seconds.
+- Report persistent **Never** options as Never rather than conflating them with
+  a one-time **No** choice.
+- Give the long-form Help and Options interfaces consistent horizontal padding
+  without expanding compact confirmation dialogs.
 
 ## [0.2.21] - 2026-08-01
 
@@ -1648,7 +1683,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.2.21...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Rightglow/Railmux/compare/v0.2.21...v0.3.0
 [0.2.21]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21
 [0.2.21.dev202608010]: https://github.com/Rightglow/Railmux/compare/v0.2.21.dev202607311...v0.2.21.dev202608010
 [0.2.21.dev202607311]: https://github.com/Rightglow/Railmux/compare/v0.2.20...v0.2.21.dev202607311

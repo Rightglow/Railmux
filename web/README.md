@@ -63,6 +63,9 @@ The website plays all six casts directly as text through asciinema-player. The
 recorder launches Railmux through its normal CLI, opens isolated local
 demo-agent panes, and removes the private tmux server when it finishes. It
 never reads the user's normal HOME or provider configuration.
+Visitors who request reduced motion receive the recorded poster frames without
+autoplay or looping, plus an explicit player control if they choose to start a
+recording themselves.
 The public source-analysis runs in `demo/real-agent-runs.json` were captured
 once with non-persistent, read-only Claude Code and Codex invocations. Each run
 records its producing agent, capture method, real prompt, inspected

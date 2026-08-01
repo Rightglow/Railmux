@@ -73,6 +73,18 @@ def _install_argv(python: str, prefix: Path, wheel: Path) -> list[str]:
     ]
 
 
+def _user_state_snapshot(env: dict[str, str]) -> dict[str, tuple[str, ...]]:
+    """Return only paths beneath user-state roots, never their contents."""
+    snapshot = {}
+    for name in ("HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"):
+        root = Path(env[name])
+        snapshot[name] = tuple(sorted(
+            str(path.relative_to(root)) + ("/" if path.is_dir() else "")
+            for path in root.rglob("*")
+        ))
+    return snapshot
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("wheel", type=Path)
@@ -89,6 +101,7 @@ def main() -> int:
         env["XDG_CONFIG_HOME"] = str(root / "config")
         env["XDG_RUNTIME_DIR"] = str(root / "runtime")
         Path(env["HOME"]).mkdir()
+        Path(env["XDG_CONFIG_HOME"]).mkdir()
         Path(env["XDG_RUNTIME_DIR"]).mkdir(mode=0o700)
 
         _run(
@@ -126,6 +139,25 @@ def main() -> int:
         ).strip()
         if version_line != f"railmux {imported['version']}":
             raise RuntimeError(f"unexpected --version output: {version_line!r}")
+        before_help = _user_state_snapshot(env)
+        help_commands = (
+            ("--help",),
+            ("config", "--help"),
+            ("doctor", "--help"),
+            ("ssh", "--help"),
+        )
+        for arguments in help_commands:
+            output = _run(
+                [str(railmux), *arguments],
+                cwd=root,
+                env=env,
+            )
+            if "usage:" not in output.lower():
+                raise RuntimeError(
+                    f"{' '.join(arguments)} did not render command help"
+                )
+        if _user_state_snapshot(env) != before_help:
+            raise RuntimeError("help commands created user configuration or state")
         doctor = json.loads(_run(
             [str(railmux), "doctor", "--json"],
             cwd=root,

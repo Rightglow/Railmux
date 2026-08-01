@@ -3,7 +3,7 @@
 [![Tests](https://github.com/Rightglow/Railmux/actions/workflows/test.yml/badge.svg)](https://github.com/Rightglow/Railmux/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/railmux.svg)](https://pypi.org/project/railmux/)
 [![Python](https://img.shields.io/pypi/pyversions/railmux.svg)](https://pypi.org/project/railmux/)
-[![License](https://img.shields.io/github/license/Rightglow/Railmux.svg)](LICENSE)
+[![License](https://img.shields.io/github/license/Rightglow/Railmux.svg)](https://github.com/Rightglow/Railmux/blob/main/LICENSE)
 
 A persistent terminal workspace to navigate, resume, and run
 [Claude Code](https://claude.com/claude-code) and
@@ -19,7 +19,7 @@ responsive layout changes do not interrupt in-progress work.
 <p align="center">
   <a href="https://rightglow.github.io/Railmux/">
     <img
-      src="web/public/generated/dual-agent-workspace.png"
+      src="https://raw.githubusercontent.com/Rightglow/Railmux/main/web/public/generated/dual-agent-workspace.png"
       alt="Railmux running Claude Code and Codex side by side with a project and session sidebar"
       width="1100"
     />
@@ -93,14 +93,21 @@ locally cached SSH display:
 railmux ssh your-server
 ```
 
+The local machine needs an OpenSSH-compatible `ssh` executable on `PATH`;
+Railmux checks this before entering its full-screen display. macOS, most Linux
+distributions, and Windows WSL normally include one.
+
 For several SSH options, use a single quoted group, for example
 `railmux ssh your-server --ssh-args='-J jump-host -p 2222'`.
 
-The remote needs Python 3.9+ and `tmux`. With permission, the local client can
-install a matching Railmux into the remote user environment; it never uses
-`sudo`. Railmux keeps its managed tmux workspace isolated from your default
-tmux server and never rewrites provider histories under `~/.codex` or
-`~/.claude`. Run `railmux doctor` for a privacy-safe local setup report, or
+The remote needs Python 3.9+, `tmux`, and the `pyte` display dependency. With
+permission, the local client installs the matching `railmux[ssh]` extra into
+the remote user environment; it never uses `sudo`. If provisioning manually,
+install `railmux[ssh]` remotely. Railmux keeps its managed tmux workspace
+isolated from your default tmux server and does not rewrite provider histories
+under `~/.codex` or `~/.claude`, except for a session you explicitly confirm
+deleting. Run
+`railmux doctor` for a privacy-safe local setup report, or
 `railmux doctor --remote your-server` for a read-only remote compatibility
 preflight. Multiple
 terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
@@ -167,7 +174,9 @@ Railmux hides the dedicated help workspace from both providers' Projects list.
 Local documentation reads and searches run without approval prompts. Codex is
 still enforced by its read-only, network-disabled sandbox; Claude is restricted
 to its built-in `Read`, `Glob`, and `Grep` tools, with shell and mutation tools
-not exposed.
+not exposed. These restrictions depend on the installed provider CLI accepting
+the documented safety flags; an incompatible CLI fails closed instead of
+starting an unrestricted help agent.
 If the help agent exits in a two-pane layout, that pane returns to Railmux's
 empty launch surface without collapsing or reordering the other agent pane.
 After a soft restart the help session is not restored automatically—open Help
@@ -603,9 +612,12 @@ Railmux supports two SSH workflows:
   display coalesces superseded redraws and keeps bounded history locally. This
   is usually smoother for Codex rewinds, Claude redraws, and slower links.
 
-The local SSH client supports macOS, Linux, and Windows WSL. The remote host
-needs Python 3.9+ and tmux; Linux and other Unix-like servers are the primary
-targets.
+The local SSH client supports macOS, Linux, and Windows WSL and requires an
+OpenSSH-compatible `ssh` executable on `PATH`. Railmux checks for it before
+entering the full-screen display. The remote host needs Python 3.9+, tmux, and
+the `pyte` display dependency; Linux and other Unix-like servers are the
+primary targets. Automatic setup installs the matching `railmux[ssh]` extra,
+or you can install that extra manually on the remote.
 
 #### Quick start with `railmux ssh`
 
@@ -713,7 +725,7 @@ SSH because it handles queued full-screen redraws well. Run `railmux doctor
 --remote your-server` for a read-only compatibility check. Railmux's display
 watchdog and remote heartbeat detach only the exact failed display client; they
 do not kill tmux, the shared workspace, or its agents. See
-[the architecture document](docs/ARCHITECTURE.md) for protocol, lease,
+[the architecture document](https://github.com/Rightglow/Railmux/blob/main/docs/ARCHITECTURE.md) for protocol, lease,
 history-cache, and failure-containment details.
 
 ### 4. Will automated review sessions pollute my session list?
@@ -785,4 +797,6 @@ The tmux sidebar idea and initial architecture came from [regmi-saugat/ccmgr](ht
 
 ## Contributing
 
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome; see [CONTRIBUTING.md](https://github.com/Rightglow/Railmux/blob/main/CONTRIBUTING.md).
+Security issues should follow the private-reporting guidance in
+[SECURITY.md](https://github.com/Rightglow/Railmux/blob/main/SECURITY.md).

@@ -10,6 +10,24 @@ from railmux.models import AttentionState, Project, SessionMeta
 from railmux.ui._widgets import ClickableRow
 
 
+_READING_MODAL_HORIZONTAL_PADDING = 1
+
+
+def _reading_modal_box(widget, *, title: str) -> urwid.LineBox:
+    """Give long-form modal content one cell of breathing room per side."""
+    padded = urwid.Padding(
+        widget,
+        left=_READING_MODAL_HORIZONTAL_PADDING,
+        right=_READING_MODAL_HORIZONTAL_PADDING,
+    )
+    return urwid.LineBox(padded, title=title)
+
+
+def _reading_modal_inner_cols(maxcol: int) -> int:
+    """Width received by content inside a padded reading modal."""
+    return max(1, maxcol - 2 - 2 * _READING_MODAL_HORIZONTAL_PADDING)
+
+
 def _action_legend(
     actions: list[tuple[str, str]],
     *,
@@ -379,7 +397,7 @@ class HelpModal(urwid.WidgetWrap):
             footer=self._footer,
             focus_part="body",
         )
-        super().__init__(urwid.LineBox(self._frame, title="Help"))
+        super().__init__(_reading_modal_box(self._frame, title="Help"))
 
     def selectable(self) -> bool:
         return True
@@ -400,7 +418,7 @@ class HelpModal(urwid.WidgetWrap):
             #
             # Adjust size for the LineBox border (1 char each side) so the
             # ListBox's visibility calculations match what's actually on screen.
-            inner_cols = max(1, size[0] - 2)
+            inner_cols = _reading_modal_inner_cols(size[0])
             chrome_rows = (
                 self._header.rows((inner_cols,))
                 + self._footer.rows((inner_cols,))
@@ -579,8 +597,8 @@ class LayoutSaveModal(urwid.WidgetWrap):
         )
         self._actions = _action_legend([
             ("a", "always"),
-            ("t", "next launch once"),
-            ("n / ↵", "skip this time"),
+            ("t", "this time · next launch once"),
+            ("n / ↵", "no · skip this exit"),
             ("v", "never"),
             ("Esc", "back"),
         ], align="center", wrap="space")
@@ -837,7 +855,7 @@ class OptionsModal(urwid.WidgetWrap):
         ])
         frame = urwid.Frame(
             body=self._listbox, footer=self._footer, focus_part="body")
-        super().__init__(urwid.LineBox(frame, title="Options"))
+        super().__init__(_reading_modal_box(frame, title="Options"))
         self._sync_rows()
 
     def _build_group(
@@ -882,7 +900,7 @@ class OptionsModal(urwid.WidgetWrap):
             self._on_close()
             return None
         if key in self._NAV_KEYS or key in ("enter", " "):
-            inner_cols = max(1, size[0] - 2)
+            inner_cols = _reading_modal_inner_cols(size[0])
             footer_rows = self._footer.rows((inner_cols,))
             inner_rows = max(1, size[1] - 2 - footer_rows)
             self._listbox.keypress((inner_cols, inner_rows), key)

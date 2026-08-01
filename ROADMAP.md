@@ -20,6 +20,25 @@ heuristic adoption when its complete pre-launch fence is unavailable.
 
 ## Follow-up candidates
 
+### Maintainability and diagnostics after 0.3
+
+Incrementally extract recovery/watchdog, restore/layout, tmux-status, and SSH
+connection-state responsibilities from the largest UI and display-client
+modules. Keep each extraction behavior-preserving and independently protected
+by the existing lifecycle and protocol tests; do not replace the modules in one
+rewrite.
+
+Evaluate an opt-in, bounded, redacted debug log for field diagnosis. It must
+never record hostnames, usernames, session or pane identities, transcripts,
+environment values, configured commands, credentials, socket paths, or raw
+private paths, and should share the privacy contract already used by
+`railmux doctor`.
+
+Audit `atomic_write_text` separately before preserving an existing destination
+mode. It currently inherits `mkstemp`'s private `0600` mode, including for the
+explicit Claude-history deletion path; changing that behavior needs targeted
+permission semantics rather than a repository-wide chmod guess.
+
 ### Native Windows latest-state SSH client
 
 Windows Terminal running a WSL distribution already uses Railmux's supported

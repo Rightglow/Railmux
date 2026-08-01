@@ -1,7 +1,9 @@
+import re
 from pathlib import Path
 
 import pytest
 
+import railmux
 from tools.release_notes import render_release_notes
 
 
@@ -26,6 +28,28 @@ CHANGELOG = """\
 [0.2.3]: https://example.test/compare/v0.2.2...v0.2.3
 [0.2.30]: https://example.test/compare/v0.2.3...v0.2.30
 """
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_current_package_version_has_curated_release_notes():
+    notes = render_release_notes(
+        (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"),
+        railmux.__version__,
+    )
+
+    assert notes.strip()
+
+
+def test_pypi_readme_has_no_repository_relative_assets_or_links():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    relative_markdown = re.findall(
+        r"\]\((?!https?://|#|mailto:)[^)]+\)", readme)
+    relative_html = re.findall(
+        r'(?:src|href)="(?!https?://|#|mailto:|data:)[^"]+"', readme)
+
+    assert relative_markdown == []
+    assert relative_html == []
 
 
 def test_renders_exact_release_section_and_comparison_link():

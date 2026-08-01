@@ -224,7 +224,9 @@ def test_layout_save_height_tracks_wrapped_description_and_actions():
     text = " ".join(
         _rendered_text(modal, size=(22, narrow)).replace("│", " ").split())
     assert "always" in text
+    assert "this time" in text
     assert "next launch once" in text
+    assert "no" in text
     assert "never" in text
     assert "back" in text
 
@@ -237,8 +239,10 @@ def test_layout_save_actions_remain_visible_when_body_height_is_clamped():
         _rendered_text(modal, size=(32, 10)).replace("│", " ").split())
 
     assert "always" in text
+    assert "this time" in text
     assert "next launch once" in text
-    assert "skip this time" in text
+    assert "no" in text
+    assert "skip this exit" in text
     assert "never" in text
     assert "back" in text
 
@@ -352,6 +356,20 @@ def test_help_explains_bottom_left_workspace_target_indicator():
     assert "◧ / ◨" in text
     assert "⬒ / ⬓" in text
     assert "filled half is the Target pane" in normalized
+
+
+def test_help_long_form_content_has_horizontal_breathing_room():
+    modal = HelpModal(
+        on_close=lambda: None,
+        provider_label="Codex",
+        on_ask=lambda: None,
+    )
+
+    lines = _rendered_text(modal, size=(60, 80)).splitlines()
+
+    assert next(line for line in lines if "Navigation" in line).startswith(
+        "│ Navigation"
+    )
 
 
 def test_help_ask_is_explicit_keyboard_mouse_action_and_close_stays_separate():

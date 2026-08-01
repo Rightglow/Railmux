@@ -76,7 +76,7 @@ product capability.
 | P02 | Discover resumable sessions created outside Railmux | Supported | Supported | One-shot `codex exec` and private Help sessions are filtered. |
 | P03 | Project list, project selection, and new project/directory creation | Supported | Supported | Creation is explicit and never inferred from an arbitrary failed match. |
 | P04 | Read-only history preview with provider-aware formatting | Supported | Supported | Latest 2,000 saved records; internal/encrypted reasoning is hidden. |
-| P05 | Start a new session and resume an existing session | Supported | Supported | Provider history is never rewritten by Railmux. |
+| P05 | Start a new session and resume an existing session | Supported | Supported | Starting, resuming, previewing, and switching never rewrite provider history; confirmed P09 deletion is the explicit exception. |
 | P06 | Preview/switch on single click or Space; open/focus on double-click or Enter | Supported | Supported | Requires mouse reports for pointer actions; keyboard path is authoritative. |
 | P07 | Session Info, rename, star, and copy title | Supported | Supported | Rename and favorites are Railmux metadata; copy depends on clipboard capability. |
 | P08 | Kill a live provider while retaining history | Supported | Supported | Revalidates immutable tmux/provider identity before mutation. |

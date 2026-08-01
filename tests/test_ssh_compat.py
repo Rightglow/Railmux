@@ -28,6 +28,25 @@ def test_newer_remote_consent_is_reentrant_and_decline_can_attach():
     assert accepted.install_version == "3.0"
 
 
+def test_030_client_can_decline_upgrade_of_compatible_021_remote():
+    candidate = facts(
+        local_version="0.3.0",
+        remote_version="0.2.21",
+        local_protocol=14,
+        remote_protocol=14,
+    )
+
+    prompt = decide(candidate)
+    declined = decide(candidate, {"remote_install": False})
+
+    assert prompt.action == "prompt"
+    assert prompt.prompt == "remote_install"
+    assert prompt.optional
+    assert prompt.install_version == "0.3.0"
+    assert declined.action == "attach"
+    assert "compatible remote Railmux 0.2.21" in (declined.warning or "")
+
+
 def test_newer_not_ready_remote_repairs_its_newer_version_and_decline_is_fatal():
     candidate = facts(remote_version="3.0", remote_ready=False)
     declined_local = {"local_upgrade": False}

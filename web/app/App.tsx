@@ -131,8 +131,8 @@ export default function Home() {
           </div>
           <div className="hero-demo">
             <div className="capture-meta">
-              <span><i /> CLAUDE CODE 2.1.220 STARTUP · ISOLATED RAILMUX</span>
-              <small>recorded identity block · deterministic local agent · no live provider call</small>
+              <span><i /> CAPTURED CLAUDE CODE 2.1.220 · ISOLATED RAILMUX</span>
+              <small>recorded Railmux UI · replayed provider transcript · no live provider call</small>
             </div>
             <TerminalRecording
               className="hero-terminal-recording"
@@ -209,8 +209,8 @@ export default function Home() {
               </div>
               <div className="workflow-player">
                 <div className="capture-meta capture-meta-dark">
-                  <span><i /> GUIDED REAL TERMINAL</span>
-                  <small>keyboard cue shown · pointer marks the matching mouse target</small>
+                  <span><i /> RECORDED RAILMUX UI · ISOLATED TMUX</span>
+                  <small>guided input cues · replayed provider transcript · no live provider call</small>
                 </div>
                 <TerminalRecording
                   source="railmux-workflow-demo.cast"
@@ -338,8 +338,8 @@ export default function Home() {
             <div className="lifecycle-demo-grid">
               <div className="lifecycle-player">
                 <div className="capture-meta capture-meta-dark">
-                  <span><i /> REAL MODE, LAYOUT, AND QUIT UI</span>
-                  <small>keyboard recorded · pointer marks supported mouse equivalents</small>
+                  <span><i /> RECORDED RAILMUX UI · MODE, LAYOUT, QUIT</span>
+                  <small>guided input cues · replayed provider transcript · no live provider call</small>
                 </div>
                 <TerminalRecording
                   source="railmux-controls-demo.cast"
@@ -416,7 +416,7 @@ export default function Home() {
                   controls={false}
                   dataDemo="dual-recording"
                 />
-                <small>REAL RAILMUX CAPTURE · CLAUDE CODE + CODEX</small>
+                <small>RECORDED RAILMUX UI · REPLAYED CLAUDE CODE + CODEX</small>
               </div>
             </article>
             <article className="feature-showcase feature-showcase-sidebar">
