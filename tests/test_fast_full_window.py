@@ -4795,6 +4795,28 @@ def test_interruptible_connection_status_yields_to_first_user_action():
     assert not surface.dismiss_interruptible_local_status()
 
 
+def test_timed_termux_hint_expires_and_newer_status_cancels_its_deadline():
+    surface = TerminalSurface(io.BytesIO())
+    surface.show_local_status(
+        "Tap the prompt again to open the keyboard",
+        interruptible=True,
+        expires_at=7.0,
+    )
+
+    assert not surface.expire_local_status(6.99)
+    assert surface.expire_local_status(7.0)
+    assert surface._local_status_text is None
+
+    surface.show_local_status(
+        "Tap the prompt again to open the keyboard",
+        interruptible=True,
+        expires_at=8.0,
+    )
+    surface.show_local_status("Checking remote path…")
+    assert not surface.expire_local_status(9.0)
+    assert surface._local_status_text == "Checking remote path…"
+
+
 def test_path_open_prompt_names_the_inside_surface_as_managed_vim():
     output = io.BytesIO()
     surface = TerminalSurface(output)

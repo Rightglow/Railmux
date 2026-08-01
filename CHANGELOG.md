@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Make the Termux “tap the prompt again” keyboard hint transient and
+  interruptible, so it yields to later status messages and restores Railmux's
+  normal status-right content after two seconds.
+
 ## [0.2.21] - 2026-08-01
 
 ### Added

@@ -625,6 +625,7 @@ class TerminalSurface:
         self._local_status_level = "info"
         self._local_status_bounds: tuple[int, int, int] | None = None
         self._local_status_interruptible = False
+        self._local_status_expires_at: float | None = None
 
     def _mouse_mode(self, enabled: bool) -> bytes:
         suffix = b"h" if enabled else b"l"
@@ -772,6 +773,7 @@ class TerminalSurface:
         *,
         level: str = "info",
         interruptible: bool = False,
+        expires_at: float | None = None,
     ) -> None:
         """Show local feedback without erasing Railmux's status-left brand."""
         self.start()
@@ -782,6 +784,7 @@ class TerminalSurface:
         self._local_status_text = safe
         self._local_status_level = level
         self._local_status_interruptible = interruptible
+        self._local_status_expires_at = expires_at
         rendered = [self._render_local_status()]
         if self._last_screen is not None:
             projection_top, visible_height = self._projection(
@@ -849,6 +852,15 @@ class TerminalSurface:
         self._local_status_text = None
         self._local_status_bounds = None
         self._local_status_interruptible = False
+        self._local_status_expires_at = None
+
+    def expire_local_status(self, now: float) -> bool:
+        """Clear one locally timed status and report whether repaint is due."""
+        deadline = self._local_status_expires_at
+        if deadline is None or now < deadline:
+            return False
+        self.clear_local_status()
+        return True
 
     def dismiss_interruptible_local_status(self) -> bool:
         """Let the first user action reveal Railmux's authoritative status."""
@@ -2746,7 +2758,12 @@ def run(args: argparse.Namespace) -> int:
                 history_info_until = None
                 surface.suspend_mouse()
                 if touch_action.show_hint:
-                    surface.show_local_status(_TERMUX_TOUCH_HINT)
+                    now = time.monotonic()
+                    surface.show_local_status(
+                        _TERMUX_TOUCH_HINT,
+                        interruptible=True,
+                        expires_at=now + _HISTORY_INFO_SECONDS,
+                    )
             if touch_action.handled:
                 return
             selection_action = selection.pointer_event(
@@ -3247,7 +3264,7 @@ def run(args: argparse.Namespace) -> int:
                         "Remote path open timed out",
                         "warning",
                     ))
-                restore_local_status = (
+                restore_local_status = surface.expire_local_status(now) or (
                     history_info_until is not None and now >= history_info_until
                 )
                 clear_selection = (
