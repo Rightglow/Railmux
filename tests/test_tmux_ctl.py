@@ -514,6 +514,15 @@ def test_root_wheel_forwarding_requires_stock_bindings_and_tmux_27():
                return_value=backup):
         assert tmux_ctl.prepare_root_wheel_bindings() == backup
 
+    tmux_32_backup = dict(
+        backup,
+        WheelUpPane=backup["WheelUpPane"].replace("send-keys -M", "send -M"),
+    )
+    with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 2)), \
+         patch("railmux.tmux_ctl.read_root_wheel_bindings",
+               return_value=tmux_32_backup):
+        assert tmux_ctl.prepare_root_wheel_bindings() == tmux_32_backup
+
     custom = dict(backup, WheelDownPane=(
         "bind-key -T root WheelDownPane display-message custom"))
     with patch("railmux.tmux_ctl.tmux_version", return_value=(3, 4)), \

@@ -2623,15 +2623,9 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     client_name = ""
 
     def send_client_key(key: str) -> None:
-        if tmux_ctl.tmux_version() >= (3, 0):
-            subprocess.run(
-                ["tmux", "send-keys", "-K", "-c", client_name, key],
-                check=True,
-            )
-            return
-        # tmux 2.7 predates send-keys -K. Feed the corresponding xterm bytes
-        # to the same attached client so the binding still executes through
-        # the real terminal input path.
+        # Feed xterm bytes to the attached client on every supported version.
+        # ``send-keys -K`` is absent from tmux 3.2 even though later releases
+        # provide it; the raw path also exercises the real terminal decoder.
         sequence = {"F8": b"\x1b[19~", "C-b": b"\x02", "Tab": b"\t"}[key]
         assert client_process.stdin is not None
         client_process.stdin.write(sequence)

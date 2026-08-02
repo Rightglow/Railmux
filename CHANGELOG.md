@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep the isolated real-tmux soft-quit smoke test independent of published
   version-update prompts, so a newer PyPI release cannot alter CI behavior.
+- Recognize tmux 3.2's stock `send -M` wheel binding spelling as equivalent to
+  newer tmux's `send-keys -M`, restoring safe sidebar wheel forwarding without
+  accepting custom root bindings.
 
 ## [0.3.2] - 2026-08-02
 
