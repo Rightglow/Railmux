@@ -50,3 +50,29 @@ of the complete diff, not only a correctness pass:
   transitional wording, and accidental scope growth before delivery.
 
 Follow [`CONTRIBUTING.md`](CONTRIBUTING.md) for verification and delivery.
+
+## Branch and release scope
+
+`main` is the release-ready POSIX/WSL product line. It must not contain native
+Windows development code, native Windows dependencies, native Windows CI jobs,
+or support claims for running local Railmux or the local `railmux ssh` client
+from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
+`main` because Railmux runs inside the supported Linux runtime there.
+
+`windows-preview` is the long-lived integration branch for native Windows
+local mode and the native Windows side of `railmux ssh`. It contains the
+current `main` behavior plus the experimental ConPTY/Windows adapters and may
+publish only PEP 440 development releases. Develop Windows changes on focused
+branches based on `windows-preview`, then merge them back into
+`windows-preview`; never merge that branch wholesale into `main`.
+
+Shared POSIX/provider fixes belong in `main` first and flow one way into
+`windows-preview`. If a bug is discovered while testing Windows, separate the
+provider-neutral fix from the Windows adapter change and land only the former
+in `main`. Keep commits separable so a future Windows promotion can be reviewed
+and merged deliberately instead of importing the preview branch's history.
+
+Before changing code or publishing, verify the current branch. Final
+`MAJOR.MINOR.PATCH` tags must point to commits reachable from `main`;
+Windows-preview tags must contain `.devN` and point to commits reachable from
+`windows-preview`.
