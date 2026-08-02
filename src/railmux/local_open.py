@@ -87,17 +87,14 @@ class OpenResult:
 
 
 def _detached_popen(argv: Sequence[str]) -> None:
-    kwargs = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.DEVNULL,
-        "stderr": subprocess.DEVNULL,
-        "close_fds": True,
-    }
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x00000200
-    else:
-        kwargs["start_new_session"] = True
-    subprocess.Popen(list(argv), **kwargs)
+    subprocess.Popen(
+        list(argv),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
 
 
 def _url_opener() -> tuple[str, ...] | None:
@@ -120,17 +117,6 @@ def _url_opener() -> tuple[str, ...] | None:
 
 def open_url(url: str) -> OpenResult:
     """Open one already validated HTTP(S) URL without invoking a shell."""
-    if os.name == "nt":
-        try:
-            os.startfile(url)
-        except OSError:
-            return OpenResult(
-                False,
-                "Could not open local browser · URL copied",
-                "warning",
-                url.encode("utf-8"),
-            )
-        return OpenResult(True, "Opened URL in local browser", "success")
     opener = _url_opener()
     if opener is None:
         return OpenResult(
@@ -274,13 +260,6 @@ def _wsl_terminal_argv(ssh_argv: Sequence[str]) -> tuple[str, ...] | None:
     )
 
 
-def _windows_terminal_argv(ssh_argv: Sequence[str]) -> tuple[str, ...] | None:
-    terminal = shutil.which("wt.exe") or shutil.which("wt")
-    if terminal is None:
-        return None
-    return (terminal, "new-tab", "--", *ssh_argv)
-
-
 def open_remote_path(
     destination: str,
     *,
@@ -301,14 +280,8 @@ def open_remote_path(
         line=line,
         column=column,
     )
-    command = (
-        subprocess.list2cmdline(ssh_argv)
-        if os.name == "nt"
-        else shlex.join(ssh_argv)
-    )
-    if os.name == "nt":
-        terminal_argv = _windows_terminal_argv(ssh_argv)
-    elif sys.platform == "darwin":
+    command = shlex.join(ssh_argv)
+    if sys.platform == "darwin":
         terminal_argv = _mac_terminal_argv(command)
     elif os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
         terminal_argv = _wsl_terminal_argv(ssh_argv)

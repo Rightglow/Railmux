@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.wheel_smoke import _import_probe_code, _install_argv, _installed_paths
+from tools.wheel_smoke import _install_argv, _installed_paths
 
 
 @pytest.mark.parametrize(
@@ -40,8 +40,3 @@ def test_prefix_install_cannot_uninstall_invoking_environment(
     assert "--ignore-installed" in argv
     assert "--force-reinstall" not in argv
     assert argv[-1] == f"{wheel}[ssh]"
-
-
-def test_windows_wheel_probe_imports_conpty_dependency():
-    assert "import winpty" in _import_probe_code(windows=True)
-    assert "import winpty" not in _import_probe_code(windows=False)

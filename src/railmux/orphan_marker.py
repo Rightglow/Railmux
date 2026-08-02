@@ -5,17 +5,14 @@ import json
 import math
 import os
 import re
+import stat
 import hashlib
+import fcntl
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from railmux import restart_state
-from railmux.platform.filelock import try_lock, unlock
-from railmux.platform.file_security import (
-    prepare_private_directory,
-    private_regular_file,
-)
 
 
 SCHEMA_VERSION = 2
@@ -230,7 +227,11 @@ def claim_owner(
     """Non-blocking compare/write/readback owner claim under a crash-safe lock."""
     lock_path = _claim_lock_path(marker)
     try:
-        if not prepare_private_directory(lock_path.parent, tighten=False):
+        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent = lock_path.parent.stat()
+        if (not stat.S_ISDIR(parent.st_mode)
+                or parent.st_uid != os.getuid()
+                or parent.st_mode & 0o077):
             return None
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
@@ -240,9 +241,13 @@ def claim_owner(
         return None
     try:
         info = os.fstat(fd)
-        if not private_regular_file(info):
+        if (not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o077):
             return None
-        if not try_lock(fd):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
             return None
         # Compare while holding the lock. A contender that read the same dead
         # owner before us must observe our claim and fail instead of overwriting.
@@ -260,7 +265,7 @@ def claim_owner(
             claimed.tmux_session_id, OPTION_NAME)) == claimed else None
     finally:
         try:
-            unlock(fd)
+            fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
             pass
         os.close(fd)

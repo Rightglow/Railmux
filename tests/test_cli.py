@@ -90,21 +90,6 @@ def test_force_enable_scroll_coalescing_locally(tmp_path):
     assert app_cls.call_args.kwargs["scroll_coalescing"] is True
 
 
-def test_native_windows_dispatches_before_tmux_preflight(monkeypatch, tmp_path):
-    native_main = MagicMock(return_value=0)
-    preflight = MagicMock(return_value=False)
-    monkeypatch.setattr("railmux.cli._native_windows", lambda: True)
-    monkeypatch.setattr("railmux.cli.ensure_tmux_available", preflight)
-    monkeypatch.setattr("railmux.winlocal.client.main", native_main)
-
-    result = main(["--project", str(tmp_path)])
-
-    assert result == 0
-    native_main.assert_called_once()
-    assert native_main.call_args.args[0] == ["--project", str(tmp_path)]
-    preflight.assert_not_called()
-
-
 def test_is_ssh_session_recognizes_common_markers():
     assert is_ssh_session({"SSH_CONNECTION": "client 1 server 2"})
     assert is_ssh_session({"SSH_CLIENT": "client 1 2"})

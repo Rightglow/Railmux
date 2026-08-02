@@ -6,6 +6,7 @@ exit, and refuses to enable when the user has customized wheel bindings.
 """
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -15,7 +16,6 @@ import tempfile
 from pathlib import Path
 
 from railmux import tmux_ctl
-from railmux.platform.filelock import try_lock, unlock
 
 
 class ScrollManager:
@@ -44,7 +44,9 @@ class ScrollManager:
         lock_path = Path(tempfile.gettempdir()) / f"{prefix}.lock"
         state_path = Path(tempfile.gettempdir()) / f"{prefix}.json"
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        if not try_lock(fd):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
             os.close(fd)
             return False
         self._lock_fd = fd
@@ -229,7 +231,7 @@ class ScrollManager:
         if self._agent_session:
             tmux_ctl.kill_session(self._agent_session)
         self._remove_state()
-        unlock(self._lock_fd)
+        fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
         os.close(self._lock_fd)
         self._lock_fd = None
         self._agent_session = self._agent_pane = None

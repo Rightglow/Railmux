@@ -27,15 +27,6 @@ def test_reusable_workflow_pins_and_runs_tmux_27_compatibility_floor():
     assert "RAILMUX_RUN_TMUX_INTEGRATION: \"1\"" in workflow
 
 
-def test_reusable_workflow_has_native_windows_client_matrix():
-    workflow = (ROOT / ".github/workflows/test.yml").read_text()
-
-    assert "windows-client:" in workflow
-    assert "runs-on: windows-latest" in workflow
-    assert 'python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]' in workflow
-    assert "tools/wheel_smoke.py $wheel.FullName" in workflow
-
-
 def test_tag_push_does_not_start_an_unrelated_duplicate_test_run():
     test = (ROOT / ".github/workflows/test.yml").read_text()
 

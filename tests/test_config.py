@@ -175,7 +175,6 @@ def test_provider_binary_must_be_a_non_empty_string(tmp_path):
 
 def test_resolved_codex_home_expands_user(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     cfg = Config(codex_home="~/.codex")
     assert cfg.resolved_codex_home() == tmp_path / ".codex"
 

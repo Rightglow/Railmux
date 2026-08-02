@@ -10,11 +10,10 @@ import json
 from pathlib import Path
 
 from railmux.atomic_file import atomic_write_text
-from railmux.platform.config_paths import config_dir
 
 
 def _favorites_path() -> Path:
-    return config_dir() / "favorites.json"
+    return Path.home() / ".config" / "railmux" / "favorites.json"
 
 
 class Favorites:

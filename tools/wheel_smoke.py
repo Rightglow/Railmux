@@ -85,17 +85,6 @@ def _user_state_snapshot(env: dict[str, str]) -> dict[str, tuple[str, ...]]:
     return snapshot
 
 
-def _import_probe_code(*, windows: bool) -> str:
-    platform_imports = "import winpty; " if windows else ""
-    return (
-        "import json, pathlib, railmux, "
-        "railmux.fast_display_client, railmux.remote_config, pyte; "
-        + platform_imports
-        + "print(json.dumps({'version': railmux.__version__, "
-        "'path': str(pathlib.Path(railmux.__file__).resolve())}))"
-    )
-
-
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("wheel", type=Path)
@@ -129,7 +118,12 @@ def main() -> int:
             [
                 sys.executable,
                 "-c",
-                _import_probe_code(windows=os.name == "nt"),
+                (
+                    "import json, pathlib, railmux, "
+                    "railmux.fast_display_client, railmux.remote_config, pyte; "
+                    "print(json.dumps({'version': railmux.__version__, "
+                    "'path': str(pathlib.Path(railmux.__file__).resolve())}))"
+                ),
             ],
             cwd=root,
             env=env,

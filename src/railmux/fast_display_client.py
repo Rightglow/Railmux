@@ -14,12 +14,15 @@ import base64
 import json
 import os
 import re
+import select
 import selectors
 import shlex
 import shutil
 import subprocess
 import sys
+import termios
 import time
+import tty
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
@@ -78,8 +81,6 @@ from railmux.fast_display_protocol import (
     encode_path_open_request,
     encode_resize,
 )
-from railmux.platform.console import RawConsole
-from railmux.platform.multiplex import PortableSelector, wait_readable
 from railmux.pane_surface import render_startup_surface
 from railmux.ssh_compat import CompatibilityFacts, decide as decide_compatibility
 from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
@@ -319,7 +320,7 @@ def await_remote_attach_status(
         readers = [process.stdout.fileno()]
         if cancel_fd is not None:
             readers.append(cancel_fd)
-        readable = wait_readable(readers, remaining)
+        readable, _writable, _exceptional = select.select(readers, [], [], remaining)
         if not readable:
             return RemoteAttachKind.TIMEOUT
         if cancel_fd is not None and cancel_fd in readable:
@@ -415,7 +416,7 @@ def await_remote_startup(
         readers = [process.stdout.fileno()]
         if cancel_fd is not None:
             readers.append(cancel_fd)
-        readable = wait_readable(readers, remaining)
+        readable, _writable, _exceptional = select.select(readers, [], [], remaining)
         if not readable:
             return RemoteStartup(RemoteStartKind.TIMEOUT)
         if cancel_fd is not None and cancel_fd in readable:
@@ -602,8 +603,20 @@ def _is_soft_keyboard_projection(
     )
 
 
-class RawTerminal(RawConsole):
-    """Backward-compatible name for the platform raw-console port."""
+class RawTerminal:
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
+        self.saved: Optional[list[object]] = None
+
+    def __enter__(self) -> "RawTerminal":
+        self.saved = termios.tcgetattr(self.fd)
+        tty.setraw(self.fd)
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.saved is not None:
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
+            self.saved = None
 
 
 class TerminalSurface:
@@ -1877,7 +1890,9 @@ def _wait_reconnect_delay(delay: float, cancel_fd: int) -> None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return
-        readable = wait_readable([cancel_fd], remaining)
+        readable, _writable, _exceptional = select.select(
+            [cancel_fd], [], [], remaining
+        )
         if readable:
             _consume_reconnect_input(cancel_fd)
 
@@ -2398,7 +2413,7 @@ def run(args: argparse.Namespace) -> int:
     touch_keyboard = TermuxTouchKeyboard(
         enabled=not args.no_mouse and termux_touch
     )
-    selector = PortableSelector()
+    selector = selectors.DefaultSelector()
     selector.register(process.stdout.fileno(), selectors.EVENT_READ, "remote")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "local")
     started = time.monotonic()
@@ -2943,9 +2958,7 @@ def run(args: argparse.Namespace) -> int:
     )
     history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
     try:
-        with RawTerminal(
-            sys.stdin.fileno(), output_fd=sys.stdout.fileno()
-        ):
+        with RawTerminal(sys.stdin.fileno()):
             while True:
                 observed_size = os.get_terminal_size(sys.stdout.fileno())
                 if observed_size != local_size:

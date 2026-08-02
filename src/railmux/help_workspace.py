@@ -1,12 +1,12 @@
 """Materialise the private, read-only context used by Ask Railmux."""
 from __future__ import annotations
 
+import os
 from importlib import metadata
 from pathlib import Path
 
 from railmux import __version__
 from railmux.atomic_file import atomic_write_text
-from railmux.platform.config_paths import data_dir
 
 
 _FALLBACK_GUIDE = """# Railmux
@@ -35,7 +35,12 @@ permissions.
 
 def help_workspace_path() -> Path:
     """Return Railmux's per-user help workspace, following the XDG spec."""
-    return data_dir() / "help"
+    raw = os.environ.get("XDG_DATA_HOME")
+    if raw:
+        candidate = Path(raw).expanduser()
+        if candidate.is_absolute():
+            return candidate / "railmux" / "help"
+    return Path.home() / ".local" / "share" / "railmux" / "help"
 
 
 def _source_readme() -> str | None:

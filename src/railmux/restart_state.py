@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,10 +17,6 @@ from pathlib import Path
 from railmux import tmux_ctl
 from railmux.atomic_file import atomic_write_text
 from railmux.config import default_config_path
-from railmux.platform.runtime_paths import (
-    ensure_private_dir as _platform_ensure_private_dir,
-    runtime_base as _platform_runtime_base,
-)
 
 
 SCHEMA_VERSION = 1
@@ -136,7 +133,10 @@ def _process_start_token(pid: int) -> str | None:
 
 
 def runtime_base() -> Path:
-    return _platform_runtime_base()
+    run_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if run_dir:
+        return Path(run_dir)
+    return Path(f"/tmp/railmux-{os.getuid()}")
 
 
 def instances_dir() -> Path:
@@ -163,13 +163,18 @@ def legacy_state_path() -> Path:
 
 def _ensure_private_dir(path: Path) -> None:
     """Create and verify a Railmux-owned 0700 runtime directory."""
-    _platform_ensure_private_dir(path)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.stat()
+    if (not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_mode & 0o077):
+        raise OSError("Railmux runtime state directory is not private")
 
 
 def _ensure_private_runtime_tree() -> None:
     """Protect every Railmux-owned layer of the production runtime path."""
     base = runtime_base()
-    if os.name == "nt" or not os.environ.get("XDG_RUNTIME_DIR"):
+    if not os.environ.get("XDG_RUNTIME_DIR"):
         # The /tmp fallback itself is Railmux-owned; unlike an externally
         # managed XDG runtime root, it must not retain umask-default 0755.
         _ensure_private_dir(base)

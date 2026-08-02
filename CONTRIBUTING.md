@@ -4,8 +4,7 @@ Thanks for your interest in railmux. Issues and pull requests are welcome.
 
 ## Dev setup
 
-railmux targets Python 3.9+ on POSIX/WSL and Python 3.10+ on native Windows.
-POSIX direct mode requires `tmux` on `PATH`; native Windows uses ConPTY.
+railmux targets Python 3.9+ and requires `tmux` on `PATH`.
 
 ```bash
 git clone https://github.com/Rightglow/Railmux

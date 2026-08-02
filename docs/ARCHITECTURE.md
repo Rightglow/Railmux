@@ -5,63 +5,7 @@ It is intentionally separate from the user-facing README. Read it before
 changing providers, mode switching, outer tmux panes, previews, or restore
 state.
 
-## Multiplexer ownership is selected once per local runtime
-
-The shared `App` consumes a Railmux-level multiplexer backend. POSIX direct and
-remote-server paths use `TmuxBackend`; native Windows uses `WinMuxBackend` and
-must never emulate tmux command strings, install MSYS2/Cygwin, or dispatch a
-hidden tmux executable. Provider launch authority crosses this boundary as an
-argv/cwd/bounded-environment `LaunchSpec`. Only explicit `.cmd`/`.bat` provider
-shims pass through `cmd.exe /d /s /c`, with Windows argv quoting and never
-`shell=True`.
-
-Native Windows has one detached per-user daemon which exclusively owns every
-ConPTY handle, the shared Urwid controller, compositor, and live-session
-registry. Terminal processes are disposable authenticated frontends. Closing a
-window or using the local `Ctrl-]` escape closes only that frontend; it cannot
-terminate the daemon or a provider. The daemon publishes a loopback TCP port,
-random 256-bit token, random daemon lifetime ID, and PID in the current user's
-non-roaming LocalAppData runtime directory. Every connection must prove that
-token before input or frames are accepted. A single-user lock prevents two
-daemons from publishing competing authority. The runtime directory uses a
-protected inheritable DACL limited to the current owner and LocalSystem; an
-untrusted or reparse-point directory fails closed. A daemon with no connected
-frontends and no live provider sessions exits after a bounded idle interval and
-removes its published endpoint.
-
-The daemon compositor and the POSIX SSH helper share one bounded terminal
-emulator extension and row renderer. The native frontend reuses the versioned
-screen-update/input protocol inside length-bounded local IPC, but local IPC
-authentication and lifecycle are independent of the SSH attach protocol. The
-daemon routes keyboard and translated SGR mouse input to either the Urwid
-sidebar, a displayed provider ConPTY, or the built-in read-only transcript
-pager. Single, dual, stacked, compact/fullscreen projection, status, cursor,
-and terminal modes are composed into one outer VT screen.
-
-Native durable session records are recovery hints, not process authority. The
-live daemon may reattach its own exact in-memory ConPTY sessions across
-frontend and UI restarts. After a daemon-lifetime mismatch, saved live-looking
-records are demoted to `resume_offer`, their PID is discarded, and provider
-history discovery may offer an ordinary provider-supported resume. A new
-daemon never adopts an existing PID or reconstructs a ConPTY from a name, cwd,
-or saved session ID. Soft Quit leaves exact daemon-owned providers alive; hard
-quit revalidates and terminates only those exact handles.
-
-Native Claude project discovery does not run the POSIX encoded-path
-backtracker against drive letters or UNC roots. It reads a bounded `cwd` from
-Claude's own transcript, requires that path to be absolute and present, and
-verifies its lossy Claude encoding against the enclosing project directory
-before exposing the project. Codex continues to use its rollout metadata.
-
-Native Windows never derives persistent text encoding from the active ANSI
-code page. Railmux-owned TOML/JSON state and provider-owned JSONL transcripts
-are read and written with explicit UTF-8; read-only transcript scans may
-replace isolated invalid bytes, while read-modify-write operations fail closed
-instead of rewriting undecodable data. Captured diagnostic/version output also
-uses explicit UTF-8 with replacement so a localized subprocess cannot crash
-startup or become a persistence authority.
-
-## POSIX Railmux owns a dedicated tmux server
+## Railmux owns a dedicated tmux server
 
 Every production launcher and remote display helper addresses the non-default
 `railmux` tmux socket explicitly. Starting Railmux from a foreign tmux client
@@ -488,7 +432,7 @@ to that section's own `ListBox`.
 
 ## Restart state has two authorities
 
-POSIX instance-local recovery state lives under `XDG_RUNTIME_DIR` (or the existing
+Instance-local recovery state lives under `XDG_RUNTIME_DIR` (or the existing
 macOS-compatible `/tmp/railmux-UID` fallback). Its filename is derived from a
 privacy-safe tmux server-lifetime digest plus the immutable outer pane ID. The
 payload repeats that owner identity and is rejected unless it matches the live
@@ -527,10 +471,6 @@ left for manual cleanup.
 Detached-session tmux stamps and swap-transport markers retain their own exact
 lifetimes and validation. Runtime JSON is a cache and must not become a
 competing authority for adopting, killing, or replacing an agent pane.
-
-Native Windows does not consume this tmux-owner handoff. Its daemon lifetime
-and in-memory ConPTY handles are the live authority, and its LocalAppData
-session store follows the `resume_offer` rule above.
 
 Legacy detached-session discovery still derives truncated tmux names with
 `App._safe_name` and resolves them with `_resolve_truncated_id`. Their character
@@ -702,7 +642,7 @@ responsive defaults for that run and must not overwrite the good profile
 unless the user subsequently establishes new geometry. Failed F8 transitions
 similarly restore the prior active ratios and acquire no persistence authority.
 
-## POSIX agent display transports preserve one ownership model
+## Agent display transports preserve one ownership model
 
 The default `swap` transport moves the real agent pane into the display window.
 The `nested` transport runs a tmux client in the outer display pane and remains

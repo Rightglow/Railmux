@@ -164,32 +164,6 @@ def test_remote_path_uses_new_wsl_terminal_tab(monkeypatch):
     assert "command -v vim" in launched[0][-1]
 
 
-def test_native_windows_terminal_keeps_ssh_arguments_separate(monkeypatch):
-    monkeypatch.setattr(
-        local_open.shutil,
-        "which",
-        lambda name: r"C:\Program Files\WindowsApps\wt.exe"
-        if name == "wt.exe" else None,
-    )
-
-    argv = local_open._windows_terminal_argv((
-        "ssh", "-J", "jump host", "-t", "--", "target", "safe command"
-    ))
-
-    assert argv == (
-        r"C:\Program Files\WindowsApps\wt.exe",
-        "new-tab",
-        "--",
-        "ssh",
-        "-J",
-        "jump host",
-        "-t",
-        "--",
-        "target",
-        "safe command",
-    )
-
-
 def test_remote_path_status_distinguishes_directory_and_binary(monkeypatch):
     monkeypatch.setattr(local_open.sys, "platform", "darwin")
     monkeypatch.setattr(

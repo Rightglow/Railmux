@@ -39,15 +39,20 @@ mode. It currently inherits `mkstemp`'s private `0600` mode, including for the
 explicit Claude-history deletion path; changing that behavior needs targeted
 permission semantics rather than a repository-wide chmod guess.
 
-### Native Windows field validation and managed tools
+### Native Windows latest-state SSH client
 
-Native local ConPTY mode and the native latest-state SSH client now exist as a
-Preview. Promotion to Supported is an evidence task: complete the real-provider
-and Windows Terminal checklist in `docs/SUPPORT_MATRIX.md`, then address any
-terminal/IME behavior found there. The POSIX-only managed shell/Vim tool-pane
-transaction is deliberately unavailable in the first native preview; adding a
-Windows implementation requires a Railmux-level tool-surface backend rather
-than importing tmux ownership grammar into `WinMuxBackend`.
+Windows Terminal running a WSL distribution already uses Railmux's supported
+Linux client path. The remaining platform target is native Windows Python in
+Windows Terminal or PowerShell, while the remote helper continues to run on a
+POSIX host with tmux.
+
+Treat this as a local platform adapter rather than a collection of
+`sys.platform` conditionals. It must replace POSIX raw-TTY and selectable-pipe
+assumptions, add Windows console/resize/clipboard/browser/terminal-launch
+boundaries, and retain the existing protocol and remote session-safety model.
+The complete functional baseline and acceptance checklist live in
+`docs/SUPPORT_MATRIX.md`; WSL unit coverage alone is not sufficient evidence
+for the native Windows support claim.
 
 ### Dual-agent workspace follow-ups
 

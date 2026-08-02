@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Mapping, MutableMapping
 
 from railmux.config import Config
-from railmux.platform import is_windows
 
 
 TMUX_BINARY_ENV = "RAILMUX_TMUX_BINARY"
@@ -67,7 +66,7 @@ def runtime_environment(
             result[TMUX_BINARY_ENV] = tmux_command
     else:
         result.pop(TMUX_BINARY_ENV, None)
-    if config.locale != "inherit" and not is_windows():
+    if config.locale != "inherit":
         result["LC_ALL"] = config.locale
     return result
 
@@ -158,8 +157,6 @@ def check_utf8_locale(
     timeout: float = 3.0,
 ) -> tuple[bool, str]:
     """Confirm that one installed locale selects a UTF-8 character map."""
-    if is_windows():
-        return True, "native Windows VT uses Unicode"
     if value == "inherit":
         return True, "inherited environment"
     env = dict(os.environ if environ is None else environ)

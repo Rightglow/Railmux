@@ -7,60 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.2.dev5] - 2026-08-02
+## [0.3.2] - 2026-08-02
 
 ### Fixed
 
 - Add the previously missing native/local Termux prompt-tap handoff: a
   fail-closed stock tmux left-click wrapper yields an authoritative agent input
   row to Android, restores mouse ownership on keyboard projection/close and
-  teardown, and includes a process-independent nonce watchdog. This is separate
-  from the existing `railmux ssh` client path.
-
-## [0.3.2.dev4] - 2026-08-02
-
-### Fixed
-
-- Keep the non-UTF-8 CJK persistence regression compatible with the retained
-  Python 3.9/3.10 POSIX floor while preserving the dev3 runtime fixes.
-
-## [0.3.2.dev3] - 2026-08-02
-
-### Fixed
-
+  teardown, and includes a process-independent nonce watchdog. This remains
+  separate from the existing `railmux ssh` client path.
 - Restore Termux prompt keyboard handoff when Codex or Claude retains exact
   input coordinates inside a verified live agent route while hiding the DEC
   hardware cursor, and cover the complete route/screen/tap-to-mouse-yield
   boundary in one regression test.
-- Make native-Windows state and provider transcript reads use explicit UTF-8
-  instead of the active ANSI code page, including config, favorites, renames,
-  Claude path cache, session/history JSONL, version probes, and diagnostics;
-  add a non-UTF-8-locale CJK persistence regression test.
-
-## [0.3.2.dev1] - 2026-08-02
-
-### Added
-
-- Add native-Windows Preview support: OS-selected ConPTY and pyte
-  dependencies, a Windows 3.10 runtime floor while POSIX retains Python 3.9,
-  a detached per-user ConPTY daemon, authenticated reconnectable frontend,
-  shared two-agent compositor/UI, exact live-session recovery, built-in
-  transcript pager, native console/clipboard/path-launch/runtime-state
-  adapters, validated Windows-drive Claude history discovery, and a Windows
-  client CI matrix with real ConPTY and OpenSSH-pipe readiness coverage.
-  Real provider and Windows Terminal acceptance remains required before this
-  can be classified as Supported; managed shell/Vim panes are not in Preview.
-- Add native-Windows Preview support for the local side of `railmux ssh` to
-  POSIX remotes, preserving the existing remote Linux/macOS support matrix and
-  leaving remote Windows servers unsupported.
-
-### Changed
-
-- Share the bounded pyte terminal extension, row renderer, and terminal-mode
-  projection between the existing POSIX SSH helper and the native Windows
-  ConPTY compositor without changing the POSIX tmux display protocol.
-- Make the latest-state SSH client use a platform readiness and raw-console
-  boundary so native Windows can wait on console and OpenSSH pipe handles.
+- Read Railmux state, provider JSONL, and captured diagnostic/version output
+  with explicit UTF-8 policies so a non-UTF-8 process locale cannot crash
+  startup or corrupt user data.
 
 ## [0.3.1] - 2026-08-01
 
@@ -1809,7 +1771,6 @@ made after 0.2.21.
 [0.2.16.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...v0.2.16.dev202607291
 [0.2.16.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16.dev202607290
 [0.2.15]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15
-[0.3.2.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2.dev1
 [0.2.15.dev202607284]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...v0.2.15.dev202607284
 [0.2.15.dev202607283]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...v0.2.15.dev202607283
 [0.2.15.dev202607282]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...v0.2.15.dev202607282

@@ -20,14 +20,12 @@ classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: POSIX :: Linux",
   "Operating System :: MacOS",
-  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
-  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development",
   "Topic :: Terminals",
   "Topic :: Utilities",
@@ -37,8 +35,6 @@ dependencies = [
   "tomlkit>=0.13.2,<1",
   "urwid>=2.6.16",
   "tomli>=2.0.1; python_version < '3.11'",
-  "pyte>=0.8.2,<0.9; sys_platform == 'win32'",
-  "pywinpty>=3.0.5,<4; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
