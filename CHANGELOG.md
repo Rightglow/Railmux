@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Claude path cache, session/history JSONL, version probes, and diagnostics;
   add a non-UTF-8-locale CJK persistence regression test.
 
-## [0.3.2.dev2] - 2026-08-02
+## [0.3.2.dev1] - 2026-08-02
 
 ### Added
 
@@ -61,12 +61,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ConPTY compositor without changing the POSIX tmux display protocol.
 - Make the latest-state SSH client use a platform readiness and raw-console
   boundary so native Windows can wait on console and OpenSSH pipe handles.
-
-### Fixed
-
-- Pin new-session naming to the requested provider instead of mutable startup
-  mode state, and use exact Windows process status/termination when pywinpty
-  briefly reports an already-exited ConPTY child as alive.
 
 ## [0.3.1] - 2026-08-01
 
@@ -1815,7 +1809,7 @@ made after 0.2.21.
 [0.2.16.dev202607291]: https://github.com/Rightglow/Railmux/compare/v0.2.16.dev202607290...v0.2.16.dev202607291
 [0.2.16.dev202607290]: https://github.com/Rightglow/Railmux/compare/v0.2.15...v0.2.16.dev202607290
 [0.2.15]: https://github.com/Rightglow/Railmux/compare/v0.2.14...v0.2.15
-[0.3.2.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2.dev2
+[0.3.2.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2.dev1
 [0.2.15.dev202607284]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607283...v0.2.15.dev202607284
 [0.2.15.dev202607283]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607282...v0.2.15.dev202607283
 [0.2.15.dev202607282]: https://github.com/Rightglow/Railmux/compare/v0.2.15.dev202607280...v0.2.15.dev202607282

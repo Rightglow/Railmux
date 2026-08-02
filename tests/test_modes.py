@@ -29,8 +29,6 @@ def test_registry_cycles_three_modes_in_declared_order():
     assert registry.next_key("codex") == "review"
     assert registry.next_key("review") == "claude"
     assert registry.for_tmux_name("rv-session") is REVIEW_MODE
-    assert registry.for_session_type("review") is REVIEW_MODE
-    assert registry.for_session_type("missing") is None
 
 
 def test_app_mode_action_uses_registry_instead_of_boolean_toggle():

@@ -2337,7 +2337,7 @@ def test_launch_refuses_untracked_preexisting_tmux(monkeypatch):
     session_id = "12345678-1234-1234-1234-1234567890ab"
     app = App.__new__(App)
     app._running = {}
-    app._session_name = lambda _key, **_kwargs: "cx-12345678-1234-12"
+    app._session_name = lambda _key: "cx-12345678-1234-12"
     app._set_status = MagicMock()
     app._ensure_detached_agent = MagicMock()
     monkeypatch.setattr(
@@ -3194,7 +3194,7 @@ def test_launch_snapshots_pre_existing_ids(monkeypatch):
     app._shellify = lambda *a, **k: "SHELLCMD"
     app._ensure_detached_agent = lambda *a, **k: (True, None)
     app._attach_in_right_pane = lambda *a, **k: True
-    app._session_name = lambda key, **_kwargs: "cx-abc"
+    app._session_name = lambda key: "cx-abc"
     app._restart_identity = OuterTmuxIdentity(
         server_digest="a" * 64, server_pid=123, pane_id="%1",
         session_id="$1", window_id="@1")

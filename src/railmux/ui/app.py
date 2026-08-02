@@ -2119,11 +2119,10 @@ class App:
         # same tmux name, so counter 10 could hijack counter 1's session (#11).
         return len(key) if key.startswith("__new__-") else 16
 
-    def _session_name(self, key: str, *, mode: AgentMode | None = None) -> str:
-        """Stable session name using an explicit or currently active mode."""
-        owner = self._active_mode() if mode is None else mode
+    def _session_name(self, key: str) -> str:
+        """Stable tmux session name using the active mode's registered prefix."""
         return (
-            f"{owner.tmux_prefix}"
+            f"{self._active_mode().tmux_prefix}"
             f"{self._safe_name(key, self._name_width(key))}"
         )
 
@@ -4478,18 +4477,7 @@ class App:
                 "error",
             )
             return False
-        launch_mode = self._modes().for_session_type(session_type)
-        if launch_mode is None:
-            self._set_status(
-                f"Launch refused: unknown provider type '{session_type}'",
-                "error",
-            )
-            return False
-        tmux_name = (
-            existing.tmux_name
-            if existing
-            else self._session_name(key, mode=launch_mode)
-        )
+        tmux_name = existing.tmux_name if existing else self._session_name(key)
         # Never adopt an untracked pre-existing tmux session merely because its
         # deterministic name collides.  Resume discovery must validate and
         # register it first; otherwise stamping/reusing it here could hijack an
@@ -4521,11 +4509,7 @@ class App:
         if placeholder_path is not None:
             owner = getattr(self, "_restart_identity", None)
             mode = self._modes().for_tmux_name(tmux_name)
-            if (
-                owner is None
-                or mode is None
-                or mode.session_type != session_type
-            ):
+            if owner is None or mode is None:
                 ok, err = False, "exact outer tmux identity is unavailable"
             else:
                 created_at = time.time()

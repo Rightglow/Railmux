@@ -502,9 +502,7 @@ def test_launch_never_passes_secret_via_any_channel(monkeypatch):
     app._mux.prepare_launch.side_effect = fake_prepare_launch
     monkeypatch.setattr(app, "_ensure_detached_agent", fake_ensure)
     monkeypatch.setattr(app, "_attach_in_right_pane", lambda *a, **k: True)
-    monkeypatch.setattr(
-        app, "_session_name", lambda key, **_kwargs: "cx-abc"
-    )
+    monkeypatch.setattr(app, "_session_name", lambda key: "cx-abc")
 
     # _codex_env is the only source of the launch env; it now yields CODEX_HOME
     # only, so the secret is never present to leak through -e.
