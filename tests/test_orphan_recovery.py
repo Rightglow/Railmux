@@ -83,7 +83,7 @@ def test_marker_rejects_corrupt_shape_and_phase_uuid_mismatch():
 def test_launch_marks_exact_holder_before_provider(monkeypatch):
     app = _app()
     app._codex_index.sessions_for_cwd.return_value = []
-    app._session_name = lambda key: "cx-new---token-1"
+    app._session_name = lambda key, **_kwargs: "cx-new---token-1"
     app._shellify = lambda *a, **k: "provider-command"
     app._attach_in_right_pane = lambda *a, **k: True
     events: list[str] = []
@@ -116,7 +116,7 @@ def test_launch_marks_exact_holder_before_provider(monkeypatch):
 def test_marker_failure_kills_only_holder_and_never_starts_provider(monkeypatch):
     app = _app()
     app._codex_index.sessions_for_cwd.return_value = []
-    app._session_name = lambda key: "cx-new---token-1"
+    app._session_name = lambda key, **_kwargs: "cx-new---token-1"
     app._shellify = lambda *a, **k: "provider-command"
     holder = _pane()
     killed: list[tmux_ctl.PaneIdentity] = []

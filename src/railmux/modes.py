@@ -80,6 +80,14 @@ class ModeRegistry:
             None,
         )
 
+    def for_session_type(self, session_type: str) -> AgentMode | None:
+        """Resolve launch ownership without consulting mutable UI mode state."""
+        return next(
+            (mode for mode in self._ordered
+             if mode.session_type == session_type),
+            None,
+        )
+
 
 CLAUDE_MODE = AgentMode(
     key="claude",
