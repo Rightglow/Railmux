@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -207,3 +208,26 @@ def test_replaced_valid_jsonl_is_rescanned(
     replacement.write_text('{"type":"ai-title","aiTitle":"stub"}\n')
     replacement.replace(session)
     assert list_projects(claude_home)[0].session_count == 0
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows path semantics")
+def test_windows_project_is_recovered_from_validated_transcript_cwd(tmp_path):
+    from railmux.discovery import list_projects
+    from railmux.path_codec import _claude_encode_path
+
+    claude_home = tmp_path / ".claude"
+    project = tmp_path / "work tree"
+    project.mkdir()
+    encoded = _claude_encode_path(str(project))
+    project_dir = claude_home / "projects" / encoded
+    project_dir.mkdir(parents=True)
+    session = project_dir / "12345678-1234-1234-1234-123456789abc.jsonl"
+    session.write_text(
+        json.dumps({"type": "assistant", "cwd": str(project), "message": {}})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    projects = list_projects(claude_home)
+
+    assert len(projects) == 1
+    assert projects[0].real_path == project
+    assert projects[0].encoded_name == encoded

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import secrets
@@ -14,6 +13,7 @@ from packaging.version import InvalidVersion, Version
 
 from railmux import restart_state
 from railmux.atomic_file import atomic_write_text
+from railmux.platform.filelock import try_lock, unlock
 
 
 _RECORD_SCHEMA = 1
@@ -99,9 +99,7 @@ def _with_lock(callback) -> bool:
     except OSError:
         return False
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        if not try_lock(fd):
             return False
         callback(record_path)
         return True
@@ -109,7 +107,7 @@ def _with_lock(callback) -> bool:
         return False
     finally:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            unlock(fd)
         except OSError:
             pass
         os.close(fd)

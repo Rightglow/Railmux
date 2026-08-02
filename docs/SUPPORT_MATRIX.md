@@ -18,6 +18,7 @@ applicable row below must either pass or carry an explicit limitation.
 | **Supported** | Part of the product contract, with automated coverage and/or the platform evidence named here. |
 | **Conditional** | Supported when the stated terminal, dependency, or version capability is present. |
 | **Field-validated** | Used successfully on real hardware, with portable logic covered in tests, but without a dedicated CI runner. |
+| **Preview** | Implemented for testing with automated coverage, but not yet part of the support contract because the named real-platform/manual acceptance is incomplete. |
 | **Best effort** | Expected to work through a compatible POSIX interface but not claimed as a release target. |
 | **Not supported** | Known to lack a required runtime adapter or product contract. |
 | **Planned** | Intended follow-up only; not current behavior. |
@@ -34,11 +35,12 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux` | Linux | — | **Supported** | Linux CI, real private-tmux integration, and the tmux 2.7 floor job. |
 | `railmux` | macOS | — | **Supported** | macOS CI and real private-tmux integration. |
 | `railmux` | Windows WSL | — | **Supported** | Uses the Linux runtime; WSL clipboard and Windows Terminal launcher branches have unit coverage. No hosted real-WSL UI test yet. |
+| `railmux` | Native Windows Python in PowerShell, CMD, or Windows Terminal | — | **Preview** | Windows 3.10+, per-user ConPTY daemon, authenticated loopback frontend, shared two-slot UI, recovery markers, built-in history pager, native clipboard, Windows CI matrix, and a real pywinpty smoke test. Real provider and terminal interaction still requires the manual checklist below; managed shell/Vim surfaces remain unavailable in this preview. |
 | `railmux ssh HOST` | Linux | Linux | **Supported** | Primary implementation and test surface; protocol, lifecycle, history, clipboard fallbacks, and reconnect are automated. |
 | `railmux ssh HOST` | macOS | Linux | **Supported** | POSIX client path plus macOS CI; Terminal.app and common external-terminal launch behavior are covered. |
 | `railmux ssh HOST` | Windows WSL, rendered by Windows Terminal | Linux | **Supported** | Linux TTY/SSH implementation with tested `clip.exe`, `wt.exe`, and `wsl.exe` integration. Real Windows Terminal interaction remains a manual release check. |
 | `railmux ssh HOST` | Android Termux | Linux | **Field-validated** | Real phone use plus automated compact projection, SGR touch, soft-keyboard, cursor-focus, resize, and clipboard-fallback state tests. |
-| `railmux ssh HOST` | Native Windows Python in PowerShell, CMD, or Windows Terminal | Linux | **Not supported** | The client currently imports POSIX `termios`/`tty`, depends on POSIX raw-TTY behavior, and has no Windows pipe/console adapter or native CI. This is the next intended platform target. |
+| `railmux ssh HOST` | Native Windows Python in PowerShell, CMD, or Windows Terminal | Linux or macOS | **Preview** | Windows Console VT/raw-mode and pipe-wait adapters, native clipboard/browser/Windows Terminal launch paths, protocol tests, packaging smoke, and the Windows CI matrix are present. A real Windows Terminal-to-POSIX SSH pass remains required before Supported. Remote Windows is not supported. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
@@ -51,12 +53,12 @@ pane-bounded drag-to-copy.
 
 | Capability | Contract |
 |---|---|
-| Python | 3.9 or newer on every machine running Railmux. |
+| Python | 3.9 or newer on POSIX/WSL; 3.10 or newer on native Windows. Core metadata stays at `Requires-Python >=3.9` because that field cannot carry an OS marker; the native Windows launcher fails before platform-only imports on Python 3.9, while Windows-only dependencies use environment markers. |
 | tmux core workspace | 2.7 or newer. CI compiles the checksum-pinned official tmux 2.7 release and boots a real Railmux frame. |
 | Managed shell/Vim and nested pane-local SSH history marker | tmux 3.0 or newer; older tmux fails closed with a warning. |
 | Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |
 | Providers | Claude Code, Codex, or both on the machine that runs the provider process. |
-| History preview | `less`; provider rollout/history files must remain readable. |
+| History preview | POSIX direct mode uses `less`; native Windows uses the built-in read-only pager. Provider rollout/history files must remain readable. |
 | Managed file viewer | Remote `vim` for supported files; missing Vim falls back without mutating the file. |
 | Mouse | Terminal must report SGR-compatible mouse events to the application. Right-click and hover may require separate terminal settings. |
 | Clipboard | Native writer where available, otherwise bounded OSC 52. Terminal policy may still reject OSC 52. |
@@ -141,7 +143,7 @@ capabilities it exposes, then record unavoidable product differences.
 | VS Code/Cursor xterm.js | Supported | Right-click behavior and CJK composition focus are editor settings; test paste and mouse forwarding. |
 | kitty, WezTerm, Alacritty, foot | Compatible/conditional | SGR mouse, OSC 52 policy, function keys, colours, resize, and external launcher where applicable. |
 | Windows Terminal with WSL | Supported | WSL runtime, `clip.exe`, `wt.exe`, function-key conflicts, mouse, paste, resize, and OSC 52. |
-| Windows Terminal with native Windows Python | Planned | Must pass the native Windows acceptance checklist below before this row changes. |
+| Windows Terminal with native Windows Python | Preview | Automated Windows console/ConPTY/package coverage exists; the complete manual terminal/provider/SSH pass below is still required. |
 | Termux | Field-validated | Compact navigation, keyboard open/close, cursor, post-keyboard touch, rotation boundary, history, and reconnect. |
 
 For every newly claimed terminal, manually verify alternate-screen entry/exit,
@@ -178,11 +180,13 @@ OpenCode is therefore **planned**, not currently supported.
     README controls and limitations, this matrix, changelog, and website/demo
     updates.
 
-## Adding a local operating system
+## Native Windows acceptance
 
-Native Windows support for `railmux ssh` must be an adapter, not scattered
-`sys.platform` branches. The remote helper can remain POSIX; the local client
-must satisfy every item below before native Windows is labelled supported.
+Native Windows is implemented behind platform, multiplexer, and frontend
+adapters rather than scattered UI branches. It remains **Preview** until the
+real Windows checks below are recorded. The SSH remote helper remains POSIX;
+neither local mode nor `railmux ssh` attempts to host a Railmux remote server
+on Windows.
 
 1. Package import, CLI parsing, config/runtime paths, version check, local
    self-upgrade, and `railmux doctor` work under supported Windows Python.
@@ -208,6 +212,32 @@ must satisfy every item below before native Windows is labelled supported.
 10. Add native Windows CI for import, unit, packaging, and protocol tests plus a
     documented real Windows Terminal manual pass. WSL-only evidence cannot
     close this item.
+
+The direct local runtime must additionally verify all of the following before
+promotion from Preview:
+
+1. Start and resume both Claude Code and Codex through `.exe` and npm
+   `.cmd` shims without `shell=True`, including paths containing spaces.
+2. Close the frontend window, reconnect to the same daemon, and prove the
+   original provider PID/ConPTY and screen state survive; Soft Quit must keep
+   providers, while confirmed hard quit must stop only exact owned processes.
+3. Exercise single, side-by-side, stacked, compact, fullscreen, focus/Target,
+   mouse, paste, resize, CJK/wide text, built-in history preview, clipboard,
+   Help agent, rename/star/info, kill, and confirmed history deletion.
+4. Kill the daemon and verify its durable records become resume offers only;
+   a replacement daemon must never adopt an orphan PID or claim its ConPTY.
+5. Verify PowerShell, CMD, and Windows Terminal cleanup: prior console modes,
+   code pages, cursor, mouse, focus reporting, and alternate screen are restored
+   after detach, normal exit, provider failure, frontend failure, and daemon
+   connection loss.
+
+Current automated evidence covers the platform split, typed provider launch,
+marker recovery across UI restart, IPC authentication/reconnect, compositor,
+history pager, shared App construction, an Urwid event loop running off the
+main thread, wheel build/import, protected runtime-directory ACL setup, real
+subprocess-pipe readiness, a real ConPTY start/read/resize/exit smoke, and a
+real `.cmd` shim in a path containing spaces on hosted Windows. Those checks
+do not substitute for the manual provider and terminal pass.
 
 ## Release closure checklist
 

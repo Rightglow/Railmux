@@ -7,7 +7,8 @@ from pathlib import Path
 
 from railmux.atomic_file import atomic_write_text
 from railmux.models import Project
-from railmux.path_codec import decode
+from railmux.path_codec import _claude_encode_path, decode
+from railmux.platform.config_paths import config_dir
 from railmux.session_index import _looks_like_uuid, _scan_session
 
 
@@ -37,7 +38,7 @@ def _path_cache_file() -> Path:
     Decoding an encoded project name is expensive on an NFS home (see
     path_codec), and the mapping is stable, so we persist it across launches.
     """
-    return Path.home() / ".config" / "railmux" / "path-cache.json"
+    return config_dir() / "path-cache.json"
 
 
 def _load_path_cache() -> dict[str, str]:
@@ -94,7 +95,7 @@ def list_projects(claude_home: Path) -> list[Project]:
         for entry in scan:
             if not entry.is_dir(follow_symlinks=False):
                 continue
-            if not entry.name.startswith("-"):
+            if os.name != "nt" and not entry.name.startswith("-"):
                 continue
             seen.add(entry.name)
 
@@ -106,10 +107,16 @@ def list_projects(claude_home: Path) -> list[Project]:
             if cached is not None and Path(cached).is_dir():
                 real_path = Path(cached)
             else:
-                try:
-                    decoded = decode(entry.name)
-                except ValueError:
-                    decoded = None
+                decoded = None
+                if os.name == "nt":
+                    decoded = _windows_project_path_from_transcript(
+                        Path(entry.path), entry.name
+                    )
+                else:
+                    try:
+                        decoded = decode(entry.name)
+                    except ValueError:
+                        pass
                 # Skip projects whose original directory no longer exists on
                 # this machine (deleted or moved). They can't be launched —
                 # `cd` into a missing dir fails — so don't list them, and drop
@@ -154,6 +161,58 @@ def list_projects(claude_home: Path) -> list[Project]:
     results.sort(key=lambda p: p.last_activity_ts, reverse=True)
     _cache[claude_home] = (parent_mtime, results)
     return results
+
+
+def _windows_project_path_from_transcript(
+    claude_dir: Path,
+    encoded_name: str,
+) -> Path | None:
+    """Recover a Windows project cwd from provider-owned transcript metadata.
+
+    Drive letters and UNC roots do not fit the POSIX path backtracker. Claude
+    records the exact cwd in its JSONL, so validate that bounded value against
+    the enclosing encoded directory instead of guessing a Windows path.
+    """
+    try:
+        candidates = sorted(
+            claude_dir.glob("*.jsonl"),
+            key=lambda path: path.stat().st_mtime_ns,
+            reverse=True,
+        )[:8]
+    except OSError:
+        return None
+    for path in candidates:
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as stream:
+                for _line_number in range(64):
+                    line = stream.readline(64 * 1024 + 1)
+                    if not line:
+                        break
+                    if len(line) > 64 * 1024:
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    raw_cwd = record.get("cwd") if isinstance(record, dict) else None
+                    if (
+                        not isinstance(raw_cwd, str)
+                        or not raw_cwd
+                        or len(raw_cwd) > 32768
+                        or "\0" in raw_cwd
+                    ):
+                        continue
+                    candidate = Path(raw_cwd)
+                    if (
+                        candidate.is_absolute()
+                        and candidate.is_dir()
+                        and _claude_encode_path(str(candidate)).casefold()
+                        == encoded_name.casefold()
+                    ):
+                        return candidate
+        except OSError:
+            continue
+    return None
 
 
 def _count_and_latest_mtime(claude_dir: Path, real_path: Path) -> tuple[int, float]:

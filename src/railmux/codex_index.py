@@ -13,12 +13,15 @@ import hashlib
 import json
 import math
 import os
-import stat
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from railmux.atomic_file import atomic_write_text
+from railmux.platform.file_security import (
+    prepare_private_directory,
+    private_regular_file,
+)
 from railmux.models import (
     AttentionCategory,
     AttentionState,
@@ -457,9 +460,7 @@ class CodexIndex:
         try:
             info = path.lstat()
             if (
-                not stat.S_ISREG(info.st_mode)
-                or info.st_uid != os.getuid()
-                or info.st_mode & 0o077
+                not private_regular_file(info)
                 or info.st_size > _PERSISTENT_CACHE_MAX_BYTES
             ):
                 return
@@ -514,17 +515,7 @@ class CodexIndex:
         path = self._cache_path
         if path is None:
             return False
-        parent = path.parent
-        try:
-            parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            info = parent.lstat()
-            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-                return False
-            if info.st_mode & 0o077:
-                os.chmod(parent, stat.S_IMODE(info.st_mode) & ~0o077)
-            return True
-        except OSError:
-            return False
+        return prepare_private_directory(path.parent)
 
     def _save_persistent_cache(self) -> None:
         path = self._cache_path

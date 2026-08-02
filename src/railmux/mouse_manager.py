@@ -1,7 +1,6 @@
 """Crash-safe ownership for tmux's server-global root wheel bindings."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import secrets
@@ -12,6 +11,7 @@ from typing import Iterator
 
 from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
+from railmux.platform.filelock import try_lock, unlock
 
 
 _VERSION = 1
@@ -44,13 +44,17 @@ class RootWheelForwardingManager:
         self._lock_path = root / self._lock_name
         self._state_path = root / self._state_name
         fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        locked = False
         try:
             os.fchmod(fd, 0o600)
             # A wedged peer must never delay Railmux startup or shutdown.
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = try_lock(fd)
+            if not locked:
+                raise BlockingIOError("Railmux mouse state is busy")
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            if locked:
+                unlock(fd)
             os.close(fd)
 
     def _load(self) -> dict | None:

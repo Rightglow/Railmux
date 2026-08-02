@@ -83,6 +83,11 @@ from railmux.fast_display_protocol import (
     encode_path_open_result,
     encode_update,
 )
+from railmux.terminal_emulator import (
+    extended_pyte as _shared_extended_pyte,
+    render_rows as _shared_render_rows,
+    terminal_modes_for_screen as _shared_terminal_modes_for_screen,
+)
 from railmux.ui.workspace import (
     COMPACT_ENTER_HEIGHT,
     COMPACT_ENTER_WIDTH,
@@ -371,9 +376,7 @@ def _build_extended_pyte(pyte: object) -> object:
 
 def _extended_pyte(pyte: object) -> object:
     """Idempotently adapt one imported pyte module for tmux's VT stream."""
-    if getattr(pyte, "_railmux_extended", False):
-        return pyte
-    return _build_extended_pyte(pyte)
+    return _shared_extended_pyte(pyte)
 
 
 @dataclass(frozen=True)
@@ -1887,42 +1890,12 @@ def _style_key(char: object) -> tuple[object, ...]:
 
 def render_rows(screen: object) -> tuple[bytes, ...]:
     """Render independently paintable rows with allowlisted SGR controls."""
-    rendered_rows: list[bytes] = []
-    for row_index in range(screen.lines):
-        rendered = [b"\033[0m"]
-        previous_style: tuple[object, ...] | None = None
-        row = screen.buffer[row_index]
-        for column in range(screen.columns):
-            char = row[column]
-            style = _style_key(char)
-            if style != previous_style:
-                rendered.append(_style(char))
-                previous_style = style
-            # pyte represents the second cell of a wide glyph as empty data;
-            # the real terminal already advances two columns for the glyph.
-            if char.data:
-                safe_data = "".join(
-                    value
-                    if value >= " "
-                    and value != "\x7f"
-                    and not "\x80" <= value <= "\x9f"
-                    else "�"
-                    for value in char.data
-                )
-                rendered.append(safe_data.encode("utf-8", errors="replace"))
-        rendered.append(b"\033[0m")
-        rendered_rows.append(b"".join(rendered))
-    return tuple(rendered_rows)
+    return _shared_render_rows(screen)
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
     """Project pyte's private-mode set onto the bounded v14 wire allowlist."""
-    terminal_modes = TerminalMode.NONE
-    if 2004 << 5 in screen.mode:
-        terminal_modes |= TerminalMode.BRACKETED_PASTE
-    if 1004 << 5 in screen.mode:
-        terminal_modes |= TerminalMode.FOCUS_EVENTS
-    return terminal_modes
+    return _shared_terminal_modes_for_screen(screen)
 
 
 def _child_exited(pid: int) -> bool:

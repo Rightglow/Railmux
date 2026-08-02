@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
-import termios
 import time
 from dataclasses import replace
 from pathlib import Path
 
 from railmux import __version__
 from railmux.config import ConfigError, default_config_path, load_config
-from railmux.diagnostics import is_ssh_session, run_doctor
 from railmux.pane_surface import render_startup_surface
+from railmux.platform import python_support_error
 from railmux.runtime_config import (
     activate_runtime_environment,
     check_executable,
@@ -37,9 +37,29 @@ _LOCAL_WATCHDOG_INTERVAL = 5.0
 _LOCAL_WATCHDOG_FAILURES = 3
 
 
+def _native_windows() -> bool:
+    return os.name == "nt"
+
+
+def is_ssh_session(environment: dict[str, str] | None = None) -> bool:
+    """Lazy compatibility wrapper that keeps POSIX diagnostics import-clean."""
+    from railmux.diagnostics import is_ssh_session as detect
+
+    return detect(environment)
+
+
+def run_doctor(*args: object, **kwargs: object) -> int:
+    """Lazy compatibility wrapper for the established CLI test/repair hook."""
+    from railmux.diagnostics import run_doctor as doctor
+
+    return doctor(*args, **kwargs)
+
+
 def _restore_terminal(attributes: list | None) -> None:
     if attributes is None:
         return
+    import termios
+
     try:
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, attributes)
     except (OSError, termios.error):
@@ -67,6 +87,8 @@ def _run_tmux_client_with_watchdog(
     """Keep one monitor outside tmux so a frozen server cannot trap the TTY."""
     attributes = None
     if sys.stdin.isatty():
+        import termios
+
         try:
             attributes = termios.tcgetattr(sys.stdin.fileno())
         except (OSError, termios.error):
@@ -152,6 +174,10 @@ def _run_tmux_client_with_watchdog(
 
 
 def main(argv: list[str] | None = None) -> int:
+    support_error = python_support_error()
+    if support_error is not None:
+        print(f"error: {support_error}", file=sys.stderr)
+        return 2
     raw_args = list(sys.argv[1:] if argv is None else argv)
     if raw_args and raw_args[0] == "config":
         from railmux.config_cli import main as config_main
@@ -338,6 +364,18 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
+    if _native_windows():
+        # Native Windows owns no local tmux server. The detached daemon keeps
+        # ConPTY handles alive while this terminal remains a disposable client.
+        activate_runtime_environment(replace(config, tmux_binary="tmux"))
+        if not args.inside_tmux:
+            from railmux.self_update import maybe_upgrade_before_launch
+            from railmux.settings import Settings
+
+            maybe_upgrade_before_launch(raw_args, Settings())
+        from railmux.winlocal.client import main as native_main
+
+        return native_main(raw_args, config=config)
     if config.tmux_binary != "tmux":
         tmux_check = check_executable("tmux", config.tmux_binary)
         if not tmux_check.valid:

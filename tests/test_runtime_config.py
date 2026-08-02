@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from railmux.config import Config
 from railmux.runtime_config import (
     TMUX_BINARY_ENV,
@@ -13,6 +15,16 @@ from railmux.runtime_config import (
 )
 
 
+def test_native_windows_locale_uses_vt_unicode(monkeypatch):
+    monkeypatch.setattr("railmux.runtime_config.is_windows", lambda: True)
+
+    assert check_utf8_locale("C.UTF-8") == (
+        True,
+        "native Windows VT uses Unicode",
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX tmux PATH authority")
 def test_runtime_environment_prepends_configured_tmux_and_sets_locale(tmp_path):
     binary = tmp_path / "bin" / "tmux"
     binary.parent.mkdir()

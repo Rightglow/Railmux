@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from railmux.platform.config_paths import default_config_path as _platform_config_path
+
 try:
     import tomllib
 except ModuleNotFoundError:  # Python 3.9-3.10
@@ -55,7 +57,7 @@ class Config:
 
 
 def default_config_path() -> Path:
-    return Path.home() / ".config" / "railmux" / "config.toml"
+    return _platform_config_path()
 
 
 def _table(data: dict[str, Any], name: str) -> dict[str, Any]:

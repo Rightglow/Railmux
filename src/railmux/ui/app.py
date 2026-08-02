@@ -55,6 +55,7 @@ from railmux.modes import (
     ProjectSource,
 )
 from railmux.models import AttentionState, Project, SessionMeta
+from railmux.mux import MuxBackend, TmuxBackend
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
 from railmux.mouse_manager import RootWheelForwardingManager
 from railmux.renames import Renames
@@ -570,6 +571,15 @@ class App:
     _DUAL_SIDEBAR_PERCENT = DUAL_SIDEBAR_PERCENT
     _DUAL_SIDEBAR_MIN_WIDTH = DUAL_SIDEBAR_MIN_WIDTH
 
+    @property
+    def mux(self) -> MuxBackend:
+        """Active mux port; bare test instances retain the POSIX backend."""
+        backend = getattr(self, "_mux", None)
+        if backend is None:
+            backend = TmuxBackend(lambda: tmux_ctl)
+            self._mux = backend
+        return backend
+
     # -- compatibility shims -------------------------------------------------
     # Tests and third-party extensions built against pre-workspace releases may
     # still touch the old scalar attributes. Keep them as properties backed by
@@ -596,10 +606,10 @@ class App:
                 )
             )
             owner = (
-                tmux_ctl.pane_identity(owner_pane_id)
+                self.mux.pane_identity(owner_pane_id)
                 if wants_swap and owner_pane_id is not None else None
             )
-            manager = AgentDisplayTransport(
+            manager = self.mux.create_display_transport(
                 self._agent_workspace(),
                 config.agent_transport,
                 auto_launched=getattr(self, "_auto_launched", False),
@@ -695,13 +705,17 @@ class App:
 
     def __init__(self, claude_home: Path, config: Config,
                  auto_launched: bool = False,
-                 scroll_coalescing: bool = True) -> None:
+                 scroll_coalescing: bool = True,
+                 mux_backend: MuxBackend | None = None,
+                 initial_project_path: Path | None = None) -> None:
+        self._mux = mux_backend or TmuxBackend(lambda: tmux_ctl)
         # Capture before any pane may be split or moved. The server-lifetime
         # digest plus immutable pane id namespaces local recovery state across
         # windows, sessions, and private tmux servers.
-        self._restart_identity = restart_state.capture_outer_identity()
+        self._restart_identity = self.mux.capture_outer_identity()
         self._claude_home = claude_home
         self._config = config
+        self._initial_project_path = initial_project_path
         self._auto_launched = auto_launched
         # Status-bar state machine. An explicit message (info/warn/error) holds
         # the bar for a level-dependent TTL, then it falls back to cycling idle
@@ -783,19 +797,20 @@ class App:
         self._remote_compact_prepared: dict | None = None
         self._remote_compact_rollback_alarm: object | None = None
         identity = self._restart_identity
+        owns_external_bindings = self.mux.capabilities.external_binding_leases
         self._root_wheel_manager = (
             RootWheelForwardingManager(
                 identity.server_digest, identity.pane_id)
-            if identity is not None else None
+            if identity is not None and owns_external_bindings else None
         )
         self._tmux_binding_manager = (
             SharedTmuxBindingManager(
                 identity.server_digest, identity.pane_id)
-            if identity is not None else None
+            if identity is not None and owns_external_bindings else None
         )
         self._selection_isolation_manager = (
             SelectionIsolationManager(identity.pane_id)
-            if identity is not None else None
+            if identity is not None and owns_external_bindings else None
         )
         self._projected_target_pane_id: str | None = None
         self._target_toggle_warning_shown = False
@@ -839,9 +854,17 @@ class App:
         self._border_indicators_original_known = False
         self._border_indicators_original = None
         self._border_indicators_arrows = False
-        self._has_less: bool = shutil.which("less") is not None
+        self._has_less: bool = (
+            shutil.which("less") is not None
+            or not self.mux.capabilities.grouped_sessions
+        )
         self._less_mouse_flag: str = self._detect_less_mouse()
-        self._scroll_manager = ScrollManager(enabled=scroll_coalescing)
+        self._scroll_manager = ScrollManager(
+            enabled=(
+                scroll_coalescing
+                and self.mux.capabilities.external_binding_leases
+            )
+        )
         self._soft_quit_flag: bool = False
         # Ordered provider registry + stable active key. No two-mode boolean:
         # ``m`` cycles the registry and each key owns independent view state.
@@ -898,7 +921,7 @@ class App:
         )
         # Warn early if dependencies are missing so the user doesn't
         # discover it by getting a cryptic error in the right pane.
-        if not tmux_ctl.has_tmux():
+        if not self.mux.has_tmux():
             self._set_status(
                 "ERROR: tmux not found — run railmux config to select its path")
 
@@ -953,7 +976,7 @@ class App:
         # audits the explicitly targeted dedicated server before
         # ``new-session -A`` so a stale outer session cannot prevent a new App
         # process from launching.
-        if tmux_ctl.in_tmux():
+        if self.mux.in_tmux():
             recover_interrupted_swaps()
         state = self._load_state()
         # Recover sessions left alive from a previous soft-quit.  Load the
@@ -996,7 +1019,17 @@ class App:
         # from _load_pending_project). Backward-compatible default.
         self._pending_focus_session = state.get("session") if state else None
         initial_project: Project | None = None
-        if state:
+        if self._initial_project_path is not None:
+            requested = self._path_key(self._initial_project_path)
+            initial_project = next(
+                (
+                    project
+                    for project in visible
+                    if self._path_key(project.real_path) == requested
+                ),
+                None,
+            )
+        if initial_project is None and state:
             proj_name = state.get("project")
             if proj_name:
                 initial_project = next(
@@ -1083,7 +1116,7 @@ class App:
                 logical_id,
                 running.project.claude_dir / f"{logical_id}.jsonl",
             )
-        tmux_ctl.set_pane_user_option(
+        self.mux.set_pane_user_option(
             pane_id,
             tmux_server.TRANSCRIPT_SOURCE_OPTION,
             marker,
@@ -1162,7 +1195,7 @@ class App:
         both green borders owns focus.  The option arrived in tmux 3.3; older
         versions retain the existing colour-only treatment.
         """
-        if tmux_ctl.tmux_version() < (3, 3):
+        if self.mux.tmux_version() < (3, 3):
             return True
         current = getattr(self, "_border_indicators_arrows", False)
         if current == arrows:
@@ -1170,20 +1203,20 @@ class App:
         known = getattr(
             self, "_border_indicators_original_known", False)
         if arrows and not known:
-            ok, original = tmux_ctl.local_window_option(
+            ok, original = self.mux.local_window_option(
                 "pane-border-indicators")
             if not ok:
                 return False
             self._border_indicators_original = original
             self._border_indicators_original_known = True
         if arrows:
-            applied = tmux_ctl.set_window_option(
+            applied = self.mux.set_window_option(
                 "pane-border-indicators", "arrows")
         else:
             # Keep arrows out of sidebar/single/stacked states even if the
             # user's inherited option happens to request them.  The exact
             # original local/inherited setting is restored on teardown.
-            applied = tmux_ctl.set_window_option(
+            applied = self.mux.set_window_option(
                 "pane-border-indicators", "colour",
             )
         if applied:
@@ -1194,7 +1227,7 @@ class App:
         """Best-effort restoration for soft quit and interrupted layouts."""
         if not getattr(self, "_border_indicators_original_known", False):
             return True
-        restored = tmux_ctl.set_window_option(
+        restored = self.mux.set_window_option(
             "pane-border-indicators",
             getattr(self, "_border_indicators_original", None),
         )
@@ -1227,11 +1260,11 @@ class App:
             # colour only half of the center divider. A single workspace has no
             # ambiguous target, and a dual workspace names P1/P2 in the status
             # brand, so every sidebar-focused border can stay honestly gray.
-            applied = tmux_ctl.set_window_border_styles(gray, gray)
+            applied = self.mux.set_window_border_styles(gray, gray)
         elif layout is WorkspaceLayout.SINGLE:
-            applied = tmux_ctl.set_window_border_styles(green, green)
+            applied = self.mux.set_window_border_styles(green, green)
         else:
-            applied = tmux_ctl.set_window_border_styles(
+            applied = self.mux.set_window_border_styles(
                 gray, green if active else gray)
         arrows = active and layout is WorkspaceLayout.SIDE_BY_SIDE
         indicators_applied = self._sync_border_indicators(arrows)
@@ -1279,7 +1312,7 @@ class App:
             expected = (green, green)
         else:
             expected = (gray, green)
-        ok, actual = tmux_ctl.window_border_styles()
+        ok, actual = self.mux.window_border_styles()
         if ok and actual != expected:
             self._set_divider_active(active, force=True)
 
@@ -1309,8 +1342,8 @@ class App:
         if target is None:
             return workspace.target
         pane_id = (
-            tmux_ctl.last_pane_id(target)
-            if previous else tmux_ctl.active_pane_id(target)
+            self.mux.last_pane_id(target)
+            if previous else self.mux.active_pane_id(target)
         )
         slot = workspace.slot_for_pane(pane_id) if pane_id else None
         if slot is None:
@@ -1351,7 +1384,7 @@ class App:
         if owner is None:
             return False
         self._sync_compact_page_from_tmux()
-        active_pane = tmux_ctl.active_pane_id(owner)
+        active_pane = self.mux.active_pane_id(owner)
         if active_pane is None:
             return False
         if active_pane == owner:
@@ -1389,7 +1422,7 @@ class App:
     def _apply_right_pane_focus_after_double(self, _loop, _user_data) -> None:
         self._double_focus_alarm = None
         pane_id = self._agent_workspace().target.pane_id
-        if pane_id is None or not tmux_ctl.select_pane(pane_id):
+        if pane_id is None or not self.mux.select_pane(pane_id):
             self._double_focus_visual_pending = False
             self._set_railmux_focus(True)
             self._redraw_focus_state_now()
@@ -1934,7 +1967,7 @@ class App:
     def _save_restore_state(self, slot: AgentSlot | None = None) -> None:
         """Remember what's in the right pane before taking it over for history."""
         slot = slot or self._agent_workspace().target
-        if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
+        if slot.pane_id and self.mux.pane_alive(slot.pane_id):
             if (slot.agent_tmux_name
                     and self._agent_session_alive(slot.agent_tmux_name)):
                 slot.restore_state = SlotRestoreState(
@@ -1967,6 +2000,26 @@ class App:
 
         Returns True on success.
         """
+        slot = slot or self._agent_workspace().target
+        if not self.mux.capabilities.grouped_sessions:
+            if not self._display_transport().prepare_preview(slot):
+                self._set_status(
+                    "failed to return the agent before transcript preview",
+                    "error",
+                )
+                return False
+            if slot.pane_id is None or not self.mux.pane_alive(slot.pane_id):
+                slot.pane_id = self.mux.create_display_pane(slot.key)
+            fmt = "codex" if session_type == "codex" else "claude"
+            if not self.mux.show_transcript(slot.pane_id, jsonl_path, fmt):
+                self._set_status("failed to open the transcript preview")
+                return False
+            slot.agent_tmux_name = None
+            slot.mode_key = self._current_mode_key()
+            self.mux.select_pane(slot.pane_id)
+            self._set_railmux_focus(False, force_border=True)
+            return True
+
         import shlex
         import sys as _sys
         mouse = self._less_mouse_flag
@@ -1987,7 +2040,6 @@ class App:
                f"{python} -m railmux.transcript --format {fmt} "
                f"--preview-limit 2000 - | "
                f"{less_env} less -R +G {mouse}").rstrip()
-        slot = slot or self._agent_workspace().target
         # In swap mode ``slot.pane_id`` is the real provider pane. Return it
         # home before the destructive ``respawn-pane -k`` below; only the
         # display placeholder may be replaced by the transcript viewer.
@@ -1998,12 +2050,12 @@ class App:
             )
             return False
         self._sync_slot_transcript_source(slot, None, None)
-        if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
-            if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
+        if slot.pane_id and self.mux.pane_alive(slot.pane_id):
+            if not self.mux.respawn_pane(slot.pane_id, cmd):
                 self._set_status("failed to respawn right pane for transcript")
                 return False
         else:
-            new_id = tmux_ctl.split_window_h(cmd, size_percent=70, detached=True)
+            new_id = self.mux.split_window_h(cmd, size_percent=70, detached=True)
             if not new_id:
                 self._set_status("failed to create right pane for transcript")
                 return False
@@ -2062,7 +2114,7 @@ class App:
             f"{self._safe_name(key, self._name_width(key))}"
         )
 
-    def _ensure_detached_agent(self, name: str, shell_cmd: str,
+    def _ensure_detached_agent(self, name: str, shell_cmd: object,
                                env: dict[str, str] | None = None
                                ) -> tuple[bool, str | None]:
         """Create a detached agent tmux session unless it already exists.
@@ -2073,11 +2125,11 @@ class App:
         no provider API key (it relies on the login shell). It's handed to tmux
         via ``-e`` (which does persist in the session env, so it must stay
         secret-free)."""
-        if tmux_ctl.session_exists(name):
+        if self.mux.session_exists(name):
             return True, None
-        return tmux_ctl.new_detached_session(name, shell_cmd, env=env)
+        return self.mux.new_detached_session(name, shell_cmd, env=env)
 
-    def _ensure_detached_claude(self, name: str, shell_cmd: str,
+    def _ensure_detached_claude(self, name: str, shell_cmd: object,
                                 env: dict[str, str] | None = None
                                 ) -> tuple[bool, str | None]:
         """Compatibility alias retained for pre-registry integrations."""
@@ -2122,7 +2174,7 @@ class App:
             # before selecting the target page; the transport cannot create
             # it later because compact selection intentionally happens before
             # the real provider is moved out of its detached home window.
-            if slot.pane_id is None or not tmux_ctl.pane_alive(slot.pane_id):
+            if slot.pane_id is None or not self.mux.pane_alive(slot.pane_id):
                 transport = self._display_transport()
                 created = (
                     transport.create_primary()
@@ -2203,7 +2255,7 @@ class App:
             return False
         self._check_agent_slot_size(slot)
         if steal_focus:
-            tmux_ctl.select_pane(slot.pane_id)
+            self.mux.select_pane(slot.pane_id)
         slot.agent_tmux_name = agent_tmux_name
         mode = self._modes().for_tmux_name(agent_tmux_name)
         slot.mode_key = mode.key if mode is not None else None
@@ -2321,8 +2373,8 @@ class App:
         current = getattr(self, "_projected_target_pane_id", None)
         if not force and current == desired:
             return True
-        applied = tmux_ctl.set_window_user_option(
-            owner, tmux_ctl.RAILMUX_TARGET_OPTION, desired)
+        applied = self.mux.set_window_user_option(
+            owner, self.mux.RAILMUX_TARGET_OPTION, desired)
         if applied:
             self._projected_target_pane_id = desired
         return applied
@@ -2333,8 +2385,8 @@ class App:
         expected = getattr(self, "_projected_target_pane_id", None)
         if owner is None or expected is None:
             return
-        if tmux_ctl.unset_window_user_option_if_value(
-                owner, tmux_ctl.RAILMUX_TARGET_OPTION, expected):
+        if self.mux.unset_window_user_option_if_value(
+                owner, self.mux.RAILMUX_TARGET_OPTION, expected):
             self._projected_target_pane_id = None
 
     def _toggle_agent_fullscreen(self) -> None:
@@ -2345,7 +2397,7 @@ class App:
                 "Compact view already shows one full-window page.", "tip")
             return
         owner = getattr(self, "_railmux_pane_id", None)
-        active = tmux_ctl.active_pane_id(owner) if owner is not None else None
+        active = self.mux.active_pane_id(owner) if owner is not None else None
         manager = self._get_tool_pane_manager()
         if (
             active is not None
@@ -2357,7 +2409,7 @@ class App:
             return
         slot = self._sync_target_slot_from_tmux()
         pane_id = slot.pane_id
-        if pane_id is None or not tmux_ctl.pane_alive(pane_id):
+        if pane_id is None or not self.mux.pane_alive(pane_id):
             self._set_status("No agent pane to fullscreen.", "tip")
             return
         if not self._zoom_pane(pane_id, toggle_if_current=True):
@@ -2448,9 +2500,9 @@ class App:
         if (prepared.get("owned_zoom")
                 and owner is not None
                 and self._window_is_zoomed() is True):
-            active = tmux_ctl.active_pane_id(owner)
+            active = self.mux.active_pane_id(owner)
             if active is not None:
-                tmux_ctl.toggle_pane_zoom(active)
+                self.mux.toggle_pane_zoom(active)
         for slot in reversed(prepared.get("parked", [])):
             if isinstance(slot, AgentSlot):
                 self._resume_compact_slot(slot)
@@ -2460,8 +2512,8 @@ class App:
             # Return to the responsive single projection it had before F20.
             self._enter_adaptive_single_view()
         active = prepared.get("active")
-        if isinstance(active, str) and tmux_ctl.pane_alive(active):
-            tmux_ctl.select_pane(active)
+        if isinstance(active, str) and self.mux.pane_alive(active):
+            self.mux.select_pane(active)
         self._install_tmux_bindings()
         self._apply_tmux_bar(self._tmux_error_bar)
 
@@ -2470,7 +2522,7 @@ class App:
         owner = getattr(self, "_railmux_pane_id", None)
         if owner is None:
             return
-        raw = tmux_ctl.show_window_user_option(
+        raw = self.mux.show_window_user_option(
             owner, COMPACT_RESIZE_OPTION)
         match = re.fullmatch(
             r"request:([0-9a-f]{16}):([0-9]{1,4}):([0-9]{1,3})",
@@ -2485,13 +2537,13 @@ class App:
         workspace = self._agent_workspace()
         if (width >= COMPACT_ENTER_WIDTH
                 and height >= COMPACT_ENTER_HEIGHT):
-            tmux_ctl.set_window_user_option(
+            self.mux.set_window_user_option(
                 owner, COMPACT_RESIZE_OPTION, response)
             return
         if (workspace.presentation is not WorkspacePresentation.WIDE
                 or (self._loop is not None
                     and self._loop.widget is not self._frame)):
-            tmux_ctl.set_window_user_option(
+            self.mux.set_window_user_option(
                 owner, COMPACT_RESIZE_OPTION, response)
             return
 
@@ -2505,18 +2557,18 @@ class App:
             # this step the normal geometry callback would attach it only
             # after TIOCSWINSZ, creating the same narrow scrollback segment.
             if not self._restore_adaptive_dual_view():
-                tmux_ctl.set_window_user_option(
+                self.mux.set_window_user_option(
                     owner, COMPACT_RESIZE_OPTION, response)
                 return
             restored_adaptive = True
 
-        active = tmux_ctl.active_pane_id(owner)
+        active = self.mux.active_pane_id(owner)
         page = self._page_for_active_pane(active)
         was_zoomed = self._window_is_zoomed()
         if was_zoomed is None:
             if restored_adaptive:
                 self._enter_adaptive_single_view()
-            tmux_ctl.set_window_user_option(
+            self.mux.set_window_user_option(
                 owner, COMPACT_RESIZE_OPTION, response)
             return
         profile = (
@@ -2533,7 +2585,7 @@ class App:
                     self._resume_compact_slot(slot)
             if restored_adaptive:
                 self._enter_adaptive_single_view()
-            tmux_ctl.set_window_user_option(
+            self.mux.set_window_user_option(
                 owner, COMPACT_RESIZE_OPTION, response)
             return
 
@@ -2550,14 +2602,14 @@ class App:
         # The helper may have timed out while a swap transaction was running.
         # A value comparison prevents a late F20 from parking the workspace
         # after its resize request has already been abandoned.
-        if tmux_ctl.show_window_user_option(
+        if self.mux.show_window_user_option(
                 owner, COMPACT_RESIZE_OPTION) != request:
             self._remote_compact_prepared = prepared
             self._rollback_remote_compact_prepare(token=token)
             return
         self._remote_compact_prepared = prepared
         ready = f"ready:{token}:{width}:{height}"
-        if not tmux_ctl.set_window_user_option(
+        if not self.mux.set_window_user_option(
                 owner, COMPACT_RESIZE_OPTION, ready):
             self._rollback_remote_compact_prepare(token=token)
             return
@@ -2573,32 +2625,20 @@ class App:
         )
         if pane_id is None:
             return None
-        try:
-            import subprocess as _sp
-            result = _sp.run(
-                ["tmux", "display-message", "-p", "-t", pane_id,
-                 "-F", "#{window_zoomed_flag}"],
-                stdout=_sp.PIPE, stderr=_sp.DEVNULL, text=True,
-            )
-            if result.returncode != 0:
-                return None
-            value = result.stdout.strip()
-            return value == "1" if value in {"0", "1"} else None
-        except Exception:
-            return None
+        return self.mux.window_is_zoomed(pane_id)
 
     def _zoom_pane(
         self, pane_id: str, *, toggle_if_current: bool = False,
     ) -> bool:
         """Select one pane and establish deterministic zoom ownership."""
         owner = getattr(self, "_railmux_pane_id", None) or pane_id
-        active = tmux_ctl.active_pane_id(owner)
+        active = self.mux.active_pane_id(owner)
         zoomed = self._window_is_zoomed()
         if zoomed is None:
             return False
         if zoomed and active == pane_id:
             return (
-                tmux_ctl.toggle_pane_zoom(pane_id)
+                self.mux.toggle_pane_zoom(pane_id)
                 if toggle_if_current else True
             )
         previous_active = active
@@ -2607,19 +2647,19 @@ class App:
         def restore_previous() -> None:
             if previous_active is None or previous_active == pane_id:
                 return
-            if not tmux_ctl.select_pane(previous_active):
+            if not self.mux.select_pane(previous_active):
                 return
             if removed_previous_zoom:
-                tmux_ctl.toggle_pane_zoom(previous_active)
+                self.mux.toggle_pane_zoom(previous_active)
 
         if zoomed:
-            if active is None or not tmux_ctl.toggle_pane_zoom(active):
+            if active is None or not self.mux.toggle_pane_zoom(active):
                 return False
             removed_previous_zoom = True
-        if active != pane_id and not tmux_ctl.select_pane(pane_id):
+        if active != pane_id and not self.mux.select_pane(pane_id):
             restore_previous()
             return False
-        if tmux_ctl.toggle_pane_zoom(pane_id):
+        if self.mux.toggle_pane_zoom(pane_id):
             return True
         restore_previous()
         return False
@@ -2640,7 +2680,7 @@ class App:
         workspace = self._agent_workspace()
         desired = self._slot_for_workspace_page(page)
         pane_id = self._pane_for_workspace_page(page)
-        if pane_id is None or not tmux_ctl.pane_alive(pane_id):
+        if pane_id is None or not self.mux.pane_alive(pane_id):
             if announce:
                 self._set_status("That compact page is not available.", "tip")
             return False
@@ -2673,7 +2713,7 @@ class App:
                 )
             return False
         pane_id = self._pane_for_workspace_page(page)
-        if pane_id is None or not tmux_ctl.pane_alive(pane_id):
+        if pane_id is None or not self.mux.pane_alive(pane_id):
             return False
 
         workspace.compact_page = page
@@ -2695,7 +2735,7 @@ class App:
         owner = getattr(self, "_railmux_pane_id", None)
         if owner is None:
             return
-        active = tmux_ctl.active_pane_id(owner)
+        active = self.mux.active_pane_id(owner)
         if active == owner:
             page = WorkspacePage.SIDEBAR
         elif active == workspace.primary.pane_id:
@@ -2739,7 +2779,7 @@ class App:
                 captured_profile = prepared.get("profile")
                 page = prepared.get("page")
             else:
-                active = tmux_ctl.active_pane_id(owner) if owner else None
+                active = self.mux.active_pane_id(owner) if owner else None
                 was_zoomed = self._window_is_zoomed()
                 if was_zoomed is None:
                     return False
@@ -2765,7 +2805,7 @@ class App:
                     getattr(self, "_adaptive_single_state", None), dict):
                 self._restore_adaptive_dual_view()
                 active = (
-                    tmux_ctl.active_pane_id(owner) if owner else None
+                    self.mux.active_pane_id(owner) if owner else None
                 )
                 page = self._page_for_active_pane(active)
             if not isinstance(page, WorkspacePage):
@@ -2792,8 +2832,8 @@ class App:
                 getattr(self, "_railmux_pane_id", None)
                 or workspace.primary.pane_id
             )
-            active = tmux_ctl.active_pane_id(owner) if owner else None
-            if active is not None and not tmux_ctl.toggle_pane_zoom(active):
+            active = self.mux.active_pane_id(owner) if owner else None
+            if active is not None and not self.mux.toggle_pane_zoom(active):
                 return False
         workspace.presentation = presentation
         compact_profile = getattr(
@@ -2823,11 +2863,11 @@ class App:
             self, "_pre_compact_wide_zoom_pane", None)
         self._pre_compact_wide_zoom_pane = None
         if (restore_zoom is not None
-                and tmux_ctl.pane_alive(restore_zoom)):
-            active = tmux_ctl.active_pane_id(restore_zoom)
+                and self.mux.pane_alive(restore_zoom)):
+            active = self.mux.active_pane_id(restore_zoom)
             if active != restore_zoom:
-                tmux_ctl.select_pane(restore_zoom)
-            tmux_ctl.toggle_pane_zoom(restore_zoom)
+                self.mux.select_pane(restore_zoom)
+            self.mux.toggle_pane_zoom(restore_zoom)
         self._apply_tmux_bar(self._tmux_error_bar)
         if parked_failed:
             self._set_status(
@@ -2844,14 +2884,14 @@ class App:
         primary_id = workspace.primary.pane_id
         if primary_id is None:
             return None
-        primary_size = tmux_ctl.pane_size(primary_id)
+        primary_size = self.mux.pane_size(primary_id)
         if primary_size is None:
             return None
         if workspace.layout is WorkspaceLayout.SINGLE:
             return primary_size
         secondary_id = workspace.secondary.pane_id
         secondary_size = (
-            tmux_ctl.pane_size(secondary_id) if secondary_id else None)
+            self.mux.pane_size(secondary_id) if secondary_id else None)
         if secondary_size is None:
             return None
         pw, ph = primary_size
@@ -2884,8 +2924,8 @@ class App:
         sidebar_id = getattr(self, "_railmux_pane_id", None)
         if sidebar_id is None:
             return False
-        window = tmux_ctl.window_size(sidebar_id)
-        current = tmux_ctl.pane_size(sidebar_id)
+        window = self.mux.window_size(sidebar_id)
+        current = self.mux.pane_size(sidebar_id)
         if window is None or current is None:
             return False
         desired = self._sidebar_width_for_layout(
@@ -2895,7 +2935,7 @@ class App:
         )
         if current[0] == desired:
             return True
-        return tmux_ctl.resize_pane_width(sidebar_id, desired)
+        return self.mux.resize_pane_width(sidebar_id, desired)
 
     def _reflow_layout_for_window_resize(
         self,
@@ -2949,9 +2989,9 @@ class App:
         primary_id = workspace.primary.pane_id
         if sidebar_id is None or primary_id is None:
             return None
-        window = tmux_ctl.window_size(sidebar_id)
-        sidebar = tmux_ctl.pane_size(sidebar_id)
-        primary = tmux_ctl.pane_size(primary_id)
+        window = self.mux.window_size(sidebar_id)
+        sidebar = self.mux.pane_size(sidebar_id)
+        primary = self.mux.pane_size(primary_id)
         if window is None or sidebar is None or primary is None:
             return None
         sidebar_permille = min(
@@ -2994,14 +3034,14 @@ class App:
                 return False
             desired = min(usable - minimum, max(
                 minimum, round(usable * ratio / 1000)))
-            return tmux_ctl.resize_pane_width(primary, desired)
+            return self.mux.resize_pane_width(primary, desired)
         usable = region[1] - 1
         minimum = self._MINIMUM_AGENT_PANE_SIZE[1]
         if usable < minimum * 2:
             return False
         desired = min(usable - minimum, max(
             minimum, round(usable * ratio / 1000)))
-        return tmux_ctl.resize_pane_height(primary, desired)
+        return self.mux.resize_pane_height(primary, desired)
 
     def _planned_restore_agent_region(
         self, layout: WorkspaceLayout,
@@ -3018,7 +3058,7 @@ class App:
         sidebar_id = getattr(self, "_railmux_pane_id", None)
         if sidebar_id is None:
             return None
-        window = tmux_ctl.window_size(sidebar_id)
+        window = self.mux.window_size(sidebar_id)
         if window is None:
             return None
         width, height = window
@@ -3061,8 +3101,7 @@ class App:
         )
         return region[0], usable - primary
 
-    @staticmethod
-    def _saved_slot_needs_surface(saved: object) -> bool:
+    def _saved_slot_needs_surface(self, saved: object) -> bool:
         """Whether a saved slot can safely justify an inert startup pane."""
         if not isinstance(saved, dict):
             return False
@@ -3072,7 +3111,7 @@ class App:
         return (
             saved.get("kind") == "agent"
             and isinstance(tmux_name, str)
-            and tmux_ctl.session_exists(tmux_name)
+            and self.mux.session_exists(tmux_name)
         )
 
     def _prelayout_pending_workspace(self) -> bool:
@@ -3189,7 +3228,7 @@ class App:
             running = self._by_tmux(name) if name is not None else None
             if running is None or running.is_legacy:
                 continue
-            topology = tmux_ctl.session_topology(name)
+            topology = self.mux.session_topology(name)
             if topology is not None:
                 guards[name] = (running, topology.session_id)
         return guards
@@ -3234,7 +3273,7 @@ class App:
             # hiding one of the original display slots.
             if running.key in self._running:
                 continue
-            topology = tmux_ctl.session_topology(name)
+            topology = self.mux.session_topology(name)
             if (topology is None or topology.session_id != session_id
                     or not self._agent_session_alive(name, server)):
                 continue
@@ -3255,7 +3294,7 @@ class App:
             if sidebar_focused else workspace.primary.pane_id
         )
         if pane_id is not None:
-            tmux_ctl.select_pane(pane_id)
+            self.mux.select_pane(pane_id)
         self._set_railmux_focus(sidebar_focused, force_border=True)
         self._paint_slot_active_target(
             workspace.primary,
@@ -3304,7 +3343,7 @@ class App:
                             workspace.set_target(target_key)
                             target = workspace.target
                             if not sidebar_focused and target.pane_id:
-                                tmux_ctl.select_pane(target.pane_id)
+                                self.mux.select_pane(target.pane_id)
                             self._set_railmux_focus(
                                 sidebar_focused, force_border=True)
                             self._restore_transient_layout_profile(profile)
@@ -3398,7 +3437,7 @@ class App:
                 if sidebar_focused else target.pane_id
             )
             if pane_id is not None:
-                tmux_ctl.select_pane(pane_id)
+                self.mux.select_pane(pane_id)
             self._set_railmux_focus(
                 sidebar_focused, force_border=True)
             self._paint_slot_active_target(
@@ -3584,7 +3623,7 @@ class App:
         self._resize_sidebar_for_layout(WorkspaceLayout.SINGLE)
         self._set_workspace_target(AgentWorkspace.PRIMARY)
         if not sidebar_focused and workspace.primary.pane_id:
-            tmux_ctl.select_pane(workspace.primary.pane_id)
+            self.mux.select_pane(workspace.primary.pane_id)
         self._paint_slot_active_target(
             workspace.primary,
             workspace.primary.active_session_id,
@@ -3718,7 +3757,7 @@ class App:
                 return False
             self._set_workspace_target(AgentWorkspace.PRIMARY)
             if not sidebar_focused and workspace.primary.pane_id:
-                tmux_ctl.select_pane(workspace.primary.pane_id)
+                self.mux.select_pane(workspace.primary.pane_id)
             self._install_tmux_bindings()
             self._set_railmux_focus(sidebar_focused, force_border=True)
             self._set_status(f"Layout → {new_layout.value}")
@@ -3747,7 +3786,7 @@ class App:
         old_secondary_id = secondary.pane_id
         if primary_id is None or old_secondary_id is None:
             return False
-        active_before = tmux_ctl.active_pane_id(primary_id)
+        active_before = self.mux.active_pane_id(primary_id)
         sidebar_focused = self._railmux_has_focus
         target_slot_before = workspace.target_slot_key
         agent_tmux_name = secondary.agent_tmux_name
@@ -3773,10 +3812,10 @@ class App:
 
         if active_before == old_secondary_id and secondary.pane_id:
             self._set_workspace_target(AgentWorkspace.SECONDARY)
-            tmux_ctl.select_pane(secondary.pane_id)
+            self.mux.select_pane(secondary.pane_id)
         elif active_before == primary_id:
             self._set_workspace_target(AgentWorkspace.PRIMARY)
-            tmux_ctl.select_pane(primary_id)
+            self.mux.select_pane(primary_id)
         else:
             self._set_workspace_target(target_slot_before)
         self._install_tmux_bindings()
@@ -3865,7 +3904,7 @@ class App:
             # safe to remove after the owned agent is proven dead. Swap panes
             # require marker-based recovery and are handled by reap_dead_display.
             if agent_dead and slot.swap_state is None:
-                tmux_ctl.kill_pane(pane_id)
+                self.mux.kill_pane(pane_id)
             lost.add(slot.key)
 
         if not lost:
@@ -3904,7 +3943,7 @@ class App:
             if history_was_lost and restore_target is not None:
                 self._sync_sidebar_to_agent_project(restore_target)
             if not sidebar_focused and primary.pane_id is not None:
-                tmux_ctl.select_pane(primary.pane_id)
+                self.mux.select_pane(primary.pane_id)
             self._install_tmux_bindings()
             self._set_railmux_focus(
                 sidebar_focused or primary.pane_id is None,
@@ -3960,7 +3999,7 @@ class App:
                 self._sync_sidebar_to_agent_project(
                     workspace.target.agent_tmux_name)
             if not sidebar_focused and workspace.target.pane_id:
-                tmux_ctl.select_pane(workspace.target.pane_id)
+                self.mux.select_pane(workspace.target.pane_id)
             self._install_tmux_bindings()
             self._set_railmux_focus(sidebar_focused, force_border=True)
             self._set_status(
@@ -4003,7 +4042,7 @@ class App:
             self._sync_sidebar_to_agent_project(
                 workspace.target.agent_tmux_name)
         if not sidebar_focused and workspace.target.pane_id:
-            tmux_ctl.select_pane(workspace.target.pane_id)
+            self.mux.select_pane(workspace.target.pane_id)
         self._install_tmux_bindings()
         self._set_railmux_focus(sidebar_focused, force_border=True)
         self._set_status(
@@ -4151,10 +4190,10 @@ class App:
         if real_pane is not None:
             if server is not None:
                 return real_pane in server.panes
-            return tmux_ctl.pane_alive(real_pane)
+            return self.mux.pane_alive(real_pane)
         if server is not None:
             return tmux_name in server.sessions
-        return tmux_ctl.session_exists(tmux_name)
+        return self.mux.session_exists(tmux_name)
 
     def _recover_unrepresented_displayed_agents(
         self, server: tmux_ctl.ServerSnapshot | None,
@@ -4179,7 +4218,7 @@ class App:
                 continue
             if server is not None and state.agent_pane_id not in server.panes:
                 continue
-            identity = tmux_ctl.pane_identity(state.agent_pane_id)
+            identity = self.mux.pane_identity(state.agent_pane_id)
             if (identity is None or identity.dead
                     or identity.pane_id != state.agent_pane_id
                     or identity.pane_pid != state.agent_pane_pid
@@ -4211,7 +4250,7 @@ class App:
         import json
         recovered = 0
         for name, _state in candidates:
-            raw_binding = tmux_ctl.show_session_user_option(
+            raw_binding = self.mux.show_session_user_option(
                 name, _SESSION_BINDING_OPTION)
             try:
                 binding = json.loads(raw_binding) if raw_binding else None
@@ -4294,7 +4333,7 @@ class App:
         # deterministic name collides.  Resume discovery must validate and
         # register it first; otherwise stamping/reusing it here could hijack an
         # unrelated or duplicate writer in the click-to-launch race window.
-        if existing is None and tmux_ctl.session_exists(tmux_name):
+        if existing is None and self.mux.session_exists(tmux_name):
             msg = (
                 f"Launch refused: untracked live tmux session '{tmux_name}'"
             )
@@ -4311,8 +4350,12 @@ class App:
         # Only the non-secret CODEX_HOME may appear in the command string.
         shell_env = ({k: v for k, v in env.items() if k == "CODEX_HOME"}
                      if env else None)
-        shell_cmd = self._shellify(cmd, cwd=cwd, env=shell_env,
-                                   login_shell=login_shell)
+        shell_cmd = self.mux.prepare_launch(
+            cmd,
+            cwd,
+            env=shell_env,
+            login_shell=login_shell,
+        )
         launch_marker: orphan_marker.Marker | None = None
         if placeholder_path is not None:
             owner = getattr(self, "_restart_identity", None)
@@ -4321,7 +4364,7 @@ class App:
                 ok, err = False, "exact outer tmux identity is unavailable"
             else:
                 created_at = time.time()
-                holder, err = tmux_ctl.create_detached_holder(tmux_name, env=env)
+                holder, err = self.mux.create_detached_holder(tmux_name, env=env)
                 ok = holder is not None
                 if holder is not None:
                     launch_marker = orphan_marker.Marker(
@@ -4337,10 +4380,10 @@ class App:
                         phase="launching",
                     )
                     if not self._write_orphan_marker(launch_marker):
-                        tmux_ctl.kill_session_identity(holder)
+                        self.mux.kill_session_identity(holder)
                         ok, err = False, "could not persist launch recovery marker"
                     else:
-                        ok, err = tmux_ctl.start_detached_holder(holder, shell_cmd)
+                        ok, err = self.mux.start_detached_holder(holder, shell_cmd)
                         if ok:
                             unresolved = launch_marker.with_phase("unresolved")
                             # If this transition fails, the durable launching
@@ -4584,7 +4627,7 @@ class App:
     def _right_pane_open(self) -> bool:
         """True when the tmux right pane exists (railmux sidebar is ~30% width)."""
         pane_id = self._primary_slot.pane_id
-        return pane_id is not None and tmux_ctl.pane_alive(pane_id)
+        return pane_id is not None and self.mux.pane_alive(pane_id)
 
     def _open_new_project_modal(self) -> None:
         modal = PathBrowserModal(
@@ -4667,7 +4710,7 @@ class App:
     def _verified_help_session_names(self) -> set[str]:
         """Return only private helpers whose persisted identity we own."""
         candidates = set(getattr(self, "_help_session_names_used", set()))
-        server = tmux_ctl.server_snapshot()
+        server = self.mux.server_snapshot()
         if server is not None:
             candidates.update(
                 name for name in server.sessions
@@ -4681,7 +4724,7 @@ class App:
         return {
             name for name in candidates
             if (self._is_help_session_name(name)
-                and tmux_ctl.show_session_user_option(
+                and self.mux.show_session_user_option(
                     name, _HELP_SESSION_OPTION) in allowed)
         }
 
@@ -4724,9 +4767,9 @@ class App:
         mode = self._active_mode()
         tmux_name = self._help_session_name(mode)
         expected_identity = self._help_session_identity(mode)
-        already_live = tmux_ctl.session_exists(tmux_name)
+        already_live = self.mux.session_exists(tmux_name)
         existing_identity = (
-            tmux_ctl.show_session_user_option(
+            self.mux.show_session_user_option(
                 tmux_name, _HELP_SESSION_OPTION)
             if already_live else None
         )
@@ -4744,8 +4787,12 @@ class App:
         try:
             workspace = materialize_help_workspace()
             command, env, login_shell = self._help_command(mode, workspace)
-            shell_cmd = self._shellify(
-                command, workspace, env=env, login_shell=login_shell)
+            shell_cmd = self.mux.prepare_launch(
+                command,
+                workspace,
+                env=env,
+                login_shell=login_shell,
+            )
         except Exception:
             self._set_status(
                 "Ask Railmux unavailable: could not prepare its help workspace",
@@ -4762,8 +4809,8 @@ class App:
             # exact, disposable private session with the current policy.
             if not self._return_agent_before_kill(tmux_name):
                 return
-            tmux_ctl.kill_session(tmux_name)
-            if tmux_ctl.session_exists(tmux_name):
+            self.mux.kill_session(tmux_name)
+            if self.mux.session_exists(tmux_name):
                 self._set_status(
                     "Ask Railmux could not upgrade its read-only policy",
                     "error",
@@ -4781,7 +4828,7 @@ class App:
                     else WorkspacePage.PRIMARY
                 )
             elif display_slot.pane_id is not None:
-                tmux_ctl.select_pane(display_slot.pane_id)
+                self.mux.select_pane(display_slot.pane_id)
                 self._set_railmux_focus(False, force_border=True)
             self._set_status(
                 f"Ask Railmux with {mode.label}; your previous agent is still running"
@@ -4789,7 +4836,7 @@ class App:
             return
 
         if not already_live:
-            ok, error = tmux_ctl.new_detached_session(
+            ok, error = self.mux.new_detached_session(
                 tmux_name, shell_cmd, env=env)
             if not ok:
                 self._set_status(
@@ -4798,13 +4845,13 @@ class App:
                 )
                 return
             marked = (
-                tmux_ctl.set_session_user_option(
+                self.mux.set_session_user_option(
                     tmux_name, _HELP_SESSION_OPTION, expected_identity)
-                and tmux_ctl.show_session_user_option(
+                and self.mux.show_session_user_option(
                     tmux_name, _HELP_SESSION_OPTION) == expected_identity
             )
             if not marked:
-                tmux_ctl.kill_session(tmux_name)
+                self.mux.kill_session(tmux_name)
                 self._set_status(
                     "Ask Railmux failed: could not verify help session identity",
                     "error",
@@ -4847,7 +4894,7 @@ class App:
         else:
             self._full_sidebar_return_page = None
             owner = getattr(self, "_railmux_pane_id", None)
-            active = tmux_ctl.active_pane_id(owner) if owner else None
+            active = self.mux.active_pane_id(owner) if owner else None
             was_zoomed = self._window_is_zoomed()
             self._full_sidebar_return_zoom_pane = (
                 active if was_zoomed is True and active != owner else None)
@@ -4890,14 +4937,14 @@ class App:
         self._full_sidebar_owned_zoom = False
         self._full_sidebar_return_zoom_pane = None
         owner = getattr(self, "_railmux_pane_id", None)
-        active = tmux_ctl.active_pane_id(owner) if owner else None
+        active = self.mux.active_pane_id(owner) if owner else None
         if (owned and owner is not None and active == owner
                 and self._window_is_zoomed() is True
-                and tmux_ctl.toggle_pane_zoom(owner)
+                and self.mux.toggle_pane_zoom(owner)
                 and return_zoom is not None
-                and tmux_ctl.pane_alive(return_zoom)):
-            tmux_ctl.select_pane(return_zoom)
-            tmux_ctl.toggle_pane_zoom(return_zoom)
+                and self.mux.pane_alive(return_zoom)):
+            self.mux.select_pane(return_zoom)
+            self.mux.toggle_pane_zoom(return_zoom)
 
     def _open_options_modal(self) -> None:
         wide_profile_at_open = (
@@ -5017,9 +5064,9 @@ class App:
 
     def _open_quit_confirm(self) -> None:
         self._save_state()
-        session = tmux_ctl.current_session_name()
+        session = self.mux.current_session_name()
         attached = (
-            tmux_ctl.session_attached_count(session) if session else None)
+            self.mux.session_attached_count(session) if session else None)
         modal = QuitConfirmModal(
             on_confirm=self._confirm_quit,
             on_soft_quit=self._soft_quit,
@@ -5032,8 +5079,10 @@ class App:
     # --- project shortcut: terminal ---
 
     def _get_tool_pane_manager(self) -> ToolPaneManager | None:
+        if not self.mux.capabilities.external_binding_leases:
+            return None
         existing = getattr(self, "_managed_tool_panes", None)
-        session_id = tmux_ctl.current_session_id()
+        session_id = self.mux.current_session_id()
         if session_id is None:
             return None
         if (
@@ -5097,7 +5146,7 @@ class App:
         if (
             manager is None
             or pane_id is None
-            or not tmux_ctl.pane_alive(pane_id)
+            or not self.mux.pane_alive(pane_id)
         ):
             self._set_status("Could not identify the target agent pane.", "error")
             return
@@ -5139,10 +5188,9 @@ class App:
 
     def _on_detach(self) -> None:
         """Detach from Railmux while keeping every agent session alive."""
-        import subprocess as _sp
-        session = tmux_ctl.current_session_name()
+        session = self.mux.current_session_name()
         attached = (
-            tmux_ctl.session_attached_count(session) if session else None)
+            self.mux.session_attached_count(session) if session else None)
         if attached != 1:
             message = (
                 "Multiple terminals are attached; use Ctrl-B d to detach "
@@ -5156,7 +5204,7 @@ class App:
                 "warn",
             )
             return
-        _sp.run(["tmux", "detach-client"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        self.mux.detach_client()
 
     def _confirm_quit(self) -> None:
         """Request a hard quit, optionally recording pane proportions."""
@@ -5340,7 +5388,7 @@ class App:
         identity = getattr(self, "_restart_identity", None)
         if identity is None:
             return False
-        topology = tmux_ctl.session_topology(identity.session_id)
+        topology = self.mux.session_topology(identity.session_id)
         return topology is not None and topology.session_name == "railmux"
 
     def _publish_managed_restart_handoff(self) -> bool:
@@ -5731,7 +5779,7 @@ class App:
         if not (isinstance(tmux_name, str)
                 and (self._agent_session_alive(tmux_name)
                      if running is not None
-                     else tmux_ctl.session_exists(tmux_name))):
+                     else self.mux.session_exists(tmux_name))):
             return None
         running = running or self._by_tmux(tmux_name)
         if running is None:
@@ -5877,7 +5925,7 @@ class App:
             primary_ok = (
                 transport.reset_slot(workspace.primary)
                 if (workspace.primary.pane_id is not None
-                    and tmux_ctl.pane_alive(workspace.primary.pane_id))
+                    and self.mux.pane_alive(workspace.primary.pane_id))
                 else transport.create_primary()
             )
         if not primary_ok or workspace.primary.pane_id is None:
@@ -5963,13 +6011,13 @@ class App:
             else workspace.primary
         )
         if (focus_key != "sidebar" and focus_slot.pane_id is not None
-                and tmux_ctl.select_pane(focus_slot.pane_id)):
+                and self.mux.select_pane(focus_slot.pane_id)):
             self._set_workspace_target(focus_slot.key)
             self._set_railmux_focus(False, force_border=True)
         else:
             railmux_pane = getattr(self, "_railmux_pane_id", None)
             if railmux_pane is not None:
-                tmux_ctl.select_pane(railmux_pane)
+                self.mux.select_pane(railmux_pane)
             self._set_railmux_focus(True, force_border=True)
         self._apply_layout_profile(allow_create=True)
         self._install_tmux_bindings()
@@ -5990,7 +6038,7 @@ class App:
             exact_tmux = state.get("right_tmux")
             exact_live = (
                 isinstance(exact_tmux, str)
-                and tmux_ctl.session_exists(exact_tmux)
+                and self.mux.session_exists(exact_tmux)
             )
             if self._restore_agent_target(state, self._primary_slot):
                 return True
@@ -6115,7 +6163,7 @@ class App:
         if (placeholder_key is None
                 or not self._legacy_placeholder_name(name, mode)):
             return None
-        raw = tmux_ctl.detached_single_pane_start_command(
+        raw = self.mux.detached_single_pane_start_command(
             name, session_id=session_id, pane_id=pane_id)
         if raw is None or not self._is_legacy_new_session_command(
                 raw, mode, cwd):
@@ -6272,12 +6320,12 @@ class App:
                             or isinstance(displayed_pid, bool)):
                         displayed_pid = None
                     open_ids = (
-                        tmux_ctl.process_tree_rollout_ids(
+                        self.mux.process_tree_rollout_ids(
                             displayed_pid,
                             self._codex_home_path() / "sessions",
                         )
                         if displayed_pid is not None
-                        else tmux_ctl.session_rollout_ids(
+                        else self.mux.session_rollout_ids(
                             tmux_name,
                             self._codex_home_path() / "sessions",
                         )
@@ -6294,7 +6342,7 @@ class App:
             if open_ids and not self._codex_writer_matches(key, open_ids):
                 try:
                     resumed_key_matches = (
-                        tmux_ctl.session_process_has_exact_arg(tmux_name, key)
+                        self.mux.session_process_has_exact_arg(tmux_name, key)
                     )
                 except Exception:
                     resumed_key_matches = None
@@ -6373,23 +6421,22 @@ class App:
         data = self._running_binding_data(running)
         if data is None:
             return False
-        return tmux_ctl.set_session_user_option(
+        return self.mux.set_session_user_option(
             running.tmux_name,
             _SESSION_BINDING_OPTION,
             json.dumps(data, separators=(",", ":"), sort_keys=True),
         )
 
-    @staticmethod
-    def _write_orphan_marker(marker: orphan_marker.Marker) -> bool:
+    def _write_orphan_marker(self, marker: orphan_marker.Marker) -> bool:
         """Write and read back the bounded marker on its immutable session."""
         try:
             raw = orphan_marker.encode(marker)
         except ValueError:
             return False
-        if not tmux_ctl.set_session_user_option(
+        if not self.mux.set_session_user_option(
                 marker.tmux_session_id, orphan_marker.OPTION_NAME, raw):
             return False
-        saved = tmux_ctl.show_session_user_option(
+        saved = self.mux.show_session_user_option(
             marker.tmux_session_id, orphan_marker.OPTION_NAME)
         return orphan_marker.decode(saved) == marker
 
@@ -6399,8 +6446,8 @@ class App:
         marker = running.orphan
         if marker is None:
             return None
-        pane = tmux_ctl.pane_identity(marker.tmux_pane_id)
-        topology = tmux_ctl.session_topology(marker.tmux_session_id)
+        pane = self.mux.pane_identity(marker.tmux_pane_id)
+        topology = self.mux.session_topology(marker.tmux_session_id)
         home_matches = bool(
             topology is not None
             and topology.session_id == marker.tmux_session_id
@@ -6415,7 +6462,7 @@ class App:
         if (not home_matches or pane is None or pane.dead
                 or not (at_home or displayed)):
             return None
-        saved = orphan_marker.decode(tmux_ctl.show_session_user_option(
+        saved = orphan_marker.decode(self.mux.show_session_user_option(
             marker.tmux_session_id, orphan_marker.OPTION_NAME))
         if saved != marker:
             return None
@@ -6478,6 +6525,8 @@ class App:
         method isolated so the bridge can be deleted with ``legacy_sessions``
         after the documented upgrade window.
         """
+        if not self.mux.capabilities.grouped_sessions:
+            return 0
         now = time.monotonic()
         previous = getattr(self, "_legacy_discovery_at", 0.0)
         if not force and now - previous < 5.0:
@@ -6645,20 +6694,24 @@ class App:
         by scanning the project's sessions — otherwise the truncated key
         will not match ``SessionMeta.session_id`` elsewhere.
         """
-        import subprocess as _sp
         self._codex_recovery_candidates_seen = False
         self._last_orphan_probe_ok = False
-        try:
-            out = _sp.check_output(
-                ["tmux", "list-sessions", "-F",
-                 "#{session_name}\t#{pane_current_path}\t#{session_created}"
-                 "\t#{session_id}\t#{pane_id}"
-                 f"\t#{{{orphan_marker.OPTION_NAME}}}"
-                 f"\t#{{{_SESSION_BINDING_OPTION}}}"],
-                stderr=_sp.DEVNULL, text=True,
-            )
-        except (OSError, _sp.CalledProcessError):
-            return False
+        if self.mux.capabilities.grouped_sessions:
+            import subprocess as _sp
+            try:
+                out = _sp.check_output(
+                    ["tmux", "list-sessions", "-F",
+                     "#{session_name}\t#{pane_current_path}\t#{session_created}"
+                     "\t#{session_id}\t#{pane_id}"
+                     f"\t#{{{orphan_marker.OPTION_NAME}}}"
+                     f"\t#{{{_SESSION_BINDING_OPTION}}}"],
+                    stderr=_sp.DEVNULL, text=True,
+                )
+            except (OSError, _sp.CalledProcessError):
+                return False
+        else:
+            rows = self.mux.owned_session_rows()
+            out = "\n".join("\t".join(row) for row in rows)
         self._last_orphan_probe_ok = True
         project_snapshot = getattr(self, "_project_snapshot", None)
         if project_snapshot is None:
@@ -6749,7 +6802,7 @@ class App:
                     or self._placeholder_tmux_key(name, mode)
                     != marker.placeholder_key):
                 continue
-            pane = tmux_ctl.pane_identity(marker.tmux_pane_id)
+            pane = self.mux.pane_identity(marker.tmux_pane_id)
             if not orphan_marker.same_live_tmux(marker, pane):
                 continue
             if (current_owner is not None
@@ -6759,7 +6812,7 @@ class App:
                          == current_owner.server_pid)
                     and marker.owner.pane_id != current_owner.pane_id
                     and not owner_snapshot_loaded):
-                server = tmux_ctl.server_snapshot()
+                server = self.mux.server_snapshot()
                 live_panes = server.panes if server is not None else None
                 owner_snapshot_loaded = True
             if not orphan_marker.owner_available(
@@ -6778,8 +6831,8 @@ class App:
                 claimed = orphan_marker.claim_owner(
                     marker,
                     current_owner,
-                    tmux_ctl.show_session_user_option,
-                    tmux_ctl.set_session_user_option,
+                    self.mux.show_session_user_option,
+                    self.mux.set_session_user_option,
                 )
                 if claimed is None:
                     continue
@@ -6961,7 +7014,7 @@ class App:
                 full_id = None
                 if mode.project_source == ProjectSource.CODEX:
                     try:
-                        open_ids = tmux_ctl.session_rollout_ids(
+                        open_ids = self.mux.session_rollout_ids(
                             name, self._codex_home_path() / "sessions")
                     except Exception:
                         open_ids = None
@@ -7007,7 +7060,7 @@ class App:
             if (mode.project_source == ProjectSource.CODEX
                     and placeholder_key is None):
                 try:
-                    writer_ids = tmux_ctl.session_rollout_ids(
+                    writer_ids = self.mux.session_rollout_ids(
                         name, self._codex_home_path() / "sessions")
                 except Exception:
                     writer_ids = None
@@ -7727,7 +7780,7 @@ class App:
                     if r.is_legacy:
                         continue
                     try:
-                        tmux_ctl.kill_session(r.tmux_name)
+                        self.mux.kill_session(r.tmux_name)
                     except Exception:
                         pass
                 self._running.clear()
@@ -7736,7 +7789,7 @@ class App:
                 # names whose persisted private identity still validates.
                 for name in self._verified_help_session_names():
                     try:
-                        tmux_ctl.kill_session(name)
+                        self.mux.kill_session(name)
                     except Exception:
                         pass
             self._teardown_core_done = True
@@ -7752,10 +7805,10 @@ class App:
             return
         self._outer_teardown_done = True
         if not self._soft_quit_flag and self._auto_launched:
-            session_name = tmux_ctl.current_session_name()
+            session_name = self.mux.current_session_name()
             if session_name == "railmux":
                 identity = getattr(self, "_restart_identity", None)
-                current_id = tmux_ctl.current_session_id()
+                current_id = self.mux.current_session_id()
                 intent = bool(
                     identity is not None
                     and current_id == identity.session_id
@@ -7765,7 +7818,7 @@ class App:
                     )
                 )
                 try:
-                    killed = tmux_ctl.kill_session("railmux")
+                    killed = self.mux.kill_session("railmux")
                 except Exception:
                     killed = False
                 if intent and not killed:
@@ -7894,7 +7947,7 @@ class App:
                 for slot in self._agent_workspace().slots)
             or bool(self._running)
         )
-        server = tmux_ctl.server_snapshot() if needs_liveness else None
+        server = self.mux.server_snapshot() if needs_liveness else None
         child_probes: dict[str, bool | None] = {}
         codex_rollout_probes: dict[str, set[str] | None] = {}
 
@@ -7915,7 +7968,7 @@ class App:
         def pane_is_alive(pane_id: str) -> bool:
             if server is not None:
                 return pane_id in server.panes
-            return tmux_ctl.pane_alive(pane_id)
+            return self.mux.pane_alive(pane_id)
 
         # A refresh may need several Codex views. Ask the single rate-limited
         # worker for a new immutable generation; every query below returns
@@ -8149,9 +8202,9 @@ class App:
                     if pane_pid is None and server is not None:
                         pane_pid = server.pane_pid_for(r.tmux_name)
                     if pane_pid is not None:
-                        has_child = tmux_ctl.process_has_child(pane_pid)
+                        has_child = self.mux.process_has_child(pane_pid)
                     else:
-                        has_child = tmux_ctl.session_has_child(r.tmux_name)
+                        has_child = self.mux.session_has_child(r.tmux_name)
                     if child_probes is not None:
                         child_probes[r.tmux_name] = has_child
                 if has_child is not None:
@@ -8185,12 +8238,12 @@ class App:
         sessions_dir = self._codex_home_path() / "sessions"
         try:
             if real_pane is not None:
-                identity = tmux_ctl.pane_identity(real_pane)
+                identity = self.mux.pane_identity(real_pane)
                 pane_pid = identity.pane_pid if identity is not None else None
             rollout_ids = (
-                tmux_ctl.process_tree_rollout_ids(pane_pid, sessions_dir)
+                self.mux.process_tree_rollout_ids(pane_pid, sessions_dir)
                 if pane_pid is not None
-                else tmux_ctl.session_rollout_ids(
+                else self.mux.session_rollout_ids(
                     running.tmux_name, sessions_dir)
             )
         except Exception:
@@ -8477,12 +8530,12 @@ class App:
         (heuristic) rather than raising into the UI."""
         try:
             sessions_dir = self._codex_home_path() / "sessions"
-            return tmux_ctl.session_rollout_ids(r.tmux_name, sessions_dir)
+            return self.mux.session_rollout_ids(r.tmux_name, sessions_dir)
         except Exception:
             # On a procfs platform an inspection failure is ambiguity, not
             # evidence that procfs is unavailable. Falling back here could
             # adopt an external same-cwd writer.
-            return set() if tmux_ctl.proc_fs_available() else None
+            return set() if self.mux.proc_fs_available() else None
 
     def _currently_focused_session_meta(self) -> SessionMeta | None:
         if not self._sessions_pane._walker:
@@ -8737,10 +8790,10 @@ class App:
             return
         if tmux_name and (exact_pane is not None
                           or (owned is None or owned.orphan is None)
-                          and tmux_ctl.session_exists(tmux_name)):
+                          and self.mux.session_exists(tmux_name)):
             if not self._return_agent_before_kill(tmux_name):
                 return
-            writer_pids = tmux_ctl.session_process_ids(tmux_name)
+            writer_pids = self.mux.session_process_ids(tmux_name)
             if exact_pane is not None:
                 # Returning a swap-displayed pane changes its current session;
                 # refresh and require the recorded home identity before kill.
@@ -8748,23 +8801,23 @@ class App:
                 killed = bool(
                     exact_pane is not None
                     and orphan_marker.same_live_tmux(owned.orphan, exact_pane)
-                    and tmux_ctl.kill_session_identity(exact_pane)
+                    and self.mux.kill_session_identity(exact_pane)
                 )
             else:
-                killed = tmux_ctl.kill_session(tmux_name)
+                killed = self.mux.kill_session(tmux_name)
             # Never remove a rollout while its writer may still be alive. A
             # concurrent exit is fine; a session that still exists after the
             # failed kill is a hard stop for both Claude and Codex deletion.
             still_alive = (
                 self._exact_running_pane(owned) is not None
                 if owned is not None and owned.orphan is not None
-                else tmux_ctl.session_exists(tmux_name)
+                else self.mux.session_exists(tmux_name)
             )
             if not killed and still_alive:
                 self._set_status(
                     f"failed to stop {tmux_name}; nothing was deleted", "error")
                 return
-            if writer_pids and not tmux_ctl.wait_for_processes_exit(writer_pids):
+            if writer_pids and not self.mux.wait_for_processes_exit(writer_pids):
                 self._set_status(
                     f"{tmux_name} is still shutting down; nothing was deleted",
                     "error",
@@ -9054,7 +9107,7 @@ class App:
         # Ensure tmux focus is on our pane so the 200 ms poll doesn't
         # auto-close the menu (can happen if focus was on the right pane).
         if self._railmux_pane_id:
-            tmux_ctl.select_pane(self._railmux_pane_id)
+            self.mux.select_pane(self._railmux_pane_id)
         if r.is_placeholder or r.is_legacy:
             # Legacy rows retain their exact server identity here; routing
             # through the provider-session menu could select a same-id session
@@ -9111,7 +9164,7 @@ class App:
         # Ensure tmux focus is on our pane so the 200 ms poll doesn't
         # auto-close the menu (can happen if focus was on the right pane).
         if self._railmux_pane_id:
-            tmux_ctl.select_pane(self._railmux_pane_id)
+            self.mux.select_pane(self._railmux_pane_id)
         self._sessions_pane.set_selected_session(session.session_id)
         r = self._by_session_id(session.session_id)
         is_alive = r is not None and not r.is_placeholder
@@ -9149,7 +9202,7 @@ class App:
         self._on_session_select(session, steal_focus=True)
 
     def _copy_session_title(self, title: str) -> None:
-        if tmux_ctl.copy_to_clipboard(title):
+        if self.mux.copy_to_clipboard(title):
             self._set_status(f"Copied title: {title}", "success")
         else:
             self._set_status(
@@ -9163,7 +9216,7 @@ class App:
         if not text:
             self._set_status("No status message is available to copy.", "warn")
             return
-        if tmux_ctl.copy_to_clipboard(text):
+        if self.mux.copy_to_clipboard(text):
             # Keep the copied source (and any sticky warning/error) as the
             # durable status state; this acknowledgement temporarily occupies
             # only status-right, then restores that exact source.
@@ -9313,9 +9366,9 @@ class App:
                 self._set_status(
                     "Kill refused: the marked pane did not return home", "error")
                 return
-            killed = tmux_ctl.kill_session_identity(pane)
-        elif tmux_ctl.session_exists(tmux_name):
-            killed = tmux_ctl.kill_session(tmux_name)
+            killed = self.mux.kill_session_identity(pane)
+        elif self.mux.session_exists(tmux_name):
+            killed = self.mux.kill_session(tmux_name)
 
         if running is not None and running.is_legacy:
             still_alive = self._agent_session_alive(running.tmux_name)
@@ -9323,7 +9376,7 @@ class App:
             still_alive = (
                 self._exact_running_pane(running) is not None
                 if running is not None and running.orphan is not None
-                else tmux_ctl.session_exists(tmux_name)
+                else self.mux.session_exists(tmux_name)
             )
         if running is not None and running.is_legacy and not killed:
             self._set_status(
@@ -9378,11 +9431,11 @@ class App:
             return
         workspace = self._agent_workspace()
         sidebar_id = getattr(self, "_railmux_pane_id", None)
-        if not sidebar_id or not tmux_ctl.pane_alive(sidebar_id):
+        if not sidebar_id or not self.mux.pane_alive(sidebar_id):
             self._set_status("Sidebar pane is unavailable.")
             return
-        window = tmux_ctl.window_size(sidebar_id)
-        sidebar = tmux_ctl.pane_size(sidebar_id)
+        window = self.mux.window_size(sidebar_id)
+        sidebar = self.mux.pane_size(sidebar_id)
         if window is None or sidebar is None or window[0] <= 0:
             self._set_status("Sidebar size is unavailable.")
             return
@@ -9395,10 +9448,10 @@ class App:
             max(minimum, sidebar[0] + (5 if expand_railmux else -5)),
         )
         if (desired == sidebar[0]
-                or not tmux_ctl.resize_pane_width(sidebar_id, desired)):
+                or not self.mux.resize_pane_width(sidebar_id, desired)):
             return
 
-        resized_sidebar = tmux_ctl.pane_size(sidebar_id)
+        resized_sidebar = self.mux.pane_size(sidebar_id)
         if resized_sidebar is not None:
             self._active_sidebar_permille = min(
                 800,
@@ -9435,7 +9488,7 @@ class App:
         """Return the full Railmux workspace size, not the sidebar TTY size."""
         pane_id = getattr(self, "_railmux_pane_id", None)
         if pane_id:
-            size = tmux_ctl.window_size(pane_id)
+            size = self.mux.window_size(pane_id)
             if size is not None:
                 return size
         try:
@@ -9650,7 +9703,7 @@ class App:
             # the display area the user actually receives.
             size = self._workspace_size()
         else:
-            size = tmux_ctl.pane_size(slot.pane_id)
+            size = self.mux.pane_size(slot.pane_id)
         if size is None:
             return
         width, height = size
@@ -9768,6 +9821,7 @@ class App:
         overwritten by the next idle tip before it ever became visible — only
         long-lived tips would show.
         """
+        self.mux.set_status_text(text, level)
         if not self._tmux_status_enabled or not self._tmux_status_session:
             return
         # Flip the WHOLE bar (bg + brand) to red on error, back to green otherwise,
@@ -9782,8 +9836,8 @@ class App:
         manager = getattr(self, "_tmux_binding_manager", None)
         if getattr(manager, "status_navigation_available", False) is True:
             try:
-                payload = tmux_ctl.status_action_range(
-                    tmux_ctl.STATUS_ACTION_COPY, payload)
+                payload = self.mux.status_action_range(
+                    self.mux.STATUS_ACTION_COPY, payload)
             except (TypeError, ValueError):
                 pass
         if remember:
@@ -10004,7 +10058,7 @@ class App:
             if (self._railmux_pane_id is not None
                     and self._loop is not None
                     and isinstance(self._loop.widget, _CloseOnClickOverlay)):
-                if tmux_ctl.current_pane_id() != self._railmux_pane_id:
+                if self.mux.current_pane_id() != self._railmux_pane_id:
                     self._close_modal()
             interval_s = 0.2
         else:
@@ -10024,8 +10078,8 @@ class App:
         # after we've mutated the outer session — otherwise the user's bar would
         # keep railmux's `status on`, style, brand and blanked window-list.
         try:
-            if tmux_ctl.in_tmux():
-                sess = tmux_ctl.current_session_name() or "railmux"
+            if self.mux.in_tmux():
+                sess = self.mux.current_session_name() or "railmux"
                 _sp.run(
                     ["tmux", "set-option", "-t", sess, "set-clipboard", "on"],
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
@@ -10033,7 +10087,7 @@ class App:
                 # Force OSC 52 passthrough so a left-drag selection in either pane
                 # copies to the *local* system clipboard (works over SSH / nested
                 # tmux on OSC-52-capable terminals). Pairs with set-clipboard on.
-                tmux_ctl.enable_clipboard_passthrough()
+                self.mux.enable_clipboard_passthrough()
                 _sp.run(
                     ["tmux", "set-option", "-t", sess, "focus-events", "on"],
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
@@ -10068,10 +10122,10 @@ class App:
                 self._tmux_status_enabled = True
                 self._apply_tmux_bar(error=False)  # initial green bar
 
-            self._railmux_pane_id = tmux_ctl.current_pane_id()
+            self._railmux_pane_id = self.mux.current_pane_id()
             if (self._railmux_pane_id is not None
-                    and tmux_ctl.current_session_name() == "railmux"
-                    and not tmux_ctl.use_smallest_window_size(
+                    and self.mux.current_session_name() == "railmux"
+                    and not self.mux.use_smallest_window_size(
                         self._railmux_pane_id)):
                 self._set_status(
                     "Could not enable stable multi-terminal sizing.", "warn")
@@ -10087,9 +10141,7 @@ class App:
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
             # not text input.
-            screen = urwid.raw_display.Screen(
-                focus_reporting=True, bracketed_paste_mode=True
-            )
+            screen = self.mux.create_ui_screen()
             self._loop = urwid.MainLoop(
                 self._frame,
                 palette=PALETTE,
@@ -10134,7 +10186,15 @@ class App:
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.
-            pass
+            if not self.mux.capabilities.grouped_sessions:
+                # The Windows daemon is the ConPTY recovery authority. An
+                # uncommitted frontend/UI interruption must fail soft; only
+                # the confirmed hard-quit path may terminate providers.
+                self._soft_quit_flag = True
+        except BaseException:
+            if not self.mux.capabilities.grouped_sessions:
+                self._soft_quit_flag = True
+            raise
         finally:
             # Always clean up tmux, regardless of how (or how early) we exited.
             self._teardown_tmux()
