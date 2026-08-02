@@ -59,6 +59,48 @@ def test_windows_backend_starts_typed_provider_and_composes_display():
     assert update.width == 120 and update.height == 30
 
 
+def test_windows_snapshot_keeps_attached_display_pane_alive():
+    backend = WinMuxBackend(process_factory=_factory)
+    launch = backend.prepare_launch(["codex", "resume", "abc"], Path("C:/repo"))
+    assert backend.new_detached_session("codex-abc", launch) == (True, None)
+    workspace = AgentWorkspace()
+    transport = backend.create_display_transport(workspace, "swap")
+
+    assert transport.attach(workspace.primary, "codex-abc").ok
+    assert workspace.primary.pane_id is not None
+    snapshot = backend.server_snapshot()
+
+    assert workspace.primary.pane_id in snapshot.panes
+    assert backend._sessions["codex-abc"].pane_id in snapshot.panes
+    assert transport.fallback_for_external_client(workspace.primary) is None
+
+
+def test_shared_reconciliation_preserves_native_attached_agent(tmp_path):
+    backend = WinMuxBackend(process_factory=_factory)
+    app = App(tmp_path, Config(), mux_backend=backend)
+    launch = backend.prepare_launch(["codex", "resume", "abc"], tmp_path)
+    assert backend.new_detached_session("codex-abc", launch) == (True, None)
+    session = backend._sessions["codex-abc"]
+    assert session.terminal is not None
+    session.terminal.feed(b"AGENT_PANEL_READY")
+    slot = app._agent_workspace().primary
+    assert app._display_transport().attach(slot, "codex-abc").ok
+
+    snapshot = backend.server_snapshot()
+    app._reconcile_display_slots(
+        lambda name: name in snapshot.sessions,
+        lambda pane_id: pane_id in snapshot.panes,
+    )
+
+    assert slot.pane_id is not None
+    assert slot.agent_tmux_name == "codex-abc"
+    assert "primary" in backend._display_regions()
+    assert any(
+        b"AGENT_PANEL_READY" in row
+        for _index, row in backend.screen_update().rows
+    )
+
+
 def test_windows_backend_preserves_unsuperseded_resume_offers(tmp_path):
     store = SessionStore(tmp_path / "sessions.json", "new-daemon")
     offer = SessionRecord(

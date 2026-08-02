@@ -232,12 +232,14 @@ promotion from Preview:
    connection loss.
 
 Current automated evidence covers the platform split, typed provider launch,
-marker recovery across UI restart, IPC authentication/reconnect, compositor,
-history pager, shared App construction, an Urwid event loop running off the
-main thread, wheel build/import, protected runtime-directory ACL setup, real
-subprocess-pipe readiness, a real ConPTY start/read/resize/exit smoke, and a
-real `.cmd` shim in a path containing spaces on hosted Windows. Those checks
-do not substitute for the manual provider and terminal pass.
+marker recovery across UI restart, display-pane liveness across shared App
+reconciliation, IPC authentication/reconnect and classified UI failure,
+compositor CJK/status retention, history pager, shared App construction, an
+Urwid event loop running off the main thread, wheel build/import, protected
+runtime-directory ACL setup, real subprocess-pipe readiness, a real ConPTY
+start/read/resize/exit smoke, a real `.cmd` shim in a path containing spaces,
+and CP936 child output normalized at the pywinpty boundary on hosted Windows.
+Those checks do not substitute for the manual provider and terminal pass.
 
 ## Release closure checklist
 

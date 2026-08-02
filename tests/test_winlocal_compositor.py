@@ -46,3 +46,22 @@ def test_sidebar_is_full_width_without_agent_and_status_cannot_scroll_frame():
         "sidebar"
     ].width == 40
     assert b"Projects" in rows[0]
+
+
+def test_compositor_preserves_cjk_agent_output_and_bottom_status():
+    sidebar = TerminalPane(20, 6)
+    primary = TerminalPane(20, 6)
+    sidebar.feed("会话列表".encode("utf-8"))
+    primary.feed("代理已恢复".encode("utf-8"))
+    compositor = Compositor(60, 12)
+
+    update = compositor.compose(
+        sidebar,
+        primary,
+        status="状态栏可见".encode("utf-8"),
+    )
+    rows = dict(update.rows)
+
+    assert "会话列表".encode("utf-8") in rows[0]
+    assert "代理已恢复".encode("utf-8") in rows[0]
+    assert "状态栏可见".encode("utf-8") in rows[11]

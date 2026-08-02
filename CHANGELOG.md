@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep native Windows display panes in the backend's authoritative snapshot so
+  the shared refresh loop does not immediately discard a successfully attached
+  or resumed Claude Code/Codex panel.
+- Honor the shared external-client fallback contract on native Windows instead
+  of crashing the Urwid thread on its first refresh, and report future native
+  UI failures to the frontend while retaining provider ConPTY sessions and a
+  bounded private traceback.
+- Cover native composition of CJK provider/sidebar text and the bottom status
+  row, plus a real Windows ConPTY child running under code page 936 without
+  adding a heuristic GBK decoder to UTF-8 provider streams.
+
 ## [0.3.2.dev5] - 2026-08-02
 
 ### Fixed

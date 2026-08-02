@@ -7,10 +7,12 @@ import socket
 import struct
 import threading
 import time
+import traceback
 import uuid
 from pathlib import Path
 from typing import Callable
 
+from railmux.atomic_file import atomic_write_text
 from railmux.config import Config, ConfigError, load_config
 from railmux.fast_display_protocol import (
     InputFrameDecoder,
@@ -33,6 +35,8 @@ from railmux.winlocal.session_store import SessionStore
 AUTH_PREFIX = b"AUTH "
 AUTH_OK = b"OK"
 AUTH_FAILED = b"ERROR authentication failed"
+NATIVE_UI_FAILED = b"RAILMUX-NATIVE/1 UI_FAILED"
+_UI_ERROR_LIMIT = 64 * 1024
 
 
 def native_runtime_dir() -> Path:
@@ -45,6 +49,10 @@ def endpoint_path() -> Path:
 
 def session_store_path() -> Path:
     return native_runtime_dir() / "sessions.json"
+
+
+def ui_error_path() -> Path:
+    return native_runtime_dir() / "native-ui-error.log"
 
 
 class DaemonServer:
@@ -60,6 +68,7 @@ class DaemonServer:
         fps: float = 20.0,
         idle_timeout: float = 300.0,
         app_factory: Callable[[], object] | None = None,
+        ui_error_file: Path | None = None,
     ) -> None:
         self.backend = backend
         self.endpoint_file = endpoint_file
@@ -69,6 +78,7 @@ class DaemonServer:
         self.idle_timeout = max(1.0, idle_timeout)
         self._last_nonidle = time.monotonic()
         self.app_factory = app_factory
+        self.ui_error_file = ui_error_file or endpoint_file.parent / ui_error_path().name
         self._listener: socket.socket | None = None
         self._clients: set[socket.socket] = set()
         self._clients_lock = threading.RLock()
@@ -194,14 +204,17 @@ class DaemonServer:
             self._app_thread.start()
 
     def _run_app(self) -> None:
+        failed = False
         try:
             assert self.app_factory is not None
             app = self.app_factory()
             run = getattr(app, "run")
             run()
-        except Exception:
+        except Exception as exc:
+            failed = True
             # Keep the daemon/ConPTY authority alive so a later attachment can
             # retry the UI without converting a display fault into session loss.
+            self._record_ui_failure(exc)
             self.backend.set_status_text(
                 "Native UI stopped unexpectedly; reconnect to retry",
                 "error",
@@ -210,7 +223,28 @@ class DaemonServer:
             # Urwid returning means hard quit, soft quit, or a failed UI. The
             # daemon and any surviving ConPTYs remain authoritative, but every
             # frontend must leave instead of displaying a frozen last frame.
-            self._detach_all_clients()
+            self._detach_all_clients(
+                final_message=NATIVE_UI_FAILED if failed else None
+            )
+
+    def _record_ui_failure(self, exc: BaseException) -> None:
+        """Persist one bounded private traceback for the local user."""
+        detail = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        if len(detail) > _UI_ERROR_LIMIT:
+            detail = "[traceback truncated]\n" + detail[-_UI_ERROR_LIMIT:]
+        payload = (
+            "Railmux native UI failure\n"
+            f"recorded_at={int(time.time())}\n"
+            f"daemon_id={self.daemon_id}\n"
+            f"{detail}"
+        )
+        try:
+            ensure_private_dir(self.ui_error_file.parent)
+            atomic_write_text(self.ui_error_file, payload)
+        except OSError:
+            pass
 
     def _render_loop(self) -> None:
         interval = 1.0 / self.fps
@@ -249,11 +283,16 @@ class DaemonServer:
         with self._clients_lock:
             return len(self._clients)
 
-    def _detach_all_clients(self) -> None:
+    def _detach_all_clients(self, *, final_message: bytes | None = None) -> None:
         with self._clients_lock:
             clients = tuple(self._clients)
             self._clients.clear()
         for client in clients:
+            if final_message is not None:
+                try:
+                    send_message(client, final_message)
+                except (ConnectionError, OSError, ValueError):
+                    pass
             try:
                 client.shutdown(socket.SHUT_RDWR)
             except OSError:

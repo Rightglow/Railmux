@@ -10,8 +10,8 @@ from railmux.fast_display_protocol import (
     encode_resize,
 )
 from railmux.winlocal.backend import WinMuxBackend
-from railmux.winlocal.client import connect_endpoint, ensure_daemon
-from railmux.winlocal.daemon import AUTH_PREFIX, DaemonServer
+from railmux.winlocal.client import NativeClient, connect_endpoint, ensure_daemon
+from railmux.winlocal.daemon import AUTH_PREFIX, NATIVE_UI_FAILED, DaemonServer
 from railmux.winlocal.ipc import read_endpoint, receive_message, send_message
 
 
@@ -129,6 +129,59 @@ def test_app_exit_disconnects_frontend_but_keeps_daemon_available(tmp_path):
     finally:
         client.close()
         server.close()
+        thread.join(timeout=2)
+
+
+def test_app_crash_reports_failure_and_writes_bounded_traceback(tmp_path):
+    class App:
+        def run(self):
+            raise RuntimeError("refresh contract failed")
+
+    error_file = tmp_path / "native-ui-error.log"
+    server = DaemonServer(
+        _backend(),
+        endpoint_file=tmp_path / "endpoint.json",
+        app_factory=App,
+        ui_error_file=error_file,
+    )
+    endpoint = server.start()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = connect_endpoint(endpoint)
+    client.settimeout(2)
+    try:
+        messages = []
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            message = receive_message(client)
+            if message is None:
+                break
+            messages.append(message)
+            if message == NATIVE_UI_FAILED:
+                break
+        assert NATIVE_UI_FAILED in messages
+        detail = error_file.read_text(encoding="utf-8")
+        assert "RuntimeError: refresh contract failed" in detail
+        assert f"daemon_id={server.daemon_id}" in detail
+        assert len(detail) <= 65 * 1024
+    finally:
+        client.close()
+        server.close()
+        thread.join(timeout=2)
+
+
+def test_native_client_classifies_ui_failure_before_socket_close():
+    daemon, frontend = socket.socketpair()
+    client = NativeClient(frontend)
+    thread = threading.Thread(target=client._read_socket, daemon=True)
+    thread.start()
+    try:
+        send_message(daemon, NATIVE_UI_FAILED)
+        assert client._events.get(timeout=2) == ("ui_error", None)
+    finally:
+        client._stop.set()
+        daemon.close()
+        frontend.close()
         thread.join(timeout=2)
 
 

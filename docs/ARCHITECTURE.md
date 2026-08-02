@@ -38,6 +38,15 @@ sidebar, a displayed provider ConPTY, or the built-in read-only transcript
 pager. Single, dual, stacked, compact/fullscreen projection, status, cursor,
 and terminal modes are composed into one outer VT screen.
 
+The native backend snapshot is the shared App's pane-liveness authority and
+must include controller and display placeholders as well as live provider
+panes. A display placeholder omitted from that snapshot is indistinguishable
+from a pane that really exited and would make reconciliation discard a valid
+attachment. If the shared UI thread fails, the daemon keeps its exact ConPTY
+handles, sends authenticated frontends a local failure classification, and
+writes one bounded traceback only inside the protected native runtime
+directory; a normal detach or UI exit must not be reported as a crash.
+
 Native durable session records are recovery hints, not process authority. The
 live daemon may reattach its own exact in-memory ConPTY sessions across
 frontend and UI restarts. After a daemon-lifetime mismatch, saved live-looking

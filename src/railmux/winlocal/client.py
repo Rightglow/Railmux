@@ -28,7 +28,13 @@ from railmux.fast_display_protocol import (
     encode_resize,
 )
 from railmux.platform.console import RawConsole
-from railmux.winlocal.daemon import AUTH_OK, AUTH_PREFIX, endpoint_path
+from railmux.winlocal.daemon import (
+    AUTH_OK,
+    AUTH_PREFIX,
+    NATIVE_UI_FAILED,
+    endpoint_path,
+    ui_error_path,
+)
 from railmux.winlocal.ipc import Endpoint, read_endpoint, receive_message, send_message
 
 
@@ -36,6 +42,10 @@ _START_TIMEOUT = 12.0
 _HEARTBEAT_INTERVAL = 5.0
 _MAX_COLUMNS = 1000
 _MAX_LINES = 500
+
+
+class NativeUIError(RuntimeError):
+    """The daemon's shared UI failed while provider ConPTYs stayed alive."""
 
 
 def connect_endpoint(endpoint: Endpoint, *, timeout: float = 2.0) -> socket.socket:
@@ -160,6 +170,8 @@ class NativeClient:
                         kind, payload = self._events.get(timeout=0.1)
                     except queue.Empty:
                         kind, payload = "tick", None
+                    if kind == "ui_error":
+                        raise NativeUIError
                     if kind == "closed":
                         return 2
                     if kind == "input":
@@ -203,6 +215,15 @@ class NativeClient:
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
+        except NativeUIError:
+            # Leave the alternate screen before printing actionable feedback.
+            surface.close()
+            print(
+                "error: native Railmux UI stopped unexpectedly; provider "
+                f"sessions are still running. Retry railmux; details: {ui_error_path()}",
+                file=sys.stderr,
+            )
+            return 2
         except (ConnectionError, OSError):
             return 2
         finally:
@@ -219,6 +240,9 @@ class NativeClient:
                 packet = receive_message(self.sock)
                 if packet is None:
                     break
+                if packet == NATIVE_UI_FAILED:
+                    self._events.put(("ui_error", None))
+                    return
                 self._events.put(("server", packet))
         except (ConnectionError, OSError, ValueError):
             pass

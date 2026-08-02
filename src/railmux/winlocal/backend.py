@@ -304,12 +304,26 @@ class WinMuxBackend:
         )
 
     def server_snapshot(self):
-        live = [session for session in self._sessions.values() if self.session_exists(session.name)]
-        return tmux_ctl.ServerSnapshot(
-            frozenset(session.name for session in live),
-            frozenset(session.pane_id for session in live),
-            tuple((session.name, session.process.pid) for session in live if session.process),
-        )
+        with self._lock:
+            live = [
+                session
+                for session in self._sessions.values()
+                if self.session_exists(session.name)
+            ]
+            panes = frozenset(
+                pane_id
+                for pane_id in self._panes
+                if self.pane_alive(pane_id)
+            )
+            return tmux_ctl.ServerSnapshot(
+                frozenset(session.name for session in live),
+                panes,
+                tuple(
+                    (session.name, session.process.pid)
+                    for session in live
+                    if session.process
+                ),
+            )
 
     def select_pane(self, pane_id: str) -> bool:
         with self._lock:
@@ -891,7 +905,10 @@ class WinDisplayTransport:
         return None
 
     def fallback_for_external_client(self, *_args, **_kwargs):
-        return True
+        # Native Windows has no external tmux client or nested-display
+        # fallback. ``App`` treats ``None`` as not applicable and otherwise
+        # requires an AttachOutcome-compatible object.
+        return None
 
     def outer_session_lost(self) -> bool:
         return False
