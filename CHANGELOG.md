@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3.dev1] - 2026-08-02
+
+### Changed
+
+- Maintain independent PEP 440 development-release lanes for POSIX/WSL builds
+  from `main` and native-Windows builds from `windows-preview`, with tag
+  ancestry enforced before publication.
+
+### Fixed
+
+- Keep the isolated real-tmux soft-quit smoke test independent of published
+  version-update prompts, so a newer PyPI release cannot alter CI behavior.
+
 ## [0.3.2] - 2026-08-02
 
 ### Fixed
@@ -1740,7 +1753,9 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...HEAD
+[0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1
+[0.3.2]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/Rightglow/Railmux/compare/v0.3.0...v0.3.1
 [0.3.1.dev202608010]: https://github.com/Rightglow/Railmux/compare/v0.3.0...v0.3.1.dev202608010
 [0.3.0]: https://github.com/Rightglow/Railmux/compare/v0.2.21...v0.3.0
