@@ -30,10 +30,22 @@ jobs:
           commit=$(git rev-parse HEAD)
           git fetch --no-tags origin main windows-preview
           if [[ "$tag" == *.dev* ]]; then
-            git merge-base --is-ancestor "$commit" origin/windows-preview || {
-              echo "::error::development releases must come from windows-preview"
+            if git merge-base --is-ancestor "$commit" origin/main; then
+              [[ "$tag" =~ ^0\.3\.[0-9]+\.dev[0-9]+$ ]] || {
+                echo "::error::main development releases must use the 0.3.x.devN series"
+                exit 1
+              }
+              echo "POSIX/WSL development release from main"
+            elif git merge-base --is-ancestor "$commit" origin/windows-preview; then
+              [[ "$tag" =~ ^0\.4\.0\.dev[0-9]+$ ]] || {
+                echo "::error::native-Windows releases must use the 0.4.0.devN series"
+                exit 1
+              }
+              echo "native-Windows development release from windows-preview"
+            else
+              echo "::error::development releases must come from main or windows-preview"
               exit 1
-            }
+            fi
           else
             git merge-base --is-ancestor "$commit" origin/main || {
               echo "::error::final releases must come from main"

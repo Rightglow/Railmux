@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev1] - 2026-08-02
+
+### Changed
+
+- Move native-Windows Preview builds to the independent `0.4.0.devN` series,
+  while POSIX/WSL development builds continue on `0.3.x.devN` from `main`.
+
 ### Fixed
 
 - Keep native Windows display panes in the backend's authoritative snapshot so
@@ -19,6 +26,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cover native composition of CJK provider/sidebar text and the bottom status
   row, plus a real Windows ConPTY child running under code page 936 without
   adding a heuristic GBK decoder to UTF-8 provider streams.
+- Recognize tmux 3.2's stock `send -M` wheel binding spelling as equivalent to
+  newer tmux's `send-keys -M`, restoring safe sidebar wheel forwarding without
+  accepting custom root bindings.
+
+## [0.3.3.dev1] - 2026-08-02
+
+### Changed
+
+- Maintain independent PEP 440 development-release lanes for POSIX/WSL builds
+  from `main` and native-Windows builds from `windows-preview`, with tag
+  ancestry enforced before publication.
+
+### Fixed
+
+- Keep the isolated real-tmux soft-quit smoke test independent of published
+  version-update prompts, so a newer PyPI release cannot alter CI behavior.
+- Recognize tmux 3.2's stock `send -M` wheel binding spelling as equivalent to
+  newer tmux's `send-keys -M`, restoring safe sidebar wheel forwarding without
+  accepting custom root bindings.
+
+## [0.3.2] - 2026-08-02
+
+### Fixed
+
+- Add the previously missing native/local Termux prompt-tap handoff: a
+  fail-closed stock tmux left-click wrapper yields an authoritative agent input
+  row to Android, restores mouse ownership on keyboard projection/close and
+  teardown, and includes a process-independent nonce watchdog. This remains
+  separate from the existing `railmux ssh` client path.
+- Restore Termux prompt keyboard handoff when Codex or Claude retains exact
+  input coordinates inside a verified live agent route while hiding the DEC
+  hardware cursor, and cover the complete route/screen/tap-to-mouse-yield
+  boundary in one regression test.
+- Read Railmux state, provider JSONL, and captured diagnostic/version output
+  with explicit UTF-8 policies so a non-UTF-8 process locale cannot crash
+  startup or corrupt user data.
 
 ## [0.3.2.dev5] - 2026-08-02
 
@@ -1797,7 +1840,13 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev1...HEAD
+[0.4.0.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2.dev5...v0.4.0.dev1
+[0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1
+[0.3.2]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2
+[0.3.2.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.2.dev4...v0.3.2.dev5
+[0.3.2.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.2.dev3...v0.3.2.dev4
+[0.3.2.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.2.dev2...v0.3.2.dev3
 [0.3.1]: https://github.com/Rightglow/Railmux/compare/v0.3.0...v0.3.1
 [0.3.1.dev202608010]: https://github.com/Rightglow/Railmux/compare/v0.3.0...v0.3.1.dev202608010
 [0.3.0]: https://github.com/Rightglow/Railmux/compare/v0.2.21...v0.3.0

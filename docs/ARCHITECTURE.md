@@ -1076,7 +1076,9 @@ dividers, and pinned action rows.
 For tmux to deliver both directions to Urwid, Railmux temporarily wraps the
 server-global root `WheelUpPane` and `WheelDownPane` bindings. This is allowed
 only on tmux 2.7+ when the root bindings match stock behavior; a custom binding
-disables forwarding without mutation. All Railmux panes on one tmux server
+disables forwarding without mutation. Stock-command recognition accepts both
+the `send -M` spelling emitted by tmux 3.2 and the canonical `send-keys -M`
+spelling emitted by newer releases. All Railmux panes on one tmux server
 share a versioned transaction in the private runtime directory, keyed by the
 server lifetime and owned by immutable pane IDs. The final live owner restores
 only per-key wrappers still carrying its random marker, so a user configuration

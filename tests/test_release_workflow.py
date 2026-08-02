@@ -58,5 +58,9 @@ def test_release_tags_are_fenced_to_their_product_branches():
     assert "fetch-depth: 0" in release
     assert "origin/main" in release
     assert "origin/windows-preview" in release
-    assert "development releases must come from windows-preview" in release
+    assert "POSIX/WSL development release from main" in release
+    assert "native-Windows development release from windows-preview" in release
+    assert "main development releases must use the 0.3.x.devN series" in release
+    assert "native-Windows releases must use the 0.4.0.devN series" in release
+    assert "development releases must come from main or windows-preview" in release
     assert "final releases must come from main" in release

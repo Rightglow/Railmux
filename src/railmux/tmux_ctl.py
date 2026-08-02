@@ -2125,7 +2125,9 @@ def _root_wheel_bindings_are_defaults(
         return False
     return (
         "mouse_any_flag" in body
-        and "send-keys -M" in body
+        # tmux 3.2 serializes its stock command with the accepted ``send``
+        # alias, while newer releases print the canonical ``send-keys`` name.
+        and re.search(r"\bsend(?:-keys)?\s+-M\b", body) is not None
         and "copy-mode -e" in body
         and _ROOT_WHEEL_MARKER not in body
     )

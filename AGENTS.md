@@ -57,14 +57,18 @@ Follow [`CONTRIBUTING.md`](CONTRIBUTING.md) for verification and delivery.
 Windows development code, native Windows dependencies, native Windows CI jobs,
 or support claims for running local Railmux or the local `railmux ssh` client
 from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
-`main` because Railmux runs inside the supported Linux runtime there.
+`main` because Railmux runs inside the supported Linux runtime there. Publish
+POSIX/WSL development builds from this branch when a fix needs field testing;
+the current stable-line preview series is `0.3.x.devN`.
 
 `windows-preview` is the long-lived integration branch for native Windows
 local mode and the native Windows side of `railmux ssh`. It contains the
 current `main` behavior plus the experimental ConPTY/Windows adapters and may
-publish only PEP 440 development releases. Develop Windows changes on focused
-branches based on `windows-preview`, then merge them back into
-`windows-preview`; never merge that branch wholesale into `main`.
+publish only PEP 440 development releases. Its current independent preview
+series is `0.4.0.devN`; do not use that series for `main` builds. Develop
+Windows changes on focused branches based on `windows-preview`, then merge
+them back into `windows-preview`; never merge that branch wholesale into
+`main`.
 
 Shared POSIX/provider fixes belong in `main` first and flow one way into
 `windows-preview`. If a bug is discovered while testing Windows, separate the
@@ -73,6 +77,9 @@ in `main`. Keep commits separable so a future Windows promotion can be reviewed
 and merged deliberately instead of importing the preview branch's history.
 
 Before changing code or publishing, verify the current branch. Final
-`MAJOR.MINOR.PATCH` tags must point to commits reachable from `main`;
-Windows-preview tags must contain `.devN` and point to commits reachable from
-`windows-preview`.
+`MAJOR.MINOR.PATCH` tags and POSIX/WSL `.devN` tags must point to commits
+reachable from `main`. Native-Windows preview tags must contain `.devN`, use
+the independent Windows preview series, and point to commits reachable from
+`windows-preview` but not `main`. Merge shared fixes from `main` before cutting
+the corresponding Windows preview build; never copy a Windows release commit
+or tag back to `main`.
