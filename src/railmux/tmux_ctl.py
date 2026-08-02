@@ -102,6 +102,8 @@ def _tmux_version_for_authority(
             argv,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=2.0,
         )
     except (
@@ -1016,6 +1018,8 @@ def create_dual_pane_layout(
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
     except OSError:
@@ -1284,6 +1288,8 @@ def pane_process_alive(pane_id: str) -> bool:
             ["tmux", "display-message", "-p", "-t", pane_id, "#{pane_dead}"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=1,
         )
         return result.returncode == 0 and result.stdout.strip() == "0"
@@ -2772,7 +2778,8 @@ def new_detached_session(name: str, cmd: str,
     try:
         dead = subprocess.run(
             ["tmux", "list-panes", "-t", name, "-F", "#{pane_dead}"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=2,
         )
         if dead.returncode != 0:
             # With tmux's default ``remain-on-exit off``, an immediately
@@ -2789,7 +2796,8 @@ def new_detached_session(name: str, cmd: str,
         if dead.stdout.strip() == "1":
             capture = subprocess.run(
                 ["tmux", "capture-pane", "-t", name, "-p", "-S", "-20"],
-                capture_output=True, text=True, timeout=2,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=2,
             )
             pane_content = capture.stdout.strip() if capture.returncode == 0 else ""
             # Clean up the dead session — it can never recover.
@@ -2913,13 +2921,15 @@ def start_detached_holder(
         dead = subprocess.run(
             ["tmux", "display-message", "-p", "-t", identity.pane_id,
              "#{pane_dead}"],
-            capture_output=True, text=True, timeout=2,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=2,
         )
         if dead.returncode == 0 and dead.stdout.strip() == "1":
             capture = subprocess.run(
                 ["tmux", "capture-pane", "-t", identity.pane_id,
                  "-p", "-S", "-20"],
-                capture_output=True, text=True, timeout=2,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=2,
             )
             lines = [line.strip() for line in capture.stdout.splitlines()
                      if line.strip()] if capture.returncode == 0 else []

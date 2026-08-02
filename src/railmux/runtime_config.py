@@ -125,6 +125,8 @@ def check_executable(
             env=None if environ is None else dict(environ),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -168,6 +170,8 @@ def check_utf8_locale(
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )

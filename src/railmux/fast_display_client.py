@@ -45,6 +45,7 @@ from railmux.fast_display_input import (
     SelectionSegment,
     SgrMouseEvent,
     TermuxTouchKeyboard,
+    TouchKeyboardAction,
     TerminalInputDecoder,
     is_termux_environment,
     page_key_direction,
@@ -221,6 +222,33 @@ def compact_status_row(screen: AppliedScreen) -> int | None:
         if plain.startswith(prefixes):
             return index + 1
     return None
+
+
+def termux_prompt_touch_action(
+    touch_keyboard: TermuxTouchKeyboard,
+    event: SgrMouseEvent,
+    history: LocalHistoryView,
+    screen: AppliedScreen | None,
+    *,
+    now: float | None = None,
+) -> TouchKeyboardAction:
+    """Classify one translated Termux tap against live screen route authority."""
+    if screen is None:
+        return TouchKeyboardAction()
+    clicked_pane_id = history.pane_id_at_position(event.x - 1, event.y - 1)
+    cursor_pane_id = history.pane_id_at_position(
+        screen.cursor_x,
+        screen.cursor_y,
+    )
+    return touch_keyboard.pointer_event(
+        event,
+        clicked_pane_id=clicked_pane_id,
+        cursor_pane_id=cursor_pane_id,
+        cursor_y=screen.cursor_y,
+        pane_frozen=history.pane_is_frozen(clicked_pane_id),
+        navigation_row=compact_status_row(screen),
+        now=now,
+    )
 
 
 class ProbeError(RuntimeError):
@@ -2723,34 +2751,16 @@ def run(args: argparse.Namespace) -> int:
                     latest_screen.cursor_x, latest_screen.cursor_y
                 )
             )
-            clicked_pane_id = (
-                None
-                if latest_screen is None
-                else history.pane_id_at_position(part.x - 1, part.y - 1)
-            )
-            cursor_pane_id = (
-                None
-                if latest_screen is None
-                else history.pane_id_at_position(
-                    latest_screen.cursor_x,
-                    latest_screen.cursor_y,
-                )
-            )
             status_row = (
                 compact_status_row(latest_screen)
                 if latest_screen is not None
                 else None
             )
-            touch_action = touch_keyboard.pointer_event(
+            touch_action = termux_prompt_touch_action(
+                touch_keyboard,
                 part,
-                clicked_pane_id=clicked_pane_id,
-                cursor_pane_id=cursor_pane_id,
-                cursor_y=0 if latest_screen is None else latest_screen.cursor_y,
-                cursor_visible=(
-                    False if latest_screen is None else latest_screen.cursor_visible
-                ),
-                pane_frozen=history.pane_is_frozen(clicked_pane_id),
-                navigation_row=status_row,
+                history,
+                latest_screen,
                 now=time.monotonic(),
             )
             if touch_action.suspend_mouse:

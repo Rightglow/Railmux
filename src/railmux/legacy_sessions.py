@@ -59,6 +59,8 @@ def discover(
             tmux_server.target_argv(target, "list-sessions", "-F", fmt),
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=None if env is None else dict(env),
         )

@@ -1981,7 +1981,8 @@ class App:
         import subprocess as _sp
         try:
             out = _sp.check_output(
-                ["less", "--version"], stderr=_sp.STDOUT, text=True, timeout=3)
+                ["less", "--version"], stderr=_sp.STDOUT, text=True,
+                encoding="utf-8", errors="replace", timeout=3)
             # "less 668 (GNU regular expressions)" → major version
             ver = int(out.strip().split()[1].split(".")[0])
             if ver >= 590:
@@ -6722,6 +6723,7 @@ class App:
                      f"\t#{{{orphan_marker.OPTION_NAME}}}"
                      f"\t#{{{_SESSION_BINDING_OPTION}}}"],
                     stderr=_sp.DEVNULL, text=True,
+                    encoding="utf-8", errors="replace",
                 )
             except (OSError, _sp.CalledProcessError):
                 return False
@@ -9000,8 +9002,8 @@ class App:
             return True
         try:
             source_stat = history_path.stat()
-            lines = history_path.read_text().splitlines()
-        except OSError:
+            lines = history_path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
             return False
         kept = []
         changed = False
@@ -9081,7 +9083,7 @@ class App:
             import json
             record = json.dumps({"type": "ai-title", "aiTitle": new_title})
             try:
-                with session.jsonl_path.open("a") as f:
+                with session.jsonl_path.open("a", encoding="utf-8") as f:
                     f.write(record + "\n")
             except OSError:
                 synced = False

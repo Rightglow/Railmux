@@ -29,10 +29,10 @@ class Favorites:
         if not self._path.is_file():
             return
         try:
-            data = json.loads(self._path.read_text())
+            data = json.loads(self._path.read_text(encoding="utf-8"))
             if isinstance(data, list):
                 self._ids = set(data)
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeError):
             self._ids = set()
 
     def _save(self) -> None:

@@ -53,6 +53,14 @@ Claude's own transcript, requires that path to be absolute and present, and
 verifies its lossy Claude encoding against the enclosing project directory
 before exposing the project. Codex continues to use its rollout metadata.
 
+Native Windows never derives persistent text encoding from the active ANSI
+code page. Railmux-owned TOML/JSON state and provider-owned JSONL transcripts
+are read and written with explicit UTF-8; read-only transcript scans may
+replace isolated invalid bytes, while read-modify-write operations fail closed
+instead of rewriting undecodable data. Captured diagnostic/version output also
+uses explicit UTF-8 with replacement so a localized subprocess cannot crash
+startup or become a persistence authority.
+
 ## POSIX Railmux owns a dedicated tmux server
 
 Every production launcher and remote display helper addresses the non-default
@@ -173,12 +181,15 @@ The local SSH client recognizes Termux only from its local environment, never
 from terminal dimensions or the remote host. Termux uses DECSET 1002 button
 tracking plus SGR coordinates because its emulator does not implement DECSET
 1003 any-event tracking; desktop clients retain 1003 for pointer hover. An
-unmodified left press within one row of the visible input cursor, inside the
-same verified live agent route, temporarily disables local mouse reporting so
+unmodified left press within one row of the provider's input coordinates,
+inside the same verified live agent route, temporarily disables local mouse reporting so
 Termux can open its soft keyboard on the next tap. Compact status navigation is
 classified before this prompt gesture, so stale agent geometry can never turn
-an `R`/`A1`/`A2` tap into a keyboard handoff. History overlays, hidden cursors,
-sidebars, modals, previews, and other panes fail closed. Mouse reporting resumes
+an `R`/`A1`/`A2` tap into a keyboard handoff. History overlays, sidebars,
+modals, previews, and other panes fail closed. DEC cursor visibility
+is presentation-only: Codex or Claude may hide its hardware cursor while
+retaining exact input coordinates, so matching click and cursor routes plus
+the bounded row distance remain authoritative. Mouse reporting resumes
 as soon as a projected
 soft keyboard is observed—the keyboard is already open and no longer needs
 pointer ownership—or after the first keyboard input when no resize is

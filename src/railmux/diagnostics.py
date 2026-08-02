@@ -151,6 +151,8 @@ def _tool_diagnostic(
             env=environ,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=3,
             check=False,
         )
@@ -300,6 +302,8 @@ def collect_doctor_snapshot(
                 env=effective_env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=2,
                 check=False,
             )

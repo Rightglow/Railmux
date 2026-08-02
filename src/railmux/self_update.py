@@ -88,6 +88,8 @@ def fresh_process_version(*, timeout: float = 10.0) -> str | None:
             ],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )

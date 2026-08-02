@@ -32,8 +32,8 @@ class Renames:
         if not self._path.is_file():
             return
         try:
-            data = json.loads(self._path.read_text())
-        except (json.JSONDecodeError, OSError):
+            data = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeError):
             return
         if isinstance(data, dict):
             self._titles = {

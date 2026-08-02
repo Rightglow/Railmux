@@ -88,6 +88,7 @@ from railmux.fast_display_client import (
     remote_install_help,
     screen_input_may_change_routes,
     split_local_escape,
+    termux_prompt_touch_action,
 )
 from railmux import fast_display_history
 from railmux.fast_display_history import (
@@ -1395,7 +1396,6 @@ def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     )
@@ -1410,7 +1410,6 @@ def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     ).handled
@@ -1418,6 +1417,51 @@ def test_termux_prompt_tap_yields_mouse_until_keyboard_input():
     assert not touch.active
     assert not touch.owns_local_focus
     assert not touch.consumes_focus_out(b"\033[O")
+
+
+def test_termux_live_route_tap_yields_mouse_when_provider_hides_dec_cursor():
+    history = LocalHistoryView()
+    assert history.begin_prefetch(1.0) is not None
+    request_id = history.prefetch_pending_id
+    assert request_id is not None
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        30,
+        0,
+        50,
+        24,
+        (b"",) * 24,
+    )
+    history.accept_prefetch(HistoryBatch(request_id, (route,)))
+    screen = AppliedScreen(
+        width=80,
+        height=24,
+        cursor_x=40,
+        cursor_y=21,
+        cursor_visible=False,
+        terminal_modes=TerminalMode.FOCUS_EVENTS,
+        rows=(b"",) * 24,
+        changed_rows=(),
+        clear=False,
+    )
+    touch = TermuxTouchKeyboard(enabled=True)
+
+    action = termux_prompt_touch_action(
+        touch,
+        SgrMouseEvent(b"press", 0, 41, 22, True),
+        history,
+        screen,
+        now=5.0,
+    )
+
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+    surface.start()
+    if action.suspend_mouse:
+        surface.suspend_mouse()
+    assert action.handled and action.show_hint
+    assert stream.getvalue().endswith(b"\033[?1002l\033[?1006l")
 
 
 def test_termux_focus_reassertion_requires_remote_focus_events():
@@ -1452,24 +1496,21 @@ def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     ).handled
 
     touch = TermuxTouchKeyboard(enabled=True, timeout=10.0)
-    for clicked, cursor, visible, frozen, y in (
-        ("%9", "%8", True, False, 21),
-        ("%8", "%8", False, False, 21),
-        ("%8", "%8", True, True, 21),
-        ("%8", "%8", True, False, 18),
+    for clicked, cursor, frozen, y in (
+        ("%9", "%8", False, 21),
+        ("%8", "%8", True, 21),
+        ("%8", "%8", False, 18),
     ):
         assert not touch.pointer_event(
             press,
             clicked_pane_id=clicked,
             cursor_pane_id=cursor,
             cursor_y=y,
-            cursor_visible=visible,
             pane_frozen=frozen,
             now=5.0,
         ).handled
@@ -1479,7 +1520,6 @@ def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     )
@@ -1495,7 +1535,6 @@ def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=15.2,
     ).handled
@@ -1504,7 +1543,6 @@ def test_termux_prompt_tap_restores_mouse_as_keyboard_projection_opens():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=15.2,
     ).handled
@@ -1525,7 +1563,6 @@ def test_termux_compact_navigation_never_yields_touch_to_soft_keyboard():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         navigation_row=22,
         now=5.0,
@@ -1543,7 +1580,6 @@ def test_termux_keyboard_projection_state_has_a_bounded_fallback():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     )
@@ -1571,7 +1607,6 @@ def test_termux_keyboard_close_queues_one_delayed_mouse_reassert():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     )
@@ -1593,7 +1628,6 @@ def test_termux_rapid_keyboard_reopen_cancels_delayed_reassert():
         "clicked_pane_id": "%8",
         "cursor_pane_id": "%8",
         "cursor_y": 21,
-        "cursor_visible": True,
         "pane_frozen": False,
     }
     touch.pointer_event(press, now=5.0, **fields)
@@ -1611,7 +1645,6 @@ def test_termux_prompt_tap_times_out_when_keyboard_does_not_open():
         clicked_pane_id="%8",
         cursor_pane_id="%8",
         cursor_y=21,
-        cursor_visible=True,
         pane_frozen=False,
         now=5.0,
     )

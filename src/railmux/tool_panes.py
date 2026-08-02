@@ -211,6 +211,8 @@ class ToolPaneManager:
                 self._argv(*args),
                 stderr=subprocess.DEVNULL,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
             ).rstrip("\n")
             return value or None

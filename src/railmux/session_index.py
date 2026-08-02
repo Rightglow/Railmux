@@ -92,7 +92,7 @@ def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
     last_stop_reason: str = ""  # only set for assistant records
 
     try:
-        with jsonl_path.open("r") as f:
+        with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
                 if not line:

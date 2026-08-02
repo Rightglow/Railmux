@@ -110,7 +110,7 @@ class Settings:
 
     def _read_document(self):
         try:
-            text = self._path.read_text()
+            text = self._path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return tomlkit.document()
         except (OSError, UnicodeError):

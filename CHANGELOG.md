@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2.dev3] - 2026-08-02
+
+### Fixed
+
+- Restore Termux prompt keyboard handoff when Codex or Claude retains exact
+  input coordinates inside a verified live agent route while hiding the DEC
+  hardware cursor, and cover the complete route/screen/tap-to-mouse-yield
+  boundary in one regression test.
+- Make native-Windows state and provider transcript reads use explicit UTF-8
+  instead of the active ANSI code page, including config, favorites, renames,
+  Claude path cache, session/history JSONL, version probes, and diagnostics;
+  add a non-UTF-8-locale CJK persistence regression test.
+
 ## [0.3.2.dev2] - 2026-08-02
 
 ### Added

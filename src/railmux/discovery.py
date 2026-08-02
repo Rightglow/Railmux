@@ -43,9 +43,9 @@ def _path_cache_file() -> Path:
 
 def _load_path_cache() -> dict[str, str]:
     try:
-        data = json.loads(_path_cache_file().read_text())
+        data = json.loads(_path_cache_file().read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
 
 

@@ -129,7 +129,6 @@ class TermuxTouchKeyboard:
         clicked_pane_id: str | None,
         cursor_pane_id: str | None,
         cursor_y: int,
-        cursor_visible: bool,
         pane_frozen: bool,
         navigation_row: int | None = None,
         now: float | None = None,
@@ -150,7 +149,6 @@ class TermuxTouchKeyboard:
             or self._active
             or self._close_reassert_pending
             or pane_frozen
-            or not cursor_visible
             or clicked_pane_id is None
             or clicked_pane_id != cursor_pane_id
             or (navigation_row is not None and event.y == navigation_row)
@@ -158,6 +156,11 @@ class TermuxTouchKeyboard:
             or not self._is_plain_left_press(event)
         ):
             return TouchKeyboardAction()
+        # DEC cursor visibility is presentation state, not prompt authority.
+        # Providers may hide the hardware cursor while retaining its exact
+        # input coordinates. The verified live-agent route, matching cursor
+        # route, unfrozen viewport, and bounded row distance remain the
+        # fail-closed authority for yielding one Termux tap.
         requested_at = time.monotonic() if now is None else now
         # A rapid reopen supersedes the delayed ownership reassertion queued by
         # the previous close; Termux must receive this new native prompt tap.
