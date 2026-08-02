@@ -14,7 +14,7 @@ from railmux.atomic_file import atomic_write_text
 from railmux.platform.filelock import try_lock, unlock
 
 
-_VERSION = 7
+_VERSION = 8
 _KEYS = ("F8", "F9")
 _MAX_STATE_BYTES = 64 * 1024
 
@@ -34,6 +34,7 @@ class SharedTmuxBindingManager:
         self._prefix_tab_managed = False
         self._right_click_managed = False
         self._status_click_managed = False
+        self._termux_tap_managed = False
         self._selection_hook_managed = False
         self._selection_hook_index: int | None = None
 
@@ -51,6 +52,11 @@ class SharedTmuxBindingManager:
     def status_navigation_available(self) -> bool:
         """Whether pane ranges in this instance's status bar are clickable."""
         return self._registered and self._status_click_managed
+
+    @property
+    def termux_tap_available(self) -> bool:
+        """Whether direct local Termux prompt taps are safely wrapped."""
+        return self._registered and self._termux_tap_managed
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -84,7 +90,7 @@ class SharedTmuxBindingManager:
         except (OSError, ValueError, json.JSONDecodeError):
             return None
         if (not isinstance(raw, dict)
-                or raw.get("version") not in {1, 2, 3, 4, 5, 6, _VERSION}):
+                or raw.get("version") not in {1, 2, 3, 4, 5, 6, 7, _VERSION}):
             return None
         token = raw.get("token")
         phase = raw.get("phase")
@@ -96,6 +102,8 @@ class SharedTmuxBindingManager:
         right_click_managed = raw.get("right_click_managed")
         status_click_backup = raw.get("status_click_backup")
         status_click_managed = raw.get("status_click_managed")
+        termux_tap_backup = raw.get("termux_tap_backup")
+        termux_tap_managed = raw.get("termux_tap_managed")
         selection_hook_managed = raw.get("selection_hook_managed")
         selection_hook_index = raw.get("selection_hook_index")
         prefix_valid = (
@@ -115,6 +123,12 @@ class SharedTmuxBindingManager:
             and set(status_click_backup) == {"MouseDown1Status"}
             and all(value is None or isinstance(value, str)
                     for value in status_click_backup.values())
+        )
+        termux_tap_valid = (
+            isinstance(termux_tap_backup, dict)
+            and set(termux_tap_backup) == {"MouseDown1Pane"}
+            and all(value is None or isinstance(value, str)
+                    for value in termux_tap_backup.values())
         )
         if (not isinstance(token, str) or not token or len(token) > 64
                 or phase not in {"installing", "active"}
@@ -140,7 +154,10 @@ class SharedTmuxBindingManager:
                              and selection_hook_index is not None)))
                 or (raw["version"] >= 5
                     and (not status_click_valid
-                         or not isinstance(status_click_managed, bool)))):
+                         or not isinstance(status_click_managed, bool)))
+                or (raw["version"] >= 8
+                    and (not termux_tap_valid
+                         or not isinstance(termux_tap_managed, bool)))):
             return None
         return raw
 
@@ -265,6 +282,21 @@ class SharedTmuxBindingManager:
                         # v7 replaces Mode/Layout's ordinary m/F8 keystrokes
                         # with edit- and modal-safe internal function keys.
                         upgraded = True
+                    if state["version"] < 8:
+                        termux_tap_backup = (
+                            tmux_ctl.prepare_root_termux_tap_binding()
+                        )
+                        # v8 adds a stock-left-click-only Termux prompt
+                        # handoff. Persist its exact original before the
+                        # server-global root-table binding is replaced.
+                        state["termux_tap_managed"] = (
+                            termux_tap_backup is not None
+                        )
+                        state["termux_tap_backup"] = (
+                            termux_tap_backup
+                            or {"MouseDown1Pane": None}
+                        )
+                        upgraded = True
                     if upgraded:
                         state["version"] = _VERSION
                         state["phase"] = "installing"
@@ -325,6 +357,21 @@ class SharedTmuxBindingManager:
                                     token,
                                 )
                             )
+                        if state["termux_tap_managed"]:
+                            current_tap = (
+                                tmux_ctl.read_root_termux_tap_binding()
+                                ["MouseDown1Pane"]
+                            )
+                            safe = (
+                                safe
+                                and tmux_ctl.root_termux_tap_binding_is_original_or_owned(
+                                    current_tap,
+                                    state["termux_tap_backup"].get(
+                                        "MouseDown1Pane"
+                                    ),
+                                    token,
+                                )
+                            )
                         if not safe:
                             if state["owners"]:
                                 return False
@@ -342,6 +389,9 @@ class SharedTmuxBindingManager:
                             if state["status_click_managed"]:
                                 tmux_ctl.restore_root_status_click_binding(
                                     state["status_click_backup"], token=token)
+                            if state["termux_tap_managed"]:
+                                tmux_ctl.restore_root_termux_tap_binding(
+                                    state["termux_tap_backup"], token=token)
                             self._remove_state()
                             state = None
                         else:
@@ -381,6 +431,14 @@ class SharedTmuxBindingManager:
                                 state["status_click_managed"] = False
                                 if not self._save(state):
                                     return False
+                            if (state["termux_tap_managed"]
+                                    and not tmux_ctl.set_root_termux_tap_forwarding(
+                                        state["termux_tap_backup"], token)):
+                                tmux_ctl.restore_root_termux_tap_binding(
+                                    state["termux_tap_backup"], token=token)
+                                state["termux_tap_managed"] = False
+                                if not self._save(state):
+                                    return False
                             state["phase"] = "active"
                     elif not (
                         tmux_ctl.root_function_bindings_owned_by(token)
@@ -402,6 +460,10 @@ class SharedTmuxBindingManager:
                             or tmux_ctl.root_status_click_binding_owned_by(
                                 token)
                         )
+                        and (
+                            not state["termux_tap_managed"]
+                            or tmux_ctl.root_termux_tap_binding_owned_by(token)
+                        )
                     ):
                         if state["owners"]:
                             return False
@@ -419,6 +481,9 @@ class SharedTmuxBindingManager:
                         if state["status_click_managed"]:
                             tmux_ctl.restore_root_status_click_binding(
                                 state["status_click_backup"], token=token)
+                        if state["termux_tap_managed"]:
+                            tmux_ctl.restore_root_termux_tap_binding(
+                                state["termux_tap_backup"], token=token)
                         self._remove_state()
                         state = None
                     if state is not None:
@@ -451,6 +516,8 @@ class SharedTmuxBindingManager:
                             state["selection_hook_index"])
                         self._status_click_managed = (
                             state["status_click_managed"])
+                        self._termux_tap_managed = (
+                            state["termux_tap_managed"])
                         return True
 
                 backup = tmux_ctl.prepare_root_function_bindings()
@@ -460,6 +527,8 @@ class SharedTmuxBindingManager:
                 selection_hook_index = tmux_ctl.prepare_selection_mode_hook()
                 status_click_backup = (
                     tmux_ctl.prepare_root_status_click_binding())
+                termux_tap_backup = (
+                    tmux_ctl.prepare_root_termux_tap_binding())
                 if backup is None:
                     return False
                 token = secrets.token_hex(8)
@@ -479,6 +548,9 @@ class SharedTmuxBindingManager:
                     "status_click_managed": status_click_backup is not None,
                     "status_click_backup": (
                         status_click_backup or {"MouseDown1Status": None}),
+                    "termux_tap_managed": termux_tap_backup is not None,
+                    "termux_tap_backup": (
+                        termux_tap_backup or {"MouseDown1Pane": None}),
                 }
                 if not self._save(state):
                     return False
@@ -550,6 +622,29 @@ class SharedTmuxBindingManager:
                                 state["selection_hook_index"], token)
                         self._remove_state()
                         return False
+                if (state["termux_tap_managed"]
+                        and not tmux_ctl.set_root_termux_tap_forwarding(
+                            state["termux_tap_backup"], token)):
+                    tmux_ctl.restore_root_termux_tap_binding(
+                        state["termux_tap_backup"], token=token)
+                    state["termux_tap_managed"] = False
+                    if not self._save(state):
+                        tmux_ctl.restore_root_function_bindings(
+                            backup, token=token)
+                        if state["prefix_tab_managed"]:
+                            tmux_ctl.restore_prefix_target_binding(
+                                state["prefix_tab_backup"], token=token)
+                        if state["right_click_managed"]:
+                            tmux_ctl.restore_root_right_click_binding(
+                                state["right_click_backup"], token=token)
+                        if state["selection_hook_managed"]:
+                            tmux_ctl.restore_selection_mode_hook(
+                                state["selection_hook_index"], token)
+                        if state["status_click_managed"]:
+                            tmux_ctl.restore_root_status_click_binding(
+                                state["status_click_backup"], token=token)
+                        self._remove_state()
+                        return False
                 state["phase"] = "active"
                 if not self._save(state) or not self._set_controller():
                     tmux_ctl.restore_root_function_bindings(
@@ -566,6 +661,9 @@ class SharedTmuxBindingManager:
                     if state["status_click_managed"]:
                         tmux_ctl.restore_root_status_click_binding(
                             state["status_click_backup"], token=token)
+                    if state["termux_tap_managed"]:
+                        tmux_ctl.restore_root_termux_tap_binding(
+                            state["termux_tap_backup"], token=token)
                     self._remove_state()
                     return False
                 self._registered = True
@@ -574,6 +672,7 @@ class SharedTmuxBindingManager:
                 self._selection_hook_managed = state["selection_hook_managed"]
                 self._selection_hook_index = state["selection_hook_index"]
                 self._status_click_managed = state["status_click_managed"]
+                self._termux_tap_managed = state["termux_tap_managed"]
                 return True
         except OSError:
             return False
@@ -627,6 +726,9 @@ class SharedTmuxBindingManager:
                     if state["status_click_managed"]:
                         tmux_ctl.restore_root_status_click_binding(
                             state["status_click_backup"], token=state["token"])
+                    if state["termux_tap_managed"]:
+                        tmux_ctl.restore_root_termux_tap_binding(
+                            state["termux_tap_backup"], token=state["token"])
                     self._remove_state()
             except OSError:
                 pass
@@ -641,5 +743,6 @@ class SharedTmuxBindingManager:
             self._prefix_tab_managed = False
             self._right_click_managed = False
             self._status_click_managed = False
+            self._termux_tap_managed = False
             self._selection_hook_managed = False
             self._selection_hook_index = None

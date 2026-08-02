@@ -699,6 +699,127 @@ def test_root_right_click_restore_does_not_overwrite_user_change():
     call.assert_not_called()
 
 
+def _default_root_termux_tap_backup():
+    return {
+        "MouseDown1Pane": (
+            "bind-key -T root MouseDown1Pane "
+            "select-pane -t = ; send-keys -M"
+        ),
+    }
+
+
+def test_termux_tap_wraps_only_stock_left_click_on_tmux_30_or_newer():
+    backup = _default_root_termux_tap_backup()
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 0)), \
+         patch.object(tmux_ctl, "read_root_termux_tap_binding",
+                      return_value=backup):
+        assert tmux_ctl.prepare_root_termux_tap_binding() == backup
+
+    custom = {
+        "MouseDown1Pane": (
+            "bind-key -T root MouseDown1Pane display-message custom"
+        ),
+    }
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
+         patch.object(tmux_ctl, "read_root_termux_tap_binding",
+                      return_value=custom):
+        assert tmux_ctl.prepare_root_termux_tap_binding() is None
+
+    with patch.object(tmux_ctl, "tmux_version", return_value=(2, 9)), \
+         patch.object(tmux_ctl, "read_root_termux_tap_binding") as read:
+        assert tmux_ctl.prepare_root_termux_tap_binding() is None
+    read.assert_not_called()
+
+
+def test_termux_tap_binding_consumes_only_authoritative_prompt_press():
+    backup = _default_root_termux_tap_backup()
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
+         _mock_check_call() as call:
+        assert tmux_ctl.set_root_termux_tap_forwarding(
+            backup, "owner123", timeout=8.0)
+
+    argv = call.call_args.args[0]
+    assert argv[:5] == [
+        "tmux", "bind-key", "-T", "root", "MouseDown1Pane"]
+    assert argv[5:9] == ["if-shell", "-F", "-t", "="]
+    condition, action, fallback = argv[9:12]
+    assert "railmux-termux-tap-v1-owner123" in condition
+    assert tmux_ctl.RAILMUX_TERMUX_TAP_PANE_OPTION in condition
+    assert all(
+        option in condition for option in tmux_ctl.RAILMUX_TERMUX_TAP_ROW_OPTIONS
+    )
+    assert "mouse_pane" in condition and "mouse_y" in condition
+    assert tmux_ctl.RAILMUX_TERMUX_TAP_ARMED_OPTION in action
+    assert "mouse off" in action and "mouse on" in action
+    assert "sleep 8" in action
+    assert "Tap the prompt again to open the keyboard" in action
+    assert "send-keys -M" not in action
+    assert fallback == "select-pane -t = ; send-keys -M"
+
+
+def test_termux_tap_condition_is_well_formed_and_fails_closed():
+    condition = tmux_ctl._root_termux_tap_condition("owner123")
+
+    assert "#{!=:#{@railmux_termux_tap_pane},}" in condition
+    assert condition.count("#{") == condition.count("}")
+    assert "#{==:#{mouse_pane},#{@railmux_termux_tap_pane}}" in condition
+
+
+def test_termux_tap_restore_never_overwrites_a_new_user_binding():
+    backup = _default_root_termux_tap_backup()
+    current = {
+        "MouseDown1Pane": (
+            "bind-key -T root MouseDown1Pane display-message user-custom"
+        ),
+    }
+    with patch.object(tmux_ctl, "read_root_termux_tap_binding",
+                      return_value=current), _mock_check_call() as call:
+        tmux_ctl.restore_root_termux_tap_binding(
+            backup, token="owner123")
+    call.assert_not_called()
+
+
+def test_termux_tap_route_rejects_frozen_or_invalid_geometry():
+    raw = "%7\t@3\t21\t24\t0\t0\t"
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
+         patch("subprocess.check_output", return_value=raw):
+        route = tmux_ctl.termux_tap_route("%7")
+    assert route == tmux_ctl.TermuxTapRoute(
+        pane_id="%7",
+        window_id="@3",
+        cursor_y=21,
+        pane_height=24,
+        in_mode=False,
+        dead=False,
+        frozen_by=None,
+    )
+
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
+         patch("subprocess.check_output",
+               return_value="%7\t@3\t24\t24\t0\t0\t%1:primary"):
+        assert tmux_ctl.termux_tap_route("%7") is None
+
+
+def test_termux_tap_projection_publishes_rows_before_pane_authority():
+    route = tmux_ctl.TermuxTapRoute(
+        pane_id="%7", window_id="@3", cursor_y=0, pane_height=24,
+        in_mode=False, dead=False, frozen_by=None,
+    )
+    with _mock_check_call() as call:
+        assert tmux_ctl.publish_termux_tap_route("@3", route, (80, 24))
+
+    argv = call.call_args.args[0]
+    assert argv[:5] == [
+        "tmux", "set-window-option", "-t", "@3",
+        tmux_ctl.RAILMUX_TERMUX_TAP_ROW_OPTIONS[0],
+    ]
+    assert argv[-2:] == [tmux_ctl.RAILMUX_TERMUX_TAP_PANE_OPTION, "%7"]
+    assert [
+        argv[argv.index(option) + 1]
+        for option in tmux_ctl.RAILMUX_TERMUX_TAP_ROW_OPTIONS
+    ] == ["0", "0", "1"]
+
+
 def test_status_pane_range_requires_tmux_34_and_valid_pane():
     with patch.object(tmux_ctl, "tmux_version", return_value=(3, 3)):
         assert tmux_ctl.status_pane_range("%7", "[1]") == "[1]"

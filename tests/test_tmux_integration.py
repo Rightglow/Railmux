@@ -2535,6 +2535,7 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     original_prefix_tab = tmux_ctl.read_prefix_target_binding()
     original_right_click = tmux_ctl.read_root_right_click_binding()
     original_status_click = tmux_ctl.read_root_status_click_binding()
+    original_termux_tap = tmux_ctl.read_root_termux_tap_binding()
     assert original["F8"] is not None and original["F9"] is None
 
     manager = SharedTmuxBindingManager("integration-server", owner_pane)
@@ -2545,6 +2546,8 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
         tmux_ctl.read_root_right_click_binding()["MouseDown3Pane"])
     current_status_click = (
         tmux_ctl.read_root_status_click_binding()["MouseDown1Status"])
+    current_termux_tap = (
+        tmux_ctl.read_root_termux_tap_binding()["MouseDown1Pane"])
     assert all(
         binding is not None
         and "railmux-function-forward-v1-" in binding
@@ -2562,6 +2565,14 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
         or "select-pane -t=" in current_right_click
     )
     assert "send-keys -M" in current_right_click
+    if tmux_ctl.tmux_version() >= (3, 0):
+        assert manager.termux_tap_available
+        assert current_termux_tap is not None
+        assert "railmux-termux-tap-v1-" in current_termux_tap
+        assert tmux_ctl.RAILMUX_TERMUX_TAP_PANE_OPTION in current_termux_tap
+    else:
+        assert not manager.termux_tap_available
+        assert current_termux_tap == original_termux_tap["MouseDown1Pane"]
     if tmux_ctl.tmux_version() >= (3, 4):
         assert manager.status_navigation_available
         assert current_status_click is not None
@@ -2712,8 +2723,147 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     assert tmux_ctl.read_prefix_target_binding() == original_prefix_tab
     assert tmux_ctl.read_root_right_click_binding() == original_right_click
     assert tmux_ctl.read_root_status_click_binding() == original_status_click
+    assert tmux_ctl.read_root_termux_tap_binding() == original_termux_tap
     assert tmux_ctl.show_window_user_option(
         owner_pane, tmux_ctl.RAILMUX_CONTROLLER_OPTION) is None
+
+
+def test_real_local_termux_prompt_tap_arms_and_restores_mouse(
+        isolated_tmux, monkeypatch, tmp_path):
+    """A real SGR press exercises the local pane binding, not SSH code."""
+    _require_tmux((3, 0), "pane-relative mouse formats")
+    if shutil.which("script") is None:
+        pytest.skip("script(1) is required to emulate an attached client")
+    display_session, owner_pane, socket_path = isolated_tmux
+    monkeypatch.setattr(
+        "railmux.tmux_binding_manager.restart_state.runtime_state_dir",
+        lambda: tmp_path,
+    )
+    original = tmux_ctl.read_root_termux_tap_binding()
+    manager = SharedTmuxBindingManager("termux-tap-server", owner_pane)
+    assert manager.open()
+    assert manager.termux_tap_available
+    assert subprocess.check_output(
+        [
+            "tmux", "display-message", "-p", "-t", owner_pane,
+            tmux_ctl._root_termux_tap_condition("condition-probe"),
+        ],
+        text=True,
+    ).strip() == "0"
+
+    agent_pane = subprocess.check_output(
+        [
+            "tmux", "split-window", "-h", "-t", owner_pane,
+            "-P", "-F", "#{pane_id}", "sleep 60",
+        ],
+        text=True,
+    ).strip()
+    fields = subprocess.check_output(
+        [
+            "tmux", "display-message", "-p", "-t", agent_pane,
+            "#{window_id}\t#{pane_left}\t#{pane_top}\t#{pane_height}",
+        ],
+        text=True,
+    ).strip().split("\t")
+    window_id, left, top, pane_height = fields
+    route = tmux_ctl.TermuxTapRoute(
+        pane_id=agent_pane,
+        window_id=window_id,
+        cursor_y=0,
+        pane_height=int(pane_height),
+        in_mode=False,
+        dead=False,
+        frozen_by=None,
+    )
+    owner_left, owner_top = subprocess.check_output(
+        [
+            "tmux", "display-message", "-p", "-t", owner_pane,
+            "#{pane_left}\t#{pane_top}",
+        ],
+        text=True,
+    ).strip().split("\t")
+    assert tmux_ctl.publish_termux_tap_route(
+        window_id, route, tmux_ctl.window_size(owner_pane) or (80, 24))
+    subprocess.run(
+        ["tmux", "set-option", "-t", window_id, "mouse", "on"],
+        check=True,
+    )
+    client_process = subprocess.Popen(
+        _script_command(
+            f"env TERM=xterm-256color tmux -S {shlex.quote(socket_path)} "
+            f"attach-session -t {shlex.quote(display_session)}"
+        ),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    client_name = ""
+    try:
+        assert _wait_until(
+            lambda: bool(subprocess.check_output(
+                ["tmux", "list-clients", "-F", "#{client_name}"],
+                text=True,
+            ).strip())
+        )
+        client_name = subprocess.check_output(
+            ["tmux", "list-clients", "-F", "#{client_name}"],
+            text=True,
+        ).strip()
+        assert client_process.stdin is not None
+        x = int(left) + 2
+        y = int(top)
+        client_process.stdin.write(f"\x1b[<0;{x + 1};{y + 1}M".encode())
+        client_process.stdin.flush()
+        assert _wait_until(
+            lambda: tmux_ctl.termux_tap_armed_value(window_id) is not None)
+        armed = tmux_ctl.termux_tap_armed_value(window_id)
+        assert armed is not None
+        assert subprocess.check_output(
+            ["tmux", "show-options", "-v", "-t", window_id, "mouse"],
+            text=True,
+        ).strip() == "off"
+        assert tmux_ctl.active_pane_id(owner_pane) == agent_pane
+        # Prove the process-independent nonce watchdog heals mouse even when
+        # no App resize/teardown callback performs the early restore.
+        assert _wait_until(
+            lambda: (
+                tmux_ctl.termux_tap_armed_value(window_id) is None
+                and subprocess.check_output(
+                    ["tmux", "show-options", "-v", "-t", window_id,
+                     "mouse"],
+                    text=True,
+                ).strip() == "on"
+            ),
+            timeout=10.0,
+        )
+        # Finish the consumed press after mouse reporting returns, then click
+        # the other pane.  The still-published route must fail closed and
+        # replay tmux's exact stock select/forward behavior.
+        unmatched_x = int(owner_left) + 2
+        unmatched_y = int(owner_top) + 2
+        client_process.stdin.write(
+            (f"\x1b[<0;{x + 1};{y + 1}m"
+             f"\x1b[<0;{unmatched_x + 1};{unmatched_y + 1}M"
+             f"\x1b[<0;{unmatched_x + 1};{unmatched_y + 1}m").encode()
+        )
+        client_process.stdin.flush()
+        assert _wait_until(
+            lambda: tmux_ctl.active_pane_id(owner_pane) == owner_pane)
+        assert tmux_ctl.termux_tap_armed_value(window_id) is None
+        assert subprocess.check_output(
+            ["tmux", "show-options", "-v", "-t", window_id, "mouse"],
+            text=True,
+        ).strip() == "on"
+        subprocess.run(
+            ["tmux", "detach-client", "-t", client_name], check=True)
+        client_process.communicate(timeout=2)
+    finally:
+        if client_process.poll() is None:
+            client_process.kill()
+            client_process.wait()
+        tmux_ctl.clear_termux_tap_route(window_id, expected_pane=agent_pane)
+        manager.close()
+    assert tmux_ctl.read_root_termux_tap_binding() == original
 
 
 def test_real_tmux_status_pane_range_selects_and_keeps_zoom(

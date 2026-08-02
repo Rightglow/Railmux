@@ -64,6 +64,19 @@ class SelectionPaneState:
 
 
 @dataclass(frozen=True)
+class TermuxTapRoute:
+    """Fail-closed local prompt route published for a tmux mouse binding."""
+
+    pane_id: str
+    window_id: str
+    cursor_y: int
+    pane_height: int
+    in_mode: bool
+    dead: bool
+    frozen_by: str | None
+
+
+@dataclass(frozen=True)
 class SessionTopology:
     """Exact session shape used by the de-nested display safety gate."""
 
@@ -1511,7 +1524,193 @@ def _parse_selection_pane_state(raw: str) -> SelectionPaneState | None:
 
 
 _PANE_ID_RE = re.compile(r"^%\d+$")
+_WINDOW_ID_RE = re.compile(r"^@\d+$")
 _SELECTION_KEY_RE = re.compile(r"^%\d+:(?:primary|secondary)$")
+
+
+def termux_tap_route(pane_id: str) -> TermuxTapRoute | None:
+    """Return one live pane-relative cursor route for local Termux taps."""
+    if tmux_version() < (3, 0) or not _PANE_ID_RE.fullmatch(pane_id):
+        return None
+    fmt = (
+        "#{pane_id}\t#{window_id}\t#{cursor_y}\t#{pane_height}\t"
+        "#{pane_in_mode}\t#{pane_dead}\t"
+        f"#{{{RAILMUX_SELECTION_FROZEN_OPTION}}}"
+    )
+    try:
+        raw = subprocess.check_output(
+            ["tmux", "display-message", "-p", "-t", pane_id, fmt],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=2.0,
+        ).rstrip("\n")
+        fields = raw.split("\t")
+        if len(fields) != 7:
+            return None
+        actual_pane, window_id, cursor, height, in_mode, dead, frozen = fields
+        cursor_y = int(cursor)
+        pane_height = int(height)
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        UnicodeError,
+        ValueError,
+    ):
+        return None
+    if (
+        actual_pane != pane_id
+        or not _WINDOW_ID_RE.fullmatch(window_id)
+        or pane_height <= 0
+        or not 0 <= cursor_y < pane_height
+        or in_mode not in {"0", "1"}
+        or dead not in {"0", "1"}
+    ):
+        return None
+    return TermuxTapRoute(
+        pane_id=actual_pane,
+        window_id=window_id,
+        cursor_y=cursor_y,
+        pane_height=pane_height,
+        in_mode=in_mode == "1",
+        dead=dead == "1",
+        frozen_by=frozen or None,
+    )
+
+
+def publish_termux_tap_route(
+    target_window: str,
+    route: TermuxTapRoute,
+    workspace_size: tuple[int, int],
+) -> bool:
+    """Atomically publish rows first and pane authority last."""
+    if (
+        not _WINDOW_ID_RE.fullmatch(target_window)
+        or not _PANE_ID_RE.fullmatch(route.pane_id)
+        or route.window_id != target_window
+    ):
+        return False
+    width, height = workspace_size
+    if width <= 0 or height <= 0:
+        return False
+    rows = tuple(
+        min(route.pane_height - 1, max(0, route.cursor_y + offset))
+        for offset in (-1, 0, 1)
+    )
+    commands: list[str] = [
+        "tmux", "set-window-option", "-t", target_window,
+        RAILMUX_TERMUX_TAP_ROW_OPTIONS[0], str(rows[0]),
+    ]
+    for name, value in (
+        (RAILMUX_TERMUX_TAP_ROW_OPTIONS[1], str(rows[1])),
+        (RAILMUX_TERMUX_TAP_ROW_OPTIONS[2], str(rows[2])),
+        (RAILMUX_TERMUX_TAP_WIDTH_OPTION, str(width)),
+        (RAILMUX_TERMUX_TAP_HEIGHT_OPTION, str(height)),
+        (RAILMUX_TERMUX_TAP_PANE_OPTION, route.pane_id),
+    ):
+        commands.extend([
+            ";", "set-window-option", "-t", target_window, name, value,
+        ])
+    try:
+        subprocess.check_call(
+            commands,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def clear_termux_tap_route(
+    target_window: str,
+    *,
+    expected_pane: str | None = None,
+) -> bool:
+    """Clear only this App's published tap authority from one window."""
+    if not _WINDOW_ID_RE.fullmatch(target_window):
+        return False
+    if expected_pane is not None and show_window_user_option(
+        target_window, RAILMUX_TERMUX_TAP_PANE_OPTION
+    ) != expected_pane:
+        return False
+    names = (
+        RAILMUX_TERMUX_TAP_PANE_OPTION,
+        *RAILMUX_TERMUX_TAP_ROW_OPTIONS,
+        RAILMUX_TERMUX_TAP_WIDTH_OPTION,
+        RAILMUX_TERMUX_TAP_HEIGHT_OPTION,
+    )
+    commands = [
+        "tmux", "set-window-option", "-u", "-t", target_window, names[0]
+    ]
+    for name in names[1:]:
+        commands.extend([
+            ";", "set-window-option", "-u", "-t", target_window, name,
+        ])
+    try:
+        subprocess.check_call(
+            commands,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def termux_tap_armed_value(target_window: str) -> str | None:
+    if not _WINDOW_ID_RE.fullmatch(target_window):
+        return None
+    return show_window_user_option(
+        target_window, RAILMUX_TERMUX_TAP_ARMED_OPTION
+    )
+
+
+def restore_termux_tap_mouse(
+    target_window: str,
+    *,
+    expected_armed: str | None = None,
+) -> bool:
+    """Disarm one matching handoff and restore the session mouse option."""
+    if not _WINDOW_ID_RE.fullmatch(target_window):
+        return False
+    if expected_armed is not None and (
+        termux_tap_armed_value(target_window) != expected_armed
+    ):
+        return False
+    try:
+        subprocess.check_call(
+            [
+                "tmux", "set-option", "-t", target_window, "mouse", "on",
+                ";", "set-window-option", "-u", "-t", target_window,
+                RAILMUX_TERMUX_TAP_ARMED_OPTION,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def reassert_termux_tap_mouse(target_window: str) -> bool:
+    """Force Termux to observe a fresh DEC mouse disable/enable pair."""
+    if not _WINDOW_ID_RE.fullmatch(target_window):
+        return False
+    try:
+        subprocess.check_call(
+            [
+                "tmux", "set-option", "-t", target_window, "mouse", "off",
+                ";", "set-option", "-t", target_window, "mouse", "on",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
 
 def freeze_selection_peer(peer_pane_id: str, selection_key: str) -> bool:
@@ -1594,6 +1793,7 @@ RootWheelBindingBackup = dict[str, Optional[str]]
 RootFunctionBindingBackup = dict[str, Optional[str]]
 RootRightClickBindingBackup = dict[str, Optional[str]]
 RootStatusClickBindingBackup = dict[str, Optional[str]]
+RootTermuxTapBindingBackup = dict[str, Optional[str]]
 PrefixTargetBindingBackup = dict[str, Optional[str]]
 _ROOT_WHEEL_KEYS = ("WheelUpPane", "WheelDownPane")
 _ROOT_WHEEL_MARKER = "railmux-wheel-forward-v1"
@@ -1603,6 +1803,8 @@ _ROOT_RIGHT_CLICK_KEY = "MouseDown3Pane"
 _ROOT_RIGHT_CLICK_MARKER = "railmux-right-click-forward-v1"
 _ROOT_STATUS_CLICK_KEY = "MouseDown1Status"
 _ROOT_STATUS_CLICK_MARKER = "railmux-status-pane-v1"
+_ROOT_TERMUX_TAP_KEY = "MouseDown1Pane"
+_ROOT_TERMUX_TAP_MARKER = "railmux-termux-tap-v1"
 STATUS_ACTION_MODE = "railmux-mode"
 STATUS_ACTION_LAYOUT = "railmux-layout"
 STATUS_ACTION_COPY = "railmux-copy"
@@ -1618,6 +1820,15 @@ RAILMUX_TARGET_OPTION = "@railmux_target_pane"
 RAILMUX_SELECTION_KEY_OPTION = "@railmux_selection_key"
 RAILMUX_SELECTION_PEER_OPTION = "@railmux_selection_peer"
 RAILMUX_SELECTION_FROZEN_OPTION = "@railmux_selection_frozen_by"
+RAILMUX_TERMUX_TAP_PANE_OPTION = "@railmux_termux_tap_pane"
+RAILMUX_TERMUX_TAP_ROW_OPTIONS = (
+    "@railmux_termux_tap_row0",
+    "@railmux_termux_tap_row1",
+    "@railmux_termux_tap_row2",
+)
+RAILMUX_TERMUX_TAP_WIDTH_OPTION = "@railmux_termux_tap_width"
+RAILMUX_TERMUX_TAP_HEIGHT_OPTION = "@railmux_termux_tap_height"
+RAILMUX_TERMUX_TAP_ARMED_OPTION = "@railmux_termux_tap_armed"
 _SELECTION_HOOK_MARKER = "railmux-selection-hook-v1"
 
 
@@ -2259,6 +2470,188 @@ def restore_root_right_click_binding(
         else:
             fd, path = tempfile.mkstemp(
                 prefix="railmux-root-right-click-", suffix=".conf")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(original + "\n")
+                subprocess.check_call(
+                    ["tmux", "source-file", path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            finally:
+                os.unlink(path)
+    except (OSError, subprocess.CalledProcessError, FileNotFoundError):
+        pass
+
+
+def read_root_termux_tap_binding() -> RootTermuxTapBindingBackup:
+    """Capture the stock left-click binding used for local Termux handoff."""
+    return {
+        _ROOT_TERMUX_TAP_KEY:
+        _read_key_binding("root", _ROOT_TERMUX_TAP_KEY),
+    }
+
+
+def prepare_root_termux_tap_binding() -> RootTermuxTapBindingBackup | None:
+    """Return only a stock left-click binding that is safe to wrap.
+
+    ``mouse_pane`` and pane-relative ``mouse_y`` became format variables in
+    tmux 3.0.  Older supported servers retain their exact stock binding and
+    simply do not offer the optional local Termux touch handoff.
+    """
+    if tmux_version() < (3, 0):
+        return None
+    backup = read_root_termux_tap_binding()
+    binding = backup[_ROOT_TERMUX_TAP_KEY]
+    if binding is None or _ROOT_TERMUX_TAP_MARKER in binding:
+        return None
+    try:
+        body = " ".join(
+            _binding_command(binding).replace("\\;", ";").split()
+        )
+    except ValueError:
+        return None
+    if body not in {
+        "select-pane -t = ; send-keys -M",
+        "select-pane -t= ; send-keys -M",
+    }:
+        return None
+    return backup
+
+
+def _root_termux_tap_condition(token: str) -> str:
+    """Return the fail-closed, arithmetic-free prompt click predicate."""
+    marker = f"{_ROOT_TERMUX_TAP_MARKER}-{token}"
+    row0, row1, row2 = RAILMUX_TERMUX_TAP_ROW_OPTIONS
+    pane_value = "#{" + RAILMUX_TERMUX_TAP_PANE_OPTION + "}"
+    armed_value = "#{" + RAILMUX_TERMUX_TAP_ARMED_OPTION + "}"
+    row_values = tuple("#{" + option + "}" for option in (row0, row1, row2))
+    row_match = (
+        "#{||:"
+        "#{||:#{==:#{mouse_y}," + row_values[0] + "},"
+        "#{==:#{mouse_y}," + row_values[1] + "}},"
+        "#{==:#{mouse_y}," + row_values[2] + "}}"
+    )
+    condition = (
+        "#{&&:"
+        "#{&&:#{!=:" + pane_value + ",},"
+        "#{==:#{mouse_pane}," + pane_value + "}},"
+        "#{&&:" + row_match + ","
+        "#{==:" + armed_value + ",}},"
+        f"#{{==:{marker},{marker}}}}}"
+    )
+    return condition
+
+
+def set_root_termux_tap_forwarding(
+    backup: RootTermuxTapBindingBackup,
+    token: str,
+    *,
+    timeout: float = 8.0,
+) -> bool:
+    """Yield one authoritative local prompt tap to Termux's native input.
+
+    The App publishes a target pane and three accepted pane-relative rows.
+    Every other click replays tmux's exact stock binding.  A matched press is
+    deliberately consumed: forwarding a press before disabling mouse can
+    strand a provider in a drag when its release becomes a native Android
+    touch.  The background nonce watchdog is independent of the App process.
+    """
+    marker = f"{_ROOT_TERMUX_TAP_MARKER}-{token}"
+    condition = _root_termux_tap_condition(token)
+    tmux = _tmux_shell_executable()
+    pane = "#{mouse_pane}"
+    window = "#{window_id}"
+    width = f"#{{{RAILMUX_TERMUX_TAP_WIDTH_OPTION}}}"
+    height = f"#{{{RAILMUX_TERMUX_TAP_HEIGHT_OPTION}}}"
+    select = _select_pane_preserving_zoom_shell(pane)
+    armed = RAILMUX_TERMUX_TAP_ARMED_OPTION
+    script = (
+        f"{select}; "
+        f"railmux_touch_nonce={shlex.quote(marker)}-$$; "
+        f"railmux_touch_value=\"$railmux_touch_nonce:{width}:{height}\"; "
+        f"{tmux} set-window-option -t {shlex.quote(window)} {armed} "
+        '"$railmux_touch_value" || exit; '
+        f"{tmux} set-option -t {shlex.quote(window)} mouse off || "
+        f"{{ {tmux} set-window-option -u -t {shlex.quote(window)} {armed}; "
+        "exit; }; "
+        f"{tmux} display-message -t {shlex.quote(window)} "
+        + shlex.quote("Tap the prompt again to open the keyboard")
+        + "; "
+        f"sleep {max(1.0, float(timeout)):g}; "
+        f"railmux_touch_live=$({tmux} show-window-options -v -t "
+        f"{shlex.quote(window)} {armed} 2>/dev/null); "
+        'if [ "$railmux_touch_live" = "$railmux_touch_value" ]; then '
+        f"{tmux} set-option -t {shlex.quote(window)} mouse on && "
+        f"{tmux} set-window-option -u -t {shlex.quote(window)} {armed}; fi; "
+        f": {marker}"
+    )
+    original = backup.get(_ROOT_TERMUX_TAP_KEY)
+    try:
+        fallback = (
+            _binding_command(original)
+            if original is not None else 'run-shell "true"'
+        )
+        subprocess.check_call(
+            [
+                "tmux", "bind-key", "-T", "root", _ROOT_TERMUX_TAP_KEY,
+                "if-shell", "-F", "-t", "=", condition,
+                f"run-shell -b {shlex.quote(script)}",
+                fallback,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def root_termux_tap_binding_owned_by(token: str) -> bool:
+    marker = f"{_ROOT_TERMUX_TAP_MARKER}-{token}"
+    binding = read_root_termux_tap_binding().get(_ROOT_TERMUX_TAP_KEY)
+    return bool(
+        binding
+        and marker in binding
+        and RAILMUX_TERMUX_TAP_PANE_OPTION in binding
+        and RAILMUX_TERMUX_TAP_ARMED_OPTION in binding
+        and "mouse_y" in binding
+    )
+
+
+def root_termux_tap_binding_is_original_or_owned(
+    binding: str | None,
+    original: str | None,
+    token: str,
+) -> bool:
+    if binding == original:
+        return True
+    marker = f"{_ROOT_TERMUX_TAP_MARKER}-{token}"
+    return bool(binding and marker in binding)
+
+
+def restore_root_termux_tap_binding(
+    backup: RootTermuxTapBindingBackup,
+    *,
+    token: str,
+) -> None:
+    """Restore stock left-click only while the live wrapper is still ours."""
+    live = read_root_termux_tap_binding().get(_ROOT_TERMUX_TAP_KEY)
+    marker = f"{_ROOT_TERMUX_TAP_MARKER}-{token}"
+    if live is None or marker not in live:
+        return
+    original = backup.get(_ROOT_TERMUX_TAP_KEY)
+    try:
+        if original is None:
+            subprocess.check_call(
+                ["tmux", "unbind-key", "-T", "root", _ROOT_TERMUX_TAP_KEY],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            fd, path = tempfile.mkstemp(
+                prefix="railmux-root-termux-tap-", suffix=".conf"
+            )
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     fh.write(original + "\n")

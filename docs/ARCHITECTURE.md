@@ -211,7 +211,33 @@ or bounded recovery boundary only when the current remote application requested
 terminal focus events. This keeps its prompt cursor visible without changing
 desktop focus semantics or exposing a focus sequence to applications that did
 not request one.
-Desktop terminals and direct Railmux launches never enter this path.
+Desktop terminals never enter this path.
+
+A native/local Railmux process on Termux has a different boundary: input over
+an agent pane reaches tmux's root mouse table and never passes through the
+sidebar's Python/Urwid input loop. On tmux 3.0+, the shared crash-safe binding
+lease therefore wraps only tmux's exact stock `MouseDown1Pane` binding. The App
+publishes one fail-closed window route consisting of the live Target agent pane
+and three accepted pane-relative rows around its current application cursor.
+Copy mode, a frozen selection peer, preview/help/tool content, a dead pane,
+unknown geometry, a non-agent Target, or a custom user left-click binding leaves
+the stock click path unchanged. Cursor visibility remains presentation-only.
+tmux 2.7-2.9 lacks the `mouse_pane` and `mouse_y` format authority required by
+the wrapper, so those supported servers retain byte-equivalent stock behavior
+without local tap assistance.
+
+An authoritative first press selects its explicit pane but is not forwarded to
+the provider: disabling mouse after forwarding only the press can strand the
+provider in a drag when Android owns its release. A background shell writes a
+unique window nonce before turning the exact owning session's `mouse` option
+off, shows the same “Tap the prompt again” hint, and restores `mouse on` after
+eight seconds only if its nonce still owns the handoff. This watchdog survives
+a killed App. The periodic geometry path restores early on the first same-width
+keyboard-height contraction, normal/soft teardown restores any matching nonce,
+and the later close projection toggles `mouse off; mouse on` so Termux observes
+fresh DEC ownership. Route options are window-scoped; the tmux `mouse` option
+is session-scoped, so the handoff is deliberately short and always restores to
+the `on` state Railmux requires for the rest of that session.
 
 Managed Claude Code panes may advertise a verified transcript source without
 using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,
@@ -932,6 +958,12 @@ acknowledgement temporarily replaces only status-right with its own success
 colour, then restores the exact copied tip/info/warning/error; it does not
 mutate the copied source. Older tmux keeps
 the same display and keyboard shortcuts without installing mouse ranges.
+
+On tmux 3.0+, the lease may also own the stock-only `MouseDown1Pane` Termux
+wrapper described above. Its backup is made durable before installation, a
+v7 lease upgrades in place to v8, multiple Railmux owners share one wrapper,
+and final teardown restores the original only while the exact marker remains.
+A user configuration reload or any pre-existing custom left-click binding wins.
 
 The same shared lease owns one indexed `pane-mode-changed` hook on tmux 3.0+.
 In a dual-agent layout, entering copy-mode through ordinary mouse selection or

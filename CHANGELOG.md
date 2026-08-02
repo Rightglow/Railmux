@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2.dev5] - 2026-08-02
+
+### Fixed
+
+- Add the previously missing native/local Termux prompt-tap handoff: a
+  fail-closed stock tmux left-click wrapper yields an authoritative agent input
+  row to Android, restores mouse ownership on keyboard projection/close and
+  teardown, and includes a process-independent nonce watchdog. This is separate
+  from the existing `railmux ssh` client path.
+
 ## [0.3.2.dev4] - 2026-08-02
 
 ### Fixed

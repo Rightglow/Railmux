@@ -35,6 +35,7 @@ from railmux.display_transport import (
 )
 from railmux.discovery import invalidate_session, list_projects
 from railmux.favorites import Favorites
+from railmux.fast_display_input import is_termux_environment
 from railmux.help_workspace import (
     is_help_workspace,
     materialize_help_workspace,
@@ -808,6 +809,16 @@ class App:
                 identity.server_digest, identity.pane_id)
             if identity is not None and owns_external_bindings else None
         )
+        self._termux_local_touch = bool(
+            identity is not None
+            and owns_external_bindings
+            and is_termux_environment()
+        )
+        self._projected_termux_tap: (
+            tuple[str, int, int, int, int] | None
+        ) = None
+        self._termux_tap_route_cleared = False
+        self._termux_keyboard_projection: tuple[int, int] | None = None
         self._selection_isolation_manager = (
             SelectionIsolationManager(identity.pane_id)
             if identity is not None and owns_external_bindings else None
@@ -2358,6 +2369,7 @@ class App:
                 # Mode/Layout ranges (and compact page ranges) are immediately
                 # live rather than waiting for the next unrelated transition.
                 self._apply_tmux_bar(self._tmux_error_bar)
+            self._sync_termux_tap_route()
 
     def _set_workspace_target(self, slot_key: str) -> AgentSlot:
         """Apply one Target transition and refresh its tmux projection."""
@@ -2390,6 +2402,142 @@ class App:
         if self.mux.unset_window_user_option_if_value(
                 owner, self.mux.RAILMUX_TARGET_OPTION, expected):
             self._projected_target_pane_id = None
+
+    def _termux_touch_window_id(self) -> str | None:
+        if not getattr(self, "_termux_local_touch", False):
+            return None
+        identity = getattr(self, "_restart_identity", None)
+        return identity.window_id if identity is not None else None
+
+    def _clear_termux_tap_route(self) -> None:
+        """Release only the local prompt route this App projected."""
+        projected = getattr(self, "_projected_termux_tap", None)
+        window_id = self._termux_touch_window_id()
+        if (
+            window_id is None
+            or projected is None
+            and getattr(self, "_termux_tap_route_cleared", False)
+        ):
+            return
+        cleared = tmux_ctl.clear_termux_tap_route(
+            window_id,
+            # A fresh process has no in-memory projection but may inherit
+            # stale window options after a crash.  This exact outer window is
+            # the authority boundary, so startup may clear it unconditionally.
+            expected_pane=projected[0] if projected is not None else None,
+        )
+        self._projected_termux_tap = None
+        self._termux_tap_route_cleared = cleared
+
+    def _sync_termux_tap_route(self) -> bool:
+        """Publish one fail-closed pane/cursor route for local Termux taps."""
+        window_id = self._termux_touch_window_id()
+        manager = getattr(self, "_tmux_binding_manager", None)
+        if (
+            window_id is None
+            or not getattr(manager, "termux_tap_available", False)
+        ):
+            self._clear_termux_tap_route()
+            return False
+        slot = self._agent_workspace().target
+        pane_id = slot.pane_id
+        running = (
+            self._by_tmux(slot.agent_tmux_name)
+            if slot.agent_tmux_name is not None else None
+        )
+        size = getattr(self, "_last_workspace_size", None)
+        route = (
+            tmux_ctl.termux_tap_route(pane_id)
+            if pane_id is not None
+            and running is not None
+            and not slot.in_history_mode
+            and not self._is_help_session_name(slot.agent_tmux_name)
+            else None
+        )
+        if (
+            route is None
+            or size is None
+            or route.window_id != window_id
+            or route.in_mode
+            or route.dead
+            or route.frozen_by is not None
+        ):
+            self._clear_termux_tap_route()
+            return False
+        projected = (
+            route.pane_id,
+            route.cursor_y,
+            route.pane_height,
+            size[0],
+            size[1],
+        )
+        if projected == getattr(self, "_projected_termux_tap", None):
+            return True
+        if not tmux_ctl.publish_termux_tap_route(window_id, route, size):
+            self._clear_termux_tap_route()
+            return False
+        self._projected_termux_tap = projected
+        self._termux_tap_route_cleared = False
+        return True
+
+    @staticmethod
+    def _parse_termux_tap_armed(value: str) -> tuple[int, int] | None:
+        fields = value.rsplit(":", 2)
+        if len(fields) != 3 or not fields[0].startswith(
+            "railmux-termux-tap-v1-"
+        ):
+            return None
+        try:
+            width, height = int(fields[1]), int(fields[2])
+        except ValueError:
+            return None
+        if width <= 0 or height <= 0:
+            return None
+        return width, height
+
+    def _maintain_termux_tap_handoff(
+        self,
+        current_size: tuple[int, int],
+    ) -> None:
+        """Restore tmux mouse when Android projects or closes its keyboard."""
+        window_id = self._termux_touch_window_id()
+        if window_id is None:
+            return
+        armed = tmux_ctl.termux_tap_armed_value(window_id)
+        baseline = (
+            self._parse_termux_tap_armed(armed)
+            if armed is not None else None
+        )
+        if armed is not None and baseline is None:
+            # Never leave mouse disabled for an unparseable Railmux marker.
+            tmux_ctl.restore_termux_tap_mouse(
+                window_id, expected_armed=armed)
+        elif baseline is not None:
+            width, height = current_size
+            if width == baseline[0] and height < baseline[1]:
+                if tmux_ctl.restore_termux_tap_mouse(
+                    window_id, expected_armed=armed
+                ):
+                    self._termux_keyboard_projection = baseline
+        projected = getattr(self, "_termux_keyboard_projection", None)
+        if projected is None:
+            return
+        width, height = current_size
+        if width == projected[0] and height >= projected[1]:
+            tmux_ctl.reassert_termux_tap_mouse(window_id)
+            self._termux_keyboard_projection = None
+
+    def _teardown_termux_tap(self) -> None:
+        """Best-effort cleanup for normal quit and soft restart."""
+        window_id = self._termux_touch_window_id()
+        if window_id is None:
+            return
+        armed = tmux_ctl.termux_tap_armed_value(window_id)
+        if armed is not None:
+            tmux_ctl.restore_termux_tap_mouse(
+                window_id, expected_armed=armed)
+        self._termux_keyboard_projection = None
+        self._clear_termux_tap_route()
 
     def _toggle_agent_fullscreen(self) -> None:
         """Zoom the focused agent/tool, or the Target agent from the sidebar."""
@@ -7763,6 +7911,7 @@ class App:
             wheel = getattr(self, "_root_wheel_manager", None)
             if wheel is not None:
                 wheel.close()
+            self._teardown_termux_tap()
             self._clear_target_pane_option()
             bindings = getattr(self, "_tmux_binding_manager", None)
             if bindings is not None:
@@ -7922,6 +8071,7 @@ class App:
         if selection is not None:
             selection.maintain()
         self._reconcile_focus_from_tmux()
+        self._sync_termux_tap_route()
         self._retry_pending_divider_style()
         transport = self._display_transport()
         if transport.outer_session_lost():
@@ -9612,6 +9762,7 @@ class App:
         width, height = size
         if width <= 0 or height <= 0:
             return
+        self._maintain_termux_tap_handoff((width, height))
         previous_size = getattr(self, "_last_workspace_size", None)
         size_changed = previous_size != (width, height)
         # Publish geometry before a presentation transition repaints the bar;
