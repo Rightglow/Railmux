@@ -1522,6 +1522,12 @@ def test_real_soft_quit_disconnects_shared_clients_and_agents_survive(
     for directory in (socket_root, home, runtime, claude_home):
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
+    config_dir = home / ".config" / "railmux"
+    config_dir.mkdir(parents=True)
+    (config_dir / "config.toml").write_text(
+        '[updates]\nauto_update = "never"\n',
+        encoding="utf-8",
+    )
 
     label = f"rx-soft-quit-{os.getpid()}"
     monkeypatch.setenv("TMUX_TMPDIR", str(socket_root))
