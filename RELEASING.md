@@ -25,6 +25,12 @@ version is explicitly requested or pre-releases are enabled. Never append
 `.devN` to an already released final version: `0.2.10.devN` sorts before
 `0.2.10`, so development builds after 0.2.10 must target `0.2.11.devN`.
 
+Final releases are cut only from `main`, whose product scope is POSIX/WSL.
+Native Windows local mode and the native Windows side of `railmux ssh` live on
+`windows-preview` and may publish only `.devN` builds until that work is
+explicitly promoted. Shared fixes land on `main` first and are merged into the
+preview branch; never merge the complete preview branch into `main`.
+
 ## One-time publishing setup
 
 1. Create a GitHub environment named `pypi` and require maintainer approval for

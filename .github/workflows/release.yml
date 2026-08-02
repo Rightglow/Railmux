@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v6
         with:
@@ -25,6 +27,19 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           pkg=$(python -c "import re,pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/railmux/__init__.py').read_text()).group(1))")
           [ "$tag" = "$pkg" ] || { echo "::error::tag v$tag != __version__ $pkg"; exit 1; }
+          commit=$(git rev-parse HEAD)
+          git fetch --no-tags origin main windows-preview
+          if [[ "$tag" == *.dev* ]]; then
+            git merge-base --is-ancestor "$commit" origin/windows-preview || {
+              echo "::error::development releases must come from windows-preview"
+              exit 1
+            }
+          else
+            git merge-base --is-ancestor "$commit" origin/main || {
+              echo "::error::final releases must come from main"
+              exit 1
+            }
+          fi
 
       - name: Render curated release notes
         run: python tools/release_notes.py "$GITHUB_REF_NAME" --output release-notes.md

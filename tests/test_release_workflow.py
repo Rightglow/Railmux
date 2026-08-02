@@ -50,3 +50,13 @@ def test_development_tag_creates_a_github_prerelease():
     assert 'if [[ "$GITHUB_REF_NAME" == *.dev* ]]' in release
     assert "prerelease+=(--prerelease)" in release
     assert '"${prerelease[@]}"' in release
+
+
+def test_release_tags_are_fenced_to_their_product_branches():
+    release = (ROOT / ".github/workflows/release.yml").read_text()
+
+    assert "fetch-depth: 0" in release
+    assert "origin/main" in release
+    assert "origin/windows-preview" in release
+    assert "development releases must come from windows-preview" in release
+    assert "final releases must come from main" in release

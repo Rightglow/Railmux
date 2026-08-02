@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - windows-preview
   pull_request:
   workflow_call:
   workflow_dispatch:
