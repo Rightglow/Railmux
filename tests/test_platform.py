@@ -163,7 +163,7 @@ from railmux.settings import Settings
 from railmux.ui.app import App
 
 home = Path(sys.argv[1])
-assert locale.getencoding().upper() not in {'UTF-8', 'UTF8'}
+assert locale.getpreferredencoding(False).upper() not in {'UTF-8', 'UTF8'}
 assert Settings().update_policy == 'never'
 assert Favorites().is_favorite('\u4f1a\u8bdd')
 assert Renames().get('\u4f1a\u8bdd') == '\u4e2d\u6587\u6807\u9898'

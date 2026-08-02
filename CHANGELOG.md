@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2.dev4] - 2026-08-02
+
+### Fixed
+
+- Keep the non-UTF-8 CJK persistence regression compatible with the retained
+  Python 3.9/3.10 POSIX floor while preserving the dev3 runtime fixes.
+
 ## [0.3.2.dev3] - 2026-08-02
 
 ### Fixed
