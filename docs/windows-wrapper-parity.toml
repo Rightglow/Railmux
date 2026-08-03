@@ -54,6 +54,7 @@ S20 = "runtime-bridge"
 
 [limitations]
 rolling_repository = "The base archive is hash-pinned and pacman signatures are checked, but repository package versions are not yet snapshot-pinned."
+mirror_health = "CI source availability checks are advisory because an external mirror outage must not invalidate product behavior; every runtime download is independently hash-verified."
 native_server = "Providers and SSH servers on native Windows are out of scope."
 runtime_bridges = "Clipboard, browser, separate-terminal, self-update, and remote-config bridges still require real Windows validation."
 unicode_profile = "The managed runtime path and provider history must still be exercised with a real non-ASCII Windows profile name."

@@ -35,11 +35,16 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
 - `railmux --version`, `--help`, and `runtime status` do not install or enter a
   runtime. `runtime install` prompts, while `runtime install --yes` is the
   explicit noninteractive operation.
-- The official MSYS2 self-extracting base URL and SHA-256 are pinned. Pacman
-  verifies repository packages with the bundled MSYS2 signing keyring and
-  performs full upgrades in fresh processes; this preview does not yet freeze
-  a repository snapshot, so runtime package versions may advance between
-  installations.
+- The official MSYS2 self-extracting base release, filename, size, and SHA-256
+  are pinned. Its approved HTTPS transports are tried in order: the official
+  GitHub release, the MSYS2 repository, and the MSYS2-listed TUNA and NJU
+  mirrors. A failed or wrongly hashed partial file is removed before fallback;
+  every transport must produce the same Railmux-pinned digest before execution.
+  Interactive downloads show bytes, total size, and percentage, while
+  redirected logs receive bounded milestones. Pacman verifies repository
+  packages with the bundled MSYS2 signing keyring and performs full upgrades
+  in fresh processes; this preview does not yet freeze a repository snapshot,
+  so runtime package versions may advance between installations.
 - Installation is serialized, staged outside the active directory, verified,
   and atomically renamed. An incomplete pre-existing final directory fails
   closed and is never silently removed. User-selected `RAILMUX_MSYS2_ROOT`
@@ -63,6 +68,12 @@ update lifecycle. The preview therefore uses a separately owned MSYS2 tree.
 The machine-readable feature ledger is `windows-wrapper-parity.toml`. It makes
 every stable support-matrix ID explicit and preserves manual checks for the
 visual and terminal behavior that unit tests cannot prove.
+
+Windows-preview CI performs an advisory HTTPS HEAD check against the exact
+pinned artifact on every approved transport. It intentionally does not use
+ICMP ping and does not block product tests when an external mirror has a
+transient outage; runtime integrity remains the SHA-256 check over the complete
+download, not the CI availability probe.
 
 On 2026-08-03 a Windows 10 19045 / PowerShell 5.1 / Python 3.12.10 spike proved
 that MSYS2 maps `HOME` to the same Windows profile, finds native Codex 0.146.0

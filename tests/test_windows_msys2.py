@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import subprocess
 from contextlib import contextmanager
@@ -8,11 +10,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from railmux import windows_msys2
 from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_NAME,
+    MSYS2_ARCHIVE_SHA256,
+    MSYS2_ARCHIVE_SIZE,
+    MSYS2_ARCHIVE_SOURCES,
     MSYS2_RUNTIME_ID,
     Msys2Runtime,
     RuntimeInstallError,
+    download_from_sources,
+    download_verified,
     find_runtime,
     install_managed_runtime,
     managed_root,
@@ -21,6 +29,35 @@ from railmux.windows_msys2 import (
 
 
 VERSION = "0.4.0.dev4"
+
+
+class TtyBuffer(io.StringIO):
+    def isatty(self):
+        return True
+
+
+class FakeResponse(io.BytesIO):
+    def __init__(
+        self,
+        payload: bytes,
+        *,
+        content_length: str | None = None,
+        final_url: str = "https://example.invalid/archive.exe",
+    ):
+        super().__init__(payload)
+        self._final_url = final_url
+        self.headers = {}
+        if content_length is not None:
+            self.headers["Content-Length"] = content_length
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.close()
+
+    def geturl(self):
+        return self._final_url
 
 
 def completed(argv, returncode=0, stdout=b"", stderr=b""):
@@ -39,6 +76,136 @@ def make_runtime(root: Path, *, managed: bool) -> Msys2Runtime:
             encoding="utf-8",
         )
     return Msys2Runtime(root, managed=managed)
+
+
+def test_approved_archive_sources_are_https_and_share_one_pinned_artifact():
+    assert MSYS2_ARCHIVE_SIZE == 52_820_994
+    assert len(MSYS2_ARCHIVE_SOURCES) == 4
+    assert len({url for _label, url in MSYS2_ARCHIVE_SOURCES}) == 4
+    for label, url in MSYS2_ARCHIVE_SOURCES:
+        assert label
+        assert url.startswith("https://")
+        assert url.endswith(f"/{MSYS2_ARCHIVE_NAME}")
+
+
+def test_download_reports_bytes_and_percentage_on_a_terminal(tmp_path, monkeypatch):
+    payload = b"a" * (2 * 1024 * 1024)
+    progress = TtyBuffer()
+    monkeypatch.setattr(windows_msys2.sys, "stderr", progress)
+    monkeypatch.setattr(
+        windows_msys2.urllib.request,
+        "urlopen",
+        lambda _url, timeout: FakeResponse(
+            payload,
+            content_length=str(len(payload)),
+        ),
+    )
+    destination = tmp_path / "archive.exe"
+
+    download_verified(
+        "https://example.invalid/archive.exe",
+        destination,
+        hashlib.sha256(payload).hexdigest(),
+    )
+
+    rendered = progress.getvalue()
+    assert "\r  example.invalid: 1.0 MiB / 2.0 MiB (50.0%)" in rendered
+    assert "\r  example.invalid: 2.0 MiB / 2.0 MiB (100.0%)\n" in rendered
+    assert destination.read_bytes() == payload
+
+
+def test_download_hash_failure_removes_the_untrusted_archive(tmp_path, monkeypatch):
+    payload = b"not the pinned archive"
+    monkeypatch.setattr(
+        windows_msys2.urllib.request,
+        "urlopen",
+        lambda _url, timeout: FakeResponse(
+            payload,
+            content_length=str(len(payload)),
+        ),
+    )
+    destination = tmp_path / "archive.exe"
+
+    with pytest.raises(RuntimeInstallError, match="SHA-256 verification"):
+        download_verified(
+            "https://example.invalid/archive.exe",
+            destination,
+            MSYS2_ARCHIVE_SHA256,
+        )
+
+    assert not destination.exists()
+
+
+def test_download_rejects_an_https_downgrade_before_writing(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        windows_msys2.urllib.request,
+        "urlopen",
+        lambda _url, timeout: FakeResponse(
+            b"untrusted",
+            final_url="http://mirror.invalid/archive.exe",
+        ),
+    )
+    destination = tmp_path / "archive.exe"
+
+    with pytest.raises(RuntimeInstallError, match="redirected outside HTTPS"):
+        download_verified(
+            "https://example.invalid/archive.exe",
+            destination,
+            MSYS2_ARCHIVE_SHA256,
+        )
+
+    assert not destination.exists()
+
+
+def test_download_falls_back_after_removing_a_partial_archive(tmp_path):
+    destination = tmp_path / "archive.exe"
+    sources = (
+        ("first", "https://first.invalid/a"),
+        ("second", "https://second.invalid/a"),
+    )
+    attempted = []
+
+    def downloader(url, target, sha256):
+        attempted.append((url, sha256))
+        if "first" in url:
+            target.write_bytes(b"partial")
+            raise RuntimeInstallError("could not download the pinned MSYS2 runtime")
+        assert not target.exists()
+        target.write_bytes(b"verified")
+
+    selected = download_from_sources(
+        destination,
+        MSYS2_ARCHIVE_SHA256,
+        sources=sources,
+        downloader=downloader,
+    )
+
+    assert selected == "second"
+    assert [url for url, _sha256 in attempted] == [url for _label, url in sources]
+    assert {sha256 for _url, sha256 in attempted} == {MSYS2_ARCHIVE_SHA256}
+    assert destination.read_bytes() == b"verified"
+
+
+def test_download_fails_closed_after_every_approved_source(tmp_path):
+    destination = tmp_path / "archive.exe"
+    sources = (
+        ("first", "https://first.invalid/a"),
+        ("second", "https://second.invalid/a"),
+    )
+
+    def downloader(_url, target, _sha256):
+        target.write_bytes(b"untrusted")
+        raise RuntimeInstallError("archive failed verification")
+
+    with pytest.raises(RuntimeInstallError, match="any approved source"):
+        download_from_sources(
+            destination,
+            MSYS2_ARCHIVE_SHA256,
+            sources=sources,
+            downloader=downloader,
+        )
+
+    assert not destination.exists()
 
 
 def test_handoff_preserves_argv_and_uses_child_only_msys_environment(tmp_path):

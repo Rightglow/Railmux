@@ -189,9 +189,11 @@ is labelled supported.
 1. `pip install`, package import, CLI parsing, bootstrap configuration, version
    check, update, and privacy-safe diagnostics work under supported Windows
    Python without importing POSIX-only Railmux modules before handoff.
-2. Offer an explicit, cancellable managed-MSYS2 installation with pinned
-   sources, integrity verification, private ownership, and no system-wide PATH
-   or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
+2. Offer an explicit, cancellable managed-MSYS2 installation with approved
+   pinned sources, one fixed integrity digest across safe source fallback,
+   visible bounded download progress, private ownership, and no system-wide
+   PATH or shell-profile edits. Never silently adopt or modify a user-owned
+   MSYS2.
 3. Keep one versioned runtime authority and make interrupted installation or
    upgrade transactional and recoverable. Never overwrite user-owned MSYS2
    files.

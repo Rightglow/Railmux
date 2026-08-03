@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Show bounded byte/total/percentage progress while the managed Windows MSYS2
+  archive downloads, including useful byte milestones in redirected logs.
+
+### Security
+
+- Fall back across the official GitHub release, MSYS2 repository, TUNA, and
+  NJU transports only after discarding the failed partial archive, and require
+  every source to match the same pinned SHA-256 before extraction.
+
 ## [0.4.0.dev4] - 2026-08-03
 
 ### Added

@@ -165,3 +165,19 @@ jobs:
         run: |
           railmux runtime status
           railmux doctor --json
+
+  msys2-mirror-health:
+    name: MSYS2 mirror health (advisory)
+    if: >-
+      github.ref == 'refs/heads/windows-preview' ||
+      github.base_ref == 'windows-preview'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Check the exact pinned archive on every approved HTTPS source
+        run: python tools/check_msys2_mirrors.py

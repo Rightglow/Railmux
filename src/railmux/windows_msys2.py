@@ -7,13 +7,16 @@ remain Windows-native.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -23,10 +26,27 @@ from pathlib import Path
 
 MSYS2_RELEASE = "2026-03-22"
 MSYS2_ARCHIVE_NAME = f"msys2-base-x86_64-{MSYS2_RELEASE.replace('-', '')}.sfx.exe"
-MSYS2_ARCHIVE_URL = (
-    "https://github.com/msys2/msys2-installer/releases/download/"
-    f"{MSYS2_RELEASE}/{MSYS2_ARCHIVE_NAME}"
+MSYS2_ARCHIVE_SOURCES = (
+    (
+        "GitHub",
+        "https://github.com/msys2/msys2-installer/releases/download/"
+        f"{MSYS2_RELEASE}/{MSYS2_ARCHIVE_NAME}",
+    ),
+    (
+        "MSYS2 repository",
+        f"https://repo.msys2.org/distrib/x86_64/{MSYS2_ARCHIVE_NAME}",
+    ),
+    (
+        "TUNA mirror",
+        f"https://mirrors.tuna.tsinghua.edu.cn/msys2/distrib/x86_64/"
+        f"{MSYS2_ARCHIVE_NAME}",
+    ),
+    (
+        "NJU mirror",
+        f"https://mirror.nju.edu.cn/msys2/distrib/x86_64/{MSYS2_ARCHIVE_NAME}",
+    ),
 )
+MSYS2_ARCHIVE_SIZE = 52_820_994
 MSYS2_ARCHIVE_SHA256 = (
     "6fe0cc8154132040e034ff4daface2a4163a9d1f6ebaaa1133394bff460bd5cf"
 )
@@ -42,6 +62,7 @@ _HANDOFF_COMMAND = (
 )
 _PROBE_TIMEOUT_SECONDS = 15.0
 _DOWNLOAD_LIMIT = 128 * 1024 * 1024
+_DOWNLOAD_LOG_STEP = 8 * 1024 * 1024
 _VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z")
 
 _INITIAL_UPDATE_COMMAND = (
@@ -69,6 +90,61 @@ class RuntimeInstallError(RuntimeErrorBase):
 Probe = Callable[..., subprocess.CompletedProcess[bytes]]
 Runner = Callable[..., subprocess.CompletedProcess]
 Downloader = Callable[[str, Path, str], None]
+
+
+def _format_download_size(size: int) -> str:
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MiB"
+    if size >= 1024:
+        return f"{size / 1024:.1f} KiB"
+    return f"{size} B"
+
+
+class _DownloadProgress:
+    """Render bounded progress without flooding redirected logs."""
+
+    def __init__(self, url: str) -> None:
+        self._stream = sys.stderr
+        self._source = urllib.parse.urlsplit(url).hostname or "approved source"
+        self._interactive = bool(getattr(self._stream, "isatty", lambda: False)())
+        self._last_logged = 0
+        self._active_line = False
+
+    def _message(self, downloaded: int, expected: int | None) -> str:
+        current = _format_download_size(downloaded)
+        if expected:
+            percent = min(100.0, downloaded * 100.0 / expected)
+            return (
+                f"  {self._source}: {current} / "
+                f"{_format_download_size(expected)} ({percent:.1f}%)"
+            )
+        return f"  {self._source}: {current} downloaded"
+
+    def update(
+        self,
+        downloaded: int,
+        expected: int | None,
+        *,
+        final: bool = False,
+    ) -> None:
+        message = self._message(downloaded, expected)
+        if self._interactive:
+            self._stream.write(f"\r{message}")
+            self._active_line = not final
+            if final:
+                self._stream.write("\n")
+            self._stream.flush()
+            return
+        if final or downloaded - self._last_logged >= _DOWNLOAD_LOG_STEP:
+            self._stream.write(f"{message}\n")
+            self._stream.flush()
+            self._last_logged = downloaded
+
+    def abort(self) -> None:
+        if self._interactive and self._active_line:
+            self._stream.write("\n")
+            self._stream.flush()
+            self._active_line = False
 
 
 @dataclass(frozen=True)
@@ -227,10 +303,30 @@ def find_runtime(
 
 def download_verified(url: str, destination: Path, sha256: str) -> None:
     """Download one bounded artifact and verify it before execution."""
+    if urllib.parse.urlsplit(url).scheme.lower() != "https":
+        raise RuntimeInstallError("the MSYS2 runtime source did not use HTTPS")
     digest = hashlib.sha256()
     total = 0
+    expected: int | None = None
+    progress = _DownloadProgress(url)
     try:
         with urllib.request.urlopen(url, timeout=60) as response:
+            final_url = getattr(response, "geturl", lambda: url)()
+            if urllib.parse.urlsplit(final_url).scheme.lower() != "https":
+                raise RuntimeInstallError(
+                    "the MSYS2 runtime source redirected outside HTTPS"
+                )
+            raw_length = response.headers.get("Content-Length")
+            if raw_length is not None:
+                try:
+                    parsed_length = int(raw_length)
+                except (TypeError, ValueError):
+                    parsed_length = 0
+                if parsed_length > 0:
+                    expected = parsed_length
+            if expected is not None and expected > _DOWNLOAD_LIMIT:
+                raise RuntimeInstallError("MSYS2 download exceeded its size limit")
+            progress.update(0, expected)
             with destination.open("xb") as output:
                 while True:
                     chunk = response.read(1024 * 1024)
@@ -241,12 +337,61 @@ def download_verified(url: str, destination: Path, sha256: str) -> None:
                         raise RuntimeInstallError("MSYS2 download exceeded its size limit")
                     digest.update(chunk)
                     output.write(chunk)
-    except RuntimeInstallError:
-        raise
-    except (OSError, urllib.error.URLError) as exc:
+                    progress.update(total, expected)
+        if digest.hexdigest().lower() != sha256.lower():
+            raise RuntimeInstallError(
+                "the downloaded MSYS2 archive failed SHA-256 verification"
+            )
+    except (
+        RuntimeInstallError,
+        OSError,
+        urllib.error.URLError,
+        http.client.HTTPException,
+    ) as exc:
+        progress.abort()
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            raise RuntimeInstallError(
+                "could not remove an incomplete MSYS2 download"
+            ) from cleanup_error
+        if isinstance(exc, RuntimeInstallError):
+            raise
         raise RuntimeInstallError("could not download the pinned MSYS2 runtime") from exc
-    if digest.hexdigest().lower() != sha256.lower():
-        raise RuntimeInstallError("the downloaded MSYS2 archive failed SHA-256 verification")
+    progress.update(total, expected, final=True)
+
+
+def download_from_sources(
+    destination: Path,
+    sha256: str,
+    *,
+    sources: Sequence[tuple[str, str]] = MSYS2_ARCHIVE_SOURCES,
+    downloader: Downloader = download_verified,
+) -> str:
+    """Try approved transports in order; every source uses the same pinned hash."""
+    last_error: RuntimeInstallError | None = None
+    for index, (label, url) in enumerate(sources, start=1):
+        print(f"Downloading from {label} ({index}/{len(sources)})…")
+        try:
+            downloader(url, destination, sha256)
+        except RuntimeInstallError as exc:
+            last_error = exc
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                raise RuntimeInstallError(
+                    "could not remove an incomplete MSYS2 download"
+                ) from cleanup_error
+            if index < len(sources):
+                print(
+                    f"{label} failed ({exc}); trying the next approved source…",
+                    file=sys.stderr,
+                )
+            continue
+        return label
+    raise RuntimeInstallError(
+        "could not download the pinned MSYS2 runtime from any approved source"
+    ) from last_error
 
 
 def _run_checked(
@@ -366,7 +511,11 @@ def install_managed_runtime(
             stage = Path(raw_stage)
             archive = stage / MSYS2_ARCHIVE_NAME
             print(f"Downloading verified MSYS2 {MSYS2_RELEASE} runtime…")
-            downloader(MSYS2_ARCHIVE_URL, archive, MSYS2_ARCHIVE_SHA256)
+            download_from_sources(
+                archive,
+                MSYS2_ARCHIVE_SHA256,
+                downloader=downloader,
+            )
 
             _run_checked(
                 [str(archive), "-y", f"-o{stage}"],
