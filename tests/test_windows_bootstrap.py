@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,14 +44,21 @@ def test_windows_help_is_available_without_a_runtime(capsys):
 
 
 def test_public_entrypoint_selects_windows_before_importing_posix_cli(capsys):
-    assert entrypoint_main(
+    result = entrypoint_main(
         ["--version"],
         platform_name="nt",
-    ) == 0
+    )
 
-    assert capsys.readouterr().out.endswith("(Windows bootstrap)\n")
+    output = capsys.readouterr()
+    if sys.version_info < (3, 10):
+        assert result == 2
+        assert "Python 3.10 or newer" in output.err
+    else:
+        assert result == 0
+        assert output.out.endswith("(Windows bootstrap)\n")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX CLI imports termios")
 def test_public_entrypoint_still_dispatches_posix_version(capsys):
     with pytest.raises(SystemExit) as stopped:
         entrypoint_main(["--version"], platform_name="posix")

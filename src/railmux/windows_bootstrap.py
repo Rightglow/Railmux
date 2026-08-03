@@ -191,7 +191,7 @@ def _runtime_error(*, wsl_present: bool, requested: str) -> None:
         detail = "The system WSL launcher is not installed."
     print(f"error: {detail}", file=sys.stderr)
     print(
-        "This 0.5 preview does not install software or modify a WSL "
+        "This 0.4 preview does not install software or modify a WSL "
         "distribution. Install Railmux inside WSL, select it with "
         "RAILMUX_WSL_DISTRO if needed, or wait for the consent-based managed "
         "MSYS2 fallback.",
