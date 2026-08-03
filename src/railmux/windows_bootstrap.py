@@ -55,9 +55,11 @@ def _runtime_status(
 def _confirm_install(*, input_fn: Callable[[str], str] = input) -> bool:
     try:
         answer = input_fn(
-            "Install the private MSYS2/tmux runtime now? "
-            "This downloads a 50 MB base plus required updates and packages, "
-            "and uses about 300 MB or more of private disk space [y/N] "
+            "Install the private MSYS2/tmux runtime now? On Windows, Railmux "
+            "depends on a complete private MSYS2 compatibility wrapper, "
+            "including tmux and Python. This downloads a 50 MB base plus "
+            "required updates and packages, "
+            "and uses about 700 MB or more of private disk space [y/N] "
         )
     except (EOFError, KeyboardInterrupt):
         print()

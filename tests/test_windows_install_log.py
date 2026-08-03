@@ -158,3 +158,59 @@ def test_default_command_runner_uses_no_stdin_and_captures_utf8(tmp_path):
 
     assert "captured 中文" not in stream.getvalue()
     assert "captured 中文" in path.read_text(encoding="utf-8")
+
+
+def test_compact_reporter_surfaces_extraction_and_package_progress(tmp_path):
+    stream = io.StringIO()
+    path = tmp_path / "install-0.4.0.dev8-20260803T000000Z-7.log"
+
+    with InstallReporter(path, verbose=False, stream=stream) as reporter:
+        reporter.command_started("extract", progress="extract")
+        reporter.command_output(b"  0% 100 - first\r  7% 200 - second\r")
+        reporter.command_output(b" 42% 300 - third\r100% 400 - final\n")
+        reporter.command_started("pacman", progress="pacman")
+        reporter.command_output(
+            "Packages (48) a b c\n"
+            "Total Download Size: 57.40 MiB\n"
+            " python-3.12.pkg.tar.zst downloading...\n"
+            "checking package integrity...\n"
+            "installing python...\n"
+        )
+
+    rendered = stream.getvalue()
+    assert "Extracting private runtime: 0%" in rendered
+    assert "Extracting private runtime: 42%" in rendered
+    assert "Extracting private runtime: 100%" in rendered
+    assert "Package transaction: 48 packages, 57.40 MiB download." in rendered
+    assert "Downloading packages: 1/48" in rendered
+    assert "Verifying downloaded package signatures" in rendered
+    assert "Installing packages: 1/48" in rendered
+
+
+def test_reporter_heartbeat_and_network_failure_classification(tmp_path):
+    stream = io.StringIO()
+    now = [0.0]
+    path = tmp_path / "install-0.4.0.dev8-20260803T000000Z-8.log"
+
+    with InstallReporter(
+        path,
+        verbose=False,
+        stream=stream,
+        clock=lambda: now[0],
+    ) as reporter:
+        reporter.command_started("pacman", progress="pacman")
+        reporter.command_output("Packages (2) python tmux\n python downloading...\n")
+        now[0] = 16.0
+        reporter.heartbeat()
+        reporter.command_output(
+            "error: failed retrieving file 'python.pkg.tar.zst' from "
+            "bad.example : The requested URL returned error: 403\n"
+            "error: failed retrieving file 'tmux.pkg.tar.zst' from "
+            "slow.example : Operation too slow. Less than 1 bytes/sec\n"
+        )
+
+        assert reporter.command_had_network_failure
+        assert reporter.hard_failed_mirror_hosts == {"bad.example"}
+
+    assert "Still working" in stream.getvalue()
+    assert "downloading package 1/2" in stream.getvalue()

@@ -32,7 +32,9 @@ from railmux.windows_install_log import (
 from railmux.windows_pacman import (
     PacmanMirrorDecision,
     PacmanMirrorError,
+    deactivate_pacman_hosts,
     optimize_pacman_mirror,
+    write_msys_only_pacman_config,
 )
 
 
@@ -84,13 +86,8 @@ _DOWNLOAD_SWITCH_RATIO = 1.25
 _CONTENT_RANGE_RE = re.compile(r"bytes (\d+)-(\d+)/(\d+)\Z")
 _VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z")
 
-_INITIAL_UPDATE_COMMAND = (
-    "pacman-key --init && pacman-key --populate msys2 && "
-    "pacman -Syu --noconfirm"
-)
-_PACKAGE_INSTALL_COMMAND = (
-    "pacman -Syu --noconfirm --needed tmux python python-pip"
-)
+_PACMAN_CONFIG = "/etc/railmux-pacman.conf"
+_PACMAN_PACKAGES = "tmux python python-pip"
 _VENV_COMMAND = "python -m venv /opt/railmux/venv"
 _PACKAGE_COMMAND = (
     f'{_RAILMUX_PYTHON} -m pip install --disable-pip-version-check '
@@ -435,6 +432,47 @@ def _managed_base(environ: Mapping[str, str]) -> Path | None:
     if not local_app_data:
         return None
     return Path(local_app_data) / "Railmux" / "runtimes"
+
+
+def _managed_cache(environ: Mapping[str, str]) -> Path | None:
+    local_app_data = environ.get("LOCALAPPDATA", "").strip()
+    if not local_app_data:
+        return None
+    return Path(local_app_data) / "Railmux" / "cache"
+
+
+def _archive_cache_is_valid(path: Path) -> bool:
+    try:
+        if path.is_symlink() or path.stat().st_size != MSYS2_ARCHIVE_SIZE:
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest().lower() == MSYS2_ARCHIVE_SHA256.lower()
+    except OSError:
+        return False
+
+
+def _prepare_cached_archive(
+    cache: Path,
+    *,
+    downloader: Downloader | None,
+) -> tuple[Path, str]:
+    cache.mkdir(parents=True, exist_ok=True)
+    archive = cache / MSYS2_ARCHIVE_NAME
+    if _archive_cache_is_valid(archive):
+        return archive, "verified local cache"
+    try:
+        archive.unlink(missing_ok=True)
+    except OSError as exc:
+        raise RuntimeInstallError("could not replace the private archive cache") from exc
+    source = download_from_sources(
+        archive,
+        MSYS2_ARCHIVE_SHA256,
+        downloader=downloader,
+    )
+    return archive, source
 
 
 def managed_root(environ: Mapping[str, str], *, version: str) -> Path | None:
@@ -832,8 +870,10 @@ def _run_checked(
     reporter: InstallReporter,
     label: str,
     runner: Runner | None = None,
-) -> None:
-    reporter.command_started(label)
+    progress: str | None = None,
+    allow_failure: bool = False,
+) -> bool:
+    reporter.command_started(label, progress=progress)
     try:
         if runner is None:
             process = subprocess.Popen(
@@ -849,12 +889,129 @@ def _run_checked(
             result = runner(list(argv), env=dict(env), check=False)
             reporter.command_output(getattr(result, "stdout", None))
             reporter.command_output(getattr(result, "stderr", None))
+            reporter.command_output_finished()
             returncode = result.returncode
     except OSError as exc:
         raise RuntimeInstallError(f"could not start {label}") from exc
     if returncode:
+        if allow_failure:
+            return False
         reporter.command_failed(label, returncode)
         raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
+    reporter.command_succeeded()
+    return True
+
+
+def _pacman_command(*, packages: bool, relaxed: bool) -> str:
+    timeout = " --disable-download-timeout" if relaxed else ""
+    needed = f" --needed {_PACMAN_PACKAGES}" if packages else ""
+    keyring = (
+        "pacman-key --init && pacman-key --populate msys2 && "
+        if not packages
+        else ""
+    )
+    return (
+        'cache=$(cygpath -u "$1") && mkdir -p "$cache" && '
+        f"{keyring}pacman --config {_PACMAN_CONFIG} --cachedir \"$cache\" "
+        f"-Syu --noconfirm{timeout}{needed}"
+    )
+
+
+def _report_mirror_decision(
+    decision: PacmanMirrorDecision,
+    reporter: InstallReporter,
+) -> None:
+    for mirror_probe in decision.probes:
+        reporter.command_output(
+            f"mirror probe {mirror_probe.label}: "
+            f"{_format_download_rate(mirror_probe.rate)}\n"
+        )
+    for label, reason in decision.failures:
+        reporter.command_output(
+            f"mirror probe {label}: unavailable ({reason})\n"
+        )
+
+
+def _refresh_pacman_mirrors(
+    root: Path,
+    *,
+    reporter: InstallReporter,
+    mirror_optimizer: MirrorOptimizer,
+) -> PacmanMirrorDecision | None:
+    try:
+        decision = mirror_optimizer(root)
+    except PacmanMirrorError as exc:
+        reporter.note(
+            f"Mirror measurement unavailable ({exc}); using the official order."
+        )
+        return None
+    _report_mirror_decision(decision, reporter)
+    return decision
+
+
+def _run_pacman_with_recovery(
+    root: Path,
+    *,
+    packages: bool,
+    cache: Path,
+    env: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+    label: str,
+    mirror_optimizer: MirrorOptimizer,
+) -> None:
+    argv = _bash_command(root, _pacman_command(packages=packages, relaxed=False), str(cache))
+    if _run_checked(
+        argv,
+        env=env,
+        reporter=reporter,
+        runner=runner,
+        label=label,
+        progress="pacman",
+        allow_failure=True,
+    ):
+        return
+    network_failure = reporter.command_had_network_failure
+    hard_failed_hosts = reporter.hard_failed_mirror_hosts
+    if not network_failure:
+        reporter.command_failed(label, 1)
+        raise RuntimeInstallError(f"{label} failed with exit code 1")
+    reporter.note(
+        "Measured package sources were exhausted; rechecking them before "
+        "one resilient retry."
+    )
+    _refresh_pacman_mirrors(
+        root,
+        reporter=reporter,
+        mirror_optimizer=mirror_optimizer,
+    )
+    if hard_failed_hosts:
+        try:
+            deactivated = deactivate_pacman_hosts(root, hard_failed_hosts)
+        except PacmanMirrorError as exc:
+            reporter.note(f"Could not exclude hard-failing mirrors ({exc}).")
+        else:
+            if deactivated:
+                reporter.note(
+                    "Excluded mirrors that returned HTTP 403/404 for packages."
+                )
+    reporter.note(
+        "Retrying with completed packages cached and the low-speed abort "
+        "disabled; a slow working source may take time."
+    )
+    retry_argv = _bash_command(
+        root,
+        _pacman_command(packages=packages, relaxed=True),
+        str(cache),
+    )
+    _run_checked(
+        retry_argv,
+        env=env,
+        reporter=reporter,
+        runner=runner,
+        label=f"{label} resilient retry",
+        progress="pacman",
+    )
 
 
 def _bash_command(root: Path, command: str, *arguments: str) -> list[str]:
@@ -935,10 +1092,12 @@ def install_managed_runtime(
             "not install or modify it"
         )
     base = _managed_base(environ)
-    if base is None:
+    cache_base = _managed_cache(environ)
+    if base is None or cache_base is None:
         raise RuntimeInstallError("LOCALAPPDATA is unavailable")
     try:
         base.mkdir(parents=True, exist_ok=True)
+        cache_base.mkdir(parents=True, exist_ok=True)
         log_path = install_log_path(environ, version=version)
     except OSError as exc:
         raise RuntimeInstallError("could not create the private runtime log") from exc
@@ -969,55 +1128,53 @@ def install_managed_runtime(
                     prefix=".install-", dir=base
                 ) as raw_stage:
                     stage = Path(raw_stage)
-                    archive = stage / MSYS2_ARCHIVE_NAME
-                    reporter.phase(1, 7, f"Downloading MSYS2 {MSYS2_RELEASE} base")
-                    source = download_from_sources(
-                        archive,
-                        MSYS2_ARCHIVE_SHA256,
+                    reporter.phase(
+                        1, 7, f"Preparing verified MSYS2 {MSYS2_RELEASE} base"
+                    )
+                    archive, source = _prepare_cached_archive(
+                        cache_base,
                         downloader=downloader,
                     )
                     reporter.done(source)
 
-                    reporter.phase(2, 7, "Verifying and extracting the private base")
+                    reporter.phase(2, 7, "Extracting the private MSYS2 base")
                     _run_checked(
                         [str(archive), "-y", f"-o{stage}"],
                         env=environ,
                         reporter=reporter,
                         runner=runner,
                         label="MSYS2 extraction",
+                        progress="extract",
                     )
                     root = stage / "msys64"
                     if not (root / "usr" / "bin" / "bash.exe").is_file():
                         raise RuntimeInstallError(
                             "the verified MSYS2 archive was incomplete"
                         )
+                    try:
+                        write_msys_only_pacman_config(root)
+                    except PacmanMirrorError as exc:
+                        raise RuntimeInstallError(
+                            f"could not prepare the private package config ({exc})"
+                        ) from exc
                     reporter.done()
 
                     reporter.phase(3, 7, "Selecting an MSYS2 package mirror")
-                    try:
-                        decision = mirror_optimizer(root)
-                    except PacmanMirrorError as exc:
-                        reporter.note(
-                            f"Mirror measurement unavailable ({exc}); using the "
-                            "official order."
-                        )
+                    decision = _refresh_pacman_mirrors(
+                        root,
+                        reporter=reporter,
+                        mirror_optimizer=mirror_optimizer,
+                    )
+                    if decision is None:
                         reporter.done("official order")
                     else:
-                        for mirror_probe in decision.probes:
-                            reporter.command_output(
-                                f"mirror probe {mirror_probe.label}: "
-                                f"{_format_download_rate(mirror_probe.rate)}\n"
-                            )
-                        for label, reason in decision.failures:
-                            reporter.command_output(
-                                f"mirror probe {label}: unavailable ({reason})\n"
-                            )
                         if decision.selected is None:
                             reporter.done("official order")
                         else:
                             reporter.done(
                                 f"{decision.selected.label} · "
-                                f"{_format_download_rate(decision.selected.rate)}"
+                                f"{_format_download_rate(decision.selected.rate)} · "
+                                f"{len(decision.active)} measured fallbacks"
                             )
 
                     runtime = Msys2Runtime(root, managed=False)
@@ -1027,24 +1184,43 @@ def install_managed_runtime(
                         "pacman is noninteractive; displayed [Y/n] prompts do "
                         "not require input."
                     )
-                    _run_checked(
-                        _bash_command(root, _INITIAL_UPDATE_COMMAND),
+                    package_cache = cache_base / f"pacman-{MSYS2_RUNTIME_ID}"
+                    package_cache.mkdir(parents=True, exist_ok=True)
+                    _run_pacman_with_recovery(
+                        root,
+                        packages=False,
+                        cache=package_cache,
                         env=child_env,
                         reporter=reporter,
                         runner=runner,
                         label="MSYS2 base update",
+                        mirror_optimizer=mirror_optimizer,
                     )
                     reporter.done()
 
                     # A new process is required after msys2-runtime/bash updates.
                     child_env = runtime.environment(environ)
+                    reporter.note("Rechecking package mirrors after the base update…")
+                    post_update_decision = _refresh_pacman_mirrors(
+                        root,
+                        reporter=reporter,
+                        mirror_optimizer=mirror_optimizer,
+                    )
+                    if post_update_decision is not None:
+                        reporter.note(
+                            f"Using {len(post_update_decision.active)} measured "
+                            "package sources."
+                        )
                     reporter.phase(5, 7, "Installing tmux and private Python")
-                    _run_checked(
-                        _bash_command(root, _PACKAGE_INSTALL_COMMAND),
+                    _run_pacman_with_recovery(
+                        root,
+                        packages=True,
+                        cache=package_cache,
                         env=child_env,
                         reporter=reporter,
                         runner=runner,
                         label="MSYS2 package installation",
+                        mirror_optimizer=mirror_optimizer,
                     )
                     reporter.done()
 

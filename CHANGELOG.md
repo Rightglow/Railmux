@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev8] - 2026-08-03
+
+### Added
+
+- Surface bounded extraction percentages, pacman repository/package milestones,
+  and a 15-second heartbeat for every otherwise-silent installer subprocess.
+- Retain the hash-verified MSYS2 base and signature-checked pacman package cache
+  outside transactional staging so a failed attempt does not redownload
+  completed artifacts.
+
+### Changed
+
+- Generate a Railmux-private pacman configuration containing only the `msys`
+  repository required by tmux and Python, avoiding five unused mingw/clang
+  database synchronizations.
+- Re-measure package mirrors after the base upgrade and keep only approved,
+  successfully measured candidates active; stale measured sources remain last-
+  resort fallbacks, while every other official entry remains visible but
+  inactive in the private mirrorlist.
+- Update the Windows consent estimate to about 700 MB or more of private disk
+  after measuring a 561 MB runtime plus retained verified caches, and explain
+  that this footprint is the complete private MSYS2 compatibility wrapper,
+  including tmux and Python, rather than the Railmux Python package alone.
+
+### Fixed
+
+- Recover automatically when package mirrors return HTTP 403/404 or pacman's
+  low-speed timeout: exclude hard-failing hosts, reuse completed packages, and
+  retry once with relaxed low-speed handling so a slow working source can
+  finish instead of discarding the entire installation.
+
+### Security
+
+- Keep mirror activation limited to exact approved HTTPS URLs present in the
+  official private mirrorlist; cached archives retain pinned SHA-256 checks and
+  cached packages retain pacman signature verification.
+
 ## [0.4.0.dev7] - 2026-08-03
 
 ### Added
@@ -1866,7 +1903,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...HEAD
+[0.4.0.dev8]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...v0.4.0.dev8
 [0.4.0.dev7]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...v0.4.0.dev7
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5

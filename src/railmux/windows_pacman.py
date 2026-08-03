@@ -24,13 +24,20 @@ PACMAN_MIRROR_SOURCES = (
 )
 
 _MIRRORLIST_RELATIVE = Path("etc") / "pacman.d" / "mirrorlist.msys"
+_PACMAN_CONF_RELATIVE = Path("etc") / "pacman.conf"
+_RAILMUX_PACMAN_CONF_RELATIVE = Path("etc") / "railmux-pacman.conf"
 _MIRRORLIST_LIMIT = 256 * 1024
+_PACMAN_CONF_LIMIT = 256 * 1024
 _PROBE_BYTES = 256 * 1024
 _PROBE_TIMEOUT = 8.0
 _SWITCH_RATIO = 1.25
 _FRESHNESS_WINDOW_SECONDS = 6 * 60 * 60
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 _SERVER_RE = re.compile(r"\s*Server\s*=\s*(https://\S+)\s*\Z")
+_INACTIVE_SERVER_RE = re.compile(
+    r"\s*#\s*Railmux inactive:\s*Server\s*=\s*(https://\S+)\s*\Z"
+)
+_SECTION_RE = re.compile(r"\s*\[([^]]+)]\s*\Z")
 
 
 class PacmanMirrorError(RuntimeError):
@@ -57,6 +64,7 @@ class PacmanMirrorDecision:
     changed: bool
     probes: tuple[PacmanMirrorProbe, ...]
     failures: tuple[tuple[str, str], ...]
+    active: tuple[PacmanMirrorProbe, ...] = ()
 
 
 MirrorProbe = Callable[[str, str], PacmanMirrorProbe]
@@ -131,7 +139,7 @@ def _approved_servers_in_mirrorlist(text: str) -> list[tuple[str, str]]:
     approved = {server: label for label, server in PACMAN_MIRROR_SOURCES}
     result: list[tuple[str, str]] = []
     for line in text.splitlines():
-        match = _SERVER_RE.fullmatch(line)
+        match = _SERVER_RE.fullmatch(line) or _INACTIVE_SERVER_RE.fullmatch(line)
         if match is None:
             continue
         server = match.group(1)
@@ -201,20 +209,82 @@ def _select_probe(
     return fastest
 
 
-def _promote_server(text: str, selected: str) -> str:
+def _ordered_active_probes(
+    probes: Sequence[PacmanMirrorProbe],
+    selected: PacmanMirrorProbe,
+) -> list[PacmanMirrorProbe]:
+    dated = [item.modified_at for item in probes if item.modified_at is not None]
+    newest = max(dated) if dated else None
+
+    def sort_key(item: PacmanMirrorProbe) -> tuple[int, float]:
+        fresh = (
+            newest is None
+            or item.modified_at is None
+            or newest - item.modified_at <= _FRESHNESS_WINDOW_SECONDS
+        )
+        return (1 if fresh else 0, item.rate)
+
+    ordered = [selected]
+    ordered.extend(
+        item
+        for item in sorted(probes, key=sort_key, reverse=True)
+        if item.server != selected.server
+    )
+    return ordered
+
+
+def _server_lines(text: str) -> list[str]:
+    result: list[str] = []
+    for line in text.splitlines():
+        match = _SERVER_RE.fullmatch(line) or _INACTIVE_SERVER_RE.fullmatch(line)
+        if match is not None and match.group(1) not in result:
+            result.append(match.group(1))
+    return result
+
+
+def _render_measured_pool(text: str, active_servers: Sequence[str]) -> str:
     lines = text.splitlines()
-    selected_index = next(
+    original_servers = _server_lines(text)
+    first_index = next(
         index
         for index, line in enumerate(lines)
-        if (match := _SERVER_RE.fullmatch(line)) is not None
-        and match.group(1) == selected
+        if _SERVER_RE.fullmatch(line) or _INACTIVE_SERVER_RE.fullmatch(line)
     )
-    selected_line = lines.pop(selected_index)
-    first_index = next(
-        index for index, line in enumerate(lines) if _SERVER_RE.fullmatch(line)
+    retained = [
+        line
+        for line in lines
+        if not (_SERVER_RE.fullmatch(line) or _INACTIVE_SERVER_RE.fullmatch(line))
+    ]
+    removed_before = sum(
+        1
+        for line in lines[:first_index]
+        if _SERVER_RE.fullmatch(line) or _INACTIVE_SERVER_RE.fullmatch(line)
     )
-    lines.insert(first_index, selected_line)
-    return "\n".join(lines) + "\n"
+    insertion = first_index - removed_before
+    active = list(dict.fromkeys(active_servers))
+    active_set = set(active)
+    rendered_servers = [f"Server = {server}" for server in active]
+    rendered_servers.extend(
+        f"# Railmux inactive: Server = {server}"
+        for server in original_servers
+        if server not in active_set
+    )
+    retained[insertion:insertion] = rendered_servers
+    return "\n".join(retained) + "\n"
+
+
+def _write_private_text(path: Path, text: str, *, error: str) -> None:
+    temporary = path.with_suffix(path.suffix + ".railmux.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+        os.replace(temporary, path)
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise PacmanMirrorError(error) from exc
 
 
 def optimize_pacman_mirror(
@@ -236,24 +306,97 @@ def optimize_pacman_mirror(
         return PacmanMirrorDecision(None, primary, False, (), ())
     probes, failures = _probe_candidates(sources, probe=probe)
     selected = _select_probe(probes, primary=primary)
-    changed = selected is not None and selected.server != primary
+    active = [] if selected is None else _ordered_active_probes(probes, selected)
+    updated = (
+        text
+        if not active
+        else _render_measured_pool(text, [item.server for item in active])
+    )
+    changed = updated != text
     if changed:
-        updated = _promote_server(text, selected.server)
-        temporary = mirrorlist.with_suffix(".railmux.tmp")
-        try:
-            with temporary.open("w", encoding="utf-8", newline="\n") as stream:
-                stream.write(updated)
-            os.replace(temporary, mirrorlist)
-        except OSError as exc:
-            try:
-                temporary.unlink(missing_ok=True)
-            except OSError:
-                pass
-            raise PacmanMirrorError("could not update the private mirrorlist") from exc
+        _write_private_text(
+            mirrorlist,
+            updated,
+            error="could not update the private mirrorlist",
+        )
     return PacmanMirrorDecision(
         selected=selected,
         primary=primary,
         changed=changed,
         probes=tuple(sorted(probes, key=lambda item: item.rate, reverse=True)),
         failures=tuple(failures),
+        active=tuple(active),
     )
+
+
+def deactivate_pacman_hosts(root: Path, hosts: Sequence[str]) -> bool:
+    """Remove hard-failing hosts from the active staged mirror pool."""
+    blocked = {host.lower() for host in hosts}
+    if not blocked:
+        return False
+    mirrorlist = root / _MIRRORLIST_RELATIVE
+    try:
+        if mirrorlist.is_symlink() or mirrorlist.stat().st_size > _MIRRORLIST_LIMIT:
+            raise PacmanMirrorError("private mirrorlist is not a safe regular file")
+        text = mirrorlist.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise PacmanMirrorError("could not read the private mirrorlist") from exc
+    active = []
+    for line in text.splitlines():
+        match = _SERVER_RE.fullmatch(line)
+        if match is None:
+            continue
+        server = match.group(1)
+        host = (urllib.parse.urlsplit(server).hostname or "").lower()
+        if host not in blocked:
+            active.append(server)
+    if not active:
+        return False
+    updated = _render_measured_pool(text, active)
+    if updated == text:
+        return False
+    _write_private_text(
+        mirrorlist,
+        updated,
+        error="could not update the private mirrorlist",
+    )
+    return True
+
+
+def write_msys_only_pacman_config(root: Path) -> Path:
+    """Create a private config that syncs only the repository Railmux uses."""
+    source = root / _PACMAN_CONF_RELATIVE
+    destination = root / _RAILMUX_PACMAN_CONF_RELATIVE
+    try:
+        if source.is_symlink() or source.stat().st_size > _PACMAN_CONF_LIMIT:
+            raise PacmanMirrorError("private pacman config is not a safe regular file")
+        text = source.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise PacmanMirrorError("could not read the private pacman config") from exc
+    output: list[str] = []
+    section: str | None = None
+    found_options = False
+    found_msys = False
+    found_msys_include = False
+    for line in text.splitlines():
+        match = _SECTION_RE.fullmatch(line)
+        if match is not None:
+            section = match.group(1).strip().lower()
+            found_options = found_options or section == "options"
+            found_msys = found_msys or section == "msys"
+        if section is None or section in {"options", "msys"}:
+            output.append(line)
+            if (
+                section == "msys"
+                and line.strip() == "Include = /etc/pacman.d/mirrorlist.msys"
+            ):
+                found_msys_include = True
+    if not (found_options and found_msys and found_msys_include):
+        raise PacmanMirrorError("private pacman config lacks the required MSYS repo")
+    rendered = "\n".join(output) + "\n"
+    _write_private_text(
+        destination,
+        rendered,
+        error="could not write the Railmux pacman config",
+    )
+    return destination

@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from railmux import windows_msys2
+from railmux.windows_install_log import InstallReporter
 from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_NAME,
     MSYS2_ARCHIVE_SHA256,
@@ -27,9 +28,10 @@ from railmux.windows_msys2 import (
     managed_root,
     probe_runtime,
 )
+from railmux.windows_pacman import PacmanMirrorDecision
 
 
-VERSION = "0.4.0.dev7"
+VERSION = "0.4.0.dev8"
 
 
 class TtyBuffer(io.StringIO):
@@ -505,10 +507,10 @@ def test_managed_runtime_requires_utf8_marker_and_exact_package_version(tmp_path
     root = managed_root(environ, version=VERSION)
     assert root is not None
     runtime = make_runtime(root, managed=True)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev7\n"))
+    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev8\n"))
 
     assert probe_runtime(runtime, version=VERSION, environ=environ, probe=probe)
-    assert not probe_runtime(runtime, version="0.4.0.dev8", environ=environ, probe=probe)
+    assert not probe_runtime(runtime, version="0.4.0.dev9", environ=environ, probe=probe)
 
 
 def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
@@ -516,7 +518,7 @@ def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
     probe = MagicMock(
         side_effect=[
             completed([], returncode=1),
-            completed([], stdout=b"railmux 0.4.0.dev7\n"),
+            completed([], stdout=b"railmux 0.4.0.dev8\n"),
         ]
     )
 
@@ -527,17 +529,17 @@ def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
 def test_each_preview_version_uses_a_separate_runtime_generation(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
 
-    dev6 = managed_root(environ, version="0.4.0.dev6")
     dev7 = managed_root(environ, version="0.4.0.dev7")
+    dev8 = managed_root(environ, version="0.4.0.dev8")
 
-    assert dev6 != dev7
-    assert dev6 is not None and dev6.parent == dev7.parent
+    assert dev7 != dev8
+    assert dev7 is not None and dev7.parent == dev8.parent
 
 
 def test_explicit_user_runtime_is_probed_but_never_requires_managed_marker(tmp_path):
     root = tmp_path / "用户-owned-msys"
     runtime = make_runtime(root, managed=False)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev7\n"))
+    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev8\n"))
     environ = {"RAILMUX_MSYS2_ROOT": str(root), "USERPROFILE": r"C:\Users\u"}
 
     found = find_runtime(version=VERSION, environ=environ, probe=probe)
@@ -606,10 +608,18 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
             bash = output / "msys64" / "usr" / "bin" / "bash.exe"
             bash.parent.mkdir(parents=True)
             bash.write_bytes(b"fixture")
+            config = output / "msys64" / "etc" / "pacman.conf"
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text(
+                "[options]\nParallelDownloads = 5\n"
+                "[mingw64]\nInclude = /etc/pacman.d/mirrorlist.mingw\n"
+                "[msys]\nInclude = /etc/pacman.d/mirrorlist.msys\n",
+                encoding="utf-8",
+            )
         return completed(argv)
 
     def probe(argv, *, env, timeout):
-        return completed(argv, stdout=b"railmux 0.4.0.dev7\n")
+        return completed(argv, stdout=b"railmux 0.4.0.dev8\n")
 
     @contextmanager
     def unlocked(_base):
@@ -622,6 +632,9 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         runner=runner,
         probe=probe,
         lock_factory=unlocked,
+        mirror_optimizer=lambda _root: PacmanMirrorDecision(
+            None, None, False, (), ()
+        ),
     )
 
     assert runtime == Msys2Runtime(
@@ -632,14 +645,94 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         (runtime.root / "railmux-runtime.json").read_text(encoding="utf-8")
     )["railmux"] == VERSION
     joined = [" ".join(command) for command in commands]
-    assert any("pacman -Syu --noconfirm" in command for command in joined)
+    assert any("-Syu --noconfirm" in command for command in joined)
     assert any("--needed tmux python python-pip" in command for command in joined)
     assert any("python -m venv /opt/railmux/venv" in command for command in joined)
     assert any('railmux[ssh]==$1' in command for command in joined)
     logs = list((Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log"))
     assert len(logs) == 1
     log = logs[0].read_text(encoding="utf-8")
-    assert "[1/7] Downloading MSYS2" in log
+    assert "[1/7] Preparing verified MSYS2" in log
     assert "--- MSYS2 base update ---" in log
     assert "Installation completed successfully" in log
+    config = runtime.root / "etc" / "railmux-pacman.conf"
+    assert "[msys]" in config.read_text(encoding="utf-8")
+    assert "[mingw64]" not in config.read_text(encoding="utf-8")
     assert not list((Path(environ["LOCALAPPDATA"]) / "Railmux" / "runtimes").glob(".install-*"))
+
+
+def test_verified_base_archive_cache_avoids_a_second_download(tmp_path, monkeypatch):
+    payload = b"verified cached archive"
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_SIZE", len(payload))
+    monkeypatch.setattr(
+        windows_msys2,
+        "MSYS2_ARCHIVE_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    archive = cache / MSYS2_ARCHIVE_NAME
+    archive.write_bytes(payload)
+
+    selected, source = windows_msys2._prepare_cached_archive(
+        cache,
+        downloader=lambda *_args: pytest.fail("cache should avoid downloading"),
+    )
+
+    assert selected == archive
+    assert source == "verified local cache"
+
+
+def test_pacman_network_failure_retries_with_cache_and_relaxed_timeout(tmp_path):
+    root = tmp_path / "msys64"
+    bash = root / "usr" / "bin" / "bash.exe"
+    bash.parent.mkdir(parents=True)
+    bash.write_bytes(b"fixture")
+    mirrorlist = root / "etc" / "pacman.d" / "mirrorlist.msys"
+    mirrorlist.parent.mkdir(parents=True)
+    tuna = "https://mirrors.tuna.tsinghua.edu.cn/msys2/msys/$arch/"
+    repo = "https://repo.msys2.org/msys/$arch/"
+    mirrorlist.write_text(
+        f"Server = {tuna}\nServer = {repo}\n",
+        encoding="utf-8",
+    )
+    attempts = []
+
+    def runner(argv, *, env, check):
+        attempts.append(argv)
+        if len(attempts) == 1:
+            return completed(
+                argv,
+                returncode=1,
+                stdout=(
+                    b"error: failed retrieving file 'python.pkg.tar.zst' from "
+                    b"mirrors.tuna.tsinghua.edu.cn : The requested URL returned "
+                    b"error: 403\n"
+                    b"error: failed retrieving file 'tmux.pkg.tar.zst' from "
+                    b"repo.msys2.org : Operation too slow.\n"
+                ),
+            )
+        return completed(argv)
+
+    path = tmp_path / "install.log"
+    with InstallReporter(path, verbose=False, stream=io.StringIO()) as reporter:
+        windows_msys2._run_pacman_with_recovery(
+            root,
+            packages=True,
+            cache=tmp_path / "package-cache",
+            env={},
+            reporter=reporter,
+            runner=runner,
+            label="packages",
+            mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                None, None, False, (), ()
+            ),
+        )
+
+    assert len(attempts) == 2
+    assert "--disable-download-timeout" not in attempts[0][4]
+    assert "--disable-download-timeout" in attempts[1][4]
+    assert str(tmp_path / "package-cache") == attempts[1][-1]
+    rendered = mirrorlist.read_text(encoding="utf-8")
+    assert f"# Railmux inactive: Server = {tuna}" in rendered
+    assert f"Server = {repo}" in rendered

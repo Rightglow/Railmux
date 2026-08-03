@@ -146,6 +146,9 @@ def test_runtime_install_consent_describes_updates_and_private_disk(capsys):
 
     output = capsys.readouterr().out
     assert "required updates and packages" in output
+    assert "complete private MSYS2 compatibility wrapper" in output
+    assert "including tmux and Python" in output
+    assert "700 MB or more" in output
     assert "private disk space" in output
 
 

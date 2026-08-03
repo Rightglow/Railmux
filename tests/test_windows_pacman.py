@@ -10,8 +10,10 @@ from railmux.windows_pacman import (
     PACMAN_MIRROR_SOURCES,
     PacmanMirrorError,
     PacmanMirrorProbe,
+    deactivate_pacman_hosts,
     optimize_pacman_mirror,
     probe_pacman_mirror,
+    write_msys_only_pacman_config,
 )
 
 
@@ -114,8 +116,12 @@ def test_optimizer_keeps_official_primary_for_an_immaterial_difference(tmp_path)
 
     assert decision.selected is not None
     assert decision.selected.server == primary
-    assert not decision.changed
-    assert mirrorlist.read_bytes() == original
+    assert decision.changed
+    assert mirrorlist.read_bytes() != original
+    assert len(decision.active) == len(PACMAN_MIRROR_SOURCES)
+    assert mirrorlist.read_text(encoding="utf-8").splitlines()[2] == (
+        f"Server = {primary}"
+    )
 
 
 def test_optimizer_rejects_a_fast_but_stale_database(tmp_path):
@@ -134,7 +140,8 @@ def test_optimizer_rejects_a_fast_but_stale_database(tmp_path):
 
     assert decision.selected is not None
     assert decision.selected.server == primary
-    assert not decision.changed
+    assert decision.changed
+    assert decision.active[-1].label == "TUNA mirror"
 
 
 def test_undated_primary_still_requires_a_material_speed_gain(tmp_path):
@@ -153,8 +160,8 @@ def test_undated_primary_still_requires_a_material_speed_gain(tmp_path):
 
     assert decision.selected is not None
     assert decision.selected.server == PACMAN_MIRROR_SOURCES[0][1]
-    assert not decision.changed
-    assert mirrorlist.read_bytes() == original
+    assert decision.changed
+    assert mirrorlist.read_bytes() != original
 
 
 def test_optimizer_never_probes_or_removes_an_unapproved_official_entry(tmp_path):
@@ -221,3 +228,61 @@ def test_network_probe_is_bounded_and_rejects_an_https_downgrade():
 
     assert requests[0][0].get_header("Range") == "bytes=0-262143"
     assert requests[0][1] == 8.0
+
+
+def test_optimizer_limits_active_pool_but_reprobes_inactive_candidates(tmp_path):
+    mirrorlist = write_mirrorlist(tmp_path)
+    nju = PACMAN_MIRROR_SOURCES[-1][1]
+
+    def first_probe(label, server):
+        if server == nju:
+            raise PacmanMirrorError("offline")
+        return mirror_probe(label, server, rate=100)
+
+    first = optimize_pacman_mirror(tmp_path, probe=first_probe)
+    rendered = mirrorlist.read_text(encoding="utf-8")
+    assert len(first.active) == len(PACMAN_MIRROR_SOURCES) - 1
+    assert f"# Railmux inactive: Server = {nju}" in rendered
+
+    second = optimize_pacman_mirror(
+        tmp_path,
+        probe=lambda label, server: mirror_probe(label, server, rate=100),
+    )
+    assert len(second.active) == len(PACMAN_MIRROR_SOURCES)
+    assert f"Server = {nju}" in mirrorlist.read_text(encoding="utf-8")
+
+
+def test_hard_failing_host_is_removed_from_active_pool(tmp_path):
+    mirrorlist = write_mirrorlist(tmp_path)
+    optimize_pacman_mirror(
+        tmp_path,
+        probe=lambda label, server: mirror_probe(label, server, rate=100),
+    )
+    tuna = PACMAN_MIRROR_SOURCES[2][1]
+
+    assert deactivate_pacman_hosts(tmp_path, ["mirrors.tuna.tsinghua.edu.cn"])
+
+    rendered = mirrorlist.read_text(encoding="utf-8")
+    assert f"# Railmux inactive: Server = {tuna}" in rendered
+    assert f"\nServer = {tuna}\n" not in rendered
+
+
+def test_private_pacman_config_keeps_options_and_only_msys_repo(tmp_path):
+    config = tmp_path / "etc" / "pacman.conf"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "# pacman\n[options]\nParallelDownloads = 5\n"
+        "[mingw64]\nInclude = /etc/pacman.d/mirrorlist.mingw\n"
+        "[ucrt64]\nInclude = /etc/pacman.d/mirrorlist.mingw\n"
+        "[msys]\nInclude = /etc/pacman.d/mirrorlist.msys\n",
+        encoding="utf-8",
+    )
+
+    destination = write_msys_only_pacman_config(tmp_path)
+
+    rendered = destination.read_text(encoding="utf-8")
+    assert "ParallelDownloads = 5" in rendered
+    assert "[msys]" in rendered
+    assert "mirrorlist.msys" in rendered
+    assert "[mingw64]" not in rendered
+    assert "[ucrt64]" not in rendered

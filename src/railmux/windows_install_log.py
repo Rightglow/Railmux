@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import os
+import queue
 import re
 import sys
+import threading
 import time
+import codecs
 from collections import deque
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -24,6 +27,23 @@ _MIRROR_WARNING_MARKERS = (
     "too many errors from ",
     "failed retrieving file ",
 )
+_HARD_MIRROR_ERROR_RE = re.compile(
+    r"failed retrieving file .* from ([^ ]+) : .*error: (?:403|404)",
+    re.IGNORECASE,
+)
+_NETWORK_ERROR_MARKERS = (
+    "failed retrieving file ",
+    "operation too slow",
+    "could not resolve host",
+    "connection timed out",
+    "failed to synchronize all databases",
+)
+_EXTRACTION_PERCENT_RE = re.compile(r"(?:^|\s)([0-9]{1,3})%\s")
+_PACKAGE_COUNT_RE = re.compile(r"^Packages \(([0-9]+)\)")
+_PACKAGE_DOWNLOAD_RE = re.compile(r"^\s*([^ ]+) downloading\.\.\.\s*$")
+_PACKAGE_CHANGE_RE = re.compile(r"^(?:installing|upgrading) ([^ ]+)\.\.\.\s*$")
+_TOTAL_DOWNLOAD_RE = re.compile(r"^Total Download Size:\s+(.+?)\s*$")
+_HEARTBEAT_SECONDS = 15.0
 
 
 def _redact_line(line: str) -> str:
@@ -81,6 +101,7 @@ class InstallReporter:
         *,
         verbose: bool,
         stream: TextIO | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.path = path
         self.verbose = verbose
@@ -88,6 +109,20 @@ class InstallReporter:
         self._log: TextIO | None = None
         self._tail: deque[str] = deque(maxlen=20)
         self._reported_mirror_warning = False
+        self._clock = clock
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending_output = ""
+        self._progress_kind: str | None = None
+        self._progress_detail = "working"
+        self._command_started_at = 0.0
+        self._last_heartbeat = 0.0
+        self._last_extraction_percent = -5
+        self._package_total: int | None = None
+        self._package_downloaded = 0
+        self._package_changed = 0
+        self._package_step = 1
+        self._network_failure = False
+        self._hard_failed_hosts: set[str] = set()
 
     def __enter__(self) -> InstallReporter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,6 +132,7 @@ class InstallReporter:
         return self
 
     def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.command_output_finished()
         if self._log is not None:
             self._log.close()
             self._log = None
@@ -130,37 +166,163 @@ class InstallReporter:
         self._console(rendered)
         self._write_log(f"{rendered}\n")
 
-    def command_started(self, label: str) -> None:
+    def command_started(self, label: str, *, progress: str | None = None) -> None:
+        self.command_output_finished()
         self._tail.clear()
         self._reported_mirror_warning = False
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._pending_output = ""
+        self._progress_kind = progress
+        self._progress_detail = label
+        self._command_started_at = self._clock()
+        self._last_heartbeat = self._command_started_at
+        self._last_extraction_percent = -5
+        self._package_total = None
+        self._package_downloaded = 0
+        self._package_changed = 0
+        self._package_step = 1
+        self._network_failure = False
+        self._hard_failed_hosts.clear()
         self._write_log(f"\n--- {label} ---\n")
 
     def command_output(self, output: bytes | str | None) -> None:
         if not output:
             return
         if isinstance(output, bytes):
-            text = output.decode("utf-8", errors="replace")
+            text = self._decoder.decode(output)
         else:
             text = output
-        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-        for raw_line in normalized.splitlines():
-            line = _redact_line(raw_line)
-            self._write_log(f"{line}\n")
-            if line.strip():
-                self._tail.append(line)
-            if self.verbose:
-                self._console(line)
-            elif (
-                not self._reported_mirror_warning
-                and any(marker in line.lower() for marker in _MIRROR_WARNING_MARKERS)
+        self._pending_output += text
+        parts = re.split(r"\r\n|\r|\n", self._pending_output)
+        self._pending_output = parts.pop()
+        for raw_line in parts:
+            self._consume_output_line(raw_line)
+        if len(self._pending_output) > 64 * 1024:
+            self._consume_output_line(self._pending_output)
+            self._pending_output = ""
+
+    def command_output_finished(self) -> None:
+        final = self._decoder.decode(b"", final=True)
+        if final:
+            self._pending_output += final
+        if self._pending_output:
+            self._consume_output_line(self._pending_output)
+            self._pending_output = ""
+
+    def _consume_output_line(self, raw_line: str) -> None:
+        line = _redact_line(raw_line)
+        self._write_log(f"{line}\n")
+        if line.strip():
+            self._tail.append(line)
+        lowered = line.lower()
+        if any(marker in lowered for marker in _NETWORK_ERROR_MARKERS):
+            self._network_failure = True
+        hard_failure = _HARD_MIRROR_ERROR_RE.search(line)
+        if hard_failure is not None:
+            self._hard_failed_hosts.add(hard_failure.group(1).lower())
+        if self.verbose:
+            self._console(line)
+        elif (
+            not self._reported_mirror_warning
+            and any(marker in lowered for marker in _MIRROR_WARNING_MARKERS)
+        ):
+            self.note(
+                "A package mirror failed; pacman is trying the next "
+                "approved source…"
+            )
+            self._reported_mirror_warning = True
+        if not self.verbose:
+            self._update_progress(line)
+
+    def _update_progress(self, line: str) -> None:
+        if self._progress_kind == "extract":
+            matches = _EXTRACTION_PERCENT_RE.findall(line)
+            if not matches:
+                return
+            percent = min(int(matches[-1]), 100)
+            self._progress_detail = f"extracting private runtime: {percent}%"
+            if percent >= self._last_extraction_percent + 5 or percent == 100:
+                self.note(f"Extracting private runtime: {percent}%")
+                self._last_extraction_percent = percent
+            return
+        if self._progress_kind != "pacman":
+            return
+        package_count = _PACKAGE_COUNT_RE.match(line)
+        if package_count is not None:
+            self._package_total = int(package_count.group(1))
+            self._package_step = max(1, self._package_total // 10)
+            self._progress_detail = f"preparing {self._package_total} packages"
+            return
+        total_download = _TOTAL_DOWNLOAD_RE.match(line)
+        if total_download is not None:
+            count = self._package_total or "the required"
+            self.note(
+                f"Package transaction: {count} packages, "
+                f"{total_download.group(1)} download."
+            )
+            return
+        download = _PACKAGE_DOWNLOAD_RE.match(line)
+        if download is not None:
+            name = download.group(1)
+            if self._package_total is None:
+                self._progress_detail = f"refreshing repository {name}"
+                self.note(f"Refreshing repository: {name}")
+                return
+            self._package_downloaded += 1
+            total = self._package_total
+            self._progress_detail = (
+                f"downloading package {self._package_downloaded}/{total}: {name}"
+            )
+            if (
+                self._package_downloaded == 1
+                or self._package_downloaded == total
+                or self._package_downloaded % self._package_step == 0
             ):
                 self.note(
-                    "A package mirror failed; pacman is trying the next "
-                    "approved source…"
+                    f"Downloading packages: {self._package_downloaded}/{total} "
+                    f"({name})"
                 )
-                self._reported_mirror_warning = True
+            return
+        change = _PACKAGE_CHANGE_RE.match(line)
+        if change is not None and self._package_total is not None:
+            self._package_changed += 1
+            total = self._package_total
+            name = change.group(1)
+            self._progress_detail = (
+                f"installing package {self._package_changed}/{total}: {name}"
+            )
+            if (
+                self._package_changed == 1
+                or self._package_changed == total
+                or self._package_changed % self._package_step == 0
+            ):
+                self.note(
+                    f"Installing packages: {self._package_changed}/{total} "
+                    f"({name})"
+                )
+            return
+        if line.strip() == "checking package integrity...":
+            self._progress_detail = "verifying package signatures"
+            self.note("Verifying downloaded package signatures…")
+
+    @property
+    def command_had_network_failure(self) -> bool:
+        return self._network_failure
+
+    @property
+    def hard_failed_mirror_hosts(self) -> frozenset[str]:
+        return frozenset(self._hard_failed_hosts)
+
+    def heartbeat(self) -> None:
+        now = self._clock()
+        if now - self._last_heartbeat < _HEARTBEAT_SECONDS:
+            return
+        elapsed = max(0, int(now - self._command_started_at))
+        self.note(f"Still working — {self._progress_detail} ({elapsed}s elapsed)")
+        self._last_heartbeat = now
 
     def command_failed(self, label: str, returncode: int) -> None:
+        self.command_output_finished()
         self.note(f"{label} failed with exit code {returncode}.")
         if self._tail:
             self.note("Last output:")
@@ -169,6 +331,12 @@ class InstallReporter:
                     line = f"{line[:_FAILURE_LINE_LIMIT]}… [truncated; see log]"
                 self._console(f"        {line}")
         self.note(f"Full UTF-8 log: {self.path}")
+
+    def command_succeeded(self) -> None:
+        self.command_output_finished()
+        if self._progress_kind == "extract" and self._last_extraction_percent < 100:
+            self.note("Extracting private runtime: 100%")
+            self._last_extraction_percent = 100
 
     def finish(self) -> None:
         self._write_log("\nInstallation completed successfully.\n")
@@ -181,9 +349,40 @@ def stream_process_output(
 ) -> int:
     stdout: BinaryIO | None = getattr(process, "stdout", None)
     if stdout is not None:
+        chunks: queue.Queue[bytes | BaseException | object] = queue.Queue()
+        finished = object()
+
+        def read_output() -> None:
+            try:
+                read = getattr(stdout, "read1", stdout.read)
+                while True:
+                    chunk = read(4096)
+                    if not chunk:
+                        break
+                    chunks.put(chunk)
+            except BaseException as exc:  # forwarded to the owning thread
+                chunks.put(exc)
+            finally:
+                chunks.put(finished)
+
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        capture_error: BaseException | None = None
         while True:
-            chunk = stdout.readline()
-            if not chunk:
+            try:
+                item = chunks.get(timeout=1.0)
+            except queue.Empty:
+                reporter.heartbeat()
+                continue
+            if item is finished:
                 break
-            reporter.command_output(chunk)
+            if isinstance(item, BaseException):
+                capture_error = item
+                continue
+            reporter.command_output(item)
+            reporter.heartbeat()
+        reader.join()
+        reporter.command_output_finished()
+        if capture_error is not None:
+            raise OSError("could not capture installer output") from capture_error
     return process.wait()

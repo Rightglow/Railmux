@@ -14,6 +14,12 @@ hands the original argv to the normal POSIX Railmux/tmux application. That one
 application remains the owner of layout, mouse routing, previews, dialogs,
 restore state, SSH display, and provider lifecycle.
 
+The footprint is about 700 MB or more because Windows needs a complete,
+internally consistent private MSYS2 compatibility base plus tmux and Python;
+it is not the size of the Railmux Python code. A measured dev8 runtime used
+561 MiB and its reusable verified base/package caches used about 119 MiB. The
+private pacman configuration enables only `msys`, not mingw/clang SDK repos.
+
 Codex and Claude Code remain the user's Windows-native executables. The child
 `HOME` is explicitly mapped to `%USERPROFILE%`, the inherited Windows `PATH` is
 retained, and native provider paths are translated only when Railmux reads
@@ -48,22 +54,33 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   in the approved order. A wrong final size or SHA-256 removes the archive, and
   every path must produce the same Railmux-pinned digest before execution.
   Interactive downloads show bytes, total size, and percentage, while
-  redirected logs receive bounded milestones. Before pacman runs, the
+  redirected logs receive bounded milestones. A verified base is retained in
+  the Railmux-private cache so later versioned runtimes do not download it
+  again. Before pacman runs, the
   bootstrap concurrently samples the actual `msys.db` from the geo redirector,
   primary repository, TUNA, USTC, and NJU entries, but only when the exact URL
   is also present in the pinned runtime's official `mirrorlist.msys`. A source
-  must return HTTPS, a bounded Zstandard database sample, and fall within six
-  hours of the newest measured `Last-Modified` value. The official first entry
-  remains preferred unless another fresh entry is at least 25% faster. Only the
-  staged private mirrorlist is atomically reordered; every official fallback
-  remains, and missing/changed URLs or failed probes leave the official order
-  untouched. Pacman verifies repository packages with the bundled MSYS2
-  signing keyring and performs full upgrades in fresh noninteractive processes;
-  this preview does not yet freeze a repository snapshot, so runtime package
-  versions may advance between installations.
+  must return HTTPS and a bounded Zstandard database sample. Candidates within
+  six hours of the newest measured `Last-Modified` value are fresh and eligible
+  to become primary; the official first entry remains preferred unless another
+  fresh entry is at least 25% faster. The
+  staged private mirrorlist activates only successfully measured approved
+  sources, ordered with stale candidates last; other official entries remain
+  visible as inactive comments. The pool is measured again after the base
+  upgrade because `pacman-mirrors` may replace the list. Railmux uses a derived
+  private pacman configuration containing only the required `msys` repository,
+  while the original configuration remains untouched. Pacman verifies packages
+  with the bundled MSYS2 signing keyring and stores completed downloads in a
+  Railmux-private cache outside transactional staging. HTTP 403/404 hosts are
+  excluded after a failed transaction; low-speed exhaustion triggers one retry
+  that reuses the cache and disables pacman's low-speed abort. This preview does
+  not yet freeze a repository snapshot, so package versions may advance between
+  installations.
 - Interactive setup renders seven stable phases rather than exposing all
-  pacman noise. Mirror fallback is summarized once, printed `[Y/n]` prompts do
-  not require input, and a command failure shows a bounded tail. Complete
+  pacman noise. Extraction percentages, repository/package milestones, and a
+  15-second heartbeat cover every long subprocess. Mirror fallback is
+  summarized once, printed `[Y/n]` prompts do not require input, and a command
+  failure shows a bounded tail. Complete
   subprocess output is written explicitly as UTF-8 beneath
   `%LOCALAPPDATA%\Railmux\logs`; URL credentials and common secret query fields
   are redacted, unrelated files are never pruned, and at most five recognized
