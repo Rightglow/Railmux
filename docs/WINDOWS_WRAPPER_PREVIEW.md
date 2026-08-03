@@ -36,10 +36,16 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   runtime. `runtime install` prompts, while `runtime install --yes` is the
   explicit noninteractive operation.
 - The official MSYS2 self-extracting base release, filename, size, and SHA-256
-  are pinned. Its approved HTTPS transports are tried in order: the official
-  GitHub release, the MSYS2 repository, and the MSYS2-listed TUNA and NJU
-  mirrors. A failed or wrongly hashed partial file is removed before fallback;
-  every transport must produce the same Railmux-pinned digest before execution.
+  are pinned. The bootstrap samples the official GitHub release first. When
+  its projected remaining time exceeds 60 seconds, it concurrently samples
+  the MSYS2 repository and the MSYS2-listed TUNA and NJU mirrors, switches only
+  for at least a 25% measured improvement, and otherwise continues the best
+  available transfer. Probe bytes are reused, and an interrupted transfer can
+  resume at the exact offset from another approved source. Servers must return
+  strict HTTPS `206` responses with the expected `Content-Range`; if adaptive
+  transfer is unavailable, the bootstrap falls back to ordinary full downloads
+  in the approved order. A wrong final size or SHA-256 removes the archive, and
+  every path must produce the same Railmux-pinned digest before execution.
   Interactive downloads show bytes, total size, and percentage, while
   redirected logs receive bounded milestones. Pacman verifies repository
   packages with the bundled MSYS2 signing keyring and performs full upgrades
@@ -69,11 +75,12 @@ The machine-readable feature ledger is `windows-wrapper-parity.toml`. It makes
 every stable support-matrix ID explicit and preserves manual checks for the
 visual and terminal behavior that unit tests cannot prove.
 
-Windows-preview CI performs an advisory HTTPS HEAD check against the exact
-pinned artifact on every approved transport. It intentionally does not use
-ICMP ping and does not block product tests when an external mirror has a
-transient outage; runtime integrity remains the SHA-256 check over the complete
-download, not the CI availability probe.
+Windows-preview CI performs an advisory one-byte HTTPS Range request against
+the exact pinned artifact on every approved transport and validates its exact
+`Content-Range`. It intentionally does not use ICMP ping and does not block
+product tests when an external mirror has a transient outage; runtime integrity
+remains the SHA-256 check over the complete download, not the CI capability
+probe.
 
 On 2026-08-03 a Windows 10 19045 / PowerShell 5.1 / Python 3.12.10 spike proved
 that MSYS2 maps `HOME` to the same Windows profile, finds native Codex 0.146.0

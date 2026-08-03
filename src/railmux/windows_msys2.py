@@ -6,6 +6,7 @@ remain Windows-native.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import http.client
 import json
@@ -63,6 +64,13 @@ _HANDOFF_COMMAND = (
 _PROBE_TIMEOUT_SECONDS = 15.0
 _DOWNLOAD_LIMIT = 128 * 1024 * 1024
 _DOWNLOAD_LOG_STEP = 8 * 1024 * 1024
+_DOWNLOAD_PROBE_BYTES = 1024 * 1024
+_DOWNLOAD_PROBE_SECONDS = 8.0
+_DOWNLOAD_PROBE_READ_SIZE = 64 * 1024
+_DOWNLOAD_PROBE_TIMEOUT = 10.0
+_DOWNLOAD_SLOW_REMAINING_SECONDS = 60.0
+_DOWNLOAD_SWITCH_RATIO = 1.25
+_CONTENT_RANGE_RE = re.compile(r"bytes (\d+)-(\d+)/(\d+)\Z")
 _VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z")
 
 _INITIAL_UPDATE_COMMAND = (
@@ -90,6 +98,22 @@ class RuntimeInstallError(RuntimeErrorBase):
 Probe = Callable[..., subprocess.CompletedProcess[bytes]]
 Runner = Callable[..., subprocess.CompletedProcess]
 Downloader = Callable[[str, Path, str], None]
+
+
+@dataclass(frozen=True)
+class _ArchiveProbe:
+    label: str
+    url: str
+    data: bytes
+    elapsed: float
+
+    @property
+    def rate(self) -> float:
+        return len(self.data) / max(self.elapsed, 0.001)
+
+
+ArchiveProbe = Callable[[str, str, int], _ArchiveProbe]
+ArchiveResume = Callable[[str, str, int, int, Callable[[bytes], None]], None]
 
 
 def _format_download_size(size: int) -> str:
@@ -145,6 +169,198 @@ class _DownloadProgress:
             self._stream.write("\n")
             self._stream.flush()
             self._active_line = False
+
+
+def _format_download_rate(rate: float) -> str:
+    return f"{_format_download_size(int(rate))}/s"
+
+
+def _validate_https_response(url: str, response: object) -> None:
+    if urllib.parse.urlsplit(url).scheme.lower() != "https":
+        raise RuntimeInstallError("the MSYS2 runtime source did not use HTTPS")
+    final_url = getattr(response, "geturl", lambda: url)()
+    if urllib.parse.urlsplit(final_url).scheme.lower() != "https":
+        raise RuntimeInstallError(
+            "the MSYS2 runtime source redirected outside HTTPS"
+        )
+
+
+def _validate_range_response(
+    url: str,
+    response: object,
+    *,
+    start: int,
+    end: int,
+    expected_size: int,
+) -> None:
+    _validate_https_response(url, response)
+    if getattr(response, "status", None) != 206:
+        raise RuntimeInstallError("the MSYS2 source did not honor a range request")
+    raw_range = response.headers.get("Content-Range", "")
+    match = _CONTENT_RANGE_RE.fullmatch(raw_range)
+    if match is None:
+        raise RuntimeInstallError("the MSYS2 source returned an invalid content range")
+    actual_start, actual_end, actual_size = (int(value) for value in match.groups())
+    if (
+        actual_start != start
+        or actual_end != end
+        or actual_size != expected_size
+    ):
+        raise RuntimeInstallError("the MSYS2 source returned the wrong content range")
+    raw_length = response.headers.get("Content-Length")
+    if raw_length is not None:
+        try:
+            actual_length = int(raw_length)
+        except (TypeError, ValueError):
+            actual_length = -1
+        if actual_length != end - start + 1:
+            raise RuntimeInstallError("the MSYS2 source returned the wrong range size")
+
+
+def _range_request(url: str, *, start: int, end: int) -> urllib.request.Request:
+    return urllib.request.Request(
+        url,
+        headers={
+            "Accept-Encoding": "identity",
+            "Range": f"bytes={start}-{end}",
+            "User-Agent": "Railmux-MSYS2-bootstrap/1",
+        },
+    )
+
+
+def _probe_archive_source(
+    label: str,
+    url: str,
+    expected_size: int,
+    *,
+    opener: Callable[..., object] = urllib.request.urlopen,
+    clock: Callable[[], float] = time.monotonic,
+) -> _ArchiveProbe:
+    """Read a bounded prefix used both for selection and final assembly."""
+    end = min(_DOWNLOAD_PROBE_BYTES, expected_size) - 1
+    request = _range_request(url, start=0, end=end)
+    started = clock()
+    data = bytearray()
+    try:
+        with opener(request, timeout=_DOWNLOAD_PROBE_TIMEOUT) as response:
+            _validate_range_response(
+                url,
+                response,
+                start=0,
+                end=end,
+                expected_size=expected_size,
+            )
+            while len(data) <= end:
+                remaining = end + 1 - len(data)
+                try:
+                    chunk = response.read(
+                        min(_DOWNLOAD_PROBE_READ_SIZE, remaining)
+                    )
+                except (OSError, http.client.HTTPException):
+                    if data:
+                        break
+                    raise
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if clock() - started >= _DOWNLOAD_PROBE_SECONDS:
+                    break
+    except RuntimeInstallError:
+        raise
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        raise RuntimeInstallError("could not probe the MSYS2 source") from exc
+    if not data:
+        raise RuntimeInstallError("the MSYS2 source returned no probe data")
+    return _ArchiveProbe(
+        label=label,
+        url=url,
+        data=bytes(data),
+        elapsed=max(clock() - started, 0.001),
+    )
+
+
+def _resume_archive_source(
+    _label: str,
+    url: str,
+    offset: int,
+    expected_size: int,
+    write_chunk: Callable[[bytes], None],
+    *,
+    opener: Callable[..., object] = urllib.request.urlopen,
+) -> None:
+    """Append the exact remaining range from one approved source."""
+    if offset >= expected_size:
+        return
+    request = _range_request(url, start=offset, end=expected_size - 1)
+    try:
+        with opener(request, timeout=60) as response:
+            _validate_range_response(
+                url,
+                response,
+                start=offset,
+                end=expected_size - 1,
+                expected_size=expected_size,
+            )
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                write_chunk(chunk)
+    except RuntimeInstallError:
+        raise
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        raise RuntimeInstallError("could not resume the MSYS2 source") from exc
+
+
+def _probe_other_sources(
+    sources: Sequence[tuple[str, str]],
+    *,
+    expected_size: int,
+    probe_source: ArchiveProbe,
+) -> list[_ArchiveProbe]:
+    if not sources:
+        return []
+    results: list[_ArchiveProbe] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        futures = {
+            pool.submit(probe_source, label, url, expected_size): label
+            for label, url in sources
+        }
+        for future in concurrent.futures.as_completed(futures):
+            label = futures[future]
+            try:
+                result = future.result()
+            except RuntimeInstallError as exc:
+                print(f"  {label}: unavailable ({exc})", file=sys.stderr)
+            else:
+                results.append(result)
+                print(
+                    f"  {label}: {_format_download_rate(result.rate)}",
+                    file=sys.stderr,
+                )
+    return results
+
+
+def _probe_is_slow(probe: _ArchiveProbe, *, expected_size: int) -> bool:
+    remaining = max(0, expected_size - len(probe.data))
+    return remaining / probe.rate > _DOWNLOAD_SLOW_REMAINING_SECONDS
+
+
+def _select_probe(
+    primary: _ArchiveProbe | None,
+    alternatives: Sequence[_ArchiveProbe],
+) -> _ArchiveProbe:
+    candidates = ([primary] if primary is not None else []) + list(alternatives)
+    if not candidates:
+        raise RuntimeInstallError("no approved MSYS2 source could be probed")
+    fastest = max(candidates, key=lambda candidate: candidate.rate)
+    if (
+        primary is not None
+        and fastest is not primary
+        and fastest.rate < primary.rate * _DOWNLOAD_SWITCH_RATIO
+    ):
+        return primary
+    return fastest
 
 
 @dataclass(frozen=True)
@@ -361,17 +577,183 @@ def download_verified(url: str, destination: Path, sha256: str) -> None:
     progress.update(total, expected, final=True)
 
 
-def download_from_sources(
+def download_adaptive(
     destination: Path,
     sha256: str,
     *,
     sources: Sequence[tuple[str, str]] = MSYS2_ARCHIVE_SOURCES,
-    downloader: Downloader = download_verified,
+    expected_size: int = MSYS2_ARCHIVE_SIZE,
+    probe_source: ArchiveProbe = _probe_archive_source,
+    resume_source: ArchiveResume = _resume_archive_source,
 ) -> str:
-    """Try approved transports in order; every source uses the same pinned hash."""
+    """Select a responsive approved source, then resume across failures."""
+    if not sources:
+        raise RuntimeInstallError("no approved MSYS2 download source is configured")
+    if expected_size <= 0 or expected_size > _DOWNLOAD_LIMIT:
+        raise RuntimeInstallError("the pinned MSYS2 archive size is invalid")
+    for _label, url in sources:
+        if urllib.parse.urlsplit(url).scheme.lower() != "https":
+            raise RuntimeInstallError("the MSYS2 runtime source did not use HTTPS")
+
+    primary: _ArchiveProbe | None = None
+    remaining_sources = list(sources[1:])
+    primary_label, primary_url = sources[0]
+    print(f"Probing {primary_label}…", flush=True)
+    try:
+        primary = probe_source(primary_label, primary_url, expected_size)
+    except RuntimeInstallError as exc:
+        print(
+            f"{primary_label} probe failed ({exc}); checking approved alternatives…",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"  {primary.label}: {_format_download_rate(primary.rate)}",
+            file=sys.stderr,
+        )
+
+    alternatives: list[_ArchiveProbe] = []
+    if primary is None or _probe_is_slow(primary, expected_size=expected_size):
+        if primary is not None:
+            remaining_seconds = (
+                expected_size - len(primary.data)
+            ) / primary.rate
+            print(
+                f"{primary.label} is slow (~{remaining_seconds:.0f}s remaining); "
+                "checking approved alternatives…",
+                file=sys.stderr,
+            )
+        alternatives = _probe_other_sources(
+            remaining_sources,
+            expected_size=expected_size,
+            probe_source=probe_source,
+        )
+    selected = _select_probe(primary, alternatives)
+    if primary is not None and selected is not primary:
+        print(
+            f"Switching to {selected.label} "
+            f"({_format_download_rate(selected.rate)}).",
+            file=sys.stderr,
+        )
+    elif alternatives:
+        print(
+            f"Continuing with {selected.label}; no approved source was "
+            "materially faster.",
+            file=sys.stderr,
+        )
+
+    measured = {probe.url: probe for probe in alternatives}
+    if primary is not None:
+        measured[primary.url] = primary
+    ordered = [selected]
+    ordered.extend(
+        probe
+        for probe in sorted(
+            measured.values(),
+            key=lambda candidate: candidate.rate,
+            reverse=True,
+        )
+        if probe.url != selected.url
+    )
+    measured_urls = set(measured)
+    ordered.extend(
+        _ArchiveProbe(label, url, b"", 1.0)
+        for label, url in sources
+        if url not in measured_urls
+    )
+
+    digest = hashlib.sha256()
+    offset = 0
+    try:
+        with destination.open("xb") as output:
+            output.write(selected.data)
+            digest.update(selected.data)
+            offset = len(selected.data)
+            if offset > expected_size:
+                raise RuntimeInstallError("the MSYS2 probe exceeded the pinned size")
+
+            last_error: RuntimeInstallError | None = None
+            for candidate in ordered:
+                progress = _DownloadProgress(candidate.url)
+                progress.update(offset, expected_size)
+
+                def write_chunk(chunk: bytes) -> None:
+                    nonlocal offset
+                    if offset + len(chunk) > expected_size:
+                        raise RuntimeInstallError(
+                            "the MSYS2 download exceeded its pinned size"
+                        )
+                    output.write(chunk)
+                    digest.update(chunk)
+                    offset += len(chunk)
+                    progress.update(offset, expected_size)
+
+                try:
+                    resume_source(
+                        candidate.label,
+                        candidate.url,
+                        offset,
+                        expected_size,
+                        write_chunk,
+                    )
+                except RuntimeInstallError as exc:
+                    last_error = exc
+                    progress.abort()
+                    print(
+                        f"{candidate.label} transfer failed ({exc}); "
+                        "resuming from another approved source…",
+                        file=sys.stderr,
+                    )
+                    continue
+                if offset != expected_size:
+                    last_error = RuntimeInstallError(
+                        "the MSYS2 source ended before the pinned size"
+                    )
+                    progress.abort()
+                    print(
+                        f"{candidate.label} transfer ended early; resuming "
+                        "from another approved source…",
+                        file=sys.stderr,
+                    )
+                    continue
+                progress.update(offset, expected_size, final=True)
+                break
+            else:
+                raise RuntimeInstallError(
+                    "every approved MSYS2 source failed during transfer"
+                ) from last_error
+
+        if digest.hexdigest().lower() != sha256.lower():
+            raise RuntimeInstallError(
+                "the downloaded MSYS2 archive failed SHA-256 verification"
+            )
+    except (RuntimeInstallError, OSError) as exc:
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            raise RuntimeInstallError(
+                "could not remove an incomplete MSYS2 download"
+            ) from cleanup_error
+        if isinstance(exc, RuntimeInstallError):
+            raise
+        raise RuntimeInstallError("could not write the pinned MSYS2 runtime") from exc
+    return selected.label
+
+
+def _download_from_sources_sequentially(
+    destination: Path,
+    sha256: str,
+    *,
+    sources: Sequence[tuple[str, str]],
+    downloader: Downloader,
+) -> str:
+    """Compatibility fallback when range selection is unavailable."""
     last_error: RuntimeInstallError | None = None
     for index, (label, url) in enumerate(sources, start=1):
-        print(f"Downloading from {label} ({index}/{len(sources)})…")
+        print(
+            f"Downloading from {label} ({index}/{len(sources)})…",
+            flush=True,
+        )
         try:
             downloader(url, destination, sha256)
         except RuntimeInstallError as exc:
@@ -392,6 +774,43 @@ def download_from_sources(
     raise RuntimeInstallError(
         "could not download the pinned MSYS2 runtime from any approved source"
     ) from last_error
+
+
+def download_from_sources(
+    destination: Path,
+    sha256: str,
+    *,
+    sources: Sequence[tuple[str, str]] = MSYS2_ARCHIVE_SOURCES,
+    downloader: Downloader | None = None,
+) -> str:
+    """Use adaptive range selection, retaining a full-download fallback."""
+    if downloader is not None:
+        return _download_from_sources_sequentially(
+            destination,
+            sha256,
+            sources=sources,
+            downloader=downloader,
+        )
+    try:
+        return download_adaptive(destination, sha256, sources=sources)
+    except RuntimeInstallError as exc:
+        print(
+            f"Adaptive MSYS2 download failed ({exc}); retrying ordinary "
+            "approved-source downloads…",
+            file=sys.stderr,
+        )
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            raise RuntimeInstallError(
+                "could not remove an incomplete MSYS2 download"
+            ) from cleanup_error
+        return _download_from_sources_sequentially(
+            destination,
+            sha256,
+            sources=sources,
+            downloader=download_verified,
+        )
 
 
 def _run_checked(
@@ -471,7 +890,7 @@ def install_managed_runtime(
     *,
     version: str,
     environ: Mapping[str, str],
-    downloader: Downloader = download_verified,
+    downloader: Downloader | None = None,
     runner: Runner = subprocess.run,
     probe: Probe = _probe,
     lock_factory: Callable[[Path], object] = install_lock,

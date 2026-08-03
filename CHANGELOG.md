@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev6] - 2026-08-03
+
+### Changed
+
+- Sample the preferred managed-MSYS2 archive source and, when its projected
+  remaining time exceeds one minute, concurrently compare the other approved
+  transports. Switch only for a material measured speedup; if all are slow,
+  continue the best available download instead of failing.
+- Reuse sampled bytes, preserve the exact partial offset across approved-source
+  transfer failures, and make Windows-preview CI check Range-resume capability.
+
+### Security
+
+- Require exact HTTPS `206` and `Content-Range` responses for adaptive transfer,
+  retain the pinned final size and SHA-256 checks, and fall back to ordinary
+  verified full downloads when Range resume is unavailable.
+
 ## [0.4.0.dev5] - 2026-08-03
 
 ### Added
@@ -1821,7 +1838,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...HEAD
+[0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
 [0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3

@@ -179,5 +179,5 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Check the exact pinned archive on every approved HTTPS source
+      - name: Check HTTPS range resume on every approved archive source
         run: python tools/check_msys2_mirrors.py

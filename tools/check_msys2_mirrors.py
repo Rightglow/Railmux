@@ -20,25 +20,35 @@ from railmux.windows_msys2 import (  # noqa: E402
 
 def check_source(source: tuple[str, str]) -> str:
     label, url = source
+    offset = 1024 * 1024
     request = urllib.request.Request(
         url,
-        method="HEAD",
-        headers={"User-Agent": "Railmux-MSYS2-mirror-health/1"},
+        headers={
+            "Accept-Encoding": "identity",
+            "Range": f"bytes={offset}-{offset}",
+            "User-Agent": "Railmux-MSYS2-mirror-health/1",
+        },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         status = getattr(response, "status", 200)
-        if status != 200:
+        if status != 206:
             raise RuntimeError(f"HTTP {status}")
-        raw_length = response.headers.get("Content-Length")
-        if raw_length is None or int(raw_length) != MSYS2_ARCHIVE_SIZE:
+        expected_range = f"bytes {offset}-{offset}/{MSYS2_ARCHIVE_SIZE}"
+        actual_range = response.headers.get("Content-Range")
+        if actual_range != expected_range:
             raise RuntimeError(
-                f"unexpected Content-Length {raw_length!r}; "
-                f"expected {MSYS2_ARCHIVE_SIZE}"
+                f"unexpected Content-Range {actual_range!r}; "
+                f"expected {expected_range!r}"
             )
+        raw_length = response.headers.get("Content-Length")
+        if raw_length is not None and int(raw_length) != 1:
+            raise RuntimeError(f"unexpected Content-Length {raw_length!r}")
         final_url = response.geturl()
         if not final_url.startswith("https://"):
             raise RuntimeError(f"redirected outside HTTPS: {final_url}")
-    return f"{label}: OK ({MSYS2_ARCHIVE_SIZE} bytes)"
+        if response.read(2) == b"":
+            raise RuntimeError("range response was empty")
+    return f"{label}: OK (HTTPS range resume supported)"
 
 
 def main() -> int:

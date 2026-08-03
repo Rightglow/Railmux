@@ -191,9 +191,9 @@ is labelled supported.
    Python without importing POSIX-only Railmux modules before handoff.
 2. Offer an explicit, cancellable managed-MSYS2 installation with approved
    pinned sources, one fixed integrity digest across safe source fallback,
-   visible bounded download progress, private ownership, and no system-wide
-   PATH or shell-profile edits. Never silently adopt or modify a user-owned
-   MSYS2.
+   bounded speed probes and exact-offset resume, visible bounded download
+   progress, private ownership, and no system-wide PATH or shell-profile edits.
+   Never silently adopt or modify a user-owned MSYS2.
 3. Keep one versioned runtime authority and make interrupted installation or
    upgrade transactional and recoverable. Never overwrite user-owned MSYS2
    files.
