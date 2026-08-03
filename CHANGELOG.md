@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3.dev3] - 2026-08-03
+
 ### Fixed
 
 - Keep the selected project and Sessions list visible while a new Codex
@@ -1787,7 +1789,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev3...HEAD
+[0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2
 [0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1
 [0.3.2]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2
