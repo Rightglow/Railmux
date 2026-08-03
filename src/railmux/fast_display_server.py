@@ -45,6 +45,7 @@ from railmux import (
     __version__,
     local_open,
     restart_state,
+    tmux_ctl,
     tmux_health,
     tmux_server,
 )
@@ -403,6 +404,7 @@ class _PaneGeometry:
     transcript_source: str | None = None
     transcript_backed: bool = False
     claude_history_policy: str = "ask"
+    history_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -421,6 +423,24 @@ _INFERRED_TRANSCRIPT_LIMIT = 8
 _TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024
 _SESSION_BINDING_OPTION = "@railmux_binding_v1"
 _SWAP_OPTIONS = ("@railmux_swap_primary", "@railmux_swap_secondary")
+_HISTORY_GENERATION_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _history_generation(marker: str) -> int:
+    """Map one validated provider UUID to a bounded opaque wire epoch."""
+    if not _HISTORY_GENERATION_RE.fullmatch(marker):
+        return 0
+    return int.from_bytes(
+        hashlib.blake2b(
+            marker.lower().encode("ascii"),
+            digest_size=8,
+            person=b"railmux-history",
+        ).digest(),
+        "big",
+    )
 
 
 _ANSI_FG = {
@@ -834,6 +854,7 @@ def _list_agent_panes(
                 "#{history_size} #{alternate_on} #{mouse_any_flag} "
                 f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}} "
                 f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}} "
+                f"#{{{tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION}}} "
                 f"#{{{TOOL_PANE_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
@@ -849,7 +870,7 @@ def _list_agent_panes(
     for raw_row in output.splitlines():
         fields = raw_row.split(" ")
         if (
-            len(fields) != 16
+            len(fields) != 17
             or fields[0] != session_id
             or fields[2] not in ("0", "1")
             or fields[3] not in ("0", "1")
@@ -880,7 +901,7 @@ def _list_agent_panes(
         ):
             return ()
         seen.add(pane_id)
-        if is_tool_pane_marker(fields[15], outer_session_id=session_id):
+        if is_tool_pane_marker(fields[16], outer_session_id=session_id):
             continue
         history_server = None
         history_pane_id = None
@@ -931,6 +952,7 @@ def _list_agent_panes(
                     transcript_source=transcript_marker,
                     transcript_backed=transcript_backed,
                     claude_history_policy=claude_history_policy,
+                    history_generation=_history_generation(fields[15]),
                 ),
             )
         )
@@ -1376,6 +1398,7 @@ def _capture_pane_history(
                 else pane.history_size + pane.height > len(lines)
             )
         ),
+        generation=pane.history_generation,
     )
 
 
@@ -1916,7 +1939,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v14 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v15 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE

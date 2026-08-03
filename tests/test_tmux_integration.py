@@ -157,6 +157,47 @@ def _require_tmux(minimum: tuple[int, int], feature: str) -> None:
         )
 
 
+def test_exact_clear_history_preserves_live_pane(isolated_tmux):
+    session_name, pane_id, _socket_path = isolated_tmux
+    subprocess.run(
+        [
+            "tmux", "respawn-pane", "-k", "-t", pane_id,
+            "i=0; while [ $i -lt 160 ]; do echo rewind-stale-$i; "
+            "i=$((i+1)); done; sleep 60",
+        ],
+        check=True,
+    )
+    assert _wait_until(
+        lambda: int(subprocess.check_output(
+            [
+                "tmux", "display-message", "-p", "-t", session_name,
+                "#{history_size}",
+            ],
+            text=True,
+        ).strip()) > 100
+    )
+    identity = tmux_ctl.pane_identity(pane_id)
+    assert identity is not None
+
+    assert tmux_ctl.reset_pane_history(identity)
+
+    current = tmux_ctl.pane_identity(pane_id)
+    assert current is not None
+    assert current.pane_pid == identity.pane_pid
+    assert current.session_id == identity.session_id
+    assert subprocess.check_output(
+        [
+            "tmux", "display-message", "-p", "-t", pane_id,
+            "#{history_size}",
+        ],
+        text=True,
+    ).strip() == "0"
+    assert "rewind-stale" not in subprocess.check_output(
+        ["tmux", "capture-pane", "-p", "-t", pane_id],
+        text=True,
+    )
+
+
 def test_real_railmux_inside_tmux_reaches_first_interactive_frame(tmp_path):
     """Boot the actual TUI on every supported tmux, including the 2.7 floor."""
     socket_root = Path(tempfile.mkdtemp(prefix="rx-start-", dir="/tmp"))

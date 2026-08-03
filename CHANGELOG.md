@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reset a live Codex pane's visible terminal cache and tmux scrollback when its
+  canonical rollout advances to a rewind child, so the abandoned turn and red
+  interruption notice do not remain above the replacement conversation; SSH
+  display protocol v15 carries the corresponding pane generation so its local
+  history cache drops the same stale suffix.
+
 ## [0.3.3.dev3] - 2026-08-03
 
 ### Fixed

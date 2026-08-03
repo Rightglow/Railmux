@@ -1074,7 +1074,7 @@ class TerminalSurface:
         self,
         requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v14."""
+        """Mirror only input-affecting modes explicitly carried by protocol v15."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -2013,7 +2013,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v14 helper holds the mutex only while registering its exact tmux
+    # A current v15 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)

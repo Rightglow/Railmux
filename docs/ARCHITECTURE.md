@@ -99,7 +99,10 @@ immediate. For a stable pane, geometry, and history source, uniquely
 aligned snapshots are merged into one newest-bounded timeline; an unaligned
 full-screen redraw may replace only the mutable live viewport. Native Claude,
 local transcript, and undecided history are separate sources and are never
-merged. A rejected deep response does not mutate the reusable cache. Deep
+merged. Protocol v15 also carries the opaque pane-local Codex history
+generation; a changed non-content generation replaces that pane's cached
+timeline instead of merging across a confirmed rewind. A rejected deep
+response does not mutate the reusable cache. Deep
 history begins with 2000 physical lines and requests cumulative 2000-line
 expansions only as the viewport approaches the oldest loaded content.
 Expansion stops at the local
@@ -226,7 +229,7 @@ feedback only: it grants no protocol authority and is replaced by the first
 validated display keyframe. Authentication, compatibility, installation, and
 attach prompts remain cooked-mode interactions.
 
-Protocol v14 reports a second bounded status after the attach boundary and
+Protocol v15 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45
@@ -544,6 +547,18 @@ rendered. Missing parents at a tail boundary stop traversal safely. Neither
 projection rewrites provider data, and abandoned suffixes are not part of the
 default history view.
 
+A live Codex rewind also advances the canonical rollout while retaining the
+same provider pane. Railmux baselines the first indexed rollout for each live
+entry and treats only a direct canonical child as a rewind transition. Where
+procfs is available, that child rollout must be open in the exact pane process
+tree; a negative probe waits, while platforms without procfs use the explicit
+provider parent link. After revalidating the real pane identity across either
+its detached home or swap display location, Railmux resets tmux's visible
+terminal cache and scrollback, then sends the unchanged foreground process
+group `SIGWINCH` so the provider redraws at the same geometry and reasserts its
+terminal modes. This sends no keyboard input, never resizes the pane, never
+touches provider history, and never mutates a legacy-server session.
+
 While that first generation is pending, Codex Projects and Sessions display an
 explicit `Indexing…` state with indeterminate section counts. Generation zero
 must never be rendered as an authoritative empty list, filtered no-match, or
@@ -782,7 +797,8 @@ routing with focus, selection, or history.
   private controller key to enter the same viewer. The swap transport first
   returns the real pane home, and normal viewer exit signals the controller to
   restore that exact live agent. Every path uses the Target pane remembered
-  from tmux focus.
+  from tmux focus. A confirmed live Codex rewind discards the same pane's stale
+  pre-rewind terminal cache before its child rollout continues drawing.
 - Cycling back to single removes only the outer secondary pane, remembers its
   exact instance-local tmux target, and never kills the detached agent session.
 - The same background tmux session should not be attached in both slots.
@@ -986,7 +1002,7 @@ shell-quoted command instead. Clean clicks in an unfocused agent continue to
 mean focus, and drags continue to mean selection, so semantic recognition
 cannot replace either established gesture.
 
-Protocol v14 separates path validation from the requested destination. The
+Protocol v15 separates path validation from the requested destination. The
 first response includes the remote workspace's Ask/Inside/Separate policy; an
 Inside or Separate choice is returned in a bounded typed request and the
 server revalidates pane identity, current working directory, path type, and

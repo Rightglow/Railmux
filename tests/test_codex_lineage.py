@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
+from railmux import tmux_ctl
 from railmux.favorites import Favorites
-from railmux.models import Project
+from railmux.models import Project, SessionMeta
 from railmux.ui.app import App, _Running
 
 
@@ -62,3 +64,94 @@ def test_existing_root_favorite_marks_visible_leaf(
     app._favorites.set_many({"root"}, True)
 
     assert app._favorite_ids_for_view() == {"root", "middle", "leaf"}
+
+
+def test_live_rewind_clears_only_exact_new_rollout_scrollback(
+    monkeypatch, tmp_path,
+) -> None:
+    root_id = "019fc605-5188-7212-bc48-ea023fe8b73c"
+    leaf_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    project = Project(tmp_path, "-project", Path(), 1, 0.0)
+    running = _Running(
+        key=root_id,
+        tmux_name="cx-live",
+        label="project/conversation",
+        project=project,
+        session_type="codex",
+        codex_canonical_session_id=root_id,
+    )
+    meta = SessionMeta(
+        project=project,
+        session_id=leaf_id,
+        jsonl_path=tmp_path / (
+            f"rollout-2026-08-03T13-13-03-{leaf_id}.jsonl"),
+        title="current",
+        message_count=2,
+        token_total=0,
+        last_mtime=2.0,
+        session_type="codex",
+        forked_from_id=root_id,
+    )
+    identity = tmux_ctl.PaneIdentity(
+        "%9", 123, "railmux", "$4", "@5", False, 80, 24)
+    app = App.__new__(App)
+    app._codex_lineage_ids = MagicMock(return_value={root_id, leaf_id})
+    app._codex_rollout_ids = MagicMock(return_value={root_id})
+    transport = MagicMock()
+    transport.displayed_real_pane.return_value = "%9"
+    app._display_transport = MagicMock(return_value=transport)
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: identity)
+    cleared = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "reset_pane_history", cleared)
+    stamped = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "set_pane_user_option", stamped)
+    probes: dict[str, set[str] | None] = {}
+
+    # An indexed child is not enough: on procfs the exact live writer must
+    # first expose that rollout through its open file descriptors.
+    app._sync_codex_rewind_scrollback(running, meta, None, probes)
+    cleared.assert_not_called()
+    assert running.codex_canonical_session_id == root_id
+
+    probes.clear()
+    app._codex_rollout_ids.return_value = {root_id, leaf_id}
+    app._sync_codex_rewind_scrollback(running, meta, None, probes)
+
+    cleared.assert_called_once_with(identity)
+    assert running.codex_canonical_session_id == leaf_id
+    stamped.assert_called_once_with(
+        "%9", tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION, leaf_id)
+
+
+def test_first_codex_generation_only_establishes_scrollback_baseline(
+    monkeypatch, tmp_path,
+) -> None:
+    session_id = "019fc605-5188-7212-bc48-ea023fe8b73c"
+    project = Project(tmp_path, "-project", Path(), 1, 0.0)
+    running = _Running(
+        key=session_id,
+        tmux_name="cx-live",
+        label="project/conversation",
+        project=project,
+        session_type="codex",
+    )
+    meta = SessionMeta(
+        project=project,
+        session_id=session_id,
+        jsonl_path=tmp_path / (
+            f"rollout-2026-08-03T13-09-08-{session_id}.jsonl"),
+        title="root",
+        message_count=1,
+        token_total=0,
+        last_mtime=1.0,
+        session_type="codex",
+    )
+    app = App.__new__(App)
+    app._stamp_codex_history_generation = MagicMock()
+    cleared = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "reset_pane_history", cleared)
+
+    app._sync_codex_rewind_scrollback(running, meta, None, {})
+
+    assert running.codex_canonical_session_id == session_id
+    cleared.assert_not_called()

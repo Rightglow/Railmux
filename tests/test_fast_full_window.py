@@ -183,6 +183,7 @@ def test_v10_unified_decoder_round_trips_history_capabilities():
         more_available=True,
         transcript_available=True,
         history_choice_required=True,
+        generation=42,
     )
     local_snapshot = replace(
         snapshot,
@@ -3717,6 +3718,96 @@ def test_local_history_cache_survives_remote_scrollback_shrinking():
     assert len(stored) == 1020
 
 
+def test_local_history_cache_discards_previous_rewind_generation():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    old = tuple(f"abandoned-{index}".encode() for index in range(1000))
+    view.accept_prefetch(HistoryBatch(
+        first_id,
+        (HistorySnapshot(
+            first_id, "%8", 30, 0, 30, 3, old, generation=11),),
+    ))
+
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    current = (b"retained", b"replacement", b"live")
+    view.accept_prefetch(HistoryBatch(
+        second_id,
+        (HistorySnapshot(
+            second_id, "%8", 30, 0, 30, 3, current, generation=12),),
+    ))
+
+    assert view.content_cache["%8"].lines == current
+
+
+def test_rewind_generation_change_closes_frozen_history_overlay():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    old = tuple(f"abandoned-{index}".encode() for index in range(100))
+    view.accept_prefetch(HistoryBatch(
+        first_id,
+        (HistorySnapshot(
+            first_id, "%8", 30, 0, 30, 3, old, generation=11),),
+    ))
+    assert view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True)).render_history
+
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    current = (b"retained", b"replacement", b"live")
+    action = view.accept_prefetch(HistoryBatch(
+        second_id,
+        (HistorySnapshot(
+            second_id, "%8", 30, 0, 30, 3, current, generation=12),),
+    ))
+
+    assert action.restore_live is True
+    assert view.active is False
+    assert view.content_cache["%8"].lines == current
+
+
+def test_rewind_generation_change_rejects_stale_deep_response():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    old = tuple(f"abandoned-{index}".encode() for index in range(100))
+    view.accept_prefetch(HistoryBatch(
+        first_id,
+        (HistorySnapshot(
+            first_id, "%8", 30, 0, 30, 3, old, generation=11),),
+    ))
+    deep = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+    deep_id = decode_history_request(
+        InputFrameDecoder().feed(deep.protocol_frame)[0].data
+    )[0]
+
+    # A newer prefetch observes the rewind before the old deep response arrives.
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    current = (b"retained", b"replacement", b"live")
+    view.accept_prefetch(HistoryBatch(
+        second_id,
+        (HistorySnapshot(
+            second_id, "%8", 30, 0, 30, 3, current, generation=12),),
+    ))
+
+    action = view.accept(HistorySnapshot(
+        deep_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        (b"older", *old),
+        generation=11,
+    ))
+
+    assert action == HistoryAction()
+    assert view.active is False
+    assert view.content_cache["%8"].lines == current
+
+
 def test_rolling_claude_transcript_retains_older_cached_rows():
     view = LocalHistoryView(history_limit=2000)
     first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
@@ -6400,8 +6491,8 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0   \n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1   \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1    \n"
         ),
     )
 
@@ -6415,6 +6506,28 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     assert pane == fast_display_server._PaneGeometry(
         "%8", 31, 0, 49, 20, mouse_forwardable=True
     )
+
+
+def test_server_projects_bounded_codex_history_generation(monkeypatch):
+    marker = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    monkeypatch.setattr(
+        fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker} \n"
+        ),
+    )
+
+    panes = fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask")
+
+    assert len(panes) == 1
+    assert panes[0].history_generation == fast_display_server._history_generation(
+        marker)
+    assert panes[0].history_generation != 0
 
 
 def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
@@ -6433,8 +6546,8 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0   \n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1    {marker}\n"
         ),
     )
 
@@ -6448,18 +6561,18 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
     ("rows", "expected"),
     [
         (
-            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0   \n"
-            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0   \n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0    \n"
+            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0    \n",
             (),
         ),
         (
-            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0   \n"
-            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0   \n",
+            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0    \n"
+            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0    \n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0   \n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0   \n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0    \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0    \n",
             (),
         ),
     ],
@@ -6483,9 +6596,9 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0   \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
             "$4 @1 0 0 %8 108 31 0 49 20 0 0 1 "
-            '{"source":1}  \n'
+            '{"source":1}   \n'
         ),
     )
     monkeypatch.setattr(

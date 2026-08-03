@@ -54,6 +54,43 @@ def test_pane_process_alive_rejects_dead_remain_on_exit_pane():
         assert tmux_ctl.pane_process_alive("%7") is True
 
 
+def test_rollout_uuid_from_path_requires_canonical_filename():
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+
+    assert tmux_ctl.rollout_uuid_from_path(Path(
+        f"/sessions/rollout-2026-08-03T13-13-03-{session_id}.jsonl"
+    )) == session_id
+    assert tmux_ctl.rollout_uuid_from_path(
+        Path(f"/sessions/{session_id}.jsonl.bak")) is None
+
+
+def test_reset_pane_history_revalidates_and_redraws_exact_identity():
+    identity = tmux_ctl.PaneIdentity(
+        "%7", 123, "agent", "$4", "@5", False, 80, 24)
+    moved = tmux_ctl.PaneIdentity(
+        "%7", 999, "other", "$8", "@9", False, 80, 24)
+
+    with patch.object(tmux_ctl, "pane_identity", return_value=moved), \
+            patch.object(tmux_ctl.subprocess, "check_call") as call:
+        assert tmux_ctl.reset_pane_history(identity) is False
+    call.assert_not_called()
+
+    with patch.object(tmux_ctl, "pane_identity", return_value=identity), \
+            patch.object(tmux_ctl.subprocess, "check_call") as call, \
+            patch.object(tmux_ctl.os, "getpgid", return_value=321), \
+            patch.object(tmux_ctl.os, "killpg") as killpg:
+        assert tmux_ctl.reset_pane_history(identity) is True
+    call.assert_called_once_with(
+        [
+            "tmux", "send-keys", "-R", "-t", "%7",
+            ";", "clear-history", "-t", "%7",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    killpg.assert_called_once_with(321, tmux_ctl.signal.SIGWINCH)
+
+
 def _mock_check_output(stdout: str):
     return patch("subprocess.check_output", return_value=stdout.encode())
 

@@ -207,7 +207,11 @@ class LocalHistoryView:
         restore_live = False
         for pane_id, viewport in tuple(self.viewports.items()):
             route = routes.get(pane_id)
-            if route is None or not self._same_geometry(viewport.snapshot, route):
+            if (
+                route is None
+                or not self._same_geometry(viewport.snapshot, route)
+                or not self._history_source_matches(viewport.snapshot, route)
+            ):
                 self.cancel_pane(pane_id)
                 restore_live = True
         return HistoryAction(restore_live=restore_live)
@@ -217,10 +221,11 @@ class LocalHistoryView:
         left: HistorySnapshot,
         right: HistorySnapshot,
     ) -> bool:
-        """Do not combine native, transcript, and undecided history."""
+        """Do not combine different providers or terminal generations."""
         return (
             left.transcript_backed == right.transcript_backed
             and left.history_choice_required == right.history_choice_required
+            and left.generation == right.generation
         )
 
     @staticmethod
@@ -813,7 +818,11 @@ class LocalHistoryView:
             ),
             None,
         )
-        if route is None or not self._same_geometry(route, snapshot):
+        if (
+            route is None
+            or not self._same_geometry(route, snapshot)
+            or not self._history_source_matches(route, snapshot)
+        ):
             return HistoryAction()
         viewport = self.viewports.get(pending.pane_id)
         if viewport is None:
