@@ -241,7 +241,8 @@ def optimize_pacman_mirror(
         updated = _promote_server(text, selected.server)
         temporary = mirrorlist.with_suffix(".railmux.tmp")
         try:
-            temporary.write_text(updated, encoding="utf-8", newline="\n")
+            with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+                stream.write(updated)
             os.replace(temporary, mirrorlist)
         except OSError as exc:
             try:
