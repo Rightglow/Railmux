@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import re
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,6 +34,7 @@ from railmux.windows_pacman import PacmanMirrorDecision
 
 
 VERSION = "0.4.0.dev9"
+_ANSI_STYLE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class TtyBuffer(io.StringIO):
@@ -117,7 +119,7 @@ def test_download_reports_bytes_and_percentage_on_a_terminal(tmp_path, monkeypat
         hashlib.sha256(payload).hexdigest(),
     )
 
-    rendered = progress.getvalue()
+    rendered = _ANSI_STYLE_RE.sub("", progress.getvalue())
     assert "\r  example.invalid: 1.0 MiB / 2.0 MiB (50.0%)" in rendered
     assert "\r  example.invalid: 2.0 MiB / 2.0 MiB (100.0%)\n" in rendered
     assert destination.read_bytes() == payload
