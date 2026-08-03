@@ -85,7 +85,7 @@ class SharedTmuxBindingManager:
             info = self._state_path.lstat()
             if (not stat.S_ISREG(info.st_mode)
                     or info.st_uid != os.getuid()
-                    or info.st_mode & 0o077
+                    or not restart_state.private_mode_is_safe(info.st_mode)
                     or info.st_size > _MAX_STATE_BYTES):
                 return None
             raw = json.loads(self._state_path.read_text(encoding="utf-8"))

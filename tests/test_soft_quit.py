@@ -2533,10 +2533,15 @@ def test_teardown_clears_clean_exit_intent_when_outer_kill_fails(monkeypatch):
     app._running = {}
     record = MagicMock(return_value=True)
     clear = MagicMock()
+    clear_windows_exit = MagicMock()
     monkeypatch.setattr(
         "railmux.ui.app.tmux_health.record_clean_exit", record)
     monkeypatch.setattr(
         "railmux.ui.app.tmux_health.clear_clean_exit", clear)
+    monkeypatch.setattr(
+        "railmux.ui.app.windows_tmux_lifecycle.clear_empty_server_exit",
+        clear_windows_exit,
+    )
 
     with patch("railmux.ui.app.tmux_ctl") as tmux:
         tmux.current_session_name.return_value = "railmux"
@@ -2545,6 +2550,7 @@ def test_teardown_clears_clean_exit_intent_when_outer_kill_fails(monkeypatch):
         app._teardown_tmux()
 
     clear.assert_called_once_with()
+    clear_windows_exit.assert_called_once_with()
 
 def test_teardown_soft_quit_skips_session_kill():
     """With _soft_quit_flag set, cc-* and outer tmux sessions are left alive."""

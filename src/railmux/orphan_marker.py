@@ -231,7 +231,7 @@ def claim_owner(
         parent = lock_path.parent.stat()
         if (not stat.S_ISDIR(parent.st_mode)
                 or parent.st_uid != os.getuid()
-                or parent.st_mode & 0o077):
+                or not restart_state.private_mode_is_safe(parent.st_mode)):
             return None
         flags = os.O_CREAT | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
@@ -243,7 +243,7 @@ def claim_owner(
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode)
                 or info.st_uid != os.getuid()
-                or info.st_mode & 0o077):
+                or not restart_state.private_mode_is_safe(info.st_mode)):
             return None
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

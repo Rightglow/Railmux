@@ -25,7 +25,7 @@ from railmux.models import (
     Project,
     SessionMeta,
 )
-from railmux.provider_paths import provider_path
+from railmux.provider_paths import private_mode_is_safe, provider_path
 from railmux.renames import Renames
 
 # Codex has no reliable provider-neutral signal that distinguishes a long
@@ -461,7 +461,7 @@ class CodexIndex:
             if (
                 not stat.S_ISREG(info.st_mode)
                 or info.st_uid != os.getuid()
-                or info.st_mode & 0o077
+                or not private_mode_is_safe(info.st_mode)
                 or info.st_size > _PERSISTENT_CACHE_MAX_BYTES
             ):
                 return

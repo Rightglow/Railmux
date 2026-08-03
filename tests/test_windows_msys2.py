@@ -33,7 +33,7 @@ from railmux.windows_msys2 import (
 from railmux.windows_pacman import PacmanMirrorDecision
 
 
-VERSION = "0.4.0.dev9"
+VERSION = "0.4.0.dev10"
 _ANSI_STYLE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -501,8 +501,14 @@ def test_handoff_preserves_argv_and_uses_child_only_msys_environment(tmp_path):
     assert child["LC_ALL"] == "C.UTF-8"
     assert child["PYTHONUTF8"] == "1"
     assert child["COLORTERM"] == "truecolor"
+    assert "RAILMUX_MSYS2_RUNTIME_ID" not in child
     assert "TMUX" not in child
     assert parent["PATH"] == r"C:\Windows\System32"
+
+    managed = make_runtime(tmp_path / "managed-msys", managed=True)
+    assert managed.environment(parent)["RAILMUX_MSYS2_RUNTIME_ID"] == (
+        windows_msys2.MSYS2_RUNTIME_ID
+    )
 
 
 def test_managed_runtime_requires_utf8_marker_and_exact_package_version(tmp_path):
@@ -510,7 +516,7 @@ def test_managed_runtime_requires_utf8_marker_and_exact_package_version(tmp_path
     root = managed_root(environ, version=VERSION)
     assert root is not None
     runtime = make_runtime(root, managed=True)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev9\n"))
+    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev10\n"))
 
     assert probe_runtime(runtime, version=VERSION, environ=environ, probe=probe)
     assert not probe_runtime(runtime, version="0.4.0.dev8", environ=environ, probe=probe)
@@ -521,7 +527,7 @@ def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
     probe = MagicMock(
         side_effect=[
             completed([], returncode=1),
-            completed([], stdout=b"railmux 0.4.0.dev9\n"),
+            completed([], stdout=b"railmux 0.4.0.dev10\n"),
         ]
     )
 
@@ -542,7 +548,7 @@ def test_each_preview_version_uses_a_separate_runtime_generation(tmp_path):
 def test_explicit_user_runtime_is_probed_but_never_requires_managed_marker(tmp_path):
     root = tmp_path / "用户-owned-msys"
     runtime = make_runtime(root, managed=False)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev9\n"))
+    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev10\n"))
     environ = {"RAILMUX_MSYS2_ROOT": str(root), "USERPROFILE": r"C:\Users\u"}
 
     found = find_runtime(version=VERSION, environ=environ, probe=probe)
@@ -622,7 +628,7 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         return completed(argv)
 
     def probe(argv, *, env, timeout):
-        return completed(argv, stdout=b"railmux 0.4.0.dev9\n")
+        return completed(argv, stdout=b"railmux 0.4.0.dev10\n")
 
     @contextmanager
     def unlocked(_base):

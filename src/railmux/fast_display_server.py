@@ -1493,7 +1493,7 @@ def _acquire_display_lock(
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
-            or info.st_mode & 0o077
+            or not restart_state.private_mode_is_safe(info.st_mode)
         ):
             raise OSError("unsafe display lock")
         deadline = time.monotonic() + max(0.0, timeout)
