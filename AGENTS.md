@@ -76,8 +76,9 @@ supported tmux-bearing runtime: prefer an existing WSL distribution and
 evaluate a managed MSYS2 runtime as the lighter fallback. Railmux itself and
 providers run inside that delegated runtime, so the POSIX UI remains the one
 behavioral authority. This branch may publish only PEP 440 development
-releases in the independent `0.5.0.devN` series; do not use that series for
-`main` builds. Develop Windows changes on focused branches based on
+releases in the `0.4.0.devN` series, continuing at `0.4.0.dev3` after the two
+archived ConPTY builds; do not use that series for `main` builds. Develop
+Windows changes on focused branches based on
 `windows-preview`, then merge them back into `windows-preview`; never merge
 that branch wholesale into `main`.
 
@@ -95,7 +96,7 @@ and merged deliberately instead of importing the preview branch's history.
 Before changing code or publishing, verify the current branch. Final
 `MAJOR.MINOR.PATCH` tags and POSIX/WSL `.devN` tags must point to commits
 reachable from `main`. Windows-wrapper preview tags must contain `.devN`, use
-the independent `0.5.0.devN` series, and point to commits reachable from
+`0.4.0.dev3` or later in the `0.4.0.devN` series, and point to commits reachable from
 `windows-preview` but not `main`. No commit reachable only from the archived
 ConPTY branch is release-eligible. Merge shared fixes from `main` before
 cutting the corresponding Windows preview build; never copy a Windows release

@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Freeze the abandoned ConPTY Windows preview at `v0.4.0.dev2`, move the active
-  Windows experiment to a clean delegated-runtime wrapper branch and independent
-  `0.5.0.devN` release lane, and reject archived ancestry during publication.
+  Windows experiment to a clean delegated-runtime wrapper branch beginning at
+  `0.4.0.dev3`, and reject archived ancestry during publication.
 
 ## [0.5.0.dev1] - Unreleased
 

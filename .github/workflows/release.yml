@@ -51,8 +51,9 @@ jobs:
               echo "POSIX/WSL development release from main"
             elif git rev-parse --verify -q origin/windows-preview >/dev/null &&
                  git merge-base --is-ancestor "$commit" origin/windows-preview; then
-              [[ "$tag" =~ ^0\.5\.0\.dev[0-9]+$ ]] || {
-                echo "::error::Windows-wrapper releases must use the 0.5.0.devN series"
+              [[ "$tag" =~ ^0\.4\.0\.dev([0-9]+)$ ]] &&
+                (( BASH_REMATCH[1] >= 3 )) || {
+                echo "::error::Windows-wrapper releases must use 0.4.0.dev3 or later"
                 exit 1
               }
               echo "Windows-wrapper development release from windows-preview"

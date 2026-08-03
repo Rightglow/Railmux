@@ -52,7 +52,9 @@ def test_release_tags_are_fenced_to_their_product_branches():
     assert "POSIX/WSL development release from main" in release
     assert "Windows-wrapper development release from windows-preview" in release
     assert "main development releases must use the 0.3.x.devN series" in release
-    assert "Windows-wrapper releases must use the 0.5.0.devN series" in release
+    assert "Windows-wrapper releases must use 0.4.0.dev3 or later" in release
+    assert r"^0\.4\.0\.dev([0-9]+)$" in release
+    assert "BASH_REMATCH[1] >= 3" in release
     assert "development releases must come from main or windows-preview" in release
     assert "final releases must come from main" in release
 
