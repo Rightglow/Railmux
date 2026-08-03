@@ -38,7 +38,9 @@ RAILMUX_RUN_TMUX_INTEGRATION=1 pytest -q tests/test_tmux_integration.py
 railmux
 ```
 
-The entry point is `railmux.cli:main`. Source lives under `src/railmux/`.
+The public entry point is `railmux.entrypoint:main`; it selects the active
+platform before importing the POSIX `railmux.cli:main`. Source lives under
+`src/railmux/`.
 
 ## Architecture and design notes
 

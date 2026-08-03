@@ -81,6 +81,11 @@ releases in the independent `0.5.0.devN` series; do not use that series for
 `windows-preview`, then merge them back into `windows-preview`; never merge
 that branch wholesale into `main`.
 
+On `windows-preview`, read `docs/WINDOWS_WRAPPER_PREVIEW.md` and
+`docs/windows-wrapper-parity.toml` before planning or reviewing a Windows
+change. Keep every stable support-matrix feature represented in the ledger,
+and replace `evidence = "not-run"` only with a named real-platform result.
+
 Shared POSIX/provider fixes belong in `main` first and flow one way into
 `windows-preview`. If a bug is discovered while testing Windows, separate the
 provider-neutral fix from the Windows adapter change and land only the former

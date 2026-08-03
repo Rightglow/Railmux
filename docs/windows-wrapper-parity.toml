@@ -1,0 +1,110 @@
+schema = 1
+architecture = "delegated-posix-runtime"
+baseline_branch = "main"
+conpty_archive = "archive/windows-conpty-deprecated@f1b8cb128bd78831d00d4cc7dfa02453f8bd9700"
+
+# Every stable SUPPORT_MATRIX feature ID must appear exactly once. Most
+# behavior is inherited because the real POSIX application runs unchanged.
+# A runtime bridge still needs integration and real-terminal evidence.
+[features]
+P01 = "delegated-posix"
+P02 = "delegated-posix"
+P03 = "delegated-posix"
+P04 = "delegated-posix"
+P05 = "delegated-posix"
+P06 = "delegated-posix"
+P07 = "delegated-posix"
+P08 = "delegated-posix"
+P09 = "delegated-posix"
+P10 = "delegated-posix"
+P11 = "delegated-posix"
+P12 = "delegated-posix"
+W01 = "delegated-posix"
+W02 = "delegated-posix"
+W03 = "delegated-posix"
+W04 = "delegated-posix"
+W05 = "delegated-posix"
+W06 = "delegated-posix"
+W07 = "delegated-posix"
+W08 = "delegated-posix"
+W09 = "delegated-posix"
+W10 = "delegated-posix"
+W11 = "delegated-posix"
+W12 = "runtime-bridge"
+W13 = "runtime-bridge"
+W14 = "delegated-posix"
+S01 = "delegated-posix"
+S02 = "delegated-posix"
+S03 = "runtime-bridge"
+S04 = "delegated-posix"
+S05 = "delegated-posix"
+S06 = "delegated-posix"
+S07 = "delegated-posix"
+S08 = "delegated-posix"
+S09 = "delegated-posix"
+S10 = "delegated-posix"
+S11 = "delegated-posix"
+S12 = "delegated-posix"
+S13 = "runtime-bridge"
+S14 = "delegated-posix"
+S15 = "runtime-bridge"
+S16 = "runtime-bridge"
+S17 = "delegated-posix"
+S18 = "not-applicable"
+S19 = "delegated-posix"
+S20 = "runtime-bridge"
+
+[limitations]
+managed_msys2 = "Not implemented; no fallback runtime is installed yet."
+wsl_provisioning = "The selected WSL distribution must already contain Railmux."
+native_history = "Native Windows provider histories are not migrated into the delegated runtime."
+runtime_bridges = "Config, doctor, update, clipboard, browser, and separate-terminal integration require per-runtime validation."
+
+[[scenarios]]
+id = "WW-PACKAGE-DISPATCH"
+features = ["W12", "W13"]
+automation = ["tests/test_windows_bootstrap.py"]
+manual = "Install with Windows Python 3.10+ under a CP936 locale; verify version, actionable failure, and WSL handoff without a traceback."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-PREVIEW-OPEN"
+features = ["P04", "P05", "P06"]
+automation = []
+manual = "Preview and open authenticated Codex and Claude sessions in Windows Terminal through the delegated runtime."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-RESIZE-REFLOW"
+features = ["W02", "W04", "W05"]
+automation = []
+manual = "Resize wide, narrow, tall, and short while each provider renders; verify native tmux reflow and restored layout."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-MOUSE-CHROME"
+features = ["P06", "W05", "W06"]
+automation = []
+manual = "Verify wheel, sidebar scrolling, double-click, right-click menus, responsive dialogs, Mode, Layout, compact pages, and status actions."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-LIFECYCLE"
+features = ["W09", "W10", "W11", "W14", "S19"]
+automation = []
+manual = "Close and reopen Windows Terminal, detach, soft restart, resize, and interrupt; providers and tmux sessions persist and the terminal recovers."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-SSH-POSIX"
+features = ["S01", "S04", "S06", "S08", "S09", "S11", "S12", "S17"]
+automation = []
+manual = "Run railmux ssh from Windows to Linux and macOS/Unix targets; verify restore, reconnect, history, mouse, paste, resize, and Ctrl-]."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-RUNTIME-BRIDGES"
+features = ["W12", "W13", "S03", "S13", "S15", "S16", "S20"]
+automation = []
+manual = "Validate config, doctor, update, clipboard, browser, separate terminal, and remote config independently in WSL and managed MSYS2."
+evidence = "not-run"

@@ -50,7 +50,7 @@ dev = [
 ]
 
 [project.scripts]
-railmux = "railmux.cli:main"
+railmux = "railmux.entrypoint:main"
 
 [project.urls]
 Homepage = "https://rightglow.github.io/Railmux/"

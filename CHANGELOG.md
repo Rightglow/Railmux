@@ -13,6 +13,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Windows experiment to a clean delegated-runtime wrapper branch and independent
   `0.5.0.devN` release lane, and reject archived ancestry during publication.
 
+## [0.5.0.dev1] - Unreleased
+
+### Added
+
+- Start the replacement Windows preview with a Python 3.10+ native bootstrap
+  that discovers an existing WSL distribution, explicitly decodes WSL output,
+  and hands exact arguments to the unchanged POSIX Railmux runtime without a
+  native ConPTY compositor or parallel UI.
+- Add a machine-readable delegated-runtime parity ledger that stays aligned
+  with the stable support inventory and retains the real Windows Terminal
+  regression scenarios learned from the archived implementation.
+
+### Known limitations
+
+- The first slice does not install Railmux into WSL, provision managed MSYS2,
+  migrate native Windows provider histories, or complete runtime-specific
+  config, doctor, clipboard, browser, update, and separate-terminal bridges.
+
 ## [0.3.3.dev2] - 2026-08-03
 
 ### Fixed
