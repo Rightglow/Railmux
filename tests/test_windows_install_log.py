@@ -143,7 +143,14 @@ def test_default_command_runner_uses_no_stdin_and_captures_utf8(tmp_path):
 
     with InstallReporter(path, verbose=False, stream=stream) as reporter:
         _run_checked(
-            [sys.executable, "-c", "print('captured 中文')"],
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; "
+                    "sys.stdout.buffer.write('captured 中文\\n'.encode('utf-8'))"
+                ),
+            ],
             env=os.environ,
             reporter=reporter,
             label="fixture",
