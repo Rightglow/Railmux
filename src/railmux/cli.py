@@ -24,12 +24,15 @@ from railmux.system_deps import ensure_tmux_available
 from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
 
 
-def _show_startup_message() -> None:
+def _show_startup_message(
+    detail: str = "Reconnecting sessions and panes…",
+) -> None:
     """Paint immediate feedback before App performs its initial discovery."""
     if not sys.stdout.isatty():
         return
     size = shutil.get_terminal_size((80, 24))
-    sys.stdout.write(render_startup_surface(size.columns, size.lines))
+    sys.stdout.write(render_startup_surface(
+        size.columns, size.lines, detail=detail))
     sys.stdout.flush()
 
 
@@ -441,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
     _show_startup_message()
     # Lazy import so non-TUI invocations (--version etc) don't pull urwid.
     from railmux.ui.app import App
+    from railmux.provider_paths import running_in_windows_wrapper
     app = App(
         claude_home=Path(args.claude_home),
         config=config,
@@ -450,6 +454,10 @@ def main(argv: list[str] | None = None) -> int:
         scroll_coalescing=(
             is_ssh_session() if args.scroll_coalescing is None
             else args.scroll_coalescing
+        ),
+        startup_progress=(
+            _show_startup_message
+            if running_in_windows_wrapper() else None
         ),
     )
     app.run()

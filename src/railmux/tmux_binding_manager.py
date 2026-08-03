@@ -14,8 +14,14 @@ from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
 
 
-_VERSION = 8
+_VERSION = 9
 _KEYS = ("F8", "F9")
+_STATUS_CLICK_KEYS = (
+    "MouseDown1Status",
+    "MouseDown1Control0",
+    "MouseDown1Control1",
+    "MouseDown1Control2",
+)
 _MAX_STATE_BYTES = 64 * 1024
 
 
@@ -114,9 +120,15 @@ class SharedTmuxBindingManager:
             and all(value is None or isinstance(value, str)
                     for value in right_click_backup.values())
         )
-        status_click_valid = (
+        legacy_status_click_valid = (
             isinstance(status_click_backup, dict)
             and set(status_click_backup) == {"MouseDown1Status"}
+            and all(value is None or isinstance(value, str)
+                    for value in status_click_backup.values())
+        )
+        status_click_valid = (
+            isinstance(status_click_backup, dict)
+            and set(status_click_backup) == set(_STATUS_CLICK_KEYS)
             and all(value is None or isinstance(value, str)
                     for value in status_click_backup.values())
         )
@@ -149,7 +161,13 @@ class SharedTmuxBindingManager:
                          or (not selection_hook_managed
                              and selection_hook_index is not None)))
                 or (raw["version"] >= 5
-                    and (not status_click_valid
+                    and ((raw["version"] < 9
+                          and not (
+                              legacy_status_click_valid
+                              or status_click_valid
+                          ))
+                         or (raw["version"] >= 9
+                             and not status_click_valid)
                          or not isinstance(status_click_managed, bool)))
                 or (raw["version"] >= 8
                     and (not termux_tap_valid
@@ -293,6 +311,29 @@ class SharedTmuxBindingManager:
                             or {"MouseDown1Pane": None}
                         )
                         upgraded = True
+                    if state["version"] < 9:
+                        if state["status_click_managed"]:
+                            if set(state["status_click_backup"]) != set(
+                                _STATUS_CLICK_KEYS
+                            ):
+                                status_click_backup = (
+                                    tmux_ctl.upgrade_root_status_click_binding(
+                                        state["status_click_backup"],
+                                        state["token"],
+                                    )
+                                )
+                                if status_click_backup is None:
+                                    return False
+                                state["status_click_backup"] = (
+                                    status_click_backup)
+                        else:
+                            state["status_click_backup"] = {
+                                key: None for key in _STATUS_CLICK_KEYS
+                            }
+                        # tmux 3.7 routes control ranges through dedicated
+                        # MouseDown1ControlN keys. Capture all originals before
+                        # reinstalling the shared status-click lease.
+                        upgraded = True
                     if upgraded:
                         state["version"] = _VERSION
                         state["phase"] = "installing"
@@ -341,17 +382,14 @@ class SharedTmuxBindingManager:
                             )
                         if state["status_click_managed"]:
                             current_status = (
-                                tmux_ctl.read_root_status_click_binding()
-                                ["MouseDown1Status"]
-                            )
-                            safe = (
-                                safe
-                                and tmux_ctl.root_status_click_binding_is_original_or_owned(
-                                    current_status,
-                                    state["status_click_backup"].get(
-                                        "MouseDown1Status"),
+                                tmux_ctl.read_root_status_click_binding())
+                            safe = safe and all(
+                                tmux_ctl.root_status_click_binding_is_original_or_owned(
+                                    current_status.get(key),
+                                    state["status_click_backup"].get(key),
                                     token,
                                 )
+                                for key in _STATUS_CLICK_KEYS
                             )
                         if state["termux_tap_managed"]:
                             current_tap = (
@@ -543,7 +581,8 @@ class SharedTmuxBindingManager:
                     "selection_hook_index": selection_hook_index,
                     "status_click_managed": status_click_backup is not None,
                     "status_click_backup": (
-                        status_click_backup or {"MouseDown1Status": None}),
+                        status_click_backup
+                        or {key: None for key in _STATUS_CLICK_KEYS}),
                     "termux_tap_managed": termux_tap_backup is not None,
                     "termux_tap_backup": (
                         termux_tap_backup or {"MouseDown1Pane": None}),

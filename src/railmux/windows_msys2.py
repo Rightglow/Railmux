@@ -34,8 +34,10 @@ from railmux.windows_pacman import (
     PacmanMirrorError,
     deactivate_pacman_hosts,
     optimize_pacman_mirror,
+    validate_transaction_package_mirrors,
     write_msys_only_pacman_config,
 )
+from railmux.terminal_status import STYLE_ACCENT, STYLE_MUTED, styled
 
 
 MSYS2_RELEASE = "2026-03-22"
@@ -88,6 +90,10 @@ _VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z")
 
 _PACMAN_CONFIG = "/etc/railmux-pacman.conf"
 _PACMAN_PACKAGES = "tmux python python-pip"
+_PACKAGE_URL_COMMAND = (
+    f"pacman --config {_PACMAN_CONFIG} -Sp --print-format '%l' "
+    f"--needed {_PACMAN_PACKAGES} 2>/dev/null"
+)
 _VENV_COMMAND = "python -m venv /opt/railmux/venv"
 _PACKAGE_COMMAND = (
     f'{_RAILMUX_PYTHON} -m pip install --disable-pip-version-check '
@@ -144,14 +150,20 @@ class _DownloadProgress:
         self._active_line = False
 
     def _message(self, downloaded: int, expected: int | None) -> str:
-        current = _format_download_size(downloaded)
+        source = styled(self._source, STYLE_ACCENT, stream=self._stream)
+        current = styled(
+            _format_download_size(downloaded), STYLE_MUTED, stream=self._stream
+        )
         if expected:
             percent = min(100.0, downloaded * 100.0 / expected)
-            return (
-                f"  {self._source}: {current} / "
-                f"{_format_download_size(expected)} ({percent:.1f}%)"
+            total = styled(
+                _format_download_size(expected), STYLE_MUTED, stream=self._stream
             )
-        return f"  {self._source}: {current} downloaded"
+            return (
+                f"  {source}: {current} / {total} "
+                f"({styled(f'{percent:.1f}%', STYLE_ACCENT, stream=self._stream)})"
+            )
+        return f"  {source}: {current} downloaded"
 
     def update(
         self,
@@ -1014,6 +1026,110 @@ def _run_pacman_with_recovery(
     )
 
 
+def _completed_package_cache_count(cache: Path) -> int:
+    """Count only complete package payloads, never signatures or partials."""
+    try:
+        return sum(
+            1
+            for path in cache.iterdir()
+            if path.name.endswith(".pkg.tar.zst")
+            and path.is_file()
+            and not path.is_symlink()
+        )
+    except OSError:
+        return 0
+
+
+def _resolved_transaction_package_urls(
+    root: Path,
+    *,
+    env: Mapping[str, str],
+    runner: Runner | None,
+) -> tuple[str, ...]:
+    """Ask pacman for bounded real package URLs without changing state."""
+    # Install test runners model transactional commands, not a second capture
+    # channel. Tests that exercise this probe patch this helper explicitly.
+    if runner is not None:
+        return ()
+    try:
+        result = subprocess.run(
+            _bash_command(root, _PACKAGE_URL_COMMAND),
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15.0,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    if result.returncode != 0:
+        return ()
+    try:
+        lines = result.stdout.decode(
+            "utf-8", errors="strict").strip().splitlines()
+    except UnicodeError:
+        return ()
+    urls = tuple(dict.fromkeys(
+        line.strip() for line in lines
+        if line.strip().startswith("https://")
+    ))
+    return urls[:128]
+
+
+def _validate_transaction_mirrors(
+    root: Path,
+    *,
+    env: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+) -> None:
+    package_urls = _resolved_transaction_package_urls(
+        root, env=env, runner=runner)
+    if not package_urls:
+        reporter.note(
+            "Actual package mirror preflight was unavailable; signed pacman "
+            "fallback remains active.",
+            level="muted",
+        )
+        return
+    reporter.note(
+        "Checking package availability on approved mirrors "
+        f"(up to 12 samples from {len(package_urls)} resolved packages)…",
+        level="muted",
+    )
+    try:
+        decision = validate_transaction_package_mirrors(root, package_urls)
+    except PacmanMirrorError as exc:
+        reporter.note(
+            f"Actual package mirror preflight was unavailable ({exc}); "
+            "signed pacman fallback remains active.",
+            level="warning",
+        )
+        return
+    failed = len(decision.failures)
+    checked = len(decision.package_names)
+    if failed and decision.changed:
+        reporter.note(
+            f"Verified {checked} transaction package samples across "
+            f"{len(decision.active_servers)} sources; excluded {failed} "
+            "database-only or blocked sources.",
+            level="warning",
+        )
+    elif failed:
+        reporter.note(
+            "Real-package probes were inconclusive; retaining the measured "
+            "pool for pacman's signed fallback.",
+            level="warning",
+        )
+    else:
+        reporter.note(
+            f"Verified {checked} transaction package samples across "
+            f"{len(decision.active_servers)} sources.",
+            level="success",
+        )
+
+
 def _bash_command(root: Path, command: str, *arguments: str) -> list[str]:
     return [
         str(root / "usr" / "bin" / "bash.exe"),
@@ -1212,6 +1328,24 @@ def install_managed_runtime(
                             "package sources."
                         )
                     reporter.phase(5, 7, "Installing tmux and private Python")
+                    reporter.note(
+                        "Mirror fallback is per package; completed package "
+                        "files stay in Railmux's private cache during retries.",
+                        level="muted",
+                    )
+                    cached_packages = _completed_package_cache_count(package_cache)
+                    if cached_packages:
+                        reporter.note(
+                            f"Reusable cache contains {cached_packages} completed "
+                            "package files; pacman will not fetch them again.",
+                            level="muted",
+                        )
+                    _validate_transaction_mirrors(
+                        root,
+                        env=child_env,
+                        reporter=reporter,
+                        runner=runner,
+                    )
                     _run_pacman_with_recovery(
                         root,
                         packages=True,

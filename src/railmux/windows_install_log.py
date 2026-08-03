@@ -13,6 +13,16 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import BinaryIO, TextIO
 
+from railmux.terminal_status import (
+    STYLE_ACCENT,
+    STYLE_ERROR,
+    STYLE_HEADING,
+    STYLE_MUTED,
+    STYLE_SUCCESS,
+    STYLE_WARNING,
+    styled,
+)
+
 
 _LOG_KEEP_COUNT = 5
 _FAILURE_LINE_LIMIT = 500
@@ -153,17 +163,23 @@ class InstallReporter:
 
     def phase(self, number: int, total: int, message: str) -> None:
         rendered = f"[{number}/{total}] {message}"
-        self._console(rendered)
+        self._console(styled(rendered, STYLE_HEADING + STYLE_ACCENT, stream=self.stream))
         self._write_log(f"\n{rendered}\n")
 
     def done(self, detail: str | None = None) -> None:
         rendered = "      done" + (f" · {detail}" if detail else "")
-        self._console(rendered)
+        self._console(styled(rendered, STYLE_SUCCESS, stream=self.stream))
         self._write_log(f"{rendered}\n")
 
-    def note(self, message: str) -> None:
+    def note(self, message: str, *, level: str = "info") -> None:
         rendered = f"      {message}"
-        self._console(rendered)
+        style = {
+            "muted": STYLE_MUTED,
+            "success": STYLE_SUCCESS,
+            "warning": STYLE_WARNING,
+            "error": STYLE_ERROR,
+        }.get(level, "")
+        self._console(styled(rendered, style, stream=self.stream) if style else rendered)
         self._write_log(f"{rendered}\n")
 
     def command_started(self, label: str, *, progress: str | None = None) -> None:
@@ -228,7 +244,8 @@ class InstallReporter:
         ):
             self.note(
                 "A package mirror failed; pacman is trying the next "
-                "approved source…"
+                "approved source…",
+                level="warning",
             )
             self._reported_mirror_warning = True
         if not self.verbose:
@@ -323,14 +340,14 @@ class InstallReporter:
 
     def command_failed(self, label: str, returncode: int) -> None:
         self.command_output_finished()
-        self.note(f"{label} failed with exit code {returncode}.")
+        self.note(f"{label} failed with exit code {returncode}.", level="error")
         if self._tail:
             self.note("Last output:")
             for line in list(self._tail)[-8:]:
                 if len(line) > _FAILURE_LINE_LIMIT:
                     line = f"{line[:_FAILURE_LINE_LIMIT]}… [truncated; see log]"
                 self._console(f"        {line}")
-        self.note(f"Full UTF-8 log: {self.path}")
+        self.note(f"Full UTF-8 log: {self.path}", level="muted")
 
     def command_succeeded(self) -> None:
         self.command_output_finished()
@@ -340,7 +357,10 @@ class InstallReporter:
 
     def finish(self) -> None:
         self._write_log("\nInstallation completed successfully.\n")
-        self._console(f"Installation log: {self.path}")
+        self._console(
+            styled("Installation completed successfully.", STYLE_SUCCESS, stream=self.stream)
+        )
+        self._console(styled(f"Installation log: {self.path}", STYLE_MUTED, stream=self.stream))
 
 
 def stream_process_output(

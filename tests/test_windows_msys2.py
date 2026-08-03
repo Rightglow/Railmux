@@ -6,6 +6,7 @@ import json
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,7 +32,7 @@ from railmux.windows_msys2 import (
 from railmux.windows_pacman import PacmanMirrorDecision
 
 
-VERSION = "0.4.0.dev8"
+VERSION = "0.4.0.dev9"
 
 
 class TtyBuffer(io.StringIO):
@@ -507,10 +508,10 @@ def test_managed_runtime_requires_utf8_marker_and_exact_package_version(tmp_path
     root = managed_root(environ, version=VERSION)
     assert root is not None
     runtime = make_runtime(root, managed=True)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev8\n"))
+    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev9\n"))
 
     assert probe_runtime(runtime, version=VERSION, environ=environ, probe=probe)
-    assert not probe_runtime(runtime, version="0.4.0.dev9", environ=environ, probe=probe)
+    assert not probe_runtime(runtime, version="0.4.0.dev8", environ=environ, probe=probe)
 
 
 def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
@@ -518,7 +519,7 @@ def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
     probe = MagicMock(
         side_effect=[
             completed([], returncode=1),
-            completed([], stdout=b"railmux 0.4.0.dev8\n"),
+            completed([], stdout=b"railmux 0.4.0.dev9\n"),
         ]
     )
 
@@ -539,7 +540,7 @@ def test_each_preview_version_uses_a_separate_runtime_generation(tmp_path):
 def test_explicit_user_runtime_is_probed_but_never_requires_managed_marker(tmp_path):
     root = tmp_path / "用户-owned-msys"
     runtime = make_runtime(root, managed=False)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev8\n"))
+    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev9\n"))
     environ = {"RAILMUX_MSYS2_ROOT": str(root), "USERPROFILE": r"C:\Users\u"}
 
     found = find_runtime(version=VERSION, environ=environ, probe=probe)
@@ -619,7 +620,7 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         return completed(argv)
 
     def probe(argv, *, env, timeout):
-        return completed(argv, stdout=b"railmux 0.4.0.dev8\n")
+        return completed(argv, stdout=b"railmux 0.4.0.dev9\n")
 
     @contextmanager
     def unlocked(_base):
@@ -736,3 +737,55 @@ def test_pacman_network_failure_retries_with_cache_and_relaxed_timeout(tmp_path)
     rendered = mirrorlist.read_text(encoding="utf-8")
     assert f"# Railmux inactive: Server = {tuna}" in rendered
     assert f"Server = {repo}" in rendered
+
+
+def test_completed_package_cache_count_ignores_signatures_partials_and_links(tmp_path):
+    (tmp_path / "python.pkg.tar.zst").write_bytes(b"package")
+    (tmp_path / "python.pkg.tar.zst.sig").write_bytes(b"signature")
+    (tmp_path / "tmux.pkg.tar.zst.part").write_bytes(b"partial")
+    try:
+        (tmp_path / "linked.pkg.tar.zst").symlink_to(
+            tmp_path / "python.pkg.tar.zst"
+        )
+    except OSError:
+        pass
+
+    assert windows_msys2._completed_package_cache_count(tmp_path) == 1
+
+
+def test_transaction_mirror_validation_reports_excluded_sources(
+    tmp_path, monkeypatch
+):
+    decision = SimpleNamespace(
+        active_servers=("https://repo.msys2.org/msys/$arch/",),
+        failures=(("TUNA mirror", "package returned HTTP 403"),),
+        changed=True,
+        package_names=("tmux.pkg.tar.zst", "python.pkg.tar.zst"),
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "_resolved_transaction_package_urls",
+        lambda *_args, **_kwargs: (
+            "https://repo.msys2.org/msys/x86_64/tmux.pkg.tar.zst",
+            "https://repo.msys2.org/msys/x86_64/python.pkg.tar.zst",
+        ),
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "validate_transaction_package_mirrors",
+        lambda *_args, **_kwargs: decision,
+    )
+    stream = io.StringIO()
+    path = tmp_path / "install.log"
+
+    with InstallReporter(path, verbose=False, stream=stream) as reporter:
+        windows_msys2._validate_transaction_mirrors(
+            tmp_path,
+            env={},
+            reporter=reporter,
+            runner=None,
+        )
+
+    assert "Verified 2 transaction package samples across 1 sources" in (
+        stream.getvalue())
+    assert "excluded 1" in stream.getvalue()

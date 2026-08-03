@@ -86,6 +86,47 @@ def test_unavailable_target_toggle_warns_once_without_projection():
         "Ctrl-B Tab unavailable; existing tmux binding preserved.", "warn")
 
 
+def test_windows_unavailable_status_clicks_warn_with_keyboard_fallback(
+        monkeypatch):
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = False
+    app = _bare_app(_tmux_binding_manager=manager)
+    app._status_navigation_warning_shown = False
+    app._set_status = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+
+    app._install_tmux_bindings()
+    app._install_tmux_bindings()
+
+    app._set_status.assert_called_once_with(
+        "Status clicks unavailable; use m for Mode and F8 for Layout.",
+        "warn",
+    )
+
+
+def test_slow_windows_startup_summary_mentions_read_only_cache():
+    import time
+
+    app = _bare_app(
+        _startup_started_at=time.monotonic() - 3.25,
+        _startup_project_scan_seconds=1.5,
+        _startup_recovery_seconds=0.75,
+    )
+    app._set_status = MagicMock()
+
+    app._report_windows_startup_summary(None, None)
+
+    message, level = app._set_status.call_args.args
+    assert "Restored in 3." in message
+    assert "index 1.5s, panes 0.8s" in message
+    assert "read-only" in message
+    assert "private cache" in message
+    assert level == "info"
+
+
 def test_f8_dispatches_rotate_without_sidebar_action_lookup():
     app = _bare_app()
     app._rotate_split = MagicMock()

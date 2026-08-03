@@ -30,9 +30,11 @@ _MIRRORLIST_LIMIT = 256 * 1024
 _PACMAN_CONF_LIMIT = 256 * 1024
 _PROBE_BYTES = 256 * 1024
 _PROBE_TIMEOUT = 8.0
+_PACKAGE_PROBE_TIMEOUT = 5.0
 _SWITCH_RATIO = 1.25
 _FRESHNESS_WINDOW_SECONDS = 6 * 60 * 60
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+_TRANSACTION_PROBE_LIMIT = 12
 _SERVER_RE = re.compile(r"\s*Server\s*=\s*(https://\S+)\s*\Z")
 _INACTIVE_SERVER_RE = re.compile(
     r"\s*#\s*Railmux inactive:\s*Server\s*=\s*(https://\S+)\s*\Z"
@@ -67,11 +69,57 @@ class PacmanMirrorDecision:
     active: tuple[PacmanMirrorProbe, ...] = ()
 
 
+@dataclass(frozen=True)
+class PacmanPackageProbeDecision:
+    """Result of checking an actual transaction package on active mirrors."""
+
+    package_names: tuple[str, ...]
+    active_servers: tuple[str, ...]
+    failures: tuple[tuple[str, str], ...]
+    changed: bool
+
+
 MirrorProbe = Callable[[str, str], PacmanMirrorProbe]
+PackageProbe = Callable[[str], None]
 
 
 def _database_url(server: str) -> str:
     return urllib.parse.urljoin(server.replace("$arch", "x86_64"), "msys.db")
+
+
+def _probe_package_url(
+    url: str,
+    *,
+    opener: Callable[..., object] = urllib.request.urlopen,
+) -> None:
+    """Require one real package prefix instead of trusting database access."""
+    if urllib.parse.urlsplit(url).scheme.lower() != "https":
+        raise PacmanMirrorError("package URL is not HTTPS")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept-Encoding": "identity",
+            "Range": "bytes=0-1023",
+            "User-Agent": "Railmux-pacman-package-probe/1",
+        },
+    )
+    try:
+        with opener(request, timeout=_PACKAGE_PROBE_TIMEOUT) as response:
+            final_url = getattr(response, "geturl", lambda: request.full_url)()
+            if urllib.parse.urlsplit(final_url).scheme.lower() != "https":
+                raise PacmanMirrorError("package redirected outside HTTPS")
+            status = getattr(response, "status", 200)
+            if status not in (200, 206):
+                raise PacmanMirrorError(f"package returned HTTP {status}")
+            data = response.read(1024)
+    except PacmanMirrorError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise PacmanMirrorError(f"package returned HTTP {exc.code}") from exc
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
+        raise PacmanMirrorError("package probe failed") from exc
+    if not data.startswith(_ZSTD_MAGIC):
+        raise PacmanMirrorError("mirror did not return an MSYS package")
 
 
 def probe_pacman_mirror(
@@ -361,6 +409,134 @@ def deactivate_pacman_hosts(root: Path, hosts: Sequence[str]) -> bool:
         error="could not update the private mirrorlist",
     )
     return True
+
+
+def validate_transaction_package_mirrors(
+    root: Path,
+    package_urls: str | Sequence[str],
+    *,
+    probe: PackageProbe = _probe_package_url,
+) -> PacmanPackageProbeDecision:
+    """Keep only active mirrors that serve representative transaction packages.
+
+    A repository database may be downloadable while package paths return 403.
+    Package URLs come from pacman's own resolved transaction and contribute only
+    strict filenames; every tested origin remains an exact approved URL from the
+    private mirrorlist. A bounded, evenly distributed sample catches mirrors
+    that serve repository databases but block only some package paths without
+    adding one TLS handshake for every dependency.
+    """
+    candidates = [package_urls] if isinstance(package_urls, str) else package_urls
+    package_names: list[str] = []
+    for package_url in candidates:
+        parsed = urllib.parse.urlsplit(package_url)
+        package_name = Path(urllib.parse.unquote(parsed.path)).name
+        if (
+            parsed.scheme.lower() != "https"
+            or not package_name.endswith(".pkg.tar.zst")
+            or package_name in {".", ".."}
+        ):
+            raise PacmanMirrorError(
+                "pacman returned an invalid package probe URL")
+        if package_name not in package_names:
+            package_names.append(package_name)
+    if not package_names:
+        raise PacmanMirrorError("pacman returned no package probe URLs")
+    if len(package_names) > _TRANSACTION_PROBE_LIMIT:
+        last = len(package_names) - 1
+        indexes = {
+            round(index * last / (_TRANSACTION_PROBE_LIMIT - 1))
+            for index in range(_TRANSACTION_PROBE_LIMIT)
+        }
+        package_names = [
+            name for index, name in enumerate(package_names)
+            if index in indexes
+        ]
+    mirrorlist = root / _MIRRORLIST_RELATIVE
+    try:
+        if mirrorlist.is_symlink() or mirrorlist.stat().st_size > _MIRRORLIST_LIMIT:
+            raise PacmanMirrorError("private mirrorlist is not a safe regular file")
+        text = mirrorlist.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise PacmanMirrorError("could not read the private mirrorlist") from exc
+    approved = {server: label for label, server in PACMAN_MIRROR_SOURCES}
+    active: list[tuple[str, str]] = []
+    for line in text.splitlines():
+        match = _SERVER_RE.fullmatch(line)
+        if match is None or match.group(1) not in approved:
+            continue
+        server = match.group(1)
+        active.append((approved[server], server))
+    if not active:
+        return PacmanPackageProbeDecision(tuple(package_names), (), (), False)
+
+    failures_by_server: dict[str, list[tuple[int, str]]] = {}
+    successes_by_server: dict[str, int] = {}
+    jobs = [
+        (label, server, index, package_name)
+        for label, server in active
+        for index, package_name in enumerate(package_names)
+    ]
+
+    def check(server: str, package_name: str) -> None:
+        url = urllib.parse.urljoin(
+            server.replace("$arch", "x86_64"),
+            urllib.parse.quote(package_name),
+        )
+        probe(url)
+
+    # Package-specific 403s are usually immediate, while one slow source is
+    # bounded to a few waves instead of serially multiplying the timeout by all
+    # samples. Keep the worker cap modest for bootstrap environments.
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=min(24, len(jobs))
+    ) as pool:
+        futures = {
+            pool.submit(check, server, package_name): (
+                label, server, index, package_name)
+            for label, server, index, package_name in jobs
+        }
+        for future in concurrent.futures.as_completed(futures):
+            _label, server, index, package_name = futures[future]
+            try:
+                future.result()
+            except PacmanMirrorError as exc:
+                failures_by_server.setdefault(server, []).append(
+                    (index, f"{package_name}: {exc}"))
+            else:
+                successes_by_server[server] = (
+                    successes_by_server.get(server, 0) + 1)
+    passed = {
+        server
+        for _label, server in active
+        if server not in failures_by_server
+        and successes_by_server.get(server) == len(package_names)
+    }
+    failures = [
+        (label, min(failures_by_server[server])[1])
+        for label, server in active
+        if server in failures_by_server
+    ]
+    # Preserve the measured order rather than completion order. If every source
+    # failed this bounded probe, retain the existing pool and let signed pacman
+    # produce the authoritative error instead of making the runtime unusable.
+    ordered_passed = [server for _label, server in active if server in passed]
+    if not ordered_passed:
+        return PacmanPackageProbeDecision(
+            tuple(package_names), tuple(server for _label, server in active),
+            tuple(failures), False,
+        )
+    updated = _render_measured_pool(text, ordered_passed)
+    changed = updated != text
+    if changed:
+        _write_private_text(
+            mirrorlist,
+            updated,
+            error="could not update the package-verified mirror pool",
+        )
+    return PacmanPackageProbeDecision(
+        tuple(package_names), tuple(ordered_passed), tuple(failures), changed,
+    )
 
 
 def write_msys_only_pacman_config(root: Path) -> Path:

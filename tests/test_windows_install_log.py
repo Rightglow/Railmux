@@ -18,6 +18,11 @@ class Cp1252Stream(io.TextIOWrapper):
         return self.buffer_for_test.getvalue().decode("cp1252")
 
 
+class TtyStream(io.StringIO):
+    def isatty(self):
+        return True
+
+
 def test_compact_reporter_hides_raw_pacman_noise_but_keeps_utf8_log(tmp_path):
     stream = io.StringIO()
     path = tmp_path / "install-0.4.0.dev7-20260803T000000Z-1.log"
@@ -66,6 +71,35 @@ def test_verbose_reporter_never_fails_on_a_legacy_windows_console_codec(tmp_path
 
     assert "?" in stream.rendered()
     assert "安装 中文…" in path.read_text(encoding="utf-8")
+
+
+def test_reporter_colors_only_the_interactive_console_not_utf8_log(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    stream = TtyStream()
+    path = tmp_path / "install-0.4.0.dev9-20260803T000000Z-9.log"
+
+    with InstallReporter(path, verbose=False, stream=stream) as reporter:
+        reporter.phase(1, 7, "Preparing runtime")
+        reporter.note("Trying another mirror", level="warning")
+        reporter.done("verified")
+        reporter.finish()
+
+    assert "\033[" in stream.getvalue()
+    assert "\033[" not in path.read_text(encoding="utf-8")
+
+
+def test_reporter_honors_no_color(tmp_path, monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = TtyStream()
+    path = tmp_path / "install-0.4.0.dev9-20260803T000000Z-10.log"
+
+    with InstallReporter(path, verbose=False, stream=stream) as reporter:
+        reporter.phase(1, 7, "Preparing runtime")
+
+    assert "\033[" not in stream.getvalue()
 
 
 def test_reporter_failure_shows_a_bounded_tail_and_log_path(tmp_path):

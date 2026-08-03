@@ -193,6 +193,119 @@ def test_valid_append_does_not_reparse_whole_jsonl(
     assert discovery.list_projects(claude_home)[0].session_count == 1
 
 
+def test_windows_persistent_validity_avoids_unchanged_jsonl_reads(
+    claude_home, write_session_fixture, tmp_path, monkeypatch
+):
+    import railmux.discovery as discovery
+
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    real = tmp_path / "persistent_project"
+    real.mkdir()
+    encoded = str(real).replace("/", "-")
+    write_session_fixture(
+        encoded,
+        "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",
+        [{"type": "user", "message": {"content": "hello"}}],
+    )
+    assert discovery.list_projects(claude_home)[0].session_count == 1
+    cache_path = discovery._validity_cache_file(claude_home)
+    rendered = cache_path.read_text(encoding="utf-8")
+    assert "hello" not in rendered
+    assert "aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb" in rendered
+
+    # Model a new Railmux process. An exact signature can reuse the boolean
+    # classification without opening provider-owned content.
+    discovery._cache.clear()
+    discovery._session_validity.clear()
+    discovery._persistent_validity_loaded.clear()
+    discovery._persistent_validity_exact_only.clear()
+    discovery._persistent_validity_dirty.clear()
+    monkeypatch.setattr(
+        discovery,
+        "_scan_session",
+        lambda *_args: pytest.fail("unchanged JSONL content was reopened"),
+    )
+
+    assert discovery.list_projects(claude_home)[0].session_count == 1
+
+
+def test_windows_persistent_validity_never_trusts_changed_session_content(
+    claude_home, write_session_fixture, tmp_path, monkeypatch
+):
+    import railmux.discovery as discovery
+
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    real = tmp_path / "changed_project"
+    real.mkdir()
+    encoded = str(real).replace("/", "-")
+    session = write_session_fixture(
+        encoded,
+        "cccccccc-1111-2222-3333-dddddddddddd",
+        [{"type": "user", "message": {"content": "hello"}}],
+    )
+    assert discovery.list_projects(claude_home)[0].session_count == 1
+
+    discovery._cache.clear()
+    discovery._session_validity.clear()
+    discovery._persistent_validity_loaded.clear()
+    discovery._persistent_validity_exact_only.clear()
+    discovery._persistent_validity_dirty.clear()
+    with session.open("a", encoding="utf-8") as stream:
+        stream.write('{"type":"assistant","message":{"stop_reason":"end_turn"}}\n')
+    calls = []
+    original = discovery._scan_session
+
+    def scan(*args):
+        calls.append(args[1])
+        return original(*args)
+
+    monkeypatch.setattr(discovery, "_scan_session", scan)
+
+    assert discovery.list_projects(claude_home)[0].session_count == 1
+    assert calls == [session]
+
+
+def test_windows_persistent_validity_ignores_nonprivate_cache(
+    claude_home, write_session_fixture, tmp_path, monkeypatch
+):
+    import railmux.discovery as discovery
+
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    real = tmp_path / "private_cache_project"
+    real.mkdir()
+    encoded = str(real).replace("/", "-")
+    session = write_session_fixture(
+        encoded,
+        "eeeeeeee-1111-2222-3333-ffffffffffff",
+        [{"type": "user", "message": {"content": "hello"}}],
+    )
+    info = session.stat()
+    cache_path = discovery._validity_cache_file(claude_home)
+    cache_path.write_text(json.dumps({
+        "schema": 1,
+        "records": [[
+            encoded,
+            session.name,
+            info.st_ino,
+            info.st_mtime_ns,
+            info.st_size,
+            True,
+        ]],
+    }), encoding="utf-8")
+    cache_path.chmod(0o644)
+    calls = []
+    original = discovery._scan_session
+
+    def scan(*args):
+        calls.append(args[1])
+        return original(*args)
+
+    monkeypatch.setattr(discovery, "_scan_session", scan)
+
+    assert discovery.list_projects(claude_home)[0].session_count == 1
+    assert calls == [session]
+
+
 def test_replaced_valid_jsonl_is_rescanned(
         claude_home, write_session_fixture, tmp_path):
     real = tmp_path / "replaced_chat"

@@ -63,8 +63,8 @@ unicode_profile = "The managed runtime path and provider history must still be e
 id = "WW-PACKAGE-DISPATCH"
 features = ["P01", "P02", "W12", "W13"]
 automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_install_log.py", "tests/test_windows_msys2.py", "tests/test_windows_pacman.py", "tests/test_provider_paths.py"]
-manual = "Install from native Windows Python 3.10+ under CP936; verify consent, extraction/package progress, compact/verbose logs, cache reuse and slow/403 mirror recovery, same-profile HOME, native providers, and exact argv."
-evidence = "2026-08-03 dev8 candidate: Windows 10 19045, PowerShell 5.1, Python 3.12.10, MSYS2 2026-03-22; all seven phases, extraction/package progress and heartbeats, MSYS-only config, five-source measured pool, verified base/package caches, activation/probe, shared HOME, and native provider discovery passed. Exact 403/slow recovery is automated from the reported failure transcript; live fault injection remains manual."
+manual = "Install from native Windows Python 3.10+ under CP936; verify consent, colored extraction/package progress, compact/verbose logs, cache reuse and partial-package 403/slow mirror recovery, same-profile HOME, native providers, and exact argv."
+evidence = "2026-08-03 dev8: Windows 10 19045, PowerShell 5.1, Python 3.12.10, MSYS2 2026-03-22; all seven phases, extraction/package progress and heartbeats, MSYS-only config, five-source measured pool, verified base/package caches, activation/probe, shared HOME, and native provider discovery passed. Dev9 adds bounded multi-package preflight and terminal-aware styling in automation; live styling and fault injection remain manual."
 
 [[scenarios]]
 id = "WW-PREVIEW-OPEN"
@@ -83,9 +83,9 @@ evidence = "not-run"
 [[scenarios]]
 id = "WW-MOUSE-CHROME"
 features = ["P06", "W05", "W06"]
-automation = []
+automation = ["tests/test_tmux_ctl.py", "tests/test_tmux_binding_manager.py", "tests/test_tmux_integration.py"]
 manual = "Verify preview wheel, sidebar scrolling, double-click, right-click menus, responsive dialogs, Mode, Layout, status actions, and selection."
-evidence = "not-run"
+evidence = "2026-08-03 dev9 candidate: a real isolated official tmux 3.7b server received Mode through range=control|0, preserved pane-range zoom, and restored all root bindings. Windows Terminal mouse/menu/dialog behavior remains manual."
 
 [[scenarios]]
 id = "WW-LIFECYCLE"

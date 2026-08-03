@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev9] - 2026-08-03
+
+### Added
+
+- Add terminal-aware color and hierarchy to the Windows installer while
+  retaining plain UTF-8 evidence logs and honoring `NO_COLOR`.
+- Show read-only provider-index and tmux-recovery stages during Windows startup,
+  then report slow restore timing in the status bar.
+- Persist a private Windows-only Claude session-validity cache so unchanged
+  histories do not need to be reopened on every Railmux process start.
+
+### Changed
+
+- Validate up to twelve evenly distributed packages from pacman's actual
+  resolved transaction on every active mirror, catching sources that serve the
+  database but return 403 for only some dependencies before the install starts.
+- Explain that pacman fallback is per package and that completed, signature-
+  checked downloads remain in Railmux's private cache across a retry.
+- Use tmux 3.7's dedicated status control ranges and safely leased
+  `MouseDown1ControlN` bindings for Mode, Layout, and status-copy actions.
+
+### Fixed
+
+- Make the Mode and Layout controls clickable under the tmux 3.7b runtime
+  bundled by the Windows preview, while retaining `m` and `F8` fallbacks and an
+  explicit warning if safe binding ownership is unavailable.
+
+### Security
+
+- Never write, migrate, truncate, or repair provider session JSONL files. The
+  Windows validity cache contains only relative provider coordinates, exact
+  file signatures, and a validity bit; it is atomically written with private
+  permissions, can be deleted safely, and never authorizes agent restoration.
+- Capture and durably persist every affected tmux control binding before
+  replacement, and restore only bindings still bearing Railmux's exact lease.
+
 ## [0.4.0.dev8] - 2026-08-03
 
 ### Added
@@ -1913,7 +1949,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev9...HEAD
+[0.4.0.dev9]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...v0.4.0.dev9
 [0.4.0.dev8]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...v0.4.0.dev8
 [0.4.0.dev7]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...v0.4.0.dev7
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6

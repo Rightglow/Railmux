@@ -27,6 +27,14 @@ their metadata. Consequently the wrapper reads the same `.codex` and `.claude`
 directories as providers launched directly from PowerShell. It does not copy,
 migrate, or rewrite provider histories.
 
+Windows startup maintains a Railmux-private validity index for Claude JSONL
+files. The index stores only the encoded project directory, UUID filename,
+inode, modification time, size, and a validity bit. A cached result is accepted
+only when that exact signature still matches; a changed or appended file is
+reopened read-only. The cache is disposable, uses a private atomic file, and is
+never sufficient evidence to resume, delete, or otherwise mutate a provider
+session.
+
 The preview supports local Railmux and the local side of `railmux ssh` to a
 Linux, macOS, or compatible Unix host. Providers and SSH servers running on
 native Windows remain out of scope. WSL remains usable only when the user
@@ -71,7 +79,11 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   private pacman configuration containing only the required `msys` repository,
   while the original configuration remains untouched. Pacman verifies packages
   with the bundled MSYS2 signing keyring and stores completed downloads in a
-  Railmux-private cache outside transactional staging. HTTP 403/404 hosts are
+  Railmux-private cache outside transactional staging. Before the package
+  transaction, Railmux asks pacman for its resolved dependency URLs and probes
+  up to twelve evenly distributed real package names across every active
+  source. A source that serves the database but blocks any sampled package is
+  made inactive when another verified source remains. HTTP 403/404 hosts are
   excluded after a failed transaction; low-speed exhaustion triggers one retry
   that reuses the cache and disables pacman's low-speed abort. This preview does
   not yet freeze a repository snapshot, so package versions may advance between
@@ -79,7 +91,8 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
 - Interactive setup renders seven stable phases rather than exposing all
   pacman noise. Extraction percentages, repository/package milestones, and a
   15-second heartbeat cover every long subprocess. Mirror fallback is
-  summarized once, printed `[Y/n]` prompts do not require input, and a command
+  summarized once, the console uses terminal-aware color while the log remains
+  plain, printed `[Y/n]` prompts do not require input, and a command
   failure shows a bounded tail. Complete
   subprocess output is written explicitly as UTF-8 beneath
   `%LOCALAPPDATA%\Railmux\logs`; URL credentials and common secret query fields
@@ -98,6 +111,13 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   disabled at the Windows boundary then restored before native providers run.
 - The parent waits through Ctrl-C instead of killing the child. tmux owns
   persistence after detach or outer-window closure.
+- Startup repaints the restoring surface with separate read-only indexing and
+  tmux-reconnection stages. A slow startup reports its measured initialization
+  time and the private-cache boundary after the first frame.
+- tmux 3.7+ status actions use dedicated `control|N` ranges and crash-safe
+  shared bindings. Railmux captures existing root-table bindings before
+  replacement, restores only its own lease, and shows the `m`/`F8` keyboard
+  alternatives if status-click ownership cannot be established safely.
 
 Git for Windows is built from a maintained subset/fork of MSYS2, but its normal
 Git Bash installation does not provide the complete `pacman` + `tmux` runtime

@@ -13,6 +13,7 @@ from railmux.windows_pacman import (
     deactivate_pacman_hosts,
     optimize_pacman_mirror,
     probe_pacman_mirror,
+    validate_transaction_package_mirrors,
     write_msys_only_pacman_config,
 )
 
@@ -286,3 +287,98 @@ def test_private_pacman_config_keeps_options_and_only_msys_repo(tmp_path):
     assert "mirrorlist.msys" in rendered
     assert "[mingw64]" not in rendered
     assert "[ucrt64]" not in rendered
+
+
+def test_transaction_package_probe_removes_database_only_mirrors(tmp_path):
+    mirrorlist = write_mirrorlist(tmp_path)
+    optimize_pacman_mirror(
+        tmp_path,
+        probe=lambda label, server: mirror_probe(label, server, rate=100),
+    )
+    tuna = PACMAN_MIRROR_SOURCES[2][1]
+    checked = []
+
+    def probe(url):
+        checked.append(url)
+        if "tuna.tsinghua" in url:
+            raise PacmanMirrorError("package returned HTTP 403")
+
+    decision = validate_transaction_package_mirrors(
+        tmp_path,
+        "https://repo.msys2.org/msys/x86_64/python-3.12.pkg.tar.zst",
+        probe=probe,
+    )
+
+    assert len(checked) == len(PACMAN_MIRROR_SOURCES)
+    assert decision.package_names == ("python-3.12.pkg.tar.zst",)
+    assert len(decision.active_servers) == len(PACMAN_MIRROR_SOURCES) - 1
+    assert decision.changed
+    assert decision.failures == ((
+        "TUNA mirror",
+        "python-3.12.pkg.tar.zst: package returned HTTP 403",
+    ),)
+    rendered = mirrorlist.read_text(encoding="utf-8")
+    assert f"# Railmux inactive: Server = {tuna}" in rendered
+
+
+def test_transaction_package_probe_keeps_pool_when_every_probe_fails(tmp_path):
+    mirrorlist = write_mirrorlist(tmp_path)
+    optimize_pacman_mirror(
+        tmp_path,
+        probe=lambda label, server: mirror_probe(label, server, rate=100),
+    )
+    before = mirrorlist.read_text(encoding="utf-8")
+
+    decision = validate_transaction_package_mirrors(
+        tmp_path,
+        "https://repo.msys2.org/msys/x86_64/tmux.pkg.tar.zst",
+        probe=lambda _url: (_ for _ in ()).throw(
+            PacmanMirrorError("temporary failure")
+        ),
+    )
+
+    assert not decision.changed
+    assert len(decision.active_servers) == len(PACMAN_MIRROR_SOURCES)
+    assert mirrorlist.read_text(encoding="utf-8") == before
+
+
+def test_transaction_package_probe_rejects_non_package_url(tmp_path):
+    write_mirrorlist(tmp_path)
+
+    with pytest.raises(PacmanMirrorError, match="invalid package probe URL"):
+        validate_transaction_package_mirrors(
+            tmp_path,
+            "https://repo.msys2.org/msys/x86_64/msys.db",
+        )
+
+
+def test_transaction_probe_excludes_mirror_missing_a_later_package(tmp_path):
+    write_mirrorlist(tmp_path)
+    optimize_pacman_mirror(
+        tmp_path,
+        probe=lambda label, server: mirror_probe(label, server, rate=100),
+    )
+    tuna = PACMAN_MIRROR_SOURCES[2][1]
+
+    def probe(url):
+        if "tuna.tsinghua" in url and "python-" in url:
+            raise PacmanMirrorError("package returned HTTP 403")
+
+    decision = validate_transaction_package_mirrors(
+        tmp_path,
+        (
+            "https://repo.msys2.org/msys/x86_64/tmux-3.7.pkg.tar.zst",
+            "https://repo.msys2.org/msys/x86_64/python-3.12.pkg.tar.zst",
+        ),
+        probe=probe,
+    )
+
+    assert decision.package_names == (
+        "tmux-3.7.pkg.tar.zst",
+        "python-3.12.pkg.tar.zst",
+    )
+    assert tuna not in decision.active_servers
+    assert decision.failures == ((
+        "TUNA mirror",
+        "python-3.12.pkg.tar.zst: package returned HTTP 403",
+    ),)
