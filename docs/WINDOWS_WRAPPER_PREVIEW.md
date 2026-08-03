@@ -33,8 +33,9 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   interpreter floor; the native entrypoint enforces the Windows floor before
   runtime discovery.
 - `railmux --version`, `--help`, and `runtime status` do not install or enter a
-  runtime. `runtime install` prompts, while `runtime install --yes` is the
-  explicit noninteractive operation.
+  runtime. `runtime install` prompts, `runtime install --yes` is the explicit
+  noninteractive operation, and `runtime install --verbose` streams the raw
+  subprocess output in addition to retaining it in the install log.
 - The official MSYS2 self-extracting base release, filename, size, and SHA-256
   are pinned. The bootstrap samples the official GitHub release first. When
   its projected remaining time exceeds 60 seconds, it concurrently samples
@@ -47,10 +48,27 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   in the approved order. A wrong final size or SHA-256 removes the archive, and
   every path must produce the same Railmux-pinned digest before execution.
   Interactive downloads show bytes, total size, and percentage, while
-  redirected logs receive bounded milestones. Pacman verifies repository
-  packages with the bundled MSYS2 signing keyring and performs full upgrades
-  in fresh processes; this preview does not yet freeze a repository snapshot,
-  so runtime package versions may advance between installations.
+  redirected logs receive bounded milestones. Before pacman runs, the
+  bootstrap concurrently samples the actual `msys.db` from the geo redirector,
+  primary repository, TUNA, USTC, and NJU entries, but only when the exact URL
+  is also present in the pinned runtime's official `mirrorlist.msys`. A source
+  must return HTTPS, a bounded Zstandard database sample, and fall within six
+  hours of the newest measured `Last-Modified` value. The official first entry
+  remains preferred unless another fresh entry is at least 25% faster. Only the
+  staged private mirrorlist is atomically reordered; every official fallback
+  remains, and missing/changed URLs or failed probes leave the official order
+  untouched. Pacman verifies repository packages with the bundled MSYS2
+  signing keyring and performs full upgrades in fresh noninteractive processes;
+  this preview does not yet freeze a repository snapshot, so runtime package
+  versions may advance between installations.
+- Interactive setup renders seven stable phases rather than exposing all
+  pacman noise. Mirror fallback is summarized once, printed `[Y/n]` prompts do
+  not require input, and a command failure shows a bounded tail. Complete
+  subprocess output is written explicitly as UTF-8 beneath
+  `%LOCALAPPDATA%\Railmux\logs`; URL credentials and common secret query fields
+  are redacted, unrelated files are never pruned, and at most five recognized
+  install logs are retained. Legacy Windows console encodings affect only the
+  best-effort display copy, not the UTF-8 evidence log.
 - Installation is serialized, staged outside the active directory, verified,
   and atomically renamed. An incomplete pre-existing final directory fails
   closed and is never silently removed. User-selected `RAILMUX_MSYS2_ROOT`
@@ -77,10 +95,11 @@ visual and terminal behavior that unit tests cannot prove.
 
 Windows-preview CI performs an advisory one-byte HTTPS Range request against
 the exact pinned artifact on every approved transport and validates its exact
-`Content-Range`. It intentionally does not use ICMP ping and does not block
-product tests when an external mirror has a transient outage; runtime integrity
-remains the SHA-256 check over the complete download, not the CI capability
-probe.
+`Content-Range`. It also reads the same bounded pacman database sample from
+every approved package candidate. It intentionally does not use ICMP ping and
+does not block product tests when an external mirror has a transient outage;
+runtime integrity remains the SHA-256 and pacman package-signature checks, not
+the CI capability probe.
 
 On 2026-08-03 a Windows 10 19045 / PowerShell 5.1 / Python 3.12.10 spike proved
 that MSYS2 maps `HOME` to the same Windows profile, finds native Codex 0.146.0

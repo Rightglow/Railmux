@@ -122,7 +122,9 @@ jobs:
         run: >-
           python -m pytest -q
           tests/test_windows_bootstrap.py
+          tests/test_windows_install_log.py
           tests/test_windows_msys2.py
+          tests/test_windows_pacman.py
           tests/test_windows_wrapper_contract.py
           tests/test_provider_paths.py
       - run: python -m ruff check src tests tools
@@ -179,5 +181,5 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Check HTTPS range resume on every approved archive source
+      - name: Check approved archive and pacman package sources
         run: python tools/check_msys2_mirrors.py

@@ -4,6 +4,7 @@ import sys
 from unittest.mock import MagicMock
 
 from railmux import __version__
+from railmux import windows_bootstrap
 from railmux.entrypoint import main as entrypoint_main
 from railmux.windows_bootstrap import main
 from railmux.windows_msys2 import Msys2Runtime
@@ -29,6 +30,7 @@ def test_windows_help_describes_shared_native_provider_data(capsys):
     assert "managed MSYS2/tmux" in output
     assert "Windows-native" in output
     assert "runtime {status,install}" in output
+    assert "--verbose" in output
     finder.assert_not_called()
 
 
@@ -95,6 +97,56 @@ def test_runtime_status_labels_user_owned_override(capsys, tmp_path):
     output = capsys.readouterr().out
     assert f"Runtime: user-owned override at {runtime.root}" in output
     assert "Managed location:" not in output
+
+
+def test_runtime_install_accepts_verbose_and_yes_in_either_order(
+    tmp_path, monkeypatch
+):
+    runtime = Msys2Runtime(tmp_path / "managed", managed=True)
+    calls = []
+
+    def install(**kwargs):
+        calls.append(kwargs)
+        return runtime
+
+    monkeypatch.setattr(windows_bootstrap, "install_managed_runtime", install)
+
+    assert main(
+        ["runtime", "install", "--verbose", "--yes"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: None,
+        version_info=(3, 10),
+    ) == 0
+
+    assert calls[0]["verbose"] is True
+
+
+def test_runtime_install_rejects_duplicate_or_unknown_logging_flags(capsys):
+    for arguments in (
+        ["runtime", "install", "--verbose", "--verbose"],
+        ["runtime", "install", "--debug"],
+    ):
+        assert main(
+            arguments,
+            runtime_finder=lambda **_kwargs: None,
+            version_info=(3, 10),
+        ) == 2
+
+    assert capsys.readouterr().err.count("[--yes] [--verbose]") == 2
+
+
+def test_runtime_install_consent_describes_updates_and_private_disk(capsys):
+    assert main(
+        ["runtime", "install"],
+        environ={"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
+        runtime_finder=lambda **_kwargs: None,
+        input_fn=lambda prompt: (print(prompt), "n")[1],
+        version_info=(3, 10),
+    ) == 2
+
+    output = capsys.readouterr().out
+    assert "required updates and packages" in output
+    assert "private disk space" in output
 
 
 def test_ready_runtime_receives_exact_argv_and_child_environment(tmp_path):

@@ -54,7 +54,7 @@ S20 = "runtime-bridge"
 
 [limitations]
 rolling_repository = "The base archive is hash-pinned and pacman signatures are checked, but repository package versions are not yet snapshot-pinned."
-mirror_health = "CI HTTPS Range capability checks are advisory because an external mirror outage must not invalidate product behavior; adaptive transfer requires exact Content-Range responses and every completed runtime download is independently hash-verified."
+mirror_health = "CI archive Range and package-database checks are advisory because an external mirror outage must not invalidate product behavior; archive transfer is size/hash verified, pacman packages are signature verified, and the staged private mirrorlist changes only for an exact approved official URL with fresh measured data."
 native_server = "Providers and SSH servers on native Windows are out of scope."
 runtime_bridges = "Clipboard, browser, separate-terminal, self-update, and remote-config bridges still require real Windows validation."
 unicode_profile = "The managed runtime path and provider history must still be exercised with a real non-ASCII Windows profile name."
@@ -62,9 +62,9 @@ unicode_profile = "The managed runtime path and provider history must still be e
 [[scenarios]]
 id = "WW-PACKAGE-DISPATCH"
 features = ["P01", "P02", "W12", "W13"]
-automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_msys2.py", "tests/test_provider_paths.py"]
-manual = "Install from native Windows Python 3.10+ under CP936; verify consent, UTF-8 state, same-profile HOME, native providers, and exact argv."
-evidence = "2026-08-03 spike: Windows 10 19045, PowerShell 5.1, Python 3.12.10, MSYS2 2026-03-22; shared HOME and native Codex/Claude discovery passed. Final dev4 installer still pending."
+automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_install_log.py", "tests/test_windows_msys2.py", "tests/test_windows_pacman.py", "tests/test_provider_paths.py"]
+manual = "Install from native Windows Python 3.10+ under CP936; verify consent, compact/verbose logs, package-mirror choice, same-profile HOME, native providers, and exact argv."
+evidence = "2026-08-03 dev7 candidate: Windows 10 19045, PowerShell 5.1, Python 3.12.10, MSYS2 2026-03-22; all seven managed-install phases, compact UTF-8 logging, package-mirror selection, runtime activation/probe, shared HOME, and native Codex/Claude discovery passed."
 
 [[scenarios]]
 id = "WW-PREVIEW-OPEN"

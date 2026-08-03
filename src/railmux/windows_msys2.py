@@ -24,6 +24,17 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from railmux.windows_install_log import (
+    InstallReporter,
+    install_log_path,
+    stream_process_output,
+)
+from railmux.windows_pacman import (
+    PacmanMirrorDecision,
+    PacmanMirrorError,
+    optimize_pacman_mirror,
+)
+
 
 MSYS2_RELEASE = "2026-03-22"
 MSYS2_ARCHIVE_NAME = f"msys2-base-x86_64-{MSYS2_RELEASE.replace('-', '')}.sfx.exe"
@@ -98,6 +109,7 @@ class RuntimeInstallError(RuntimeErrorBase):
 Probe = Callable[..., subprocess.CompletedProcess[bytes]]
 Runner = Callable[..., subprocess.CompletedProcess]
 Downloader = Callable[[str, Path, str], None]
+MirrorOptimizer = Callable[[Path], PacmanMirrorDecision]
 
 
 @dataclass(frozen=True)
@@ -817,15 +829,32 @@ def _run_checked(
     argv: Sequence[str],
     *,
     env: Mapping[str, str],
-    runner: Runner,
+    reporter: InstallReporter,
     label: str,
+    runner: Runner | None = None,
 ) -> None:
+    reporter.command_started(label)
     try:
-        result = runner(list(argv), env=dict(env), check=False)
+        if runner is None:
+            process = subprocess.Popen(
+                list(argv),
+                env=dict(env),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=-1,
+            )
+            returncode = stream_process_output(process, reporter)
+        else:
+            result = runner(list(argv), env=dict(env), check=False)
+            reporter.command_output(getattr(result, "stdout", None))
+            reporter.command_output(getattr(result, "stderr", None))
+            returncode = result.returncode
     except OSError as exc:
         raise RuntimeInstallError(f"could not start {label}") from exc
-    if result.returncode:
-        raise RuntimeInstallError(f"{label} failed with exit code {result.returncode}")
+    if returncode:
+        reporter.command_failed(label, returncode)
+        raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
 
 
 def _bash_command(root: Path, command: str, *arguments: str) -> list[str]:
@@ -891,9 +920,11 @@ def install_managed_runtime(
     version: str,
     environ: Mapping[str, str],
     downloader: Downloader | None = None,
-    runner: Runner = subprocess.run,
+    runner: Runner | None = None,
     probe: Probe = _probe,
     lock_factory: Callable[[Path], object] = install_lock,
+    mirror_optimizer: MirrorOptimizer = optimize_pacman_mirror,
+    verbose: bool = False,
 ) -> Msys2Runtime:
     """Install a fresh private runtime and activate it only after verification."""
     if not _VERSION_RE.fullmatch(version):
@@ -906,94 +937,163 @@ def install_managed_runtime(
     base = _managed_base(environ)
     if base is None:
         raise RuntimeInstallError("LOCALAPPDATA is unavailable")
-    base.mkdir(parents=True, exist_ok=True)
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        log_path = install_log_path(environ, version=version)
+    except OSError as exc:
+        raise RuntimeInstallError("could not create the private runtime log") from exc
     final_root = managed_root(environ, version=version)
     assert final_root is not None
     final_root.parent.mkdir(parents=True, exist_ok=True)
 
-    with lock_factory(base):
-        existing = find_runtime(version=version, environ=environ, probe=probe)
-        if existing is not None:
-            return existing
-        if final_root.exists():
-            if _marker_matches(final_root, version=version):
-                raise RuntimeInstallError(
-                    "the managed MSYS2 runtime is present but could not be "
-                    "verified; retry after checking antivirus or disk load"
-                )
-            raise RuntimeInstallError(
-                "the managed MSYS2 directory exists but is incomplete; "
-                "it was left untouched"
-            )
+    try:
+        with InstallReporter(log_path, verbose=verbose) as reporter:
+            with lock_factory(base):
+                existing = find_runtime(version=version, environ=environ, probe=probe)
+                if existing is not None:
+                    reporter.note("The exact managed runtime is already ready.")
+                    reporter.finish()
+                    return existing
+                if final_root.exists():
+                    if _marker_matches(final_root, version=version):
+                        raise RuntimeInstallError(
+                            "the managed MSYS2 runtime is present but could not be "
+                            "verified; retry after checking antivirus or disk load"
+                        )
+                    raise RuntimeInstallError(
+                        "the managed MSYS2 directory exists but is incomplete; "
+                        "it was left untouched"
+                    )
 
-        with tempfile.TemporaryDirectory(prefix=".install-", dir=base) as raw_stage:
-            stage = Path(raw_stage)
-            archive = stage / MSYS2_ARCHIVE_NAME
-            print(f"Downloading verified MSYS2 {MSYS2_RELEASE} runtime…")
-            download_from_sources(
-                archive,
-                MSYS2_ARCHIVE_SHA256,
-                downloader=downloader,
-            )
+                with tempfile.TemporaryDirectory(
+                    prefix=".install-", dir=base
+                ) as raw_stage:
+                    stage = Path(raw_stage)
+                    archive = stage / MSYS2_ARCHIVE_NAME
+                    reporter.phase(1, 7, f"Downloading MSYS2 {MSYS2_RELEASE} base")
+                    source = download_from_sources(
+                        archive,
+                        MSYS2_ARCHIVE_SHA256,
+                        downloader=downloader,
+                    )
+                    reporter.done(source)
 
-            _run_checked(
-                [str(archive), "-y", f"-o{stage}"],
-                env=environ,
-                runner=runner,
-                label="MSYS2 extraction",
-            )
-            root = stage / "msys64"
-            if not (root / "usr" / "bin" / "bash.exe").is_file():
-                raise RuntimeInstallError("the verified MSYS2 archive was incomplete")
-            runtime = Msys2Runtime(root, managed=False)
-            child_env = runtime.environment(environ)
+                    reporter.phase(2, 7, "Verifying and extracting the private base")
+                    _run_checked(
+                        [str(archive), "-y", f"-o{stage}"],
+                        env=environ,
+                        reporter=reporter,
+                        runner=runner,
+                        label="MSYS2 extraction",
+                    )
+                    root = stage / "msys64"
+                    if not (root / "usr" / "bin" / "bash.exe").is_file():
+                        raise RuntimeInstallError(
+                            "the verified MSYS2 archive was incomplete"
+                        )
+                    reporter.done()
 
-            print("Updating the private MSYS2 base…")
-            _run_checked(
-                _bash_command(root, _INITIAL_UPDATE_COMMAND),
-                env=child_env,
-                runner=runner,
-                label="MSYS2 base update",
-            )
-            # A new process is required after msys2-runtime/bash updates.
-            child_env = runtime.environment(environ)
-            print("Installing tmux and the private Python runtime…")
-            _run_checked(
-                _bash_command(root, _PACKAGE_INSTALL_COMMAND),
-                env=child_env,
-                runner=runner,
-                label="MSYS2 package installation",
-            )
-            _run_checked(
-                _bash_command(root, _VENV_COMMAND),
-                env=child_env,
-                runner=runner,
-                label="Railmux virtual environment creation",
-            )
-            print(f"Installing Railmux {version} into the private runtime…")
-            _run_checked(
-                _bash_command(root, _PACKAGE_COMMAND, version),
-                env=child_env,
-                runner=runner,
-                label="Railmux runtime package installation",
-            )
-            _write_marker(root, version=version)
-            staged_runtime = Msys2Runtime(root, managed=True)
-            if not probe_runtime(
-                staged_runtime,
-                version=version,
-                environ=environ,
-                probe=probe,
-            ):
-                raise RuntimeInstallError("the staged Railmux runtime failed validation")
-            os.replace(root, final_root)
+                    reporter.phase(3, 7, "Selecting an MSYS2 package mirror")
+                    try:
+                        decision = mirror_optimizer(root)
+                    except PacmanMirrorError as exc:
+                        reporter.note(
+                            f"Mirror measurement unavailable ({exc}); using the "
+                            "official order."
+                        )
+                        reporter.done("official order")
+                    else:
+                        for mirror_probe in decision.probes:
+                            reporter.command_output(
+                                f"mirror probe {mirror_probe.label}: "
+                                f"{_format_download_rate(mirror_probe.rate)}\n"
+                            )
+                        for label, reason in decision.failures:
+                            reporter.command_output(
+                                f"mirror probe {label}: unavailable ({reason})\n"
+                            )
+                        if decision.selected is None:
+                            reporter.done("official order")
+                        else:
+                            reporter.done(
+                                f"{decision.selected.label} · "
+                                f"{_format_download_rate(decision.selected.rate)}"
+                            )
 
-        installed = Msys2Runtime(final_root, managed=True)
-        if not probe_runtime(
-            installed,
-            version=version,
-            environ=environ,
-            probe=probe,
-        ):
-            raise RuntimeInstallError("the activated Railmux runtime failed validation")
-        return installed
+                    runtime = Msys2Runtime(root, managed=False)
+                    child_env = runtime.environment(environ)
+                    reporter.phase(4, 7, "Updating the private MSYS2 base")
+                    reporter.note(
+                        "pacman is noninteractive; displayed [Y/n] prompts do "
+                        "not require input."
+                    )
+                    _run_checked(
+                        _bash_command(root, _INITIAL_UPDATE_COMMAND),
+                        env=child_env,
+                        reporter=reporter,
+                        runner=runner,
+                        label="MSYS2 base update",
+                    )
+                    reporter.done()
+
+                    # A new process is required after msys2-runtime/bash updates.
+                    child_env = runtime.environment(environ)
+                    reporter.phase(5, 7, "Installing tmux and private Python")
+                    _run_checked(
+                        _bash_command(root, _PACKAGE_INSTALL_COMMAND),
+                        env=child_env,
+                        reporter=reporter,
+                        runner=runner,
+                        label="MSYS2 package installation",
+                    )
+                    reporter.done()
+
+                    reporter.phase(6, 7, f"Installing Railmux {version}")
+                    _run_checked(
+                        _bash_command(root, _VENV_COMMAND),
+                        env=child_env,
+                        reporter=reporter,
+                        runner=runner,
+                        label="Railmux virtual environment creation",
+                    )
+                    _run_checked(
+                        _bash_command(root, _PACKAGE_COMMAND, version),
+                        env=child_env,
+                        reporter=reporter,
+                        runner=runner,
+                        label="Railmux runtime package installation",
+                    )
+                    reporter.done()
+
+                    reporter.phase(7, 7, "Validating and activating the runtime")
+                    _write_marker(root, version=version)
+                    staged_runtime = Msys2Runtime(root, managed=True)
+                    if not probe_runtime(
+                        staged_runtime,
+                        version=version,
+                        environ=environ,
+                        probe=probe,
+                    ):
+                        raise RuntimeInstallError(
+                            "the staged Railmux runtime failed validation"
+                        )
+                    os.replace(root, final_root)
+
+                installed = Msys2Runtime(final_root, managed=True)
+                if not probe_runtime(
+                    installed,
+                    version=version,
+                    environ=environ,
+                    probe=probe,
+                ):
+                    raise RuntimeInstallError(
+                        "the activated Railmux runtime failed validation"
+                    )
+                reporter.done("ready")
+                reporter.finish()
+                return installed
+    except RuntimeInstallError as exc:
+        raise RuntimeInstallError(f"{exc}; full log: {log_path}") from exc
+    except OSError as exc:
+        detail = f"; full log: {log_path}" if log_path.is_file() else ""
+        raise RuntimeInstallError(f"runtime installation failed{detail}") from exc

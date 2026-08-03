@@ -26,7 +26,7 @@ def _print_help() -> None:
         "       railmux ssh HOST [OPTIONS]\n"
         "       railmux config [--remote HOST] [OPTIONS]\n"
         "       railmux doctor [--remote HOST] [OPTIONS]\n"
-        "       railmux runtime {status,install} [--yes]\n\n"
+        "       railmux runtime {status,install} [--yes] [--verbose]\n\n"
         "Windows preview: Railmux runs in a private managed MSYS2/tmux "
         "runtime while Codex and Claude Code remain Windows-native and use "
         "the existing Windows user session directories."
@@ -56,7 +56,8 @@ def _confirm_install(*, input_fn: Callable[[str], str] = input) -> bool:
     try:
         answer = input_fn(
             "Install the private MSYS2/tmux runtime now? "
-            "This downloads about 50 MB and uses about 300 MB [y/N] "
+            "This downloads a 50 MB base plus required updates and packages, "
+            "and uses about 300 MB or more of private disk space [y/N] "
         )
     except (EOFError, KeyboardInterrupt):
         print()
@@ -68,13 +69,18 @@ def _install(
     *,
     environ: Mapping[str, str],
     assume_yes: bool,
+    verbose: bool = False,
     input_fn: Callable[[str], str] = input,
 ) -> Msys2Runtime | None:
     if not assume_yes and not _confirm_install(input_fn=input_fn):
         print("MSYS2 runtime installation cancelled.", file=sys.stderr)
         return None
     try:
-        runtime = install_managed_runtime(version=__version__, environ=environ)
+        runtime = install_managed_runtime(
+            version=__version__,
+            environ=environ,
+            verbose=verbose,
+        )
     except RuntimeInstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return None
@@ -135,12 +141,24 @@ def main(
     if arguments[:2] == ["runtime", "status"] and len(arguments) == 2:
         return _runtime_status(runtime, environ=environ)
     if arguments and arguments[0] == "runtime":
-        if arguments[1:] not in (["install"], ["install", "--yes"]):
-            print("error: usage: railmux runtime {status,install} [--yes]", file=sys.stderr)
+        install_arguments = arguments[1:]
+        install_flags = install_arguments[1:] if install_arguments[:1] == ["install"] else []
+        if (
+            not install_arguments
+            or install_arguments[0] != "install"
+            or len(install_flags) != len(set(install_flags))
+            or any(flag not in {"--yes", "--verbose"} for flag in install_flags)
+        ):
+            print(
+                "error: usage: railmux runtime {status,install} "
+                "[--yes] [--verbose]",
+                file=sys.stderr,
+            )
             return 2
         runtime = runtime or _install(
             environ=environ,
-            assume_yes=arguments[-1:] == ["--yes"],
+            assume_yes="--yes" in install_flags,
+            verbose="--verbose" in install_flags,
             input_fn=input_fn,
         )
         return 0 if runtime is not None else 2
@@ -162,7 +180,12 @@ def main(
                 file=sys.stderr,
             )
             return 2
-        runtime = _install(environ=environ, assume_yes=False, input_fn=input_fn)
+        runtime = _install(
+            environ=environ,
+            assume_yes=False,
+            verbose=False,
+            input_fn=input_fn,
+        )
         if runtime is None:
             return 2
 

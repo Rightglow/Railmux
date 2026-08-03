@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Advisory HTTPS health check for the pinned MSYS2 archive transports."""
+"""Advisory HTTPS health check for approved MSYS2 bootstrap transports."""
 
 from __future__ import annotations
 
@@ -15,6 +15,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from railmux.windows_msys2 import (  # noqa: E402
     MSYS2_ARCHIVE_SIZE,
     MSYS2_ARCHIVE_SOURCES,
+)
+from railmux.windows_pacman import (  # noqa: E402
+    PACMAN_MIRROR_SOURCES,
+    probe_pacman_mirror,
 )
 
 
@@ -51,14 +55,27 @@ def check_source(source: tuple[str, str]) -> str:
     return f"{label}: OK (HTTPS range resume supported)"
 
 
+def check_pacman_source(source: tuple[str, str]) -> str:
+    probe = probe_pacman_mirror(*source)
+    return (
+        f"{probe.label}: OK (pacman database "
+        f"{probe.bytes_read} byte sample)"
+    )
+
+
 def main() -> int:
     failures = []
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=len(MSYS2_ARCHIVE_SOURCES)
-    ) as pool:
+    checks = [
+        (f"archive {source[0]}", check_source, source)
+        for source in MSYS2_ARCHIVE_SOURCES
+    ] + [
+        (f"pacman {source[0]}", check_pacman_source, source)
+        for source in PACMAN_MIRROR_SOURCES
+    ]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(checks)) as pool:
         futures = {
-            pool.submit(check_source, source): source[0]
-            for source in MSYS2_ARCHIVE_SOURCES
+            pool.submit(check, source): name
+            for name, check, source in checks
         }
         for future in concurrent.futures.as_completed(futures):
             label = futures[future]

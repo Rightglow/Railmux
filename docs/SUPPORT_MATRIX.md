@@ -192,8 +192,9 @@ is labelled supported.
 2. Offer an explicit, cancellable managed-MSYS2 installation with approved
    pinned sources, one fixed integrity digest across safe source fallback,
    bounded speed probes and exact-offset resume, visible bounded download
-   progress, private ownership, and no system-wide PATH or shell-profile edits.
-   Never silently adopt or modify a user-owned MSYS2.
+   progress, fresh package-mirror selection, bounded default phases, complete
+   UTF-8 diagnostic logs, private ownership, and no system-wide PATH or
+   shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
 3. Keep one versioned runtime authority and make interrupted installation or
    upgrade transactional and recoverable. Never overwrite user-owned MSYS2
    files.

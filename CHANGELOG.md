@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev7] - 2026-08-03
+
+### Added
+
+- Measure fresh MSYS package databases from a bounded approved subset of the
+  private runtime's official mirrorlist and promote a materially faster source
+  before pacman runs, while retaining every official fallback.
+- Present Windows runtime installation as seven stable phases, retain complete
+  redacted UTF-8 subprocess logs, show a bounded failure tail, and add
+  `railmux runtime install --verbose` for raw live output.
+
+### Changed
+
+- Clarify that the initial 50 MB base download is followed by required private
+  MSYS2 updates and packages, and that pacman's printed confirmation needs no
+  keyboard input.
+- Bound both the number and displayed length of failure-tail lines while
+  preserving the complete line in the diagnostic log.
+- Extend advisory Windows-preview mirror CI to exercise the approved pacman
+  database endpoints as well as the pinned base archive transports.
+
+### Security
+
+- Reorder only a staged Railmux-owned mirrorlist, require exact approved
+  official HTTPS URLs and a fresh bounded Zstandard database sample, retain
+  pacman signature verification, redact credentials from logs, and preserve
+  the original official order whenever selection cannot be proven safe.
+
 ## [0.4.0.dev6] - 2026-08-03
 
 ### Changed
@@ -1838,7 +1866,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...HEAD
+[0.4.0.dev7]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...v0.4.0.dev7
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
