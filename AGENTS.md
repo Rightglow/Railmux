@@ -67,17 +67,27 @@ Never base new work on it, merge it, publish another release from it, or move
 the branch/tag references. Consult it only for bounded lessons or
 platform-neutral changes that are independently reimplemented and reviewed.
 
+`archive/windows-wsl-delegation-deprecated` is the frozen, read-only archive
+of the abandoned native-Windows-to-WSL bootstrap experiment. It ends at
+`v0.4.0.dev3`. Native Windows users could not naturally share their existing
+Windows Codex/Claude installation, credentials, paths, and provider history
+with a Linux provider runtime, so this is not a fallback or a base for new
+Windows work. Ordinary Railmux launched by a user from inside WSL remains part
+of the supported POSIX product line on `main`.
+
 `windows-preview` is the long-lived integration branch for the replacement
 Windows bootstrap/wrapper experiment. It must start from current `main` and
 must not inherit the archived ConPTY compositor, native provider hosting, or
 parallel UI implementation. Native Windows Python owns only discovery,
 consent, installation/update, path/argument translation, and handoff into a
-supported tmux-bearing runtime: prefer an existing WSL distribution and
-evaluate a managed MSYS2 runtime as the lighter fallback. Railmux itself and
-providers run inside that delegated runtime, so the POSIX UI remains the one
-behavioral authority. This branch may publish only PEP 440 development
-releases in the `0.4.0.devN` series, continuing at `0.4.0.dev3` after the two
-archived ConPTY builds; do not use that series for `main` builds. Develop
+private managed MSYS2/tmux runtime. Railmux itself runs under MSYS2 while the
+providers remain the user's Windows-native Codex/Claude executables and use
+their existing Windows-owned session/config directories. The POSIX UI remains
+the one behavioral authority. Do not add a WSL delegation fallback: native
+Windows launch and ordinary user-initiated WSL launch are separate products.
+This branch may publish only PEP 440 development releases in the
+`0.4.0.devN` series, continuing at `0.4.0.dev4` after the archived ConPTY and
+WSL builds; do not use that series for `main` builds. Develop
 Windows changes on focused branches based on
 `windows-preview`, then merge them back into `windows-preview`; never merge
 that branch wholesale into `main`.
@@ -91,8 +101,8 @@ and merged deliberately instead of importing the preview branch's history.
 Before changing code or publishing, verify the current branch. Final
 `MAJOR.MINOR.PATCH` tags and POSIX/WSL `.devN` tags must point to commits
 reachable from `main`. Windows-wrapper preview tags must contain `.devN`, use
-`0.4.0.dev3` or later in the `0.4.0.devN` series, and point to commits reachable from
+`0.4.0.dev4` or later in the `0.4.0.devN` series, and point to commits reachable from
 `windows-preview` but not `main`. No commit reachable only from the archived
-ConPTY branch is release-eligible. Merge shared fixes from `main` before
-cutting the corresponding Windows preview build; never copy a Windows release
-commit or tag back to `main`.
+ConPTY or WSL-delegation branch is release-eligible. Merge shared fixes from
+`main` before cutting the corresponding Windows preview build; never copy a
+Windows release commit or tag back to `main`.

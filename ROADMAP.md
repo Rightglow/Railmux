@@ -39,23 +39,26 @@ mode. It currently inherits `mkstemp`'s private `0600` mode, including for the
 explicit Claude-history deletion path; changing that behavior needs targeted
 permission semantics rather than a repository-wide chmod guess.
 
-### Windows bootstrap into one POSIX Railmux runtime
+### Windows bootstrap into a managed MSYS2 Railmux runtime
 
 Windows Terminal running a WSL distribution already uses Railmux's supported
-Linux path. The remaining product experiment is a thin native Windows
-bootstrap that discovers or provisions a tmux-bearing compatibility runtime,
-then hands local Railmux or the local side of `railmux ssh` to the unchanged
-POSIX application. Prefer an existing WSL distribution; evaluate a private,
-managed MSYS2 runtime as the lighter fallback for users who do not want WSL.
+Linux path, but it is not the native-Windows product: its Linux providers do
+not naturally share the user's Windows Codex/Claude installation, credentials,
+paths, and histories. The native experiment therefore uses a thin bootstrap
+that provisions a private managed MSYS2/tmux runtime and hands local Railmux or
+the local side of `railmux ssh` to the unchanged POSIX application. Providers
+remain Windows-native and keep using the existing Windows user directories.
 
 The bootstrap may own consent, downloads, integrity checks, updates, path and
 argument translation, and terminal handoff. It must not grow another terminal
 emulator, compositor, provider host, or independent copy of Railmux UI state.
 The earlier ConPTY implementation is frozen at `v0.4.0.dev2` on
 `archive/windows-conpty-deprecated` and is not a base for new work. The
+WSL-delegation experiment is frozen at `v0.4.0.dev3` on
+`archive/windows-wsl-delegation-deprecated` for the same reason. The
 complete functional baseline and acceptance checklist live in
-`docs/SUPPORT_MATRIX.md`; mocked Windows branches and WSL-only evidence are
-not sufficient to claim the native launch experience.
+`docs/SUPPORT_MATRIX.md`; mocked Windows branches and ordinary WSL evidence are
+not sufficient to claim the managed-MSYS2 launch experience.
 
 ### Dual-agent workspace follow-ups
 

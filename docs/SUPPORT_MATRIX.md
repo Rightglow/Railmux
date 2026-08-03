@@ -39,7 +39,7 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux ssh HOST` | Windows WSL, rendered by Windows Terminal | Linux | **Supported** | Linux TTY/SSH implementation with tested `clip.exe`, `wt.exe`, and `wsl.exe` integration. Real Windows Terminal interaction remains a manual release check. |
 | `railmux ssh HOST` | Android Termux | Linux | **Field-validated** | Real phone use plus automated compact projection, SGR touch, soft-keyboard, cursor-focus, resize, and clipboard-fallback state tests. |
 | Either entry point | Native Windows Python in PowerShell, CMD, or Windows Terminal | — or Linux | **Not supported** | The `main` package has no native runtime adapter; use the supported WSL path. Installing the package does not yet provision or enter a delegated runtime. |
-| `railmux` or `railmux ssh HOST` | Native Windows bootstrap delegating to WSL or managed MSYS2 | — or Linux | **Planned** | The bootstrap/wrapper is developed only on `windows-preview`; the current `main` package does not install a runtime or claim native launch support. Railmux and providers must execute inside the delegated POSIX runtime. |
+| `railmux` or `railmux ssh HOST` | Native Windows bootstrap using managed MSYS2/tmux | — or Linux | **Planned** | The wrapper is developed only on `windows-preview`; the current `main` package does not install a runtime or claim native launch support. Railmux runs under MSYS2 while Windows-native providers retain the user's existing session/config directories. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
@@ -189,19 +189,19 @@ is labelled supported.
 1. `pip install`, package import, CLI parsing, bootstrap configuration, version
    check, update, and privacy-safe diagnostics work under supported Windows
    Python without importing POSIX-only Railmux modules before handoff.
-2. Detect a usable WSL distribution without changing it silently; otherwise
-   offer an explicit, cancellable managed-MSYS2 installation with pinned
+2. Offer an explicit, cancellable managed-MSYS2 installation with pinned
    sources, integrity verification, private ownership, and no system-wide PATH
-   or shell-profile edits.
+   or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
 3. Keep one versioned runtime authority and make interrupted installation or
-   upgrade transactional and recoverable. Never overwrite user-owned WSL or
-   MSYS2 files.
+   upgrade transactional and recoverable. Never overwrite user-owned MSYS2
+   files.
 4. Translate Windows paths, Unicode arguments, environment, exit status, and
    Ctrl-C exactly across the handoff without `shell=True` or command-string
    interpolation.
 5. Launch the existing POSIX `railmux` or `railmux ssh` entry point inside the
-   selected runtime. Providers, tmux, session discovery, restore, previews,
-   layout, and UI state remain owned there rather than mirrored natively.
+   selected runtime. tmux, session discovery, restore, previews, layout, and UI
+   state remain owned there rather than mirrored natively; provider processes
+   are the Windows-native CLIs and use their existing Windows histories.
 6. Validate UTF-8/CJK input, IME composition, bracketed paste, arrows, Page
    Up/Down, function keys, tmux prefix sequences, and terminal cleanup.
 7. Validate resize/reflow, SGR mouse press/release/wheel/drag/hover,
@@ -212,11 +212,11 @@ is labelled supported.
    commands without `shell=True` or command-string interpolation.
 9. Prove local session restore and `railmux ssh` to Linux/macOS/Unix hosts.
    Running providers or an SSH server on native Windows remains out of scope.
-10. Add unconditional native Windows bootstrap/import/package CI plus WSL and
-    managed-MSYS2 runtime smoke evidence. If hosted CI cannot exercise one
-    runtime, record a named and dated real Windows Terminal pass here for every
-    release that claims it. Mocked OS branches cannot close either runtime
-    path, and WSL evidence cannot close the MSYS2 path.
+10. Add unconditional native Windows bootstrap/import/package CI plus a real
+    managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
+    record a named and dated real Windows Terminal pass here for every release
+    that claims it. Mocked OS branches and ordinary WSL evidence cannot close
+    the managed-MSYS2 path.
 
 ## Release closure checklist
 

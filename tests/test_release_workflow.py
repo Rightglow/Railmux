@@ -52,9 +52,9 @@ def test_release_tags_are_fenced_to_their_product_branches():
     assert "POSIX/WSL development release from main" in release
     assert "Windows-wrapper development release from windows-preview" in release
     assert "main development releases must use the 0.3.x.devN series" in release
-    assert "Windows-wrapper releases must use 0.4.0.dev3 or later" in release
+    assert "Windows-wrapper releases must use 0.4.0.dev4 or later" in release
     assert r"^0\.4\.0\.dev([0-9]+)$" in release
-    assert "BASH_REMATCH[1] >= 3" in release
+    assert "BASH_REMATCH[1] >= 4" in release
     assert "development releases must come from main or windows-preview" in release
     assert "final releases must come from main" in release
 
@@ -66,6 +66,9 @@ def test_active_preview_branch_is_tested_and_archive_is_rejected_explicitly():
     push_section = test.split("pull_request:", 1)[0]
     assert "- windows-preview" in push_section
     assert "f1b8cb128bd78831d00d4cc7dfa02453f8bd9700" in release
+    assert "912cae6bd62d31a6ad69ce7da2f85be4750ed84b" in release
     assert "archived ConPTY branch moved from its frozen tip" in release
     assert "archived ConPTY history is not release-eligible" in release
+    assert "archived WSL-delegation branch moved from its frozen tip" in release
+    assert "archived WSL-delegation history is not release-eligible" in release
     assert "windows-preview:refs/remotes/origin/windows-preview || true" in release
