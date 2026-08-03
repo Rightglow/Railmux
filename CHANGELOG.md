@@ -7,13 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Freeze the abandoned ConPTY Windows preview at `v0.4.0.dev2`, move the active
-  Windows experiment to a clean delegated-runtime wrapper branch beginning at
-  `0.4.0.dev3`, and reject archived ancestry during publication.
-
-## [0.4.0.dev3] - Unreleased
+## [0.4.0.dev3] - 2026-08-03
 
 ### Added
 
@@ -24,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a machine-readable delegated-runtime parity ledger that stays aligned
   with the stable support inventory and retains the real Windows Terminal
   regression scenarios learned from the archived implementation.
+
+### Changed
+
+- Freeze the abandoned ConPTY Windows preview at `v0.4.0.dev2`, move the active
+  Windows experiment to a clean delegated-runtime wrapper branch beginning at
+  `0.4.0.dev3`, and reject archived ancestry during publication.
 
 ### Known limitations
 
@@ -1792,7 +1792,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...HEAD
+[0.4.0.dev3]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev2...v0.4.0.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2
 [0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1
 [0.3.2]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2
