@@ -39,20 +39,23 @@ mode. It currently inherits `mkstemp`'s private `0600` mode, including for the
 explicit Claude-history deletion path; changing that behavior needs targeted
 permission semantics rather than a repository-wide chmod guess.
 
-### Native Windows latest-state SSH client
+### Windows bootstrap into one POSIX Railmux runtime
 
 Windows Terminal running a WSL distribution already uses Railmux's supported
-Linux client path. The remaining platform target is native Windows Python in
-Windows Terminal or PowerShell, while the remote helper continues to run on a
-POSIX host with tmux.
+Linux path. The remaining product experiment is a thin native Windows
+bootstrap that discovers or provisions a tmux-bearing compatibility runtime,
+then hands local Railmux or the local side of `railmux ssh` to the unchanged
+POSIX application. Prefer an existing WSL distribution; evaluate a private,
+managed MSYS2 runtime as the lighter fallback for users who do not want WSL.
 
-Treat this as a local platform adapter rather than a collection of
-`sys.platform` conditionals. It must replace POSIX raw-TTY and selectable-pipe
-assumptions, add Windows console/resize/clipboard/browser/terminal-launch
-boundaries, and retain the existing protocol and remote session-safety model.
-The complete functional baseline and acceptance checklist live in
-`docs/SUPPORT_MATRIX.md`; WSL unit coverage alone is not sufficient evidence
-for the native Windows support claim.
+The bootstrap may own consent, downloads, integrity checks, updates, path and
+argument translation, and terminal handoff. It must not grow another terminal
+emulator, compositor, provider host, or independent copy of Railmux UI state.
+The earlier ConPTY implementation is frozen at `v0.4.0.dev2` on
+`archive/windows-conpty-deprecated` and is not a base for new work. The
+complete functional baseline and acceptance checklist live in
+`docs/SUPPORT_MATRIX.md`; mocked Windows branches and WSL-only evidence are
+not sufficient to claim the native launch experience.
 
 ### Dual-agent workspace follow-ups
 

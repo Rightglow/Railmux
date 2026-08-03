@@ -26,10 +26,17 @@ version is explicitly requested or pre-releases are enabled. Never append
 `0.2.10`, so development builds after 0.2.10 must target `0.2.11.devN`.
 
 Final releases are cut only from `main`, whose product scope is POSIX/WSL.
-Native Windows local mode and the native Windows side of `railmux ssh` live on
-`windows-preview` and may publish only `.devN` builds until that work is
-explicitly promoted. Shared fixes land on `main` first and are merged into the
-preview branch; never merge the complete preview branch into `main`.
+The delegated-runtime Windows bootstrap experiment lives on `windows-preview`
+and may publish only `0.5.0.devN` builds until that work is explicitly
+promoted. The abandoned ConPTY experiment is frozen at `v0.4.0.dev2` on
+`archive/windows-conpty-deprecated`; it is not release-eligible. Shared fixes
+land on `main` first and are merged into the active preview branch; never merge
+the complete preview branch into `main`.
+
+The already-published `0.4.0.dev1` and `0.4.0.dev2` artifacts are historical
+validation builds, not the active preview. Yank them on PyPI after the archive
+migration so unconstrained `pip --pre` resolution does not prefer the abandoned
+implementation; a yank preserves exact-pin installation for reproduction.
 
 ## One-time publishing setup
 

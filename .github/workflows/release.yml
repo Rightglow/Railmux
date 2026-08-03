@@ -28,7 +28,20 @@ jobs:
           pkg=$(python -c "import re,pathlib; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('src/railmux/__init__.py').read_text()).group(1))")
           [ "$tag" = "$pkg" ] || { echo "::error::tag v$tag != __version__ $pkg"; exit 1; }
           commit=$(git rev-parse HEAD)
-          git fetch --no-tags origin main windows-preview
+          archive_tip=f1b8cb128bd78831d00d4cc7dfa02453f8bd9700
+          git fetch --no-tags origin \
+            main:refs/remotes/origin/main \
+            archive/windows-conpty-deprecated:refs/remotes/origin/archive/windows-conpty-deprecated
+          git fetch --no-tags origin \
+            windows-preview:refs/remotes/origin/windows-preview || true
+          [ "$(git rev-parse origin/archive/windows-conpty-deprecated)" = "$archive_tip" ] || {
+            echo "::error::archived ConPTY branch moved from its frozen tip"
+            exit 1
+          }
+          if git merge-base --is-ancestor "$archive_tip" "$commit"; then
+            echo "::error::archived ConPTY history is not release-eligible"
+            exit 1
+          fi
           if [[ "$tag" == *.dev* ]]; then
             if git merge-base --is-ancestor "$commit" origin/main; then
               [[ "$tag" =~ ^0\.3\.[0-9]+\.dev[0-9]+$ ]] || {
@@ -36,12 +49,13 @@ jobs:
                 exit 1
               }
               echo "POSIX/WSL development release from main"
-            elif git merge-base --is-ancestor "$commit" origin/windows-preview; then
-              [[ "$tag" =~ ^0\.4\.0\.dev[0-9]+$ ]] || {
-                echo "::error::native-Windows releases must use the 0.4.0.devN series"
+            elif git rev-parse --verify -q origin/windows-preview >/dev/null &&
+                 git merge-base --is-ancestor "$commit" origin/windows-preview; then
+              [[ "$tag" =~ ^0\.5\.0\.dev[0-9]+$ ]] || {
+                echo "::error::Windows-wrapper releases must use the 0.5.0.devN series"
                 exit 1
               }
-              echo "native-Windows development release from windows-preview"
+              echo "Windows-wrapper development release from windows-preview"
             else
               echo "::error::development releases must come from main or windows-preview"
               exit 1

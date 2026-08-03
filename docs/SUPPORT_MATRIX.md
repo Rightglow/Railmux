@@ -38,7 +38,8 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux ssh HOST` | macOS | Linux | **Supported** | POSIX client path plus macOS CI; Terminal.app and common external-terminal launch behavior are covered. |
 | `railmux ssh HOST` | Windows WSL, rendered by Windows Terminal | Linux | **Supported** | Linux TTY/SSH implementation with tested `clip.exe`, `wt.exe`, and `wsl.exe` integration. Real Windows Terminal interaction remains a manual release check. |
 | `railmux ssh HOST` | Android Termux | Linux | **Field-validated** | Real phone use plus automated compact projection, SGR touch, soft-keyboard, cursor-focus, resize, and clipboard-fallback state tests. |
-| `railmux ssh HOST` | Native Windows Python in PowerShell, CMD, or Windows Terminal | Linux | **Not supported** | The client currently imports POSIX `termios`/`tty`, depends on POSIX raw-TTY behavior, and has no Windows pipe/console adapter or native CI. This is the next intended platform target. |
+| Either entry point | Native Windows Python in PowerShell, CMD, or Windows Terminal | — or Linux | **Not supported** | The `main` package has no native runtime adapter; use the supported WSL path. Installing the package does not yet provision or enter a delegated runtime. |
+| `railmux` or `railmux ssh HOST` | Native Windows bootstrap delegating to WSL or managed MSYS2 | — or Linux | **Planned** | The bootstrap/wrapper is developed only on `windows-preview`; the current `main` package does not install a runtime or claim native launch support. Railmux and providers must execute inside the delegated POSIX runtime. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
@@ -141,7 +142,7 @@ capabilities it exposes, then record unavoidable product differences.
 | VS Code/Cursor xterm.js | Supported | Right-click behavior and CJK composition focus are editor settings; test paste and mouse forwarding. |
 | kitty, WezTerm, Alacritty, foot | Compatible/conditional | SGR mouse, OSC 52 policy, function keys, colours, resize, and external launcher where applicable. |
 | Windows Terminal with WSL | Supported | WSL runtime, `clip.exe`, `wt.exe`, function-key conflicts, mouse, paste, resize, and OSC 52. |
-| Windows Terminal with native Windows Python | Planned | Must pass the native Windows acceptance checklist below before this row changes. |
+| Windows Terminal launched by the native Windows bootstrap | Planned | Must pass the delegated-runtime acceptance checklist below before this row changes. |
 | Termux | Field-validated | Compact navigation, keyboard open/close, cursor, post-keyboard touch, rotation boundary, history, and reconnect. |
 
 For every newly claimed terminal, manually verify alternate-screen entry/exit,
@@ -180,34 +181,42 @@ OpenCode is therefore **planned**, not currently supported.
 
 ## Adding a local operating system
 
-Native Windows support for `railmux ssh` must be an adapter, not scattered
-`sys.platform` branches. The remote helper can remain POSIX; the local client
-must satisfy every item below before native Windows is labelled supported.
+The Windows preview uses a native bootstrap to enter one POSIX Railmux runtime,
+not a second Console/ConPTY UI implementation. The remote helper can remain
+POSIX. Every item below must pass before the native Windows launch experience
+is labelled supported.
 
-1. Package import, CLI parsing, config/runtime paths, version check, local
-   self-upgrade, and `railmux doctor` work under supported Windows Python.
-2. Replace POSIX `termios`/`tty` raw-mode ownership with a Windows Console/VT
-   adapter that restores the exact prior modes after success, cancellation,
-   exception, process termination, and reconnect exhaustion.
-3. Read terminal size and resize events from native Windows Terminal without
-   forwarding transient invalid geometry to the remote tmux client.
-4. Transport SSH stdin/stdout without assuming POSIX-selectable pipe file
-   descriptors; preserve non-blocking local input, remote output, heartbeat,
-   and bounded reconnect cancellation.
-5. Decode and forward UTF-8/CJK input, bracketed paste, arrows, Page Up/Down,
-   function keys, tmux prefix sequences, `Ctrl-C`, and the local `Ctrl-]`
-   emergency escape without byte loss or newline translation.
-6. Validate SGR mouse press/release, wheel, drag, hover, double-click, status
-   clicks, local history routing, semantic URL/path click, and selection copy.
-7. Implement native clipboard and default-browser adapters, retaining bounded
-   OSC 52 as a policy-dependent fallback.
-8. Define separate-terminal behavior for Windows Terminal tabs/windows and
-   safely quote a remote SSH/Vim command without `shell=True` injection.
-9. Preserve startup/restoring prompts, cooked consent prompts, cursor, colours,
-   alternate screen, focus events, IME composition, and terminal cleanup.
-10. Add native Windows CI for import, unit, packaging, and protocol tests plus a
-    documented real Windows Terminal manual pass. WSL-only evidence cannot
-    close this item.
+1. `pip install`, package import, CLI parsing, bootstrap configuration, version
+   check, update, and privacy-safe diagnostics work under supported Windows
+   Python without importing POSIX-only Railmux modules before handoff.
+2. Detect a usable WSL distribution without changing it silently; otherwise
+   offer an explicit, cancellable managed-MSYS2 installation with pinned
+   sources, integrity verification, private ownership, and no system-wide PATH
+   or shell-profile edits.
+3. Keep one versioned runtime authority and make interrupted installation or
+   upgrade transactional and recoverable. Never overwrite user-owned WSL or
+   MSYS2 files.
+4. Translate Windows paths, Unicode arguments, environment, exit status, and
+   Ctrl-C exactly across the handoff without `shell=True` or command-string
+   interpolation.
+5. Launch the existing POSIX `railmux` or `railmux ssh` entry point inside the
+   selected runtime. Providers, tmux, session discovery, restore, previews,
+   layout, and UI state remain owned there rather than mirrored natively.
+6. Validate UTF-8/CJK input, IME composition, bracketed paste, arrows, Page
+   Up/Down, function keys, tmux prefix sequences, and terminal cleanup.
+7. Validate resize/reflow, SGR mouse press/release/wheel/drag/hover,
+   double-click, status clicks, context menus, local history routing, semantic
+   URL/path clicks, and selection copy against the POSIX baseline.
+8. Define clipboard, browser, and separate-terminal bridges for each runtime;
+   keep bounded OSC 52 as a policy-dependent fallback and quote remote SSH/Vim
+   commands without `shell=True` or command-string interpolation.
+9. Prove local session restore and `railmux ssh` to Linux/macOS/Unix hosts.
+   Running providers or an SSH server on native Windows remains out of scope.
+10. Add unconditional native Windows bootstrap/import/package CI plus WSL and
+    managed-MSYS2 runtime smoke evidence. If hosted CI cannot exercise one
+    runtime, record a named and dated real Windows Terminal pass here for every
+    release that claims it. Mocked OS branches cannot close either runtime
+    path, and WSL evidence cannot close the MSYS2 path.
 
 ## Release closure checklist
 

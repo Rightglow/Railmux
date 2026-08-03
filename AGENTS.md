@@ -61,14 +61,25 @@ from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
 POSIX/WSL development builds from this branch when a fix needs field testing;
 the current stable-line preview series is `0.3.x.devN`.
 
-`windows-preview` is the long-lived integration branch for native Windows
-local mode and the native Windows side of `railmux ssh`. It contains the
-current `main` behavior plus the experimental ConPTY/Windows adapters and may
-publish only PEP 440 development releases. Its current independent preview
-series is `0.4.0.devN`; do not use that series for `main` builds. Develop
-Windows changes on focused branches based on `windows-preview`, then merge
-them back into `windows-preview`; never merge that branch wholesale into
-`main`.
+`archive/windows-conpty-deprecated` is the frozen, read-only archive of the
+abandoned native ConPTY compositor experiment. It ends at `v0.4.0.dev2`.
+Never base new work on it, merge it, publish another release from it, or move
+the branch/tag references. Consult it only for bounded lessons or
+platform-neutral changes that are independently reimplemented and reviewed.
+
+`windows-preview` is the long-lived integration branch for the replacement
+Windows bootstrap/wrapper experiment. It must start from current `main` and
+must not inherit the archived ConPTY compositor, native provider hosting, or
+parallel UI implementation. Native Windows Python owns only discovery,
+consent, installation/update, path/argument translation, and handoff into a
+supported tmux-bearing runtime: prefer an existing WSL distribution and
+evaluate a managed MSYS2 runtime as the lighter fallback. Railmux itself and
+providers run inside that delegated runtime, so the POSIX UI remains the one
+behavioral authority. This branch may publish only PEP 440 development
+releases in the independent `0.5.0.devN` series; do not use that series for
+`main` builds. Develop Windows changes on focused branches based on
+`windows-preview`, then merge them back into `windows-preview`; never merge
+that branch wholesale into `main`.
 
 Shared POSIX/provider fixes belong in `main` first and flow one way into
 `windows-preview`. If a bug is discovered while testing Windows, separate the
@@ -78,8 +89,9 @@ and merged deliberately instead of importing the preview branch's history.
 
 Before changing code or publishing, verify the current branch. Final
 `MAJOR.MINOR.PATCH` tags and POSIX/WSL `.devN` tags must point to commits
-reachable from `main`. Native-Windows preview tags must contain `.devN`, use
-the independent Windows preview series, and point to commits reachable from
-`windows-preview` but not `main`. Merge shared fixes from `main` before cutting
-the corresponding Windows preview build; never copy a Windows release commit
-or tag back to `main`.
+reachable from `main`. Windows-wrapper preview tags must contain `.devN`, use
+the independent `0.5.0.devN` series, and point to commits reachable from
+`windows-preview` but not `main`. No commit reachable only from the archived
+ConPTY branch is release-eligible. Merge shared fixes from `main` before
+cutting the corresponding Windows preview build; never copy a Windows release
+commit or tag back to `main`.
