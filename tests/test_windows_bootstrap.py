@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock
 
 from railmux import __version__
@@ -34,6 +35,10 @@ def test_windows_help_describes_shared_native_provider_data(capsys):
 def test_public_entrypoint_selects_windows_before_posix_import(capsys):
     result = entrypoint_main(["--version"], platform_name="nt")
 
+    if sys.version_info < (3, 10):
+        assert result == 2
+        assert "Windows preview requires Python 3.10" in capsys.readouterr().err
+        return
     assert result == 0
     assert capsys.readouterr().out.endswith("(Windows MSYS2 bootstrap)\n")
 
