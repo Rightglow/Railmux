@@ -46,6 +46,10 @@ def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch, tmp_path)
     marker.chmod(0o644)
     monkeypatch.setattr(provider_paths, "_MANAGED_RUNTIME_MARKER", marker)
     monkeypatch.setattr(provider_paths.sys, "platform", "cygwin")
+    monkeypatch.setattr(
+        provider_paths.os, "getuid", lambda: marker.lstat().st_uid,
+        raising=False,
+    )
     monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
     monkeypatch.setenv("RAILMUX_MSYS2_RUNTIME_ID", "msys2-test")
 
@@ -61,8 +65,13 @@ def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch, tmp_path)
 def test_managed_runtime_marker_must_be_same_owner(monkeypatch, tmp_path):
     marker = tmp_path / "railmux-runtime.json"
     marker.write_text("{}", encoding="utf-8")
+    marker_info = marker.lstat()
     monkeypatch.setattr(provider_paths, "_MANAGED_RUNTIME_MARKER", marker)
     monkeypatch.setattr(provider_paths.sys, "platform", "cygwin")
+    monkeypatch.setattr(
+        provider_paths.os, "getuid", lambda: marker_info.st_uid,
+        raising=False,
+    )
     monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
     monkeypatch.setenv("RAILMUX_MSYS2_RUNTIME_ID", "msys2-test")
     real_lstat = marker.lstat
@@ -70,7 +79,7 @@ def test_managed_runtime_marker_must_be_same_owner(monkeypatch, tmp_path):
         provider_paths.Path, "lstat",
         lambda self: os.stat_result((
             real_lstat().st_mode, real_lstat().st_ino,
-            real_lstat().st_dev, 1, os.getuid() + 1, 0,
+            real_lstat().st_dev, 1, marker_info.st_uid + 1, 0,
             real_lstat().st_size, 0, 0, 0,
         )),
     )
