@@ -262,7 +262,7 @@ path:
 railmux ssh your-server
 ```
 
-Protocol v14 begins with a bounded remote hello containing package version,
+Protocol v15 begins with a bounded remote hello containing package version,
 protocol version, SSH dependency readiness, and tmux availability. The server
 does not inspect or mutate tmux until the compatible client returns the exact
 start acknowledgement. Missing Railmux or its optional dependency can be
@@ -283,7 +283,7 @@ across differing package versions.
 
 If the default `railmux` tmux session is absent, the server starts Railmux in a
 detached tmux session using the same installed Python environment. A custom
-`--session` is never auto-created. Multiple protocol-v14 helpers may attach to
+`--session` is never auto-created. Multiple protocol-v15 helpers may attach to
 the same managed session. A short flock covers only validation and attachment;
 the helper confirms its own child by matching tmux's `#{client_pid}` before it
 releases that boundary. The shared window is set to `window-size=smallest`, so
@@ -346,7 +346,7 @@ A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
 
-Display protocol v14 uses monotonically sequenced, zlib-compressed keyframes and
+Display protocol v15 uses monotonically sequenced, zlib-compressed keyframes and
 row patches. Each update also carries a bounded terminal-mode bitmask. Only
 bracketed paste (`DECSET 2004`) and focus events (`DECSET 1004`) are projected;
 the client mirrors transitions and disables both modes before restoring the
@@ -376,7 +376,7 @@ reach the pane boundary. Raw tmux control sequences are parsed through `pyte`;
 reconstructed text and allowlisted SGR character styles cross the screen
 protocol. One bounded, validated OSC 52 clipboard payload may cross as a
 separate explicit message; other OSC and terminal actions are not forwarded.
-Protocol v14 also carries bounded, typed path lookup, destination-choice, and
+Protocol v15 also carries bounded, typed path lookup, destination-choice, and
 application-result messages.
 The remote accepts it only for a visible agent route, resolves it read-only
 against the real provider pane's current working directory, and returns an
@@ -399,9 +399,9 @@ a persistent or current-invocation answer only after helper acknowledgement.
 This capability is explicit on the
 wire: an unrelated mouse-aware TUI retains application-level wheel input, while
 locally transcript-backed wheel input never opens Claude Code's
-provider-managed history view. Protocol v14 also
+provider-managed history view. Protocol v15 also
 reports whether older rows remain, instead of inferring exhaustion from a
-short compressed page. Protocol v14 permits at most 20000 physical lines;
+short compressed page. Protocol v15 permits at most 20000 physical lines;
 the client requests 300 for the hot cache, then cumulative deep snapshots from
 2000 lines up to its configured 2000-20000 cap. A server-side styled-byte
 budget may return a shorter newest suffix rather than fail the display helper.
@@ -413,7 +413,10 @@ input, or `Esc` restores all panes. A periodic prefetch refreshes routes and
 future cache content without moving a frozen viewport. Every cumulative
 response replaces its prior snapshot only when its visible multi-line anchor
 has one exact match, so repeated content, newly prepended history, or newly
-appended output cannot shift the user's view. Each local wheel event advances
+appended output cannot shift the user's view. A pane-local, content-free Codex
+generation changes only after a confirmed rewind; protocol v15 uses it to
+replace that pane's cache rather than merging the abandoned suffix. Each local
+wheel event advances
 exactly one row: macOS/Linux touchpad and terminal stacks already encode gesture
 speed as event frequency, so multiplying a burst again could skip a long code
 block. Codex tmux history and Claude transcript-backed local history share this

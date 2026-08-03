@@ -331,7 +331,9 @@ messages, tool calls, and abbreviated tool output are colour-coded, while
 internal context and encrypted reasoning are hidden. Codex rewind lineages and
 Claude Code `parentUuid` branches are projected onto the provider's current
 conversation: the retained prefix and replacement suffix remain visible, while
-the abandoned suffix is hidden.
+the abandoned suffix is hidden. When Railmux observes a running Codex session
+advance to its rewind child, it also removes the abandoned terminal screen and
+tmux scrollback before Codex redraws the live pane.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between

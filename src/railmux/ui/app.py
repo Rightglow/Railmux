@@ -365,6 +365,12 @@ class _Running:
     legacy_server: tmux_server.TmuxServerTarget | None = None
     legacy_session_id: str | None = None
     provider_session_id: str | None = None
+    # Last canonical Codex rollout observed for this live pane.  Rewind creates
+    # a child rollout while leaving tmux's byte scrollback intact; tracking the
+    # provider generation lets the refresh path discard only that stale
+    # presentation cache when the exact live writer advances to its child.
+    codex_canonical_session_id: str | None = None
+    codex_history_generation_stamped: bool = False
 
     @property
     def is_placeholder(self) -> bool:
@@ -8530,6 +8536,9 @@ class App:
                 meta = self._session_cache.get(
                     r.project, r.logical_session_id or r.key)
             if meta is not None:
+                if session_type == "codex":
+                    self._sync_codex_rewind_scrollback(
+                        r, meta, server, codex_rollout_probes)
                 if meta.title:
                     r.label = f"{meta.project.display_name}/{meta.display_title}"
                 r.status = self._effective_status(
@@ -8547,6 +8556,86 @@ class App:
                             self._show_attention_status(meta.attention)
         self._maybe_resort_running()
         self._render_running_pane()
+
+    def _sync_codex_rewind_scrollback(
+        self,
+        running: _Running,
+        meta: SessionMeta,
+        server: tmux_ctl.ServerSnapshot | None,
+        codex_rollout_probes: dict[str, set[str] | None] | None,
+    ) -> None:
+        """Drop stale tmux bytes after an exact live Codex rewind transition.
+
+        The provider rollout is the history authority, but Codex keeps using
+        the same terminal pane after a rewind.  Its abandoned suffix can
+        therefore survive in tmux scrollback even though the canonical JSONL
+        is already correct.  Baseline the first observed rollout, then clear
+        only when the next canonical rollout names that baseline as its parent.
+        On procfs systems the new rollout must also be open in this exact pane's
+        process tree; an unavailable probe degrades to the provider lineage
+        link, while a negative probe waits for a later refresh.
+        """
+        current_id = meta.session_id
+        previous_id = running.codex_canonical_session_id
+        if previous_id is None:
+            running.codex_canonical_session_id = current_id
+            self._stamp_codex_history_generation(running, current_id)
+            return
+        if current_id == previous_id:
+            if not running.codex_history_generation_stamped:
+                self._stamp_codex_history_generation(running, current_id)
+            return
+        if (running.is_legacy or meta.forked_from_id != previous_id
+                or current_id not in self._codex_lineage_ids(previous_id)):
+            return
+
+        rollout_id = tmux_ctl.rollout_uuid_from_path(meta.jsonl_path)
+        if rollout_id != current_id:
+            return
+        probes = codex_rollout_probes if codex_rollout_probes is not None else {}
+        if running.tmux_name in probes:
+            open_ids = probes[running.tmux_name]
+        else:
+            open_ids = self._codex_rollout_ids(running, server)
+            probes[running.tmux_name] = open_ids
+        if open_ids is not None and current_id not in open_ids:
+            return
+
+        identity = self._codex_real_pane_identity(running)
+        if identity is None or not tmux_ctl.reset_pane_history(identity):
+            return
+        running.codex_canonical_session_id = current_id
+        running.codex_history_generation_stamped = tmux_ctl.set_pane_user_option(
+            identity.pane_id,
+            tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
+            current_id,
+        )
+
+    def _codex_real_pane_identity(
+        self, running: _Running,
+    ) -> tmux_ctl.PaneIdentity | None:
+        """Resolve a Codex pane across its detached home or swap location."""
+        real_pane = self._display_transport().displayed_real_pane(
+            running.tmux_name)
+        if real_pane is not None:
+            return tmux_ctl.pane_identity(real_pane)
+        topology = tmux_ctl.session_topology(running.tmux_name)
+        return topology.single_live_pane if topology is not None else None
+
+    def _stamp_codex_history_generation(
+        self, running: _Running, session_id: str,
+    ) -> None:
+        """Publish a content-free epoch for full-window SSH history caches."""
+        if running.is_legacy:
+            return
+        identity = self._codex_real_pane_identity(running)
+        if identity is None:
+            return
+        running.codex_history_generation_stamped = tmux_ctl.set_pane_user_option(
+            identity.pane_id,
+            tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
+            session_id,
+        )
 
     def _maybe_resort_running(self) -> None:
         """Re-order the Running registry by recency, at most once per minute.

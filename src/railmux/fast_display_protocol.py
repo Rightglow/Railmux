@@ -1,4 +1,4 @@
-"""Private v14 framing for the coalesced full-window SSH display."""
+"""Private v15 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD14\x00"
-INPUT_MAGIC = b"RMUXK14\x00"
-PROTOCOL_VERSION = 14
+DISPLAY_MAGIC = b"RMUXD15\x00"
+INPUT_MAGIC = b"RMUXK15\x00"
+PROTOCOL_VERSION = 15
 REMOTE_CONFIG_PROTOCOL = 1
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
@@ -28,10 +28,10 @@ MAX_HISTORY_PANES = 8
 MAX_CLIPBOARD_BYTES = 64 * 1024
 MAX_PATH_BYTES = 4096
 _UPDATE_METADATA = struct.Struct(">BIHHHHBHI")
-_HISTORY_METADATA = struct.Struct(">IIHHHHBI")
+_HISTORY_METADATA = struct.Struct(">IIHHHHBQI")
 _HISTORY_REQUEST = struct.Struct(">IHHH")
 _HISTORY_BATCH_METADATA = struct.Struct(">II")
-_HISTORY_PANE_METADATA = struct.Struct(">IHHHHB")
+_HISTORY_PANE_METADATA = struct.Struct(">IHHHHBQ")
 _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
 _PATH_REQUEST = struct.Struct(">IIH")
 _PATH_RESULT = struct.Struct(">IBBH")
@@ -143,6 +143,7 @@ class HistorySnapshot:
     more_available: bool = False
     transcript_available: bool = False
     history_choice_required: bool = False
+    generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -302,6 +303,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
             snapshot.more_available,
             snapshot.transcript_available,
             snapshot.history_choice_required,
+            snapshot.generation,
         )):
             raise ValueError("a rejected history response must be empty")
         pane_number = 0
@@ -317,6 +319,8 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
             raise ValueError("invalid history position")
         if len(snapshot.lines) < snapshot.height:
             raise ValueError("history snapshot is shorter than its viewport")
+        if not 0 <= snapshot.generation <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError("invalid history generation")
     raw_lines = _pack_history_lines(snapshot.lines)
     compressed = zlib.compress(raw_lines, level=3)
     metadata = _HISTORY_METADATA.pack(
@@ -327,6 +331,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
         snapshot.width,
         snapshot.height,
         _history_capabilities(snapshot),
+        snapshot.generation,
         len(raw_lines),
     )
     payload = bytes((int(OutputKind.HISTORY),)) + metadata + compressed
@@ -360,6 +365,8 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             raise ValueError("invalid history position")
         if len(snapshot.lines) < snapshot.height:
             raise ValueError("history snapshot is shorter than its viewport")
+        if not 0 <= snapshot.generation <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError("invalid history generation")
         packed_lines = _pack_history_lines(snapshot.lines)
         pane_metadata = _HISTORY_PANE_METADATA.pack(
             pane_number,
@@ -368,6 +375,7 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             snapshot.width,
             snapshot.height,
             _history_capabilities(snapshot),
+            snapshot.generation,
         )
         total += len(pane_metadata) + len(packed_lines)
         if total > MAX_SCREEN_BYTES:
@@ -611,6 +619,7 @@ class ServerMessageDecoder:
                         width,
                         height,
                         raw_capabilities,
+                        generation,
                         raw_size,
                     ) = (
                         _HISTORY_METADATA.unpack(body[:_HISTORY_METADATA.size])
@@ -628,6 +637,7 @@ class ServerMessageDecoder:
                             height,
                             lines,
                             raw_capabilities,
+                            generation,
                         )):
                             raise ValueError("invalid rejected history response")
                         pane_id = None
@@ -662,6 +672,7 @@ class ServerMessageDecoder:
                         history_choice_required=bool(
                             raw_capabilities & _HISTORY_CHOICE_REQUIRED
                         ),
+                        generation=generation,
                     ))
                     continue
                 if output_kind is OutputKind.HISTORY_BATCH:
@@ -691,6 +702,7 @@ class ServerMessageDecoder:
                             width,
                             height,
                             raw_capabilities,
+                            generation,
                         ) = _HISTORY_PANE_METADATA.unpack(
                             raw[offset:offset + _HISTORY_PANE_METADATA.size]
                         )
@@ -729,6 +741,7 @@ class ServerMessageDecoder:
                             history_choice_required=bool(
                                 raw_capabilities & _HISTORY_CHOICE_REQUIRED
                             ),
+                            generation=generation,
                         ))
                     if offset != len(raw):
                         raise ValueError("trailing history batch data")
@@ -843,7 +856,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v14 control-response messages."""
+    """Compatibility view which ignores v15 control-response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()

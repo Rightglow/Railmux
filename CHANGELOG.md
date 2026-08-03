@@ -121,6 +121,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installs before atomic activation, use explicit UTF-8 for runtime state, and
   never modify system PATH, shell profiles, or a user-owned MSYS2 tree.
 
+## [0.3.3.dev4] - 2026-08-03
+
+### Fixed
+
+- Reset a live Codex pane's visible terminal cache and tmux scrollback when its
+  canonical rollout advances to a rewind child, so the abandoned turn and red
+  interruption notice do not remain above the replacement conversation; SSH
+  display protocol v15 carries the corresponding pane generation so its local
+  history cache drops the same stale suffix.
+
 ## [0.3.3.dev3] - 2026-08-03
 
 ### Fixed
@@ -1909,6 +1919,7 @@ made after 0.2.21.
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
+[0.3.3.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev3...v0.3.3.dev4
 [0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2
 [0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1

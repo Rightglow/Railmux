@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import shlex
 import shutil
 import subprocess
@@ -300,6 +301,12 @@ _ROLLOUT_UUID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.jsonl$"
 )
+
+
+def rollout_uuid_from_path(path: Path) -> str | None:
+    """Return the filename UUID for a canonical Codex rollout path."""
+    match = _ROLLOUT_UUID_RE.search(path.name)
+    return match.group(1) if match is not None else None
 
 
 def pane_pid_for_session(session_name: str) -> int | None:
@@ -1818,6 +1825,7 @@ _PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
 RAILMUX_CONTROLLER_OPTION = "@railmux_controller_pane"
 RAILMUX_TARGET_OPTION = "@railmux_target_pane"
 RAILMUX_HISTORY_PREVIEW_OPTION = "@railmux_history_preview_v1"
+RAILMUX_HISTORY_GENERATION_OPTION = "@railmux_history_generation_v1"
 # tmux names function keys only through F12. Private controller routes use
 # canonical xterm sequences in literal mode, so they cannot be confused with
 # user input forwarded to an agent pane.
@@ -3345,6 +3353,47 @@ def exact_pane_alive(identity: PaneIdentity) -> bool:
         and current.session_id == identity.session_id
         and current.session_name == identity.session_name
     )
+
+
+def reset_pane_history(identity: PaneIdentity) -> bool:
+    """Reset visible bytes and scrollback for the exact observed live pane.
+
+    Revalidate the immutable session, pane process, and window before issuing
+    one tmux command queue that resets the terminal model and clears history.
+    Then send the pane's foreground process group an ordinary same-size
+    ``SIGWINCH`` so its TUI repaints and reasserts terminal modes without a
+    geometry change or injected keyboard input.
+    """
+    current = pane_identity(identity.pane_id)
+    if (current is None or current.dead
+            or current.pane_pid != identity.pane_pid
+            or current.session_id != identity.session_id
+            or current.window_id != identity.window_id):
+        return False
+    try:
+        subprocess.check_call(
+            [
+                "tmux", "send-keys", "-R", "-t", identity.pane_id,
+                ";", "clear-history", "-t", identity.pane_id,
+            ],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+    current = pane_identity(identity.pane_id)
+    if (current is None or current.dead
+            or current.pane_pid != identity.pane_pid
+            or current.session_id != identity.session_id
+            or current.window_id != identity.window_id):
+        return True
+    try:
+        os.killpg(os.getpgid(current.pane_pid), signal.SIGWINCH)
+    except (OSError, ValueError):
+        # The presentation cache is already clean. A provider that exited or
+        # cannot be signalled will repaint on its next ordinary terminal write.
+        pass
+    return True
 
 
 def kill_session_identity(identity: PaneIdentity) -> bool:
