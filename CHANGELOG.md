@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev5] - 2026-08-03
+
 ### Added
 
 - Show bounded byte/total/percentage progress while the managed Windows MSYS2
@@ -1819,7 +1821,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...HEAD
+[0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
 [0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2
