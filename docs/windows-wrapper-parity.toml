@@ -65,7 +65,7 @@ id = "WW-PACKAGE-DISPATCH"
 features = ["W12", "W13"]
 automation = ["tests/test_windows_bootstrap.py"]
 manual = "Install with Windows Python 3.10+ under a CP936 locale; verify version, actionable failure, and WSL handoff without a traceback."
-evidence = "not-run"
+evidence = "2026-08-03, Windows 10 19045 / PowerShell 5.1 / Python 3.12.10 on 4u4g-gen-0007, source 0be2d1c: user install, console/module version, CP936, lazy import, root help, system WSL stub, and missing-runtime exit passed; enabled-WSL handoff not run."
 
 [[scenarios]]
 id = "WW-PREVIEW-OPEN"
