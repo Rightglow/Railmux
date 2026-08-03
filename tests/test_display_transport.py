@@ -41,6 +41,7 @@ class FakeTmux:
         self.next_pane = 10
         self.next_session = 10
         self.swap_calls: list[tuple[str, str]] = []
+        self.fit_calls: list[tuple[str, str]] = []
         self.killed_sessions: list[str] = []
         self.fail_marker_window: str | None = None
         self.fail_swap_at: int | None = None
@@ -69,7 +70,7 @@ class FakeTmux:
             "split_window_v": self.split_window_h,
             "create_dual_pane_layout": self.create_dual_pane_layout,
             "respawn_pane": self.respawn_pane,
-            "fit_session_to_pane": lambda *_args: True,
+            "fit_session_to_pane": self.fit_session_to_pane,
             "wait_session_detached": lambda name, timeout=1.0: (
                 self.sessions[name]["attached"] == 0),
             "create_grouped_session": self.create_grouped_session,
@@ -218,6 +219,10 @@ class FakeTmux:
         self._relocate(target, source_window)
         return True
 
+    def fit_session_to_pane(self, session, pane):
+        self.fit_calls.append((session, pane))
+        return True
+
     def kill_session(self, name):
         session = self.sessions.pop(name, None)
         if session is None:
@@ -310,6 +315,7 @@ def test_successful_swap_out_and_home(rig):
     assert fake.window_options
 
     assert manager.return_home(workspace.primary)
+    assert fake.fit_calls == [("agent-a", "%2")]
     assert fake.panes["%2"].window_id == "@2"
     assert workspace.primary.pane_id == placeholder
     assert workspace.primary.swap_state is None
@@ -324,6 +330,7 @@ def test_compact_parking_keeps_agent_home_and_slot_placeholder_stable(rig):
     assert state is not None
 
     assert manager.park(workspace.primary)
+    assert fake.fit_calls == [("agent-a", "%2")]
     assert workspace.primary.display_parked is True
     assert workspace.primary.agent_tmux_name == "agent-a"
     assert workspace.primary.pane_id == state.placeholder_pane_id
@@ -354,6 +361,19 @@ def test_compact_park_swap_failure_leaves_agent_displayed(rig):
     assert workspace.primary.display_parked is False
     assert workspace.primary.pane_id == "%2"
     assert fake.panes["%2"].window_id == "@1"
+
+
+def test_return_geometry_failure_does_not_weaken_identity_transaction(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    monkeypatch.setattr(
+        transport_mod.tmux_ctl, "fit_session_to_pane", lambda *_args: False)
+
+    assert manager.return_home(workspace.primary)
+    assert fake.panes["%2"].window_id == "@2"
+    assert workspace.primary.swap_state is None
 
 
 def test_compact_park_marker_commit_failure_rolls_back_display(rig, monkeypatch):

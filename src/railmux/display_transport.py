@@ -738,6 +738,22 @@ class AgentDisplayTransport:
     def _with_phase(state: SwapState, phase: str) -> SwapState:
         return SwapState(**{**asdict(state), "phase": phase})
 
+    @staticmethod
+    def _fit_home_to_display(state: SwapState) -> None:
+        """Best-effort preserve the provider's visible geometry at home.
+
+        While a real pane is displayed, its named session contains only the
+        inert placeholder.  Resize that detached home window to the real
+        pane's current size before swapping back.  Otherwise background output
+        is formatted at the placeholder's older (often much narrower) launch
+        geometry and later appears as a narrow discontinuity in scrollback.
+
+        Geometry is presentation-only: failure must never weaken or abort the
+        identity-pinned return transaction.
+        """
+        tmux_ctl.fit_session_to_pane(
+            state.agent_tmux_name, state.agent_pane_id)
+
     def park(self, slot: AgentSlot) -> bool:
         """Move one displayed swap agent home without forgetting its slot.
 
@@ -764,6 +780,7 @@ class AgentDisplayTransport:
         parking = self._with_phase(state, "parking")
         if not _write_marker_pair(parking, slot.key):
             return False
+        self._fit_home_to_display(state)
         if not tmux_ctl.swap_panes(
                 state.agent_pane_id, state.placeholder_pane_id):
             _write_marker_pair(state, slot.key)
@@ -857,6 +874,7 @@ class AgentDisplayTransport:
                 return False
             returning = SwapState(**{**asdict(state), "phase": "returning"})
             _write_marker_pair(returning, slot.key)
+            self._fit_home_to_display(state)
             if not tmux_ctl.swap_panes(
                     state.agent_pane_id, state.placeholder_pane_id):
                 return False

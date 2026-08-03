@@ -8520,6 +8520,7 @@ class App:
         # Codex New Project can use its in-memory synthetic project earlier.
         by_path = {p.real_path: p for p in projects}
         claimed = self._running_session_ids() | set(self._running)
+        resolved_any = False
         for r in placeholders:
             # Codex New Project owns an in-memory synthetic project before its
             # first rollout makes that cwd visible in the Codex index. Claude
@@ -8605,15 +8606,30 @@ class App:
             r.project = candidate.project
             r.placeholder_path = None
             r.created_at = 0.0
+            # Publish the same provider generation atomically to Running.  The
+            # normal refinement pass below may add process-derived status, but
+            # the promoted row must never retain its stale ``(new)`` label,
+            # zero mtime, or placeholder activity for one extra refresh.
+            r.status = candidate.status
+            r.last_mtime = candidate.last_mtime
+            r.attention = candidate.attention
             self._running[candidate.session_id] = r
             self._stamp_running(r)
             claimed.add(candidate.session_id)
+            resolved_any = True
             displayed_slot = self._agent_workspace().slot_for_agent(r.tmux_name)
             if displayed_slot is not None:
                 self._set_slot_active_target(
                     displayed_slot, candidate.session_id, r.tmux_name)
                 if displayed_slot is self._agent_workspace().target:
                     self._set_current_project(candidate.project)
+        if resolved_any:
+            # Placeholder launch time may already have consumed the ordinary
+            # one-minute sort budget.  Its first authoritative provider
+            # generation is a one-time identity transition, so allow the
+            # immediately following Running refresh to place it by real
+            # activity without enabling per-poll row movement.
+            self._running_sort_ts = 0.0
 
     def _correlate_codex_rollout(self, r: "_Running") -> set[str] | None:
         """Exact child→rollout correlation for a Codex placeholder (#12).
@@ -8628,6 +8644,20 @@ class App:
         (heuristic) rather than raising into the UI."""
         try:
             sessions_dir = self._codex_home_path() / "sessions"
+            # Swap display moves the real provider pane out of its named home
+            # session, leaving an inert placeholder there.  Follow the exact
+            # displayed pane identity just as status aggregation does;
+            # querying the home session in this state can only inspect the
+            # placeholder and leaves every new session unresolved until the
+            # first preview happens to return it home.
+            real_pane = self._display_transport().displayed_real_pane(
+                r.tmux_name)
+            if real_pane is not None:
+                identity = tmux_ctl.pane_identity(real_pane)
+                if identity is None:
+                    return set() if tmux_ctl.proc_fs_available() else None
+                return tmux_ctl.process_tree_rollout_ids(
+                    identity.pane_pid, sessions_dir)
             return tmux_ctl.session_rollout_ids(r.tmux_name, sessions_dir)
         except Exception:
             # On a procfs platform an inspection failure is ambiguity, not

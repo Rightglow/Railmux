@@ -2817,6 +2817,7 @@ def test_resolve_placeholders_codex_rekeys_to_real_uuid():
     app = App.__new__(App)
     app._codex_mode = True
     app._right_pane_claude = None
+    app._running_sort_ts = 1234.0
     app._running = {
         "__new__-1": _Running(
             key="__new__-1", tmux_name="cx-new----1",
@@ -2840,6 +2841,10 @@ def test_resolve_placeholders_codex_rekeys_to_real_uuid():
     entry = app._running[real_id]
     assert entry.tmux_name == "cx-new----1"      # same tmux session, re-keyed
     assert not entry.is_placeholder
+    assert entry.label == "test-proj/Real session"
+    assert entry.status == "idle"
+    assert entry.last_mtime == 1000.0
+    assert app._running_sort_ts == 0.0
     app._codex_index.sessions_for_cwd.assert_called_once_with(
         proj.real_path, refresh=False)
 
@@ -3178,6 +3183,40 @@ def test_correlate_codex_rollout_fails_closed_without_config(monkeypatch):
     r = _Running(key="__new__-tok-1", tmux_name="cx-x", label="l",
                  session_type="codex")
     assert app._correlate_codex_rollout(r) == set()
+
+
+def test_correlate_codex_rollout_follows_swap_displayed_real_pane(monkeypatch):
+    """A swap leaves only an inert placeholder in the named home session."""
+    session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    sessions_dir = Path("/codex/sessions")
+    app = App.__new__(App)
+    app._codex_home_path = lambda: sessions_dir.parent
+    manager = MagicMock()
+    manager.displayed_real_pane.return_value = "%42"
+    app._display_transport_manager = manager
+    running = _Running(
+        key="__new__-tok-1",
+        tmux_name="cx-new----tok-1",
+        label="test-proj/(new)",
+        session_type="codex",
+    )
+    monkeypatch.setattr(
+        tmux_ctl,
+        "pane_identity",
+        lambda pane: tmux_ctl.PaneIdentity(
+            pane, 4242, "railmux", "$1", "@1", False, 100, 30
+        ),
+    )
+    process_probe = MagicMock(return_value={session_id})
+    monkeypatch.setattr(tmux_ctl, "process_tree_rollout_ids", process_probe)
+    home_probe = MagicMock(side_effect=AssertionError(
+        "the home session contains only the swap placeholder"
+    ))
+    monkeypatch.setattr(tmux_ctl, "session_rollout_ids", home_probe)
+
+    assert app._correlate_codex_rollout(running) == {session_id}
+    process_probe.assert_called_once_with(4242, sessions_dir)
+    home_probe.assert_not_called()
 
 
 def test_launch_snapshots_pre_existing_ids(monkeypatch):

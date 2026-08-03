@@ -690,6 +690,14 @@ or unowned outer session uses nested display. Controlled preview, close, soft
 quit, hard quit, and delete return the real pane before replacing a display
 placeholder or killing its home session.
 
+Before a controlled return or compact parking swap, Railmux best-effort sizes
+the detached home window from the visible real pane. The home currently owns
+only an inert placeholder, so this preserves the provider's last visible PTY
+geometry while it continues in the background and prevents a narrow block of
+background output from appearing when the pane is displayed again. Sizing
+failure is presentation-only and cannot weaken or abort the identity-pinned
+return transaction; an independently attached session is never resized.
+
 Nested display clears `TMUX` to avoid tmux's nested-client guard, so its attach
 argv must retain the exact inherited server as `tmux -S <socket>`; a plain
 `tmux attach-session` would silently fall through to the user's default server.
@@ -1119,6 +1127,13 @@ and an associated blocked rollout applies only when no sibling is busy. This
 correlation must follow a pane moved by the swap transport and must never infer
 ownership from cwd, title, or rollout recency. Where procfs is unavailable or
 the probe fails, the parent rollout remains the status authority.
+
+New-session placeholder resolution follows that same swap-aware real-pane
+identity. Once the exact rollout becomes visible in the pinned index
+generation, its title, provider status, attention, and activity timestamp are
+promoted to Running together and that one-time identity transition may bypass
+the ordinary reorder throttle. A Sessions row must not appear stopped merely
+because the named home session currently contains the swap placeholder.
 
 Subagent rollouts remain filtered from visible session lists, but the Codex
 index worker publishes their UUID-to-status values in the same immutable

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve a swap-displayed agent's visible geometry when returning it to its
+  detached home, preventing background output from forming a narrow,
+  discontinuous block when the session is shown and scrolled again.
+- Resolve newly launched Codex sessions through the real pane after a swap, so
+  Sessions and Running update together, the first click reopens the live
+  conversation instead of a transcript preview, and the promoted active row
+  receives its real title, status, and recency ordering immediately.
+
 ## [0.3.3.dev1] - 2026-08-02
 
 ### Changed

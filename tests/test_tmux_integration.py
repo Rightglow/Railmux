@@ -2308,7 +2308,7 @@ def test_real_compact_parking_keeps_hidden_provider_geometry_stable(
         check=True,
     )
     subprocess.run(
-        ["tmux", "new-session", "-d", "-x", "82", "-y", "39",
+        ["tmux", "new-session", "-d", "-x", "46", "-y", "25",
          "-s", "compact-park-agent", "sleep 60"],
         check=True,
     )
@@ -2327,10 +2327,17 @@ def test_real_compact_parking_keeps_hidden_provider_geometry_stable(
     state = workspace.primary.swap_state
     assert state is not None
     provider_pid = tmux_ctl.pane_identity(state.agent_pane_id).pane_pid
+    visible_size = tmux_ctl.pane_size(state.agent_pane_id)
+    assert visible_size is not None
+    assert visible_size[0] == 82
+    assert visible_size != (46, 25)
 
     assert manager.park(workspace.primary)
     parked_size = tmux_ctl.pane_size(state.agent_pane_id)
-    assert parked_size is not None
+    # The detached home began at 46x25. Parking must carry over the real
+    # pane's visible geometry instead of narrowing background output back to
+    # that stale launch size.
+    assert parked_size == visible_size
     subprocess.run(
         ["tmux", "resize-window", "-t", display_session, "-x", "105", "-y", "20"],
         check=True,
