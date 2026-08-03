@@ -1,6 +1,7 @@
 import json
-import os
+import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 from railmux import __version__, provider_paths
 from railmux.provider_paths import (
@@ -36,19 +37,24 @@ def test_forward_slash_windows_drive_path_is_normalized():
     ) == Path("/e/workspace/project")
 
 
-def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch, tmp_path):
-    marker = tmp_path / "railmux-runtime.json"
-    marker.write_text(json.dumps({
+def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch):
+    payload = json.dumps({
         "schema": 1,
         "runtime": "msys2-test",
         "railmux": __version__,
-    }), encoding="utf-8")
-    marker.chmod(0o644)
+    })
+    marker = SimpleNamespace(
+        lstat=lambda: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o644,
+            st_uid=42,
+            st_size=len(payload),
+        ),
+        read_text=lambda **_kwargs: payload,
+    )
     monkeypatch.setattr(provider_paths, "_MANAGED_RUNTIME_MARKER", marker)
     monkeypatch.setattr(provider_paths.sys, "platform", "cygwin")
     monkeypatch.setattr(
-        provider_paths.os, "getuid", lambda: marker.lstat().st_uid,
-        raising=False,
+        provider_paths.os, "getuid", lambda: 42, raising=False,
     )
     monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
     monkeypatch.setenv("RAILMUX_MSYS2_RUNTIME_ID", "msys2-test")
@@ -62,26 +68,21 @@ def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch, tmp_path)
     assert not private_mode_is_safe(0o100644)
 
 
-def test_managed_runtime_marker_must_be_same_owner(monkeypatch, tmp_path):
-    marker = tmp_path / "railmux-runtime.json"
-    marker.write_text("{}", encoding="utf-8")
-    marker_info = marker.lstat()
+def test_managed_runtime_marker_must_be_same_owner(monkeypatch):
+    marker = SimpleNamespace(
+        lstat=lambda: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o644,
+            st_uid=43,
+            st_size=2,
+        ),
+        read_text=lambda **_kwargs: "{}",
+    )
     monkeypatch.setattr(provider_paths, "_MANAGED_RUNTIME_MARKER", marker)
     monkeypatch.setattr(provider_paths.sys, "platform", "cygwin")
     monkeypatch.setattr(
-        provider_paths.os, "getuid", lambda: marker_info.st_uid,
-        raising=False,
+        provider_paths.os, "getuid", lambda: 42, raising=False,
     )
     monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
     monkeypatch.setenv("RAILMUX_MSYS2_RUNTIME_ID", "msys2-test")
-    real_lstat = marker.lstat
-    monkeypatch.setattr(
-        provider_paths.Path, "lstat",
-        lambda self: os.stat_result((
-            real_lstat().st_mode, real_lstat().st_ino,
-            real_lstat().st_dev, 1, marker_info.st_uid + 1, 0,
-            real_lstat().st_size, 0, 0, 0,
-        )),
-    )
 
     assert not running_in_managed_windows_wrapper()
