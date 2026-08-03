@@ -38,12 +38,37 @@ def test_compact_status_exposes_all_available_pages_and_controls():
         page_targets=("%controller", "%1", "%2"),
     )
 
-    assert projection.text.startswith("[R][1][2] CC · ⬒")
+    assert projection.text.startswith("[R]<1>[2] CC · ⬒")
     assert {hit.action for hit in projection.hits} >= {
         "page:%controller", "page:%1", "page:%2",
         ACTION_MODE, ACTION_LAYOUT,
     }
     assert projection.error is True
+
+
+def test_compact_status_marks_the_active_page_in_plain_text():
+    common = dict(
+        width=40,
+        mode_label="Codex",
+        layout_indicator="⬒",
+        status_text="",
+        status_level="info",
+        compact=True,
+        page_targets=("%controller", "%1", "%2"),
+    )
+
+    sidebar = project_status_chrome(
+        active_page=WorkspacePage.SIDEBAR,
+        **common,
+    )
+    secondary = project_status_chrome(
+        active_page=WorkspacePage.SECONDARY,
+        **common,
+    )
+
+    assert sidebar.text.startswith("<R>[1][2]")
+    assert secondary.text.startswith("[R][1]<2>")
+    assert sidebar.text != secondary.text
 
 
 def test_status_projection_is_cell_bounded_with_cjk_text():

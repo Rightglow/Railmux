@@ -56,7 +56,7 @@ pane-bounded drag-to-copy.
 | Python | 3.9 or newer on POSIX/WSL; 3.10 or newer on native Windows. Core metadata stays at `Requires-Python >=3.9` because that field cannot carry an OS marker; the native Windows launcher fails before platform-only imports on Python 3.9, while Windows-only dependencies use environment markers. |
 | tmux core workspace | 2.7 or newer. CI compiles the checksum-pinned official tmux 2.7 release and boots a real Railmux frame. |
 | Managed shell/Vim and nested pane-local SSH history marker | tmux 3.0 or newer; older tmux fails closed with a warning. |
-| Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |
+| Clickable tmux status ranges and compact page labels | tmux 3.4 or newer for tmux clicks; native Windows uses the same clickable pages and marks its active page with angle brackets. Keyboard navigation remains portable. |
 | Providers | Claude Code, Codex, or both on the machine that runs the provider process. |
 | History preview | POSIX direct mode uses `less`; native Windows uses the built-in read-only pager. Provider rollout/history files must remain readable. |
 | Managed file viewer | Remote `vim` for supported files; missing Vim falls back without mutating the file. |

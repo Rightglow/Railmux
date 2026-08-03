@@ -4,7 +4,12 @@ from unittest.mock import MagicMock
 import pytest
 import urwid
 
-from railmux.ui.workspace import AgentWorkspace, WorkspaceLayout
+from railmux.ui.workspace import (
+    AgentWorkspace,
+    WorkspaceLayout,
+    WorkspacePage,
+    WorkspacePresentation,
+)
 from railmux.config import Config
 from railmux.models import Project, SessionMeta
 from railmux.ui.app import App
@@ -424,3 +429,149 @@ def test_native_compact_status_page_click_moves_zoom_to_live_agent(tmp_path):
     assert backend.active_pane_id() == workspace.primary.pane_id
     assert backend.window_is_zoomed(workspace.primary.pane_id) is True
     assert (update.width, update.height) == (70, 20)
+
+
+def test_native_layout_keeps_independent_dividers_across_axis_changes():
+    backend = WinMuxBackend(width=160, height=40, process_factory=_factory)
+    workspace = AgentWorkspace()
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    transport = backend.create_display_transport(workspace, "swap")
+    assert transport.create_dual(workspace.layout)
+    primary = workspace.primary.pane_id
+    assert primary is not None
+
+    assert backend.resize_pane_width(primary, 30)
+    assert backend._display_regions()["primary"].width == 30
+
+    workspace.layout = WorkspaceLayout.STACKED
+    backend._sync_display_sizes()
+    stacked = backend._display_regions()
+    assert stacked["primary"].height == 19
+
+    assert backend.resize_pane_height(primary, 14)
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    backend._sync_display_sizes()
+    assert backend._display_regions()["primary"].width == 30
+
+
+def test_native_zoom_keeps_logical_hidden_pane_sizes_available():
+    backend = WinMuxBackend(width=160, height=40, process_factory=_factory)
+    workspace = AgentWorkspace()
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    transport = backend.create_display_transport(workspace, "swap")
+    assert transport.create_dual(workspace.layout)
+    primary = workspace.primary.pane_id
+    secondary = workspace.secondary.pane_id
+    assert primary is not None and secondary is not None
+    before = (backend.pane_size(primary), backend.pane_size(secondary))
+
+    assert backend.toggle_pane_zoom(primary)
+
+    assert backend.pane_size(primary) == before[0]
+    assert backend.pane_size(secondary) == before[1]
+    assert set(backend._display_regions()) == {"primary"}
+
+
+def test_native_reset_slot_clears_stale_preview(tmp_path):
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    workspace = AgentWorkspace()
+    transport = backend.create_display_transport(workspace, "swap")
+    assert transport.create_primary()
+    transcript = tmp_path / "preview.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"stale"}}\n',
+        encoding="utf-8",
+    )
+    assert backend.show_transcript(
+        workspace.primary.pane_id, transcript, "claude"
+    )
+
+    assert transport.reset_slot(workspace.primary)
+
+    assert not backend._previews
+    assert backend._terminal_for_display(workspace.primary.pane_id) is None
+
+
+def test_native_reselect_is_noop_for_last_pane_and_keyframes():
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    workspace = AgentWorkspace()
+    transport = backend.create_display_transport(workspace, "swap")
+    assert transport.create_primary()
+    primary = workspace.primary.pane_id
+    assert primary is not None
+    assert backend.select_pane(primary)
+    assert backend.toggle_pane_zoom(primary)
+    backend.screen_update()
+    sequence = backend._compositor.sequence
+
+    assert backend.select_pane(primary)
+
+    assert backend.active_pane_id() == primary
+    assert backend.last_pane_id() == "%controller"
+    assert backend._compositor.sequence == sequence
+    assert backend._compositor._last_rows is not None
+
+
+def test_native_mouse_route_preserves_double_click_event_stream():
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    screen = backend.create_ui_screen()
+    screen.start()
+    try:
+        backend.route_input(
+            b"\x1b[<0;5;4M\x1b[<0;5;4m"
+            b"\x1b[<0;5;4M\x1b[<0;5;4m"
+        )
+        keys, _raw = screen.get_input(True)
+    finally:
+        screen.stop()
+
+    assert keys == [
+        ("mouse press", 1, 4, 3),
+        ("mouse release", 1, 4, 3),
+        ("mouse press", 1, 4, 3),
+        ("mouse release", 1, 4, 3),
+    ]
+
+
+def test_native_empty_display_input_falls_back_to_sidebar():
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    workspace = AgentWorkspace()
+    workspace.presentation = WorkspacePresentation.COMPACT
+    workspace.compact_page = WorkspacePage.PRIMARY
+    transport = backend.create_display_transport(workspace, "swap")
+    assert transport.create_primary()
+    primary = workspace.primary.pane_id
+    assert primary is not None
+    assert backend.select_pane(primary)
+    screen = backend.create_ui_screen()
+    screen.start()
+    try:
+        backend.route_input(b"x")
+        keys, _raw = screen.get_input(True)
+    finally:
+        screen.stop()
+
+    assert "x" in keys
+    assert backend.active_pane_id() == "%controller"
+
+
+def test_native_status_actions_only_accept_plain_left_press():
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    backend.screen_update()
+    mode_hit = next(
+        hit for hit in backend._status_hits if hit.action == "mode"
+    )
+    screen = backend.create_ui_screen()
+    screen.start()
+    try:
+        column = mode_hit.start + 1
+        backend.route_input(
+            f"\x1b[<64;{column};30M".encode()  # wheel up
+            + f"\x1b[<32;{column};30M".encode()  # left drag
+            + f"\x1b[<0;{column};30M".encode()  # plain left press
+        )
+        keys, _raw = screen.get_input(True)
+    finally:
+        screen.stop()
+
+    assert keys.count("f5") == 1

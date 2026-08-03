@@ -86,7 +86,9 @@ def project_status_chrome(
             WorkspacePage.SECONDARY,
         )
         for page, target, label in zip(pages, page_targets, labels):
-            marker = f"[{label}]"
+            # Native terminals do not all expose tmux's per-range style
+            # channel.  Keep the selected page visible in plain text too.
+            marker = f"<{label}>" if page is active_page else f"[{label}]"
             append(marker, f"page:{target}" if target is not None else None)
         append(" ")
         append(visible_mode, ACTION_MODE)

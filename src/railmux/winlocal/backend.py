@@ -91,7 +91,11 @@ class WinMuxBackend:
         self._client_count: Callable[[], int] | None = None
         self._workspace = None
         self._sidebar_width: int | None = None
-        self._primary_size: int | None = None
+        # Divider positions are axis-specific.  Keeping one value here makes
+        # a column width turn into a row height (and vice versa) when the user
+        # cycles between side-by-side and stacked layouts.
+        self._primary_width: int | None = None
+        self._primary_height: int | None = None
         # The sidebar starts as the only surface and therefore owns the full
         # viewport.  Opening the first display pane narrows it through the same
         # geometry synchronization path used by later layout changes.
@@ -355,6 +359,8 @@ class WinMuxBackend:
         with self._lock:
             if not self.pane_alive(pane_id):
                 return False
+            if pane_id == self._active_pane:
+                return True
             self._last_pane, self._active_pane = self._active_pane, pane_id
             # tmux status-page selection inside a zoomed window displays the
             # newly selected pane.  Preserve that semantic in the native
@@ -374,7 +380,10 @@ class WinMuxBackend:
 
     def pane_size(self, pane_id: str):
         with self._lock:
-            regions = self._display_regions()
+            # tmux preserves the logical sizes of panes hidden by zoom.  App
+            # uses those sizes to retain/reflow layout profiles, so report the
+            # same unzoomed geometry rather than the full-window projection.
+            regions = self._layout_regions()
             if pane_id == "%controller":
                 region = regions.get("sidebar")
                 return (region.width, region.height) if region else None
@@ -408,7 +417,7 @@ class WinMuxBackend:
                 and pane_id == workspace.primary.pane_id
                 and workspace.layout is WorkspaceLayout.SIDE_BY_SIDE
             ):
-                self._primary_size = width
+                self._primary_width = width
             else:
                 return False
             self._sync_display_sizes()
@@ -424,7 +433,7 @@ class WinMuxBackend:
                 or workspace.layout is not WorkspaceLayout.STACKED
             ):
                 return False
-            self._primary_size = height
+            self._primary_height = height
             self._sync_display_sizes()
             self.request_keyframe()
             return True
@@ -663,7 +672,9 @@ class WinMuxBackend:
                 ),
                 layout=workspace.layout if workspace is not None else None,
                 sidebar_width=self._sidebar_width,
-                primary_size=self._primary_size,
+                primary_size=(
+                    self._primary_height if stacked else self._primary_width
+                ),
             )
 
     def request_keyframe(self) -> None:
@@ -750,12 +761,22 @@ class WinMuxBackend:
                 session = self._session_for_pane(self._active_pane)
             if session is not None and session.process is not None:
                 session.process.write(data)
+                return
+            # An empty display slot is not an input sink.  This can occur
+            # briefly after resetting/reaping a slot while focus still points
+            # at its stable pane identity.
+            self.select_pane("%controller")
+            self._screen.inject(data)
 
     def _route_mouse(self, event: SgrMouseEvent) -> None:
         x, y = event.x - 1, event.y - 1
         with self._lock:
             if y == self.height - 1:
-                if event.pressed and event.button & 3 == 0:
+                if (
+                    event.pressed
+                    and not event.button & (32 | 64)
+                    and event.button & 3 == 0
+                ):
                     self._route_status_click(x)
                 return
             for name, region in self._display_regions().items():
@@ -804,7 +825,15 @@ class WinMuxBackend:
             return {
                 name: Region(0, 0, self.width, max(1, self.height - 1))
             }
+        return self._layout_regions()
+
+    def _layout_regions(self):
+        """Return persistent pane geometry without applying zoom projection."""
         workspace = self._workspace
+        stacked = bool(
+            workspace is not None
+            and workspace.layout is WorkspaceLayout.STACKED
+        )
         return self._compositor.regions(
             has_primary=bool(
                 workspace is not None and workspace.primary.pane_id
@@ -814,13 +843,12 @@ class WinMuxBackend:
                 and workspace.secondary.pane_id
                 and workspace.layout is not WorkspaceLayout.SINGLE
             ),
-            stacked=bool(
-                workspace is not None
-                and workspace.layout is WorkspaceLayout.STACKED
-            ),
+            stacked=stacked,
             layout=workspace.layout if workspace is not None else None,
             sidebar_width=self._sidebar_width,
-            primary_size=self._primary_size,
+            primary_size=(
+                self._primary_height if stacked else self._primary_width
+            ),
         )
 
     def _project_status(self):
@@ -1015,6 +1043,7 @@ class WinDisplayTransport:
         with self.backend._lock:
             if slot.pane_id:
                 self.backend._displayed.pop(slot.pane_id, None)
+                self.backend._previews.pop(slot.pane_id, None)
             slot.clear_content()
             self.backend._sync_display_sizes()
         return True

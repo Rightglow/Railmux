@@ -35,16 +35,29 @@ def _ledger():
 
 
 def test_every_stable_feature_has_a_windows_preview_disposition():
-    inventory = set(re.findall(
-        r"^\| ([PWS][0-9]{2}) \|", MATRIX.read_text(encoding="utf-8"), re.M
-    ))
+    matrix_text = MATRIX.read_text(encoding="utf-8")
+    functional_inventory = matrix_text.split(
+        "## Functional inventory", 1
+    )[1].split("## Terminal emulator validation", 1)[0]
+    first_cells = re.findall(
+        r"^\|\s*([^|]+?)\s*\|", functional_inventory, re.M
+    )
+    data_cells = [
+        cell for cell in first_cells if cell not in {"ID", "---"}
+    ]
+    assert all(re.fullmatch(r"[A-Z]+[0-9]+", cell) for cell in data_cells)
+    inventory = set(data_cells)
+    assert len(inventory) == len(data_cells)
     features = _ledger()["features"]
+    limitations = _ledger()["limitations"]
 
     assert set(features) == inventory
     assert set(features.values()) <= VALID_DISPOSITIONS
-    for feature_id, disposition in features.items():
-        if disposition in {"limited", "not-applicable"}:
-            assert feature_id in _ledger()["limitations"]
+    expected_limitations = {
+        feature_id for feature_id, disposition in features.items()
+        if disposition in {"limited", "not-applicable"}
+    }
+    assert set(limitations) == expected_limitations
 
 
 def test_windows_interaction_scenarios_keep_live_automation_or_manual_evidence():

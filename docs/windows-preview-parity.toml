@@ -73,7 +73,7 @@ manual = "Resize wide/narrow/tall/short while each provider is rendering and con
 [[scenarios]]
 id = "NW-DOUBLE-CLICK-REDRAW"
 features = ["P06", "W05"]
-automation = ["tests/test_widgets.py::test_double_click_fires_on_double_click", "tests/test_winlocal_backend.py::test_native_preview_then_open_replaces_history_with_live_agent"]
+automation = ["tests/test_widgets.py::test_double_click_fires_on_double_click", "tests/test_winlocal_backend.py::test_native_mouse_route_preserves_double_click_event_stream", "tests/test_winlocal_backend.py::test_native_preview_then_open_replaces_history_with_live_agent"]
 manual = "Double-click rows during polling and confirm no stale or duplicated sidebar rows."
 
 [[scenarios]]
