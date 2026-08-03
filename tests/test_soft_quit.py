@@ -2849,6 +2849,48 @@ def test_resolve_placeholders_codex_rekeys_to_real_uuid():
         proj.real_path, refresh=False)
 
 
+def test_resolve_placeholder_keeps_visible_project_identity_on_promotion():
+    """A Codex metadata key must not replace the Projects-pane key for a cwd."""
+    visible = _project()
+    codex_project = replace(
+        visible,
+        encoded_name="-cx-tmp-test-proj",
+        claude_dir=Path(),
+    )
+    real_id = "12345678-1234-1234-1234-1234567890ab"
+    tmux_name = "cx-new----1"
+    app = App.__new__(App)
+    app._codex_mode = True
+    app._right_pane_claude = None
+    app._running_sort_ts = 1234.0
+    app._running = {
+        "__new__-1": _Running(
+            key="__new__-1",
+            tmux_name=tmux_name,
+            label="test-proj/(new)",
+            project=visible,
+            placeholder_path=visible.real_path,
+            created_at=999.0,
+            session_type="codex",
+        )
+    }
+    app._codex_index = MagicMock()
+    app._codex_index.sessions_for_cwd.return_value = [
+        _codex_session(codex_project, real_id, mtime=1000.0)
+    ]
+    app._correlate_codex_rollout = MagicMock(return_value={real_id})
+    app._set_current_project = MagicMock()
+    app._set_slot_active_target = MagicMock()
+    app._agent_workspace().target.agent_tmux_name = tmux_name
+
+    app._resolve_placeholders([visible])
+
+    entry = app._running[real_id]
+    assert entry.project is visible
+    assert entry.project.encoded_name == visible.encoded_name
+    app._set_current_project.assert_called_once_with(visible)
+
+
 def test_resolve_placeholders_codex_keeps_placeholder_until_jsonl_appears():
     """Before the rollout file exists (no session yet), the placeholder must
     stay a placeholder rather than mis-binding to nothing."""

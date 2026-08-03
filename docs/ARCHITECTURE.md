@@ -1132,8 +1132,11 @@ New-session placeholder resolution follows that same swap-aware real-pane
 identity. Once the exact rollout becomes visible in the pinned index
 generation, its title, provider status, attention, and activity timestamp are
 promoted to Running together and that one-time identity transition may bypass
-the ordinary reorder throttle. A Sessions row must not appear stopped merely
-because the named home session currently contains the swap placeholder.
+the ordinary reorder throttle. Promotion retains the current Projects-pane
+object by normalized cwd rather than importing a provider metadata key, so the
+selected project and its Sessions snapshot cannot disappear for one refresh.
+A Sessions row must not appear stopped merely because the named home session
+currently contains the swap placeholder.
 
 Subagent rollouts remain filtered from visible session lists, but the Codex
 index worker publishes their UUID-to-status values in the same immutable

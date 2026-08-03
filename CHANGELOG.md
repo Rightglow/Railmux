@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep the selected project and Sessions list visible while a new Codex
+  placeholder is promoted to its real conversation, avoiding a one-refresh
+  flash of the empty “Select a project” state.
+
 ### Changed
 
 - Freeze the abandoned ConPTY Windows preview at `v0.4.0.dev2`, move the active

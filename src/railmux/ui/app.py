@@ -8518,7 +8518,7 @@ class App:
         # Index visible projects by real_path. A Claude placeholder becomes
         # resolvable once its first real session makes the project visible;
         # Codex New Project can use its in-memory synthetic project earlier.
-        by_path = {p.real_path: p for p in projects}
+        by_path = {self._path_key(p.real_path): p for p in projects}
         claimed = self._running_session_ids() | set(self._running)
         resolved_any = False
         for r in placeholders:
@@ -8526,7 +8526,11 @@ class App:
             # first rollout makes that cwd visible in the Codex index. Claude
             # placeholders continue to wait for discovery to supply the real
             # encoded project directory.
-            project = by_path.get(r.placeholder_path) or r.project
+            placeholder_key = (
+                self._path_key(r.placeholder_path)
+                if r.placeholder_path is not None else None
+            )
+            project = by_path.get(placeholder_key) or r.project
             if project is None:
                 continue
             registered_mode = self._modes().for_tmux_name(r.tmux_name)
@@ -8599,11 +8603,25 @@ class App:
                 if not self._write_orphan_marker(resolved_marker):
                     continue
                 r.orphan = resolved_marker
+            # Codex metadata always carries its synthetic ``-cx-`` project
+            # key, while the Projects pane reuses a discovered Claude project
+            # object when the same cwd exists in both providers.  Preserve the
+            # currently-published project identity across promotion: replacing
+            # it with the metadata object for one tick makes the later
+            # encoded-name match fail, briefly clearing Sessions to its
+            # "Select a project" state before path-based selection recovers.
+            promoted_project = (
+                by_path.get(self._path_key(candidate.project.real_path))
+                or project
+                or candidate.project
+            )
             # Re-key the entry from the placeholder to the real session_id.
             del self._running[r.key]
             r.key = candidate.session_id
-            r.label = f"{candidate.project.display_name}/{candidate.display_title}"
-            r.project = candidate.project
+            r.label = (
+                f"{promoted_project.display_name}/{candidate.display_title}"
+            )
+            r.project = promoted_project
             r.placeholder_path = None
             r.created_at = 0.0
             # Publish the same provider generation atomically to Running.  The
@@ -8622,7 +8640,7 @@ class App:
                 self._set_slot_active_target(
                     displayed_slot, candidate.session_id, r.tmux_name)
                 if displayed_slot is self._agent_workspace().target:
-                    self._set_current_project(candidate.project)
+                    self._set_current_project(promoted_project)
         if resolved_any:
             # Placeholder launch time may already have consumed the ordinary
             # one-minute sort budget.  Its first authoritative provider
