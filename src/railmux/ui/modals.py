@@ -282,7 +282,7 @@ class HelpModal(urwid.WidgetWrap):
             ("m", "Cycle through available agent modes"),
             ("o", "Open persistent Railmux options"),
             ("t", "Open a terminal in the active project"),
-            ("␣", "Preview stopped / switch running session"),
+            ("␣", "Preview current history (stopped or running)"),
             ("F8", "Cycle layout: single / side-by-side / stacked"),
             ("F9", "Fullscreen the focused agent / terminal / Vim (toggle)"),
             ("q or Ctrl-C", "Quit railmux (prompts for confirmation)"),

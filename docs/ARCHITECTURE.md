@@ -534,6 +534,16 @@ not temporarily demote it to an unresolved placeholder. Such an entry is
 provisional: the first coherent generation removes and strictly re-adopts it so
 metadata can refine its label or reject a wrong cwd or writer.
 
+History is a provider projection, not a dump of append-only terminal bytes.
+For Codex, every preview resolves any lineage alias to the newest indexed
+rewind rollout and renders that file alone: the rollout already contains the
+retained prefix plus its active replacement suffix. For Claude Code, semantic
+JSONL records are buffered within the bounded preview input, the newest
+non-sidechain UUID is the active tip, and only its `parentUuid` ancestry is
+rendered. Missing parents at a tail boundary stop traversal safely. Neither
+projection rewrites provider data, and abandoned suffixes are not part of the
+default history view.
+
 While that first generation is pending, Codex Projects and Sessions display an
 explicit `Indexing…` state with indeterminate section counts. Generation zero
 must never be rendered as an authoritative empty list, filtered no-match, or
@@ -765,10 +775,14 @@ routing with focus, selection, or history.
   minimum size. An unavailable side-by-side or stacked layout is skipped. If
   neither split fits when starting from single, F8 keeps single-pane layout and
   reports the size limit.
-- Single-click, `␣`, and context Preview share one action: preview a stopped
-  row, or switch a running row while sidebar focus stays put. Enter and
-  double-click share the focus-transferring open action. Every path uses the
-  Target pane remembered from tmux focus.
+- Single-click and Enter on a running row attach its real provider pane;
+  stopped-row click still opens history. `␣` and context Preview always open
+  read-only canonical history, including for a running row. Wheel-up over a
+  displayed live agent uses a pane-local primary/secondary marker and a
+  private controller key to enter the same viewer. The swap transport first
+  returns the real pane home, and normal viewer exit signals the controller to
+  restore that exact live agent. Every path uses the Target pane remembered
+  from tmux focus.
 - Cycling back to single removes only the outer secondary pane, remembers its
   exact instance-local tmux target, and never kills the detached agent session.
 - The same background tmux session should not be attached in both slots.

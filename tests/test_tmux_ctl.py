@@ -551,6 +551,34 @@ def test_root_wheel_forwarding_installs_both_directions_with_owner_marker():
     )
     assert any("copy-mode -e" in arg for arg in up)
     assert not any("copy-mode -e" in arg for arg in down)
+    assert any(tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION in arg for arg in up)
+    assert any("\x1b[35~" in arg for arg in up)
+    assert any("\x1b[36~" in arg for arg in up)
+    assert not any(
+        tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION in arg for arg in down)
+
+
+def test_root_wheel_current_version_requires_history_route():
+    current = {
+        "WheelUpPane": (
+            "bind-key -T root WheelUpPane "
+            "railmux-wheel-forward-v1-owner123 mouse_any_flag send-keys -M "
+            f"{tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION} "
+            "\x1b[35~ \x1b[36~"
+        ),
+        "WheelDownPane": (
+            "bind-key -T root WheelDownPane "
+            "railmux-wheel-forward-v1-owner123 mouse_any_flag send-keys -M"
+        ),
+    }
+    with patch("railmux.tmux_ctl.read_root_wheel_bindings",
+               return_value=current):
+        assert tmux_ctl.root_wheel_bindings_are_current("owner123")
+
+    old = dict(current, WheelUpPane=current["WheelUpPane"].replace(
+        tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, ""))
+    with patch("railmux.tmux_ctl.read_root_wheel_bindings", return_value=old):
+        assert not tmux_ctl.root_wheel_bindings_are_current("owner123")
 
 
 def test_root_wheel_restore_does_not_overwrite_user_change():

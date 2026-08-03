@@ -127,12 +127,14 @@ for focus and layout limits.
 |--------|--------|
 | Left-click (non-running) | Preview session history in the Target pane |
 | Left-click (running) | Switch the Target pane to that session |
+| Wheel up over a live agent | Open its canonical current-branch history |
 | Double-click | Open/attach in the Target pane and move focus there |
 | Right-click | Context menu (Open, Preview, Info, Rename, Star, Copy title, Kill, Term, Delete) |
 
 Unavailable context-menu actions are hidden for the selected session state.
-Single-click and `␣` act in the Target pane without moving keyboard focus;
-double-click and `Enter` also move focus there. The terminal must report mouse
+Single-click and `␣` act in the Target pane without moving keyboard focus, but
+`␣` always means history while a click on a running row means live attach.
+Double-click and `Enter` also move focus there. The terminal must report mouse
 buttons to applications for these actions to reach Railmux. Right-click
 reporting is sometimes a separate setting from ordinary mouse reporting; see
 [FAQ 2](#2-mouse-buttons-or-f8f9-dont-work--whats-wrong).
@@ -165,7 +167,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `T` | Return to that agent's managed Vim viewer, when open |
 | `m` | Switch agent mode (Claude Code ⇄ Codex) |
 | `o` | Open persistent Railmux options |
-| `␣` | Preview stopped or switch running target (like single-click) |
+| `␣` | Preview canonical history for the selected stopped or running session |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
 | `F9` | Fullscreen the focused agent, managed terminal, or Vim (toggle) |
 | `?` | Full help popup with all keybindings |
@@ -257,7 +259,8 @@ to single leaves Pane 2's agent running in the background.
 
 In a split, focus an agent pane to make it the Target pane. After focus returns
 to the sidebar, single-click or `␣` acts in that pane without moving keyboard
-focus; double-click or `Enter` opens there and transfers focus. The status bar
+focus; a running-row click attaches live while `␣` previews history.
+Double-click or `Enter` opens there and transfers focus. The status bar
 at the bottom-left shows the current layout and Target pane:
 
 | Symbol | Meaning |
@@ -321,15 +324,20 @@ sessions move ahead of the other results.
 ## History preview
 
 For a stopped session, left-click or press `␣` to view conversation history in
-the Target pane without starting or resuming the agent. Preview is read-only: it
-cannot send a message or change the session. User and assistant messages, tool
-calls, and abbreviated tool output are colour-coded, while internal context and
-encrypted reasoning are hidden.
+the Target pane without starting or resuming the agent. For a running session,
+press `␣`, choose **Preview**, or wheel up over its live pane. Preview is
+read-only: it cannot send a message or change the session. User and assistant
+messages, tool calls, and abbreviated tool output are colour-coded, while
+internal context and encrypted reasoning are hidden. Codex rewind lineages and
+Claude Code `parentUuid` branches are projected onto the provider's current
+conversation: the retained prefix and replacement suffix remain visible, while
+the abandoned suffix is hidden.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between
-matches, and `q` to exit and restore the pane. Double-click to skip preview and
-open the session directly.
+matches, and `q` to exit. If preview began from a live pane, `q` restores that
+exact session; otherwise it restores the prior Target pane. Double-click to
+skip preview and open the session directly.
 
 ## Status indicators
 

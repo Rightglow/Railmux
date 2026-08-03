@@ -157,6 +157,14 @@ class RootWheelForwardingManager:
                             state["backup"], token=token)
                         self._remove_state()
                         state = None
+                    elif not tmux_ctl.root_wheel_bindings_are_current(token):
+                        # The ownership transaction can survive a soft upgrade
+                        # in the same tmux pane. Refresh only an exactly-owned
+                        # wrapper so the new pane-local history route becomes
+                        # active without treating it as a user binding.
+                        if not tmux_ctl.set_root_wheel_forwarding(
+                                state["backup"], token):
+                            return False
                     if state is not None:
                         state["owners"] = sorted(
                             {*state["owners"], self._owner_pane_id})

@@ -295,6 +295,81 @@ def _render_claude_native_tool_results(
         yield RESET
 
 
+def _claude_current_branch(records: list[dict]) -> list[dict]:
+    """Project an append-only Claude JSONL onto its current main branch.
+
+    Claude Code links semantic records with ``uuid`` / ``parentUuid``. Editing
+    or rewinding a prompt appends a second child instead of removing the old
+    suffix, so file order is not conversation order. The newest non-sidechain
+    UUID is the active tip; walking its parents retains the shared prefix and
+    the replacement suffix while excluding abandoned and sub-agent branches.
+
+    UUID-less metadata is retained for the normal renderer filters. If the
+    input is a bounded tail, walking stops safely at the first missing parent.
+    """
+    by_uuid: dict[str, dict] = {}
+    tip: str | None = None
+    for record in records:
+        uuid = record.get("uuid")
+        if not isinstance(uuid, str) or not uuid:
+            continue
+        by_uuid[uuid] = record
+        if record.get("isSidechain") is not True:
+            tip = uuid
+    if tip is None:
+        return records
+
+    current: set[str] = set()
+    cursor: str | None = tip
+    while cursor and cursor not in current:
+        record = by_uuid.get(cursor)
+        if record is None:
+            break
+        current.add(cursor)
+        parent = record.get("parentUuid")
+        cursor = parent if isinstance(parent, str) and parent else None
+
+    return [
+        record for record in records
+        if not isinstance(record.get("uuid"), str)
+        or not record.get("uuid")
+        or record["uuid"] in current
+    ]
+
+
+def _render_claude_records(
+    records: list[dict], *, claude_native: bool,
+):
+    """Render only the active Claude branch from buffered JSONL records."""
+    calls: dict[str, str] = {}
+    for record in _claude_current_branch(records):
+        rtype = record.get("type", "")
+        if rtype in _SKIP_TYPES:
+            continue
+        if _is_real_user(record):
+            rendered = (
+                _render_claude_native_user(record)
+                if claude_native
+                else _render_user(record)
+            )
+            if rendered:
+                yield rendered
+        if rtype == "user":
+            renderer = (
+                _render_claude_native_tool_results
+                if claude_native
+                else _render_claude_tool_results
+            )
+            yield from renderer(record, calls)
+        elif rtype == "assistant":
+            renderer = (
+                _render_claude_native_assistant
+                if claude_native
+                else _render_assistant_blocks
+            )
+            yield from renderer(record, calls)
+
+
 def format_transcript(
     source: Path | object,
     fmt: str | None = None,
@@ -326,7 +401,10 @@ def format_transcript(
     # call_id -> tool name, so Codex tool outputs can be labelled with the
     # call that produced them (issue #3).
     codex_calls: dict[str, str] = {}
-    claude_calls: dict[str, str] = {}
+    # Claude rewind/edit branches live in one append-only JSONL, so those
+    # records must be buffered until the active tip is known. Production
+    # callers bound the input to the latest 2,000 records.
+    claude_records: list[dict] = []
     try:
         if isinstance(source, Path):
             fh = open(source, "r", encoding="utf-8")
@@ -360,33 +438,10 @@ def format_transcript(
             if _codex:
                 yield from _render_codex(record, codex_calls)
                 continue
-
-            # -- Claude format (legacy) --------------------------------
-            if rtype in _SKIP_TYPES:
-                continue
-
-            if _is_real_user(record):
-                rendered = (
-                    _render_claude_native_user(record)
-                    if claude_native
-                    else _render_user(record)
-                )
-                if rendered:
-                    yield rendered
-            if rtype == "user":
-                renderer = (
-                    _render_claude_native_tool_results
-                    if claude_native
-                    else _render_claude_tool_results
-                )
-                yield from renderer(record, claude_calls)
-            elif rtype == "assistant":
-                renderer = (
-                    _render_claude_native_assistant
-                    if claude_native
-                    else _render_assistant_blocks
-                )
-                yield from renderer(record, claude_calls)
+            claude_records.append(record)
+        if _codex is False:
+            yield from _render_claude_records(
+                claude_records, claude_native=claude_native)
     except OSError:
         yield f"{YELLOW}Could not read: {source}{RESET}\n"
     finally:

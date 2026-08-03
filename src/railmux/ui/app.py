@@ -1072,7 +1072,7 @@ class App:
         session_id: str | None,
         tmux_name: str | None,
     ) -> None:
-        """Stamp the exact Claude transcript used by fast SSH local history."""
+        """Stamp transcript/history routing for the displayed live agent."""
         pane_id = slot.pane_id
         if pane_id is None or not pane_id.startswith("%"):
             return
@@ -1097,6 +1097,19 @@ class App:
             pane_id,
             tmux_server.TRANSCRIPT_SOURCE_OPTION,
             marker,
+        )
+        history_slot = None
+        if (
+            running is not None
+            and running.session_type in ("claude", "codex")
+            and logical_id is not None
+            and not running.is_placeholder
+        ):
+            history_slot = slot.key
+        tmux_ctl.set_pane_user_option(
+            pane_id,
+            tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION,
+            history_slot,
         )
 
     def _paint_slot_active_target(
@@ -1900,11 +1913,16 @@ class App:
         self._on_session_preview(session)
 
     def _on_session_preview(self, session: SessionMeta) -> None:
-        """Show session history in the right pane without launching Claude.
+        """Show the provider's canonical current-branch history.
 
-        Stopped-row clicks, Space, and the context action preview history. Live
-        rows are filtered by _on_session_row_preview before reaching this path.
+        Stopped-row clicks, Space, context Preview, and live-pane wheel-up use
+        this read-only projection. A Codex rewind lineage is represented by its
+        newest rollout; Claude branches are projected by ``transcript``.
         """
+        if session.session_type == "codex":
+            representative = self._codex_representative(session.session_id)
+            if representative is not None:
+                session = representative
         slot = self._agent_workspace().target
         self._cancel_pending_double_focus()
         if not self._has_less:
@@ -1939,7 +1957,65 @@ class App:
                     slot, session.session_id, None, **target_kwargs)
             if not self._show_attention_status(session.attention):
                 self._set_status(
-                    f"≡ Previewing {session.display_title} (history)")
+                    f"≡ Previewing {session.display_title} (current history)")
+
+    def _preview_running_history(self, entry: RunningEntry) -> None:
+        """Preview the exact live entry's canonical provider history."""
+        running = self._by_tmux(entry.tmux_name)
+        if (running is None or running.is_placeholder
+                or not self._agent_session_alive(entry.tmux_name)):
+            self._set_status("Live history is no longer available.", "warn")
+            return
+        session_id = running.logical_session_id
+        if session_id is None:
+            self._set_status("Waiting for the provider history file…", "tip")
+            return
+        session = self._find_session_meta(
+            session_id, running.project, running.session_type)
+        if session is None:
+            self._set_status("Waiting for the provider history file…", "tip")
+            return
+        slot = (self._agent_workspace().slot_for_agent(entry.tmux_name)
+                or self._agent_workspace().target)
+        self._set_workspace_target(slot.key)
+        self._on_session_preview(session)
+
+    def _preview_slot_history(self, slot: AgentSlot) -> None:
+        """Handle a pane-local wheel-up routed through the controller."""
+        tmux_name = slot.agent_tmux_name
+        if tmux_name is None:
+            return
+        running = self._by_tmux(tmux_name)
+        if running is None:
+            return
+        self._preview_running_history(RunningEntry(
+            tmux_name=tmux_name,
+            label=running.label,
+            status=running.status,
+        ))
+
+    def _restore_history_slot(self, slot: AgentSlot) -> None:
+        """Return a closed live-history viewer to the exact saved agent."""
+        if not slot.in_history_mode:
+            return
+        restore = slot.restore_state
+        if (restore is None or restore.kind != "agent"
+                or restore.tmux_name is None):
+            return
+        running = self._by_tmux(restore.tmux_name)
+        if (running is None
+                or not self._agent_session_alive(restore.tmux_name)):
+            self._set_status("The previewed live session has ended.", "warn")
+            return
+        self._on_running_select(
+            RunningEntry(
+                tmux_name=running.tmux_name,
+                label=running.label,
+                status=running.status,
+            ),
+            steal_focus=False,
+            slot=slot,
+        )
 
     def _save_restore_state(self, slot: AgentSlot | None = None) -> None:
         """Remember what's in the right pane before taking it over for history."""
@@ -1981,6 +2057,7 @@ class App:
         import shlex
         import sys as _sys
         mouse = self._less_mouse_flag
+        slot = slot or self._agent_workspace().target
         # Tail the last 2000 lines so large sessions appear instantly. Tailing
         # drops the leading ``session_meta`` record, so a long Codex rollout
         # would otherwise be auto-detected as Claude and render blank. Pass the
@@ -1998,7 +2075,17 @@ class App:
                f"{python} -m railmux.transcript --format {fmt} "
                f"--preview-limit 2000 - | "
                f"{less_env} less -R +G {mouse}").rstrip()
-        slot = slot or self._agent_workspace().target
+        restore = slot.restore_state
+        controller = getattr(self, "_railmux_pane_id", None)
+        if (restore is not None and restore.kind == "agent" and controller
+                and slot.key in tmux_ctl.RAILMUX_HISTORY_RESTORE_KEYS):
+            _restore_key, restore_sequence = (
+                tmux_ctl.RAILMUX_HISTORY_RESTORE_KEYS[slot.key])
+            cmd += (
+                "; tmux send-keys -l -t "
+                f"{shlex.quote(controller)} -- "
+                f"{shlex.quote(restore_sequence)}"
+            )
         # In swap mode ``slot.pane_id`` is the real provider pane. Return it
         # home before the destructive ``respawn-pane -k`` below; only the
         # display placeholder may be replaced by the transcript viewer.
@@ -3697,7 +3784,7 @@ class App:
         return None
 
     def _preview_focused_target(self) -> None:
-        """Mirror a single-click for the focused Sessions/Running target."""
+        """Preview canonical history for the focused session or live entry."""
         target = self._focused_pane_menu_target()
         if target is None:
             self._set_status(
@@ -3706,9 +3793,9 @@ class App:
             return
         kind, value, _label = target
         if kind == "session" and isinstance(value, SessionMeta):
-            self._on_session_row_preview(value)
+            self._on_session_preview(value)
         elif kind == "running" and isinstance(value, RunningEntry):
-            self._on_running_select(value, steal_focus=False)
+            self._preview_running_history(value)
 
     def _close_secondary_split(self, *, announce: bool = True) -> bool:
         workspace = self._agent_workspace()
@@ -7313,6 +7400,27 @@ class App:
         if key == COMPACT_RESIZE_KEY.lower():
             self._handle_remote_compact_prepare()
             return
+        for slot_key, (preview_key, _sequence) in (
+                tmux_ctl.RAILMUX_HISTORY_PREVIEW_KEYS.items()):
+            if key == preview_key.lower():
+                if (getattr(self, "_loop", None) is not None
+                        and self._loop.widget is not self._frame):
+                    return
+                workspace = self._agent_workspace()
+                self._preview_slot_history(
+                    workspace.primary
+                    if slot_key == AgentWorkspace.PRIMARY
+                    else workspace.secondary)
+                return
+        for slot_key, (restore_key, _sequence) in (
+                tmux_ctl.RAILMUX_HISTORY_RESTORE_KEYS.items()):
+            if key == restore_key.lower():
+                workspace = self._agent_workspace()
+                self._restore_history_slot(
+                    workspace.primary
+                    if slot_key == AgentWorkspace.PRIMARY
+                    else workspace.secondary)
+                return
         # F9 is routed here by a global tmux binding and must remain available
         # while a modal is open (notably Help's fullscreen copy workflow).
         if key == "f9":
@@ -9320,7 +9428,7 @@ class App:
             (_context_menu_label("Open", "↵"),
              lambda s=session: self._do_context_open(s)),
             (_context_menu_label("Preview", "␣"), lambda s=session:
-             self._on_session_row_preview(s)),
+             self._on_session_preview(s)),
             (_context_menu_label("Info", "i"),
              lambda s=session: self._do_context_info(s)),
             (_context_menu_label("Rename", "r"),

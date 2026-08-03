@@ -2505,6 +2505,7 @@ def test_real_root_wheel_install_restore_and_user_reload(isolated_tmux):
         and "send-keys -M" in binding
         for binding in installed.values()
     )
+    assert tmux_ctl.root_wheel_bindings_are_current(first_token), installed
     tmux_ctl.restore_root_wheel_bindings(backup, token=first_token)
     assert tmux_ctl.read_root_wheel_bindings() == backup
 

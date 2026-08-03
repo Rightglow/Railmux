@@ -56,7 +56,37 @@ def test_active_claude_pane_stamps_and_clears_exact_transcript_source(
     )
     assert f"{session_id}.jsonl" in observed[0][2]
     assert observed[1] == (
+        "%8", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, "primary",
+    )
+    assert observed[2] == (
         "%8", tmux_server.TRANSCRIPT_SOURCE_OPTION, None,
+    )
+    assert observed[3] == (
+        "%8", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, None,
+    )
+
+
+def test_active_codex_pane_stamps_canonical_history_wheel_route(monkeypatch):
+    running = _Running(
+        "root-id",
+        "cx-agent",
+        "Codex",
+        session_type="codex",
+    )
+    app = App.__new__(App)
+    app._by_tmux = lambda name: running if name == "cx-agent" else None
+    slot = AgentSlot("secondary", pane_id="%9")
+    observed = []
+    monkeypatch.setattr(
+        tmux_ctl,
+        "set_pane_user_option",
+        lambda pane, option, value: observed.append((pane, option, value)) or True,
+    )
+
+    app._sync_slot_transcript_source(slot, "root-id", "cx-agent")
+
+    assert observed[-1] == (
+        "%9", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, "secondary",
     )
 
 
@@ -1252,6 +1282,102 @@ def test_preview_targets_explicit_active_secondary_slot():
     assert app._workspace.secondary.in_history_mode is True
 
 
+def test_codex_preview_resolves_newest_rewind_representative():
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._has_less = True
+    app._cancel_pending_double_focus = MagicMock()
+    app._save_restore_state = MagicMock()
+    app._show_transcript = MagicMock(return_value=True)
+    app._set_active_target = MagicMock()
+    app._set_status = MagicMock()
+    app._show_attention_status = MagicMock(return_value=False)
+    app._current_mode_key = MagicMock(return_value="codex")
+    root = SimpleNamespace(session_type="codex", session_id="root-id")
+    current = SimpleNamespace(
+        session_type="codex",
+        session_id="current-id",
+        jsonl_path=Path("/tmp/current-id.jsonl"),
+        display_title="current branch",
+        project=SimpleNamespace(encoded_name="project"),
+        attention=None,
+    )
+    app._codex_representative = MagicMock(return_value=current)
+
+    app._on_session_preview(root)
+
+    app._show_transcript.assert_called_once_with(
+        current.jsonl_path, session_type="codex")
+    app._set_active_target.assert_called_once_with(
+        "current-id", None, mode_key="codex", project_key="project")
+
+
+def test_private_history_keys_route_preview_and_restore_before_modal_checks():
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._preview_slot_history = MagicMock()
+    app._restore_history_slot = MagicMock()
+
+    app._on_input("f21")
+    app._on_input("f24")
+
+    app._preview_slot_history.assert_called_once_with(app._workspace.primary)
+    app._restore_history_slot.assert_called_once_with(app._workspace.secondary)
+
+
+def test_live_transcript_viewer_exit_signals_exact_slot_restore(
+    monkeypatch, tmp_path,
+):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    slot = app._workspace.primary
+    slot.pane_id = "%2"
+    slot.agent_tmux_name = "cx-live"
+    slot.restore_state = SimpleNamespace(kind="agent", tmux_name="cx-live")
+    app._less_mouse_flag = ""
+    app._railmux_pane_id = "%1"
+    app._railmux_has_focus = True
+    app._display_transport = MagicMock(
+        return_value=SimpleNamespace(prepare_preview=lambda _slot: True))
+    app._sync_slot_transcript_source = MagicMock()
+    app._set_divider_active = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    commands = []
+    monkeypatch.setattr(tmux_ctl, "pane_alive", lambda _pane: True)
+    monkeypatch.setattr(
+        tmux_ctl, "respawn_pane",
+        lambda pane, command: commands.append((pane, command)) or True,
+    )
+
+    assert app._show_transcript(
+        tmp_path / "session.jsonl", session_type="codex")
+
+    assert commands[0][0] == "%2"
+    assert "less -R +G" in commands[0][1]
+    assert "tmux send-keys -l -t %1" in commands[0][1]
+    assert "\x1b[42~" in commands[0][1]
+    assert slot.agent_tmux_name is None
+
+
+def test_closed_live_history_restores_saved_agent_to_same_slot(monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    slot = app._workspace.secondary
+    slot.in_history_mode = True
+    slot.restore_state = SimpleNamespace(kind="agent", tmux_name="cx-live")
+    running = _Running("id", "cx-live", "Live", status="busy")
+    app._by_tmux = MagicMock(return_value=running)
+    app._on_running_select = MagicMock()
+    monkeypatch.setattr(app, "_agent_session_alive", lambda _name: True)
+
+    app._restore_history_slot(slot)
+
+    entry = app._on_running_select.call_args.args[0]
+    assert entry.tmux_name == "cx-live"
+    app._on_running_select.assert_called_once_with(
+        entry, steal_focus=False, slot=slot)
+
+
 def test_session_context_menu_preview_uses_space_action():
     app = App.__new__(App)
     app._railmux_pane_id = None
@@ -1268,6 +1394,7 @@ def test_session_context_menu_preview_uses_space_action():
     app._close_modal = MagicMock()
     app._show_overlay = MagicMock()
     app._on_session_row_preview = MagicMock()
+    app._on_session_preview = MagicMock()
     app._copy_session_title = MagicMock()
     session = MagicMock()
     session.session_id = "preview-id"
@@ -1282,7 +1409,8 @@ def test_session_context_menu_preview_uses_space_action():
         row for row in menu._walker
         if "Preview" in row._wrapped_widget.base_widget.text)
     preview_row._on_click()
-    app._on_session_row_preview.assert_called_once_with(session)
+    app._on_session_preview.assert_called_once_with(session)
+    app._on_session_row_preview.assert_not_called()
 
 
 def test_session_context_menu_copy_title_uses_provider_title():
@@ -1347,30 +1475,29 @@ def test_legacy_running_menu_copies_provider_title_without_project_prefix(
     app._copy_session_title.assert_called_once_with("Review layout policy")
 
 
-def test_space_on_running_row_switches_without_focus_transfer():
+def test_space_on_running_row_previews_canonical_history():
     app = App.__new__(App)
     entry = RunningEntry(tmux_name="cx-live", label="project/session")
     app._focused_pane_menu_target = MagicMock(
         return_value=("running", entry, entry.label))
-    app._on_running_select = MagicMock()
+    app._preview_running_history = MagicMock()
 
     app._preview_focused_target()
 
-    app._on_running_select.assert_called_once_with(
-        entry, steal_focus=False)
+    app._preview_running_history.assert_called_once_with(entry)
 
 
-def test_space_on_session_row_uses_same_live_aware_click_action():
+def test_space_on_session_row_previews_even_when_live():
     app = App.__new__(App)
     session = MagicMock(spec=SessionMeta)
     session.display_title = "session"
     app._focused_pane_menu_target = MagicMock(
         return_value=("session", session, "session"))
-    app._on_session_row_preview = MagicMock()
+    app._on_session_preview = MagicMock()
 
     app._preview_focused_target()
 
-    app._on_session_row_preview.assert_called_once_with(session)
+    app._on_session_preview.assert_called_once_with(session)
 
 
 def test_preview_failure_sets_no_success_status():

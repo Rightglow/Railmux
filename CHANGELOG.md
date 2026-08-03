@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep the selected project and Sessions list visible while a new Codex
   placeholder is promoted to its real conversation, avoiding a one-refresh
   flash of the empty “Select a project” state.
+- Project live-session history from the provider's current branch: Codex uses
+  the newest rewind rollout and Claude Code follows its active `parentUuid`
+  chain, so abandoned prompt suffixes no longer replace or obscure retained
+  conversation history.
+- Route wheel-up, Space, and context Preview on a running session into that
+  canonical read-only history while keeping single-click and Enter attached to
+  the real live conversation; closing the viewer restores the exact live pane.
 
 ### Changed
 

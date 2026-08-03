@@ -1817,6 +1817,18 @@ _PREFIX_TARGET_KEY = "Tab"
 _PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
 RAILMUX_CONTROLLER_OPTION = "@railmux_controller_pane"
 RAILMUX_TARGET_OPTION = "@railmux_target_pane"
+RAILMUX_HISTORY_PREVIEW_OPTION = "@railmux_history_preview_v1"
+# tmux names function keys only through F12. Private controller routes use
+# canonical xterm sequences in literal mode, so they cannot be confused with
+# user input forwarded to an agent pane.
+RAILMUX_HISTORY_PREVIEW_KEYS = {
+    "primary": ("F21", "\x1b[35~"),
+    "secondary": ("F22", "\x1b[36~"),
+}
+RAILMUX_HISTORY_RESTORE_KEYS = {
+    "primary": ("F23", "\x1b[42~"),
+    "secondary": ("F24", "\x1b[43~"),
+}
 RAILMUX_SELECTION_KEY_OPTION = "@railmux_selection_key"
 RAILMUX_SELECTION_PEER_OPTION = "@railmux_selection_peer"
 RAILMUX_SELECTION_FROZEN_OPTION = "@railmux_selection_frozen_by"
@@ -2145,28 +2157,69 @@ def set_root_wheel_forwarding(
     backup: RootWheelBindingBackup,
     token: str,
 ) -> bool:
-    """Forward both wheel directions to mouse-aware pane applications.
+    """Open canonical live history on wheel-up, otherwise preserve tmux input.
 
     The literal marker makes crash recovery able to distinguish Railmux's
     wrapper from a binding the user installed while Railmux was running.
+    A pane-local primary/secondary marker routes the first live-agent wheel-up
+    to Railmux's controller; the transcript viewer clears that marker, so its
+    subsequent wheel events are forwarded normally.
     Non-mouse-aware panes retain the exact stock fallback; WheelDownPane was
     unbound by default and therefore has no false branch.
     """
     marker = f"{_ROOT_WHEEL_MARKER}-{token}"
-    condition = (
+    mouse_condition = (
         "#{&&:#{mouse_any_flag},"
         f"#{{==:{marker},{marker}}}}}"
     )
+    controller_present = f"#{{!=:#{{{RAILMUX_CONTROLLER_OPTION}}},}}"
+
+    def _preview_condition(slot_key: str) -> str:
+        return (
+            "#{&&:"
+            f"#{{==:#{{{RAILMUX_HISTORY_PREVIEW_OPTION}}},{slot_key}}},"
+            f"{controller_present}}}"
+        )
+
+    def _send_preview(slot_key: str) -> str:
+        _key, sequence = RAILMUX_HISTORY_PREVIEW_KEYS[slot_key]
+        return (
+            f"send-keys -l -t '#{{{RAILMUX_CONTROLLER_OPTION}}}' -- "
+            f"'{sequence}'"
+        )
+
     try:
         for key in _ROOT_WHEEL_KEYS:
+            binding = backup.get(key)
+            fallback = _binding_command(binding) if binding is not None else ""
+            mouse_fallback = (
+                f"if-shell -F -t = '{mouse_condition}' 'send-keys -M'"
+            )
+            if fallback:
+                mouse_fallback += f" '{fallback}'"
             args = [
                 "tmux", "bind-key", "-T", "root", key,
-                "if-shell", "-F", "-t", "=", condition,
-                "send-keys -M",
             ]
-            binding = backup.get(key)
-            if binding is not None:
-                args.append(_binding_command(binding))
+            if key == "WheelUpPane":
+                secondary_fallback = (
+                    "if-shell -F -t = "
+                    f"'{_preview_condition('secondary')}' "
+                    f"\"{_send_preview('secondary')}\" "
+                    f"\"{mouse_fallback}\""
+                )
+                args.extend([
+                    "if-shell", "-F", "-t", "=",
+                    _preview_condition("primary"),
+                    _send_preview("primary"),
+                    secondary_fallback,
+                ])
+            else:
+                args.extend([
+                    "if-shell", "-F", "-t", "=", mouse_condition,
+                    "send-keys -M",
+                ])
+                if fallback:
+                    args.append(fallback)
             subprocess.check_call(
                 args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
@@ -2183,6 +2236,28 @@ def root_wheel_bindings_owned_by(token: str) -> bool:
         and "mouse_any_flag" in binding
         and "send-keys -M" in binding
         for binding in read_root_wheel_bindings().values()
+    )
+
+
+def root_wheel_bindings_are_current(token: str) -> bool:
+    """Whether the owned wrapper includes canonical-history routing."""
+    bindings = read_root_wheel_bindings()
+    up = bindings.get("WheelUpPane")
+    marker = f"{_ROOT_WHEEL_MARKER}-{token}"
+    return (
+        all(
+            binding is not None
+            and marker in binding
+            and "mouse_any_flag" in binding
+            and "send-keys -M" in binding
+            for binding in bindings.values()
+        )
+        and up is not None
+        and RAILMUX_HISTORY_PREVIEW_OPTION in up
+        and all(
+            sequence in up or sequence.replace("\x1b", r"\033") in up
+            for _key, sequence in RAILMUX_HISTORY_PREVIEW_KEYS.values()
+        )
     )
 
 

@@ -28,6 +28,8 @@ def _install_mocks(monkeypatch, tmp_path):
     monkeypatch.setattr(tmux_ctl, "restore_root_wheel_bindings", restore)
     monkeypatch.setattr(tmux_ctl, "root_wheel_bindings_owned_by",
                         lambda _token: True)
+    monkeypatch.setattr(tmux_ctl, "root_wheel_bindings_are_current",
+                        lambda _token: True)
     return backup, install, restore
 
 
@@ -77,6 +79,21 @@ def test_stale_restored_transaction_reinstalls_in_same_open(
 
     restore.assert_called_once()
     assert install.call_count == 2
+
+
+def test_owned_pre_history_wrapper_is_upgraded_in_place(
+        monkeypatch, tmp_path):
+    _backup, install, restore = _install_mocks(monkeypatch, tmp_path)
+    first = RootWheelForwardingManager("server", "%1")
+    assert first.open()
+    monkeypatch.setattr(
+        tmux_ctl, "root_wheel_bindings_are_current", lambda _token: False)
+    second = RootWheelForwardingManager("server", "%2")
+
+    assert second.open()
+
+    assert install.call_count == 2
+    restore.assert_not_called()
 
 
 def test_custom_root_bindings_fail_closed_without_mutation(monkeypatch, tmp_path):

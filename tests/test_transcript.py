@@ -306,6 +306,90 @@ def test_claude_native_history_uses_static_tui_like_blocks():
     assert "tokens)" not in rendered
 
 
+def test_claude_rewind_projects_only_current_parent_uuid_branch():
+    records = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "isSidechain": False,
+            "message": {"role": "user", "content": "shared prompt"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "isSidechain": False,
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "shared answer"},
+            ]},
+        },
+        {
+            "type": "user", "uuid": "old-u", "parentUuid": "a1",
+            "isSidechain": False,
+            "message": {"role": "user", "content": "abandoned btw"},
+        },
+        {
+            "type": "assistant", "uuid": "old-a", "parentUuid": "old-u",
+            "isSidechain": False,
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "abandoned answer"},
+            ]},
+        },
+        {
+            "type": "user", "uuid": "new-u", "parentUuid": "a1",
+            "isSidechain": False,
+            "message": {"role": "user", "content": "replacement prompt"},
+        },
+        {
+            "type": "assistant", "uuid": "new-a", "parentUuid": "new-u",
+            "isSidechain": False,
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "replacement answer"},
+            ]},
+        },
+    ]
+    text = "\n".join(json.dumps(record) for record in records) + "\n"
+
+    rendered = "".join(format_transcript(
+        io.StringIO(text), fmt="claude", claude_native=True
+    ))
+
+    assert "shared prompt" in rendered
+    assert "shared answer" in rendered
+    assert "replacement prompt" in rendered
+    assert "replacement answer" in rendered
+    assert "abandoned btw" not in rendered
+    assert "abandoned answer" not in rendered
+
+
+def test_claude_sidechain_tail_does_not_replace_current_conversation_tip():
+    records = [
+        {
+            "type": "user", "uuid": "u1", "parentUuid": None,
+            "isSidechain": False,
+            "message": {"role": "user", "content": "main prompt"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "parentUuid": "u1",
+            "isSidechain": False,
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "main answer"},
+            ]},
+        },
+        {
+            "type": "assistant", "uuid": "side-a", "parentUuid": "u1",
+            "isSidechain": True,
+            "message": {"role": "assistant", "content": [
+                {"type": "text", "text": "sidechain answer"},
+            ]},
+        },
+    ]
+    text = "\n".join(json.dumps(record) for record in records) + "\n"
+
+    rendered = "".join(format_transcript(io.StringIO(text), fmt="claude"))
+
+    assert "main prompt" in rendered
+    assert "main answer" in rendered
+    assert "sidechain answer" not in rendered
+
+
 def test_session_text_cannot_inject_osc_or_terminal_query():
     record = {
         "type": "user",
