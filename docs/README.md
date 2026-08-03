@@ -23,6 +23,9 @@ Read the smallest relevant document before changing behavior:
 - [`BACKGROUND_SESSION_INDEX.md`](BACKGROUND_SESSION_INDEX.md) records the
   reproducible evidence behind the background Codex index. It supplements the
   immutable-generation rules in `ARCHITECTURE.md`.
+- [`WINDOWS_WRAPPER_PREVIEW.md`](WINDOWS_WRAPPER_PREVIEW.md) and its
+  machine-readable parity ledger define the isolated managed-MSYS2 experiment
+  on `windows-preview`; they are not a support claim for `main`.
 
 Related repository-level documents have different roles:
 

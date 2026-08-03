@@ -104,3 +104,64 @@ jobs:
         env:
           RAILMUX_RUN_TMUX_INTEGRATION: "1"
         run: python -m pytest -q tests/test_tmux_integration.py
+
+  windows-bootstrap:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install --upgrade pip pytest tomli ruff
+      - run: python -m pip install --no-deps -e .
+      - name: Verify native bootstrap and contract tests
+        run: >-
+          python -m pytest -q
+          tests/test_windows_bootstrap.py
+          tests/test_windows_msys2.py
+          tests/test_windows_wrapper_contract.py
+          tests/test_provider_paths.py
+      - run: python -m ruff check src tests tools
+      - run: railmux --version
+
+  windows-msys2-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - run: git config --global core.autocrlf input
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: msys2/setup-msys2@v2
+        id: msys2
+        with:
+          msystem: MSYS
+          update: true
+          path-type: inherit
+          install: >-
+            tmux
+            python
+            python-pip
+      - name: Install the checkout in the runtime-owned venv
+        shell: msys2 {0}
+        run: |
+          python -m venv /opt/railmux/venv
+          /opt/railmux/venv/bin/python -m pip install --upgrade pip
+          /opt/railmux/venv/bin/python -m pip install ".[ssh]"
+          tmux -V
+          /opt/railmux/venv/bin/railmux --version
+      - name: Install the thin native Windows package
+        shell: pwsh
+        run: python -m pip install --no-deps .
+      - name: Probe and enter the real MSYS2 runtime from Windows
+        shell: pwsh
+        env:
+          RAILMUX_MSYS2_ROOT: ${{ steps.msys2.outputs.msys2-location }}
+        run: |
+          railmux runtime status
+          railmux doctor --json

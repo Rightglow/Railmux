@@ -369,6 +369,25 @@ def test_codex_index_sessions_for_cwd(tmp_path: Path):
     assert sessions_b[0].session_id == "b1111111-1111-7111-a36b-9e1044cb7a88"
 
 
+def test_windows_codex_cwd_maps_to_msys_mount(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    path = tmp_path / "rollout-windows.jsonl"
+    _write_codex_session(
+        path,
+        "c1111111-1111-7111-a36b-9e1044cb7a88",
+        r"C:\Users\Alice\work",
+        messages=[
+            {"role": "user", "text": "hello"},
+            {"role": "assistant", "text": "done"},
+        ],
+    )
+
+    session = _scan_codex_session(path)
+
+    assert session is not None
+    assert session.project.real_path == Path("/c/Users/Alice/work")
+
+
 def test_codex_index_collapses_rewind_lineage_to_newest_rollout(
     tmp_path: Path,
 ):

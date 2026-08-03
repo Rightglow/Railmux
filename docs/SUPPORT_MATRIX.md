@@ -52,7 +52,7 @@ pane-bounded drag-to-copy.
 
 | Capability | Contract |
 |---|---|
-| Python | 3.9 or newer on every machine running Railmux. |
+| Python | 3.9 or newer on POSIX/WSL. The native Windows preview bootstrap requires 3.10+; the managed MSYS2 process currently uses 3.12+. |
 | tmux core workspace | 2.7 or newer. CI compiles the checksum-pinned official tmux 2.7 release and boots a real Railmux frame. |
 | Managed shell/Vim and nested pane-local SSH history marker | tmux 3.0 or newer; older tmux fails closed with a warning. |
 | Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |

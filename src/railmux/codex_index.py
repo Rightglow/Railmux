@@ -25,6 +25,7 @@ from railmux.models import (
     Project,
     SessionMeta,
 )
+from railmux.provider_paths import provider_path
 from railmux.renames import Renames
 
 # Codex has no reliable provider-neutral signal that distinguishes a long
@@ -97,9 +98,10 @@ class HiddenCodexStatus:
 def persistent_cache_path(codex_home: Path) -> Path:
     """Return a private cache path unique to one Codex sessions root."""
     raw_base = os.environ.get("XDG_CACHE_HOME")
+    requested_base = provider_path(raw_base).expanduser() if raw_base else None
     base = (
-        Path(raw_base).expanduser()
-        if raw_base and Path(raw_base).expanduser().is_absolute()
+        requested_base
+        if requested_base is not None and requested_base.is_absolute()
         else Path.home() / ".cache"
     )
     try:
@@ -1036,7 +1038,7 @@ def _parse_codex_session(
     cwd_str = payload.get("cwd")
     if not isinstance(cwd_str, str) or not cwd_str.strip():
         return None
-    cwd = Path(cwd_str)
+    cwd = provider_path(cwd_str)
     forked_from = payload.get("forked_from_id")
     forked_from_id = (
         forked_from

@@ -141,6 +141,11 @@ def maybe_upgrade_before_launch(
     settings: Settings,
 ) -> None:
     """Check once in the outer launcher and restart after an accepted update."""
+    # Native Windows owns this private venv through the verified bootstrap.
+    # Updating only the inner copy would break its exact-version marker and
+    # could replace files while a tmux generation is still alive.
+    if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2":
+        return
     policy = settings.update_policy
     if policy == "never":
         return

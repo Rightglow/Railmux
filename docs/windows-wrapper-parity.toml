@@ -1,0 +1,108 @@
+schema = 1
+architecture = "managed-msys2-posix-runtime"
+baseline_branch = "main"
+conpty_archive = "archive/windows-conpty-deprecated@f1b8cb128bd78831d00d4cc7dfa02453f8bd9700"
+wsl_archive = "archive/windows-wsl-delegation-deprecated@912cae6bd62d31a6ad69ce7da2f85be4750ed84b"
+
+[features]
+P01 = "runtime-bridge"
+P02 = "runtime-bridge"
+P03 = "delegated-posix"
+P04 = "runtime-bridge"
+P05 = "runtime-bridge"
+P06 = "delegated-posix"
+P07 = "delegated-posix"
+P08 = "delegated-posix"
+P09 = "delegated-posix"
+P10 = "delegated-posix"
+P11 = "delegated-posix"
+P12 = "delegated-posix"
+W01 = "delegated-posix"
+W02 = "delegated-posix"
+W03 = "delegated-posix"
+W04 = "delegated-posix"
+W05 = "delegated-posix"
+W06 = "delegated-posix"
+W07 = "runtime-bridge"
+W08 = "delegated-posix"
+W09 = "delegated-posix"
+W10 = "delegated-posix"
+W11 = "delegated-posix"
+W12 = "runtime-bridge"
+W13 = "runtime-bridge"
+W14 = "delegated-posix"
+S01 = "delegated-posix"
+S02 = "delegated-posix"
+S03 = "runtime-bridge"
+S04 = "delegated-posix"
+S05 = "delegated-posix"
+S06 = "delegated-posix"
+S07 = "delegated-posix"
+S08 = "delegated-posix"
+S09 = "delegated-posix"
+S10 = "delegated-posix"
+S11 = "delegated-posix"
+S12 = "delegated-posix"
+S13 = "runtime-bridge"
+S14 = "delegated-posix"
+S15 = "runtime-bridge"
+S16 = "runtime-bridge"
+S17 = "delegated-posix"
+S18 = "not-applicable"
+S19 = "delegated-posix"
+S20 = "runtime-bridge"
+
+[limitations]
+rolling_repository = "The base archive is hash-pinned and pacman signatures are checked, but repository package versions are not yet snapshot-pinned."
+native_server = "Providers and SSH servers on native Windows are out of scope."
+runtime_bridges = "Clipboard, browser, separate-terminal, self-update, and remote-config bridges still require real Windows validation."
+unicode_profile = "The managed runtime path and provider history must still be exercised with a real non-ASCII Windows profile name."
+
+[[scenarios]]
+id = "WW-PACKAGE-DISPATCH"
+features = ["P01", "P02", "W12", "W13"]
+automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_msys2.py", "tests/test_provider_paths.py"]
+manual = "Install from native Windows Python 3.10+ under CP936; verify consent, UTF-8 state, same-profile HOME, native providers, and exact argv."
+evidence = "2026-08-03 spike: Windows 10 19045, PowerShell 5.1, Python 3.12.10, MSYS2 2026-03-22; shared HOME and native Codex/Claude discovery passed. Final dev4 installer still pending."
+
+[[scenarios]]
+id = "WW-PREVIEW-OPEN"
+features = ["P04", "P05", "P06"]
+automation = ["tests/test_path_codec.py", "tests/test_codex_index.py"]
+manual = "Preview, scroll, close, and open authenticated native Codex and Claude sessions, including sessions created outside Railmux."
+evidence = "2026-08-03 spike launched native Codex 0.146.0 and Claude Code 2.1.220 in MSYS tmux; authenticated restore/preview not run."
+
+[[scenarios]]
+id = "WW-RESIZE-REFLOW"
+features = ["W02", "W04", "W05"]
+automation = []
+manual = "Resize wide, narrow, tall, and short while each provider renders; verify reflow, compact pages, bottom chrome, and restored layout."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-MOUSE-CHROME"
+features = ["P06", "W05", "W06"]
+automation = []
+manual = "Verify preview wheel, sidebar scrolling, double-click, right-click menus, responsive dialogs, Mode, Layout, status actions, and selection."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-LIFECYCLE"
+features = ["W09", "W10", "W11", "W14", "S19"]
+automation = ["tests/test_windows_bootstrap.py"]
+manual = "Close/reopen the outer terminal, detach, soft restart, resize, interrupt, and verify providers persist and terminal modes recover."
+evidence = "2026-08-03 spike: detached Claude tmux pane survived closing and reopening the PowerShell/SSH client; full Railmux lifecycle not run."
+
+[[scenarios]]
+id = "WW-SSH-POSIX"
+features = ["S01", "S04", "S06", "S08", "S09", "S11", "S12", "S17"]
+automation = []
+manual = "Run railmux ssh from Windows to Linux and macOS/Unix; verify restore, reconnect, history, mouse, paste, resize, and Ctrl-]."
+evidence = "not-run"
+
+[[scenarios]]
+id = "WW-RUNTIME-BRIDGES"
+features = ["W07", "W12", "W13", "S03", "S13", "S15", "S16", "S20"]
+automation = []
+manual = "Validate config, doctor, Ask Railmux, local update ownership, clipboard, browser, separate terminal, and remote config in managed MSYS2."
+evidence = "not-run"

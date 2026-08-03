@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev4] - 2026-08-03
+
+### Added
+
+- Replace the archived native-to-WSL experiment with an explicit,
+  consent-based native Windows bootstrap into a private managed MSYS2/tmux
+  runtime, keeping the established POSIX Railmux UI as the sole implementation.
+- Share native Codex and Claude Code executables, credentials, configuration,
+  and histories through the Windows user profile; translate native drive paths
+  and Claude project keys when indexing existing sessions from MSYS2.
+- Add Windows package dispatch and managed-runtime tests, a real-MSYS2 CI
+  smoke, and a parity ledger that keeps unverified terminal behavior visible.
+
+### Security
+
+- Pin and hash-verify the official MSYS2 base archive, serialize and stage
+  installs before atomic activation, use explicit UTF-8 for runtime state, and
+  never modify system PATH, shell profiles, or a user-owned MSYS2 tree.
+
 ## [0.3.3.dev3] - 2026-08-03
 
 ### Fixed
@@ -1789,7 +1808,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev3...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...HEAD
+[0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
 [0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2
 [0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1

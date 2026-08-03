@@ -7,7 +7,7 @@ from pathlib import Path
 
 from railmux.atomic_file import atomic_write_text
 from railmux.models import Project
-from railmux.path_codec import decode
+from railmux.path_codec import decode, is_encoded_project_name
 from railmux.session_index import _looks_like_uuid, _scan_session
 
 
@@ -94,7 +94,7 @@ def list_projects(claude_home: Path) -> list[Project]:
         for entry in scan:
             if not entry.is_dir(follow_symlinks=False):
                 continue
-            if not entry.name.startswith("-"):
+            if not is_encoded_project_name(entry.name):
                 continue
             seen.add(entry.name)
 

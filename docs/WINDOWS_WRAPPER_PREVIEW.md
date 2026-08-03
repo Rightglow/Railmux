@@ -1,0 +1,78 @@
+# Windows managed-MSYS2 preview
+
+This is the design and validation authority for the active `windows-preview`
+branch. The abandoned native ConPTY compositor and native-to-WSL delegation
+experiments are frozen at `archive/windows-conpty-deprecated` (`v0.4.0.dev2`)
+and `archive/windows-wsl-delegation-deprecated` (`v0.4.0.dev3`). Neither is a
+fallback or a base for this implementation.
+
+## Decision and ownership
+
+Native Windows Python is only a bootstrap. With explicit consent it installs a
+private, versioned MSYS2 runtime beneath `%LOCALAPPDATA%\Railmux\runtimes`, then
+hands the original argv to the normal POSIX Railmux/tmux application. That one
+application remains the owner of layout, mouse routing, previews, dialogs,
+restore state, SSH display, and provider lifecycle.
+
+Codex and Claude Code remain the user's Windows-native executables. The child
+`HOME` is explicitly mapped to `%USERPROFILE%`, the inherited Windows `PATH` is
+retained, and native provider paths are translated only when Railmux reads
+their metadata. Consequently the wrapper reads the same `.codex` and `.claude`
+directories as providers launched directly from PowerShell. It does not copy,
+migrate, or rewrite provider histories.
+
+The preview supports local Railmux and the local side of `railmux ssh` to a
+Linux, macOS, or compatible Unix host. Providers and SSH servers running on
+native Windows remain out of scope. WSL remains usable only when the user
+independently opens a WSL shell and runs the ordinary POSIX product there.
+
+## Bootstrap contract
+
+- Windows requires Python 3.10 or newer. Packaging metadata must retain Python
+  3.9 for POSIX because Python package metadata cannot express an OS-specific
+  interpreter floor; the native entrypoint enforces the Windows floor before
+  runtime discovery.
+- `railmux --version`, `--help`, and `runtime status` do not install or enter a
+  runtime. `runtime install` prompts, while `runtime install --yes` is the
+  explicit noninteractive operation.
+- The official MSYS2 self-extracting base URL and SHA-256 are pinned. Pacman
+  verifies repository packages with the bundled MSYS2 signing keyring and
+  performs full upgrades in fresh processes; this preview does not yet freeze
+  a repository snapshot, so runtime package versions may advance between
+  installations.
+- Installation is serialized, staged outside the active directory, verified,
+  and atomically renamed. An incomplete pre-existing final directory fails
+  closed and is never silently removed. User-selected `RAILMUX_MSYS2_ROOT`
+  runtimes are probed read-only and never provisioned or updated.
+- No system `PATH`, shell profile, Windows package manager, user-owned MSYS2,
+  or provider history is modified. All captured text and marker files use an
+  explicit UTF-8 codec; CP936/GBK is never an implicit file encoding.
+- The handoff uses an argv list and a fixed shell literal. A `$0` sentinel
+  prevents dropping the first argument, and MSYS argument conversion is
+  disabled at the Windows boundary then restored before native providers run.
+- The parent waits through Ctrl-C instead of killing the child. tmux owns
+  persistence after detach or outer-window closure.
+
+Git for Windows is built from a maintained subset/fork of MSYS2, but its normal
+Git Bash installation does not provide the complete `pacman` + `tmux` runtime
+Railmux needs. Reusing it would also couple Railmux to another application's
+update lifecycle. The preview therefore uses a separately owned MSYS2 tree.
+
+## Evidence and release boundary
+
+The machine-readable feature ledger is `windows-wrapper-parity.toml`. It makes
+every stable support-matrix ID explicit and preserves manual checks for the
+visual and terminal behavior that unit tests cannot prove.
+
+On 2026-08-03 a Windows 10 19045 / PowerShell 5.1 / Python 3.12.10 spike proved
+that MSYS2 maps `HOME` to the same Windows profile, finds native Codex 0.146.0
+and Claude Code 2.1.220 through inherited `PATH`, launches both in detached tmux
+3.7b panes, preserves a detached Claude pane across closing and reopening the
+outer shell, and starts the complete POSIX Railmux UI. Authentication-specific
+restore, preview, resize, mouse, menus, clipboard/browser bridges, and
+`railmux ssh` remain release-specific manual checks and are not inferred from
+that spike.
+
+Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
+This document is not a stable-support claim, and the repository README and
+website remain unchanged until the manual checklist is complete.
