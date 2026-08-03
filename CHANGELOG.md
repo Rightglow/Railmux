@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev2] - 2026-08-03
+
+### Changed
+
+- Add a machine-checked native-Windows parity ledger: every stable support-
+  matrix feature now requires an explicit Windows disposition, while high-risk
+  preview/open, resize, double-click redraw, modal, bottom-chrome, and real-
+  provider scenarios retain named automated and manual evidence.
+
+### Fixed
+
+- Synchronize the shared Urwid viewport, transcript preview, and displayed
+  ConPTYs whenever native layout topology or terminal geometry changes, so
+  opening an agent, entering compact/fullscreen presentation, and resizing no
+  longer render a wide sidebar canvas into a narrow region or size dialogs from
+  stale dimensions.
+- Replace a native history-preview surface when a live session is opened, keep
+  single-click preview focus in the sidebar, and preserve double-click/Enter as
+  the authoritative focus-transfer gesture.
+- Restore the full native bottom chrome with Mode, Layout/Target, compact page,
+  status-copy hit regions, and error styling instead of showing only transient
+  status text.
+- Make native sidebar and agent dividers consume the shared responsive layout
+  geometry and apply resize requests to their real Urwid/ConPTY surfaces.
+
 ## [0.4.0.dev1] - 2026-08-02
 
 ### Changed
@@ -1840,7 +1865,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev2...HEAD
+[0.4.0.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev1...v0.4.0.dev2
 [0.4.0.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2.dev5...v0.4.0.dev1
 [0.3.3.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3.dev1
 [0.3.2]: https://github.com/Rightglow/Railmux/compare/v0.3.1...v0.3.2

@@ -70,6 +70,15 @@ Windows changes on focused branches based on `windows-preview`, then merge
 them back into `windows-preview`; never merge that branch wholesale into
 `main`.
 
+On `windows-preview`, also read and update
+[`docs/windows-preview-parity.toml`](docs/windows-preview-parity.toml) for any
+shared feature, interaction, layout, status, modal, mouse, preview, or session
+lifecycle change. CI requires every stable `SUPPORT_MATRIX` feature ID to have
+an explicit Windows disposition and preserves the named high-risk interaction
+scenarios. A shared implementation is not by itself rendering evidence; add a
+headless native transition test and retain the listed real Windows Terminal
+check when terminal/provider behavior is involved.
+
 Shared POSIX/provider fixes belong in `main` first and flow one way into
 `windows-preview`. If a bug is discovered while testing Windows, separate the
 provider-neutral fix from the Windows adapter change and land only the former

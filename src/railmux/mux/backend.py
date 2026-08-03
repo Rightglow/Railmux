@@ -32,6 +32,20 @@ class LaunchSpec:
     login_shell: bool = False
 
 
+@dataclass(frozen=True)
+class StatusChrome:
+    """Platform-neutral state for Railmux's persistent bottom chrome.
+
+    POSIX projects this into tmux's status line; native Windows draws it in
+    the daemon compositor.  The transient status message is intentionally a
+    separate value so it cannot replace the Mode/Layout controls.
+    """
+
+    mode_label: str
+    layout_indicator: str | None
+    error: bool = False
+
+
 class MuxBackend(Protocol):
     """Core topology/lifecycle surface consumed by the shared UI.
 
@@ -57,3 +71,5 @@ class MuxBackend(Protocol):
     def detach_client(self) -> bool: ...
     def kill_pane(self, pane_id: str) -> bool: ...
     def kill_session(self, name: str) -> bool: ...
+    def set_status_text(self, text: str, level: str) -> None: ...
+    def set_status_chrome(self, chrome: StatusChrome) -> None: ...

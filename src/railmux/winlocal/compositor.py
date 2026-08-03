@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import unicodedata
 
 import pyte
+from urwid.str_util import calc_width
 
 from railmux.fast_display_protocol import ScreenUpdate, TerminalMode, UpdateKind
 from railmux.terminal_emulator import extended_pyte, render_rows
+from railmux.ui.workspace import WorkspaceLayout, sidebar_width_for_layout
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,9 @@ class Compositor:
         has_primary: bool,
         has_secondary: bool,
         stacked: bool = False,
+        layout: WorkspaceLayout | None = None,
+        sidebar_width: int | None = None,
+        primary_size: int | None = None,
     ) -> dict[str, Region]:
         """Return the authoritative input/render geometry for this frame."""
         content_height = max(1, self.height - 1)
@@ -70,8 +74,17 @@ class Compositor:
             return {
                 "sidebar": Region(0, 0, self.width, content_height),
             }
-        sidebar_width = min(
-            max(18, self.width * 3 // 10), max(18, self.width - 2)
+        if layout is None:
+            layout = (
+                WorkspaceLayout.STACKED if stacked else
+                WorkspaceLayout.SIDE_BY_SIDE if has_secondary else
+                WorkspaceLayout.SINGLE
+            )
+        stacked = layout is WorkspaceLayout.STACKED
+        sidebar_width = (
+            sidebar_width_for_layout(layout, self.width)
+            if sidebar_width is None
+            else min(max(1, sidebar_width), max(1, self.width - 2))
         )
         result = {
             "sidebar": Region(0, 0, sidebar_width, content_height),
@@ -85,13 +98,21 @@ class Compositor:
                 agent_x, 0, agent_width, content_height
             )
         elif stacked:
-            top = max(1, (content_height - 1) // 2)
+            top = (
+                max(1, (content_height - 1) // 2)
+                if primary_size is None else
+                min(max(1, primary_size), max(1, content_height - 2))
+            )
             result["primary"] = Region(agent_x, 0, agent_width, top)
             result["secondary"] = Region(
                 agent_x, top + 1, agent_width, content_height - top - 1
             )
         else:
-            left = max(1, (agent_width - 1) // 2)
+            left = (
+                max(1, (agent_width - 1) // 2)
+                if primary_size is None else
+                min(max(1, primary_size), max(1, agent_width - 2))
+            )
             result["primary"] = Region(agent_x, 0, left, content_height)
             result["secondary"] = Region(
                 agent_x + left + 1,
@@ -109,13 +130,24 @@ class Compositor:
         *,
         stacked: bool = False,
         status: bytes = b"railmux",
+        status_error: bool = False,
         focus: str = "sidebar",
+        show_primary: bool | None = None,
+        show_secondary: bool | None = None,
+        layout: WorkspaceLayout | None = None,
+        sidebar_width: int | None = None,
+        primary_size: int | None = None,
     ) -> ScreenUpdate:
         content_height = max(1, self.height - 1)
         geometry = self.regions(
-            has_primary=primary is not None,
-            has_secondary=secondary is not None,
+            has_primary=primary is not None if show_primary is None else show_primary,
+            has_secondary=(
+                secondary is not None if show_secondary is None else show_secondary
+            ),
             stacked=stacked,
+            layout=layout,
+            sidebar_width=sidebar_width,
+            primary_size=primary_size,
         )
         panes = {
             "sidebar": sidebar,
@@ -140,13 +172,17 @@ class Compositor:
                 output.append(_border_accent(region))
         if agent_x > sidebar_width:
             output.append(_vertical_border(sidebar_width, content_height))
-        if secondary is not None and stacked:
-            output.append(_horizontal_border(agent_x, regions[-1][1].y - 1, agent_width))
-        elif secondary is not None:
-            output.append(_vertical_border(regions[-1][1].x - 1, content_height))
+        if "secondary" in geometry and stacked:
+            output.append(_horizontal_border(
+                agent_x, geometry["secondary"].y - 1, agent_width
+            ))
+        elif "secondary" in geometry:
+            output.append(_vertical_border(
+                geometry["secondary"].x - 1, content_height
+            ))
         output.append(
             _move(self.height - 1, 0)
-            + b"\033[0;30;42m"
+            + (b"\033[0;97;41m" if status_error else b"\033[0;30;42m")
             + _bounded_status(status, self.width)
             + b"\033[K\033[0m"
         )
@@ -177,6 +213,7 @@ class Compositor:
         pane: TerminalPane,
         *,
         status: bytes = b"railmux",
+        status_error: bool = False,
     ) -> ScreenUpdate:
         """Compose one zoomed surface while retaining the shared status row."""
         content_height = max(1, self.height - 1)
@@ -186,7 +223,7 @@ class Compositor:
             output.append(_move(row, 0) + value)
         output.append(
             _move(self.height - 1, 0)
-            + b"\033[0;30;42m"
+            + (b"\033[0;97;41m" if status_error else b"\033[0;30;42m")
             + _bounded_status(status, self.width)
             + b"\033[K\033[0m"
         )
@@ -242,11 +279,7 @@ def _bounded_status(status: bytes, width: int) -> bytes:
     for character in text:
         if ord(character) < 32 or 0x7F <= ord(character) <= 0x9F:
             character = " "
-        character_width = (
-            0
-            if unicodedata.combining(character)
-            else 1 if ord(character) < 128 else 2
-        )
+        character_width = calc_width(character, 0, len(character))
         if cells + character_width > width:
             break
         result.append(character)

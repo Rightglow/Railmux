@@ -16,6 +16,10 @@ Read the smallest relevant document before changing behavior:
   local/remote platforms, terminal capabilities, and user-visible features.
   Use its stable feature IDs and acceptance checklists when extending Railmux
   to a new provider, operating system, or terminal emulator.
+- [`windows-preview-parity.toml`](windows-preview-parity.toml) is the
+  machine-checked native-Windows disposition and interaction-evidence ledger.
+  On `windows-preview`, every new stable feature ID and every presentation-
+  sensitive change must update it so CI exposes an unreviewed frontend gap.
 - [`DENESTED_AGENT_PANE.md`](DENESTED_AGENT_PANE.md) records the evidence,
   transaction model, fallbacks, benchmarks, default-transport decision, and
   unresolved limitations for the swap transport. Keep measurements explicit

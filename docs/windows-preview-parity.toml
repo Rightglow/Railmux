@@ -1,0 +1,95 @@
+schema = 1
+
+# Every stable SUPPORT_MATRIX feature ID must appear exactly once here.  CI
+# fails when the shared product inventory grows without an explicit native
+# Windows disposition.  A disposition describes implementation ownership, not
+# a support promotion: real-provider/Windows-Terminal checks remain manual.
+[features]
+P01 = "shared-contract"
+P02 = "shared-contract"
+P03 = "shared-contract"
+P04 = "native-adapter"
+P05 = "native-adapter"
+P06 = "native-adapter"
+P07 = "shared-contract"
+P08 = "native-adapter"
+P09 = "shared-contract"
+P10 = "shared-contract"
+P11 = "shared-contract"
+P12 = "native-adapter"
+W01 = "native-equivalent"
+W02 = "native-adapter"
+W03 = "native-adapter"
+W04 = "native-adapter"
+W05 = "native-adapter"
+W06 = "shared-contract"
+W07 = "shared-contract"
+W08 = "limited"
+W09 = "native-adapter"
+W10 = "native-adapter"
+W11 = "native-adapter"
+W12 = "shared-contract"
+W13 = "native-adapter"
+W14 = "native-equivalent"
+S01 = "shared-contract"
+S02 = "shared-contract"
+S03 = "limited"
+S04 = "native-adapter"
+S05 = "shared-contract"
+S06 = "native-adapter"
+S07 = "shared-contract"
+S08 = "shared-contract"
+S09 = "native-adapter"
+S10 = "shared-contract"
+S11 = "native-adapter"
+S12 = "native-adapter"
+S13 = "native-adapter"
+S14 = "native-adapter"
+S15 = "native-adapter"
+S16 = "native-adapter"
+S17 = "native-adapter"
+S18 = "not-applicable"
+S19 = "native-adapter"
+S20 = "limited"
+
+[limitations]
+W08 = "Managed shell and Vim panes are not implemented in the native preview."
+S03 = "Consent-based local self-upgrade is currently a POSIX-local contract."
+S18 = "Termux soft-keyboard behavior applies to Android, not native Windows."
+S20 = "Remote config editing is currently a POSIX-local contract."
+
+[[scenarios]]
+id = "NW-PREVIEW-OPEN"
+features = ["P04", "P05", "P06"]
+automation = ["tests/test_winlocal_backend.py::test_shared_preview_open_gesture_contract_runs_through_native_backend", "tests/test_winlocal_backend.py::test_native_preview_then_open_replaces_history_with_live_agent"]
+manual = "Preview and open authenticated Codex and Claude sessions in Windows Terminal."
+
+[[scenarios]]
+id = "NW-TOPOLOGY-RESIZE"
+features = ["W02", "W04", "W05"]
+automation = ["tests/test_winlocal_backend.py::test_native_topology_and_resize_keep_urwid_and_preview_geometry_in_sync", "tests/test_winlocal_backend.py::test_native_compact_resize_projects_full_page_then_restores_sidebar", "tests/test_winlocal_real_conpty.py::test_real_conpty_starts_reads_resizes_and_exits"]
+manual = "Resize wide/narrow/tall/short while each provider is rendering and confirm its own reflow."
+
+[[scenarios]]
+id = "NW-DOUBLE-CLICK-REDRAW"
+features = ["P06", "W05"]
+automation = ["tests/test_widgets.py::test_double_click_fires_on_double_click", "tests/test_winlocal_backend.py::test_native_preview_then_open_replaces_history_with_live_agent"]
+manual = "Double-click rows during polling and confirm no stale or duplicated sidebar rows."
+
+[[scenarios]]
+id = "NW-RESPONSIVE-MODAL"
+features = ["W05", "W06"]
+automation = ["tests/test_winlocal_backend.py::test_native_modal_uses_current_sidebar_viewport_after_agent_opens"]
+manual = "Open every modal before/after agent panes and resize it at minimum geometry."
+
+[[scenarios]]
+id = "NW-BOTTOM-CHROME"
+features = ["P12", "W02", "W05", "W06"]
+automation = ["tests/test_winlocal_backend.py::test_native_bottom_chrome_contains_mode_layout_and_click_actions", "tests/test_status_chrome.py::test_compact_status_exposes_all_available_pages_and_controls"]
+manual = "Click Mode, Layout, compact pages, and status-copy across focus/modal states."
+
+[[scenarios]]
+id = "NW-REAL-PROVIDERS"
+features = ["P01", "P02", "P04", "P05", "P06", "W10"]
+automation = []
+manual = "Authenticate both providers, start and resume real sessions, reconnect the frontend, and verify durable history remains unchanged."

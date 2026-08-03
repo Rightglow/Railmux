@@ -38,6 +38,25 @@ sidebar, a displayed provider ConPTY, or the built-in read-only transcript
 pager. Single, dual, stacked, compact/fullscreen projection, status, cursor,
 and terminal modes are composed into one outer VT screen.
 
+The persistent bottom chrome is semantic shared state, not a tmux-only
+decoration. `App` publishes Mode, layout/Target, error state, and transient
+status independently; POSIX projects them into tmux status-left/status-right,
+while native Windows projects the same controls and click targets into the
+compositor's final row. A frontend must not replace Mode/Layout/page controls
+with status text. The native status hit map is rebuilt from the exact rendered
+cell ranges on every frame and routes only private controller actions or exact
+workspace pane identities.
+
+The native compositor's region map is also the logical viewport authority for
+the shared Urwid screen, transcript viewer, and every displayed ConPTY. An
+outer resize and a topology-only transition (opening/closing/rotating a pane,
+entering a preview, compact/fullscreen changes) both synchronize those
+surfaces before composition. The compositor must never silently resize only
+the terminal emulator while Urwid continues drawing at an older width; that
+turns ordinary wrapping into stale or repeated rows and gives modals the wrong
+available geometry. Reattaching a live agent to a preview slot removes the
+preview surface before the next frame.
+
 The native backend snapshot is the shared App's pane-liveness authority and
 must include controller and display placeholders as well as live provider
 panes. A display placeholder omitted from that snapshot is indistinguishable

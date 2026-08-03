@@ -6,7 +6,7 @@ from types import ModuleType
 from pathlib import Path
 
 from railmux import tmux_ctl
-from railmux.mux.backend import Capabilities
+from railmux.mux.backend import Capabilities, StatusChrome
 
 
 class TmuxBackend:
@@ -126,6 +126,10 @@ class TmuxBackend:
     def set_status_text(self, _text: str, _level: str) -> None:
         # POSIX status rendering remains in App because it owns the established
         # tmux option formatting; native rendering uses this backend hook.
+        pass
+
+    def set_status_chrome(self, _chrome: StatusChrome) -> None:
+        # App retains the established tmux option formatting and leases.
         pass
 
     def prepare_launch(

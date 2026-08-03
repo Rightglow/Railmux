@@ -66,6 +66,8 @@ jobs:
           tests/test_ssh_doctor.py
           tests/test_remote_config.py
           tests/test_mux_backend.py
+          tests/test_status_chrome.py
+          tests/test_windows_parity_contract.py
           tests/test_winlocal_backend.py
           tests/test_winlocal_compositor.py
           tests/test_winlocal_conpty.py

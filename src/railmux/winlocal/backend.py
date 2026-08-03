@@ -14,10 +14,22 @@ from typing import Callable
 
 from railmux import tmux_ctl
 from railmux.fast_display_input import SgrMouseEvent, TerminalInputDecoder
-from railmux.mux.backend import Capabilities, LaunchSpec
+from railmux.mux.backend import Capabilities, LaunchSpec, StatusChrome
 from railmux.platform.process import provider_argv
 from railmux.restart_state import OuterTmuxIdentity
-from railmux.ui.workspace import DisplayTransportKind, WorkspaceLayout
+from railmux.ui.status_chrome import (
+    ACTION_COPY,
+    ACTION_LAYOUT,
+    ACTION_MODE,
+    StatusHit,
+    project_status_chrome,
+)
+from railmux.ui.workspace import (
+    DisplayTransportKind,
+    WorkspaceLayout,
+    WorkspacePage,
+    WorkspacePresentation,
+)
 from railmux.winlocal.compositor import Compositor, Region, TerminalPane
 from railmux.winlocal.conpty import ConPtyProcess, PyWinPtyProcess
 from railmux.winlocal.history_viewer import HistoryViewer
@@ -78,9 +90,17 @@ class WinMuxBackend:
         self._last_input_source: object | None = None
         self._client_count: Callable[[], int] | None = None
         self._workspace = None
-        self._screen = VirtualScreen(max(20, width * 3 // 10), max(1, height - 1))
+        self._sidebar_width: int | None = None
+        self._primary_size: int | None = None
+        # The sidebar starts as the only surface and therefore owns the full
+        # viewport.  Opening the first display pane narrows it through the same
+        # geometry synchronization path used by later layout changes.
+        self._screen = VirtualScreen(width, max(1, height - 1))
         self._compositor = Compositor(width, height)
-        self._status = b"railmux"
+        self._status_text = ""
+        self._status_level = "tip"
+        self._status_chrome = StatusChrome("Claude Code", None)
+        self._status_hits: tuple[StatusHit, ...] = ()
         self._lock = threading.RLock()
         self._input_decoder = TerminalInputDecoder()
 
@@ -150,7 +170,13 @@ class WinMuxBackend:
 
     def set_status_text(self, text: str, level: str) -> None:
         prefix = {"error": "ERROR: ", "warn": "WARNING: "}.get(level, "")
-        self._status = (prefix + text).encode("utf-8", errors="replace")
+        with self._lock:
+            self._status_text = prefix + text
+            self._status_level = level
+
+    def set_status_chrome(self, chrome: StatusChrome) -> None:
+        with self._lock:
+            self._status_chrome = chrome
 
     def create_display_pane(self, key: str) -> str:
         with self._lock:
@@ -330,6 +356,14 @@ class WinMuxBackend:
             if not self.pane_alive(pane_id):
                 return False
             self._last_pane, self._active_pane = self._active_pane, pane_id
+            # tmux status-page selection inside a zoomed window displays the
+            # newly selected pane.  Preserve that semantic in the native
+            # compositor instead of leaving zoom ownership on an invisible
+            # previous page.
+            if self._zoomed_pane is not None:
+                self._zoomed_pane = pane_id
+                self._sync_display_sizes()
+                self.request_keyframe()
             return True
 
     def active_pane_id(self, _target: str | None = None) -> str:
@@ -364,17 +398,43 @@ class WinMuxBackend:
     def window_size(self, _pane_id: str):
         return (self.width, self.height)
 
-    def resize_pane_width(self, _pane_id: str, _width: int) -> bool:
-        return True
+    def resize_pane_width(self, pane_id: str, width: int) -> bool:
+        with self._lock:
+            workspace = self._workspace
+            if pane_id == "%controller":
+                self._sidebar_width = width
+            elif (
+                workspace is not None
+                and pane_id == workspace.primary.pane_id
+                and workspace.layout is WorkspaceLayout.SIDE_BY_SIDE
+            ):
+                self._primary_size = width
+            else:
+                return False
+            self._sync_display_sizes()
+            self.request_keyframe()
+            return True
 
-    def resize_pane_height(self, _pane_id: str, _height: int) -> bool:
-        return True
+    def resize_pane_height(self, pane_id: str, height: int) -> bool:
+        with self._lock:
+            workspace = self._workspace
+            if (
+                workspace is None
+                or pane_id != workspace.primary.pane_id
+                or workspace.layout is not WorkspaceLayout.STACKED
+            ):
+                return False
+            self._primary_size = height
+            self._sync_display_sizes()
+            self.request_keyframe()
+            return True
 
     def toggle_pane_zoom(self, _pane_id: str) -> bool:
         with self._lock:
             if not self.pane_alive(_pane_id):
                 return False
             self._zoomed_pane = None if self._zoomed_pane == _pane_id else _pane_id
+            self._sync_display_sizes()
             self.request_keyframe()
             return True
 
@@ -562,6 +622,8 @@ class WinMuxBackend:
     def screen_update(self):
         with self._lock:
             self._sync_display_sizes()
+            status = self._project_status()
+            self._status_hits = status.hits
             workspace = self._workspace
             primary = secondary = None
             stacked = False
@@ -577,7 +639,9 @@ class WinMuxBackend:
                 )
                 if zoomed is not None:
                     return self._compositor.compose_full(
-                        zoomed, status=self._status
+                        zoomed,
+                        status=status.text.encode("utf-8", errors="replace"),
+                        status_error=status.error,
                     )
             focus = "sidebar"
             if workspace is not None and self._active_pane == workspace.primary.pane_id:
@@ -586,7 +650,20 @@ class WinMuxBackend:
                 focus = "secondary"
             return self._compositor.compose(
                 self._screen.pane, primary, secondary, stacked=stacked,
-                status=self._status, focus=focus,
+                status=status.text.encode("utf-8", errors="replace"),
+                status_error=status.error,
+                focus=focus,
+                show_primary=bool(
+                    workspace is not None and workspace.primary.pane_id
+                ),
+                show_secondary=bool(
+                    workspace is not None
+                    and workspace.secondary.pane_id
+                    and workspace.layout is not WorkspaceLayout.SINGLE
+                ),
+                layout=workspace.layout if workspace is not None else None,
+                sidebar_width=self._sidebar_width,
+                primary_size=self._primary_size,
             )
 
     def request_keyframe(self) -> None:
@@ -600,23 +677,7 @@ class WinMuxBackend:
         with self._lock:
             self.width, self.height = width, height
             self._compositor.resize(width, height)
-            regions = self._display_regions()
-            sidebar = regions["sidebar"]
-            self._screen.resize(sidebar.width, sidebar.height)
-            for name in ("primary", "secondary"):
-                region = regions.get(name)
-                pane_id = self._pane_for_region(name)
-                preview = self._previews.get(pane_id or "")
-                if region is not None and preview is not None:
-                    preview.resize(region.width, region.height)
-                session = self._session_for_region(name)
-                if region is None or session is None:
-                    continue
-                if session.terminal is not None:
-                    session.terminal.resize(region.width, region.height)
-                if session.process is not None and session.process.is_alive():
-                    session.process.resize(region.width, region.height)
-                    session.process_size = (region.width, region.height)
+            self._sync_display_sizes()
 
     def route_input(self, data: bytes, *, source: object | None = None) -> None:
         """Route keyboard and SGR mouse reports to the focused surface."""
@@ -634,10 +695,29 @@ class WinMuxBackend:
                 self._write_active(data)
 
     def _sync_display_sizes(self) -> None:
-        """Apply authoritative compositor regions to every displayed ConPTY."""
+        """Apply compositor geometry to Urwid, previews, and every ConPTY.
+
+        A topology change can narrow the sidebar without an outer terminal
+        resize.  Urwid must receive that viewport change too; otherwise it
+        keeps drawing its old wide canvas into a narrow terminal emulator and
+        wrapped fragments appear as duplicated rows.
+        """
         regions = self._display_regions()
+        sidebar = regions.get("sidebar")
+        if (
+            sidebar is not None
+            and self._screen.get_cols_rows() != (sidebar.width, sidebar.height)
+        ):
+            self._screen.resize(sidebar.width, sidebar.height)
         for name in ("primary", "secondary"):
             region = regions.get(name)
+            pane_id = self._pane_for_region(name)
+            preview = self._previews.get(pane_id or "")
+            if region is not None and preview is not None:
+                if (preview.width, preview.height) != (
+                    region.width, region.height
+                ):
+                    preview.resize(region.width, region.height)
             session = self._session_for_region(name)
             if region is None or session is None:
                 continue
@@ -674,6 +754,10 @@ class WinMuxBackend:
     def _route_mouse(self, event: SgrMouseEvent) -> None:
         x, y = event.x - 1, event.y - 1
         with self._lock:
+            if y == self.height - 1:
+                if event.pressed and event.button & 3 == 0:
+                    self._route_status_click(x)
+                return
             for name, region in self._display_regions().items():
                 if not (
                     region.x <= x < region.x + region.width
@@ -720,19 +804,71 @@ class WinMuxBackend:
             return {
                 name: Region(0, 0, self.width, max(1, self.height - 1))
             }
-        primary_pane = self._pane_for_region("primary")
-        secondary_pane = self._pane_for_region("secondary")
-        primary = self._terminal_for_display(primary_pane)
-        secondary = self._terminal_for_display(secondary_pane)
         workspace = self._workspace
         return self._compositor.regions(
-            has_primary=primary is not None,
-            has_secondary=secondary is not None,
+            has_primary=bool(
+                workspace is not None and workspace.primary.pane_id
+            ),
+            has_secondary=bool(
+                workspace is not None
+                and workspace.secondary.pane_id
+                and workspace.layout is not WorkspaceLayout.SINGLE
+            ),
             stacked=bool(
                 workspace is not None
                 and workspace.layout is WorkspaceLayout.STACKED
             ),
+            layout=workspace.layout if workspace is not None else None,
+            sidebar_width=self._sidebar_width,
+            primary_size=self._primary_size,
         )
+
+    def _project_status(self):
+        workspace = self._workspace
+        compact = bool(
+            workspace is not None
+            and workspace.presentation is WorkspacePresentation.COMPACT
+        )
+        page = (
+            workspace.compact_page
+            if workspace is not None else WorkspacePage.SIDEBAR
+        )
+        targets = (
+            "%controller",
+            workspace.primary.pane_id if workspace is not None else None,
+            workspace.secondary.pane_id if workspace is not None else None,
+        )
+        return project_status_chrome(
+            width=self.width,
+            mode_label=self._status_chrome.mode_label,
+            layout_indicator=self._status_chrome.layout_indicator,
+            status_text=self._status_text,
+            status_level=(
+                "error" if self._status_chrome.error else self._status_level
+            ),
+            compact=compact,
+            active_page=page,
+            page_targets=targets,
+        )
+
+    def _route_status_click(self, column: int) -> None:
+        hit = next(
+            (candidate for candidate in self._status_hits
+             if candidate.start <= column < candidate.end),
+            None,
+        )
+        if hit is None:
+            return
+        if hit.action == ACTION_MODE:
+            self._screen.inject(b"\x1b[15~")  # F5
+        elif hit.action == ACTION_LAYOUT:
+            self._screen.inject(b"\x1b[18~")  # F7
+        elif hit.action == ACTION_COPY:
+            self._screen.inject(b"\x1b[17~")  # F6
+        elif hit.action.startswith("page:"):
+            pane_id = hit.action[5:]
+            if self.pane_alive(pane_id):
+                self.select_pane(pane_id)
 
     def _pane_for_region(self, name: str) -> str | None:
         workspace = self._workspace
@@ -826,12 +962,16 @@ class WinDisplayTransport:
     def create_primary(self, **_kwargs) -> bool:
         if self.workspace.primary.pane_id is None:
             self.workspace.primary.pane_id = self.backend.create_display_pane("primary")
+            with self.backend._lock:
+                self.backend._sync_display_sizes()
         return True
 
     def create_secondary(self, _layout) -> bool:
         self.create_primary()
         if self.workspace.secondary.pane_id is None:
             self.workspace.secondary.pane_id = self.backend.create_display_pane("secondary")
+            with self.backend._lock:
+                self.backend._sync_display_sizes()
         return True
 
     def create_dual(self, layout, **_kwargs) -> bool:
@@ -845,6 +985,7 @@ class WinDisplayTransport:
         if slot.pane_id is None:
             slot.pane_id = self.backend.create_display_pane(slot.key)
         with self.backend._lock:
+            self.backend._previews.pop(slot.pane_id, None)
             self.backend._displayed[slot.pane_id] = agent_tmux_name
             slot.agent_tmux_name = agent_tmux_name
             slot.transport_kind = DisplayTransportKind.SWAP
@@ -864,6 +1005,7 @@ class WinDisplayTransport:
             if slot.pane_id:
                 self.backend._displayed.pop(slot.pane_id, None)
                 self.backend._previews.pop(slot.pane_id, None)
+            self.backend._sync_display_sizes()
         return True
 
     def prepare_preview(self, slot) -> bool:
@@ -874,6 +1016,7 @@ class WinDisplayTransport:
             if slot.pane_id:
                 self.backend._displayed.pop(slot.pane_id, None)
             slot.clear_content()
+            self.backend._sync_display_sizes()
         return True
 
     def prepare_kill(self, _name):
@@ -884,6 +1027,8 @@ class WinDisplayTransport:
         if slot.pane_id:
             self.backend.kill_pane(slot.pane_id)
         slot.clear_display()
+        with self.backend._lock:
+            self.backend._sync_display_sizes()
         return True
 
     def close_all(self) -> bool:

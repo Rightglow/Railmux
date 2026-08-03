@@ -56,7 +56,7 @@ from railmux.modes import (
     ProjectSource,
 )
 from railmux.models import AttentionState, Project, SessionMeta
-from railmux.mux import MuxBackend, TmuxBackend
+from railmux.mux import MuxBackend, StatusChrome, TmuxBackend
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
 from railmux.mouse_manager import RootWheelForwardingManager
 from railmux.renames import Renames
@@ -2028,8 +2028,9 @@ class App:
                 return False
             slot.agent_tmux_name = None
             slot.mode_key = self._current_mode_key()
-            self.mux.select_pane(slot.pane_id)
-            self._set_railmux_focus(False, force_border=True)
+            # A preview is the single-click/Space action.  Keep keyboard focus
+            # in the sidebar; only double-click/Enter is allowed to transfer
+            # focus to the displayed surface (P06).
             return True
 
         import shlex
@@ -10033,6 +10034,21 @@ class App:
         initial paint, from _render_status_to_tmux on the normal↔error
         transition, and from mode cycling so the mode indicator repaints.
         Best-effort — a tmux hiccup must not raise into the UI."""
+        # Publish the semantic chrome even when tmux is not the renderer.
+        # Native Windows consumes this hook; POSIX keeps its established tmux
+        # formatting below.  Test doubles and older third-party backends remain
+        # best-effort compatible.
+        mux = getattr(self, "mux", None)
+        publish = getattr(mux, "set_status_chrome", None)
+        if callable(publish):
+            try:
+                publish(StatusChrome(
+                    mode_label=self._active_mode().label,
+                    layout_indicator=self._status_layout_indicator(),
+                    error=error,
+                ))
+            except (AttributeError, KeyError, TypeError, ValueError):
+                pass
         if not self._tmux_status_enabled or not self._tmux_status_session:
             return
         bar = _TMUX_BAR_STYLE_ERROR if error else _TMUX_BAR_STYLE_NORMAL

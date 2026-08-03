@@ -234,12 +234,18 @@ promotion from Preview:
 Current automated evidence covers the platform split, typed provider launch,
 marker recovery across UI restart, display-pane liveness across shared App
 reconciliation, IPC authentication/reconnect and classified UI failure,
-compositor CJK/status retention, history pager, shared App construction, an
-Urwid event loop running off the main thread, wheel build/import, protected
+compositor CJK/status retention, semantic Mode/Layout/page status controls,
+topology-driven Urwid/preview/ConPTY viewport synchronization, preview-to-live
+surface replacement, responsive modal sizing, history pager, shared App
+construction, an Urwid event loop running off the main thread,
+wheel build/import, protected
 runtime-directory ACL setup, real subprocess-pipe readiness, a real ConPTY
 start/read/resize/exit smoke, a real `.cmd` shim in a path containing spaces,
 and CP936 child output normalized at the pywinpty boundary on hosted Windows.
 Those checks do not substitute for the manual provider and terminal pass.
+The machine-checked native disposition and high-risk interaction ledger lives
+in [`windows-preview-parity.toml`](windows-preview-parity.toml); adding a stable
+feature ID without classifying its Windows impact fails CI.
 
 ## Release closure checklist
 

@@ -1,9 +1,12 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+import urwid
 
 from railmux.ui.workspace import AgentWorkspace, WorkspaceLayout
 from railmux.config import Config
+from railmux.models import Project, SessionMeta
 from railmux.ui.app import App
 from railmux.winlocal.backend import WinMuxBackend
 from railmux.winlocal.session_store import SessionRecord, SessionStore
@@ -216,3 +219,208 @@ def test_native_app_honors_initial_project_path(tmp_path):
     )
 
     assert app._initial_project_path == project
+
+
+def test_native_topology_and_resize_keep_urwid_and_preview_geometry_in_sync(
+    tmp_path,
+):
+    backend = WinMuxBackend(width=120, height=30, process_factory=_factory)
+    workspace = AgentWorkspace()
+    transport = backend.create_display_transport(workspace, "swap")
+    screen = backend.create_ui_screen()
+
+    assert screen.get_cols_rows() == (120, 29)
+    transport.create_primary()
+    assert screen.get_cols_rows() == (36, 29)
+
+    transcript = tmp_path / "preview.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"a long preview line"}}\n',
+        encoding="utf-8",
+    )
+    assert backend.show_transcript(
+        workspace.primary.pane_id, transcript, "claude"
+    )
+
+    backend.resize(160, 40)
+    preview = backend._previews[workspace.primary.pane_id]
+    assert screen.get_cols_rows() == (48, 39)
+    assert (preview.width, preview.height) == (111, 39)
+
+    workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    transport.create_secondary(workspace.layout)
+    backend.screen_update()
+    assert screen.get_cols_rows() == (32, 39)
+
+
+def test_native_modal_uses_current_sidebar_viewport_after_agent_opens(tmp_path):
+    backend = WinMuxBackend(width=120, height=30, process_factory=_factory)
+    app = App(tmp_path, Config(), mux_backend=backend)
+    app._display_transport().create_primary()
+    app._loop = MagicMock()
+    app._loop.screen = backend.create_ui_screen()
+    app._frame = urwid.SolidFill(" ")
+
+    app._show_overlay(
+        urwid.SolidFill(" "),
+        width=60,
+        height=40,
+        fixed_width=True,
+        fixed_height=True,
+    )
+
+    assert app._loop.widget.width == 34
+    assert app._loop.widget.height == 27
+
+
+def test_native_bottom_chrome_contains_mode_layout_and_click_actions(tmp_path):
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    app = App(tmp_path, Config(), mux_backend=backend)
+    app._display_transport().create_primary()
+    app._apply_tmux_bar(False)
+    backend.set_status_text("ready", "info")
+
+    update = backend.screen_update()
+    status_row = dict(update.rows)[29]
+
+    assert b"Railmux" in status_row
+    assert app._active_mode().label.encode() in status_row
+    assert "▣".encode() in status_row
+    assert b"ready" in status_row
+
+    mode_hit = next(hit for hit in backend._status_hits if hit.action == "mode")
+    screen = backend.create_ui_screen()
+    screen.start()
+    try:
+        backend._route_mouse(type("Event", (), {
+            "x": mode_hit.start + 1,
+            "y": backend.height,
+            "button": 0,
+            "pressed": True,
+        })())
+        keys, _raw = screen.get_input(True)
+    finally:
+        screen.stop()
+
+    assert "f5" in keys
+
+
+def test_native_preview_then_open_replaces_history_with_live_agent(tmp_path):
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    workspace = AgentWorkspace()
+    transport = backend.create_display_transport(workspace, "swap")
+    launch = backend.prepare_launch(["codex", "resume", "abc"], tmp_path)
+    assert backend.new_detached_session("codex-abc", launch) == (True, None)
+    session = backend._sessions["codex-abc"]
+    session.terminal.feed(b"LIVE_AGENT_SURFACE")
+    assert transport.attach(workspace.primary, "codex-abc").ok
+
+    transcript = tmp_path / "preview.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"PREVIEW_SURFACE"}}\n',
+        encoding="utf-8",
+    )
+    assert transport.prepare_preview(workspace.primary)
+    assert backend.show_transcript(
+        workspace.primary.pane_id, transcript, "claude"
+    )
+    assert workspace.primary.pane_id in backend._previews
+
+    assert transport.attach(workspace.primary, "codex-abc").ok
+    update = backend.screen_update()
+
+    assert workspace.primary.pane_id not in backend._previews
+    assert any(b"LIVE_AGENT_SURFACE" in row for _index, row in update.rows)
+
+
+def test_shared_preview_open_gesture_contract_runs_through_native_backend(
+    tmp_path,
+):
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(
+        '{"type":"user","message":{"content":"preview body"}}\n',
+        encoding="utf-8",
+    )
+    project = Project(
+        real_path=tmp_path,
+        encoded_name="native-project",
+        claude_dir=tmp_path,
+        session_count=1,
+        last_activity_ts=1.0,
+    )
+    session = SessionMeta(
+        project=project,
+        session_id="11111111-1111-1111-1111-111111111111",
+        jsonl_path=transcript,
+        title="Native preview",
+        message_count=1,
+        token_total=1,
+        last_mtime=1.0,
+    )
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    app = App(tmp_path, Config(), mux_backend=backend)
+
+    app._on_session_row_preview(session)
+    slot = app._agent_workspace().primary
+
+    assert slot.in_history_mode
+    assert backend.active_pane_id() == "%controller"
+    assert slot.pane_id in backend._previews
+
+    app._on_session_select(session, steal_focus=False, from_double=True)
+
+    assert not slot.in_history_mode
+    assert slot.pane_id not in backend._previews
+    assert slot.agent_tmux_name is not None
+    assert backend.session_exists(slot.agent_tmux_name)
+
+
+def test_native_compact_resize_projects_full_page_then_restores_sidebar(tmp_path):
+    backend = WinMuxBackend(width=100, height=30, process_factory=_factory)
+    app = App(tmp_path, Config(), mux_backend=backend)
+    app._display_transport().create_primary()
+    app._railmux_pane_id = "%controller"
+    app._loop = MagicMock()
+    app._loop.widget = app._frame
+
+    backend.resize(70, 20)
+    app._check_terminal_size()
+
+    assert app._agent_workspace().presentation.value == "compact"
+    assert backend.window_is_zoomed("%controller") is True
+    assert backend.create_ui_screen().get_cols_rows() == (70, 19)
+
+    backend.resize(100, 30)
+    app._check_terminal_size()
+
+    assert app._agent_workspace().presentation.value == "wide"
+    assert backend.window_is_zoomed("%controller") is False
+    assert backend.create_ui_screen().get_cols_rows() == (30, 29)
+
+
+def test_native_compact_status_page_click_moves_zoom_to_live_agent(tmp_path):
+    backend = WinMuxBackend(width=70, height=20, process_factory=_factory)
+    workspace = AgentWorkspace()
+    workspace.presentation = type(workspace.presentation).COMPACT
+    transport = backend.create_display_transport(workspace, "swap")
+    launch = backend.prepare_launch(["codex", "resume", "abc"], tmp_path)
+    assert backend.new_detached_session("codex-abc", launch) == (True, None)
+    assert transport.attach(workspace.primary, "codex-abc").ok
+    assert backend.toggle_pane_zoom("%controller")
+    backend.screen_update()
+    hit = next(
+        hit for hit in backend._status_hits
+        if hit.action == f"page:{workspace.primary.pane_id}"
+    )
+
+    backend._route_mouse(type("Event", (), {
+        "x": hit.start + 1,
+        "y": backend.height,
+        "button": 0,
+        "pressed": True,
+    })())
+    update = backend.screen_update()
+
+    assert backend.active_pane_id() == workspace.primary.pane_id
+    assert backend.window_is_zoomed(workspace.primary.pane_id) is True
+    assert (update.width, update.height) == (70, 20)
