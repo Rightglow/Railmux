@@ -25,6 +25,7 @@ from railmux import (
     tmux_ctl,
     tmux_health,
     tmux_server,
+    windows_tmux_lifecycle,
 )
 from railmux.atomic_file import atomic_write_text
 from railmux.background_index import BackgroundCodexIndex
@@ -713,6 +714,9 @@ class App:
         # digest plus immutable pane id namespaces local recovery state across
         # windows, sessions, and private tmux servers.
         self._restart_identity = restart_state.capture_outer_identity()
+        # A newly live UI revokes any cleanup proof from the preceding
+        # lifecycle before it can create provider sessions.
+        windows_tmux_lifecycle.clear_empty_server_exit()
         self._claude_home = claude_home
         self._config = config
         self._auto_launched = auto_launched
@@ -8061,10 +8065,25 @@ class App:
         if defer_outer or getattr(self, "_outer_teardown_done", False):
             return
         self._outer_teardown_done = True
+        identity = getattr(self, "_restart_identity", None)
+        if (
+            self._auto_launched
+            and identity is not None
+            and running_in_windows_wrapper()
+            and tmux_ctl.current_session_name() == "railmux"
+            and tmux_ctl.current_session_id() == identity.session_id
+        ):
+            # MSYS2 can retain an AF_UNIX pathname after its last session
+            # exits. Arm cleanup only when the server-wide immutable-ID
+            # inventory proves that no provider or unknown session exists.
+            windows_tmux_lifecycle.arm_empty_server_exit(
+                server_pid=identity.server_pid,
+                session_id=identity.session_id,
+                pane_id=identity.pane_id,
+            )
         if not self._soft_quit_flag and self._auto_launched:
             session_name = tmux_ctl.current_session_name()
             if session_name == "railmux":
-                identity = getattr(self, "_restart_identity", None)
                 current_id = tmux_ctl.current_session_id()
                 intent = bool(
                     identity is not None
@@ -8080,6 +8099,7 @@ class App:
                     killed = False
                 if intent and not killed:
                     tmux_health.clear_clean_exit()
+                    windows_tmux_lifecycle.clear_empty_server_exit()
 
     def _enter_filter_mode(self) -> None:
         # Borrow the button row (footer index 1) for a filter Edit — both are a

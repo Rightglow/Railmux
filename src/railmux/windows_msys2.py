@@ -414,6 +414,10 @@ class Msys2Runtime:
         # providers, whose POSIX cwd arguments do require MSYS conversion.
         child["MSYS2_ARG_CONV_EXCL"] = "*"
         child["RAILMUX_WINDOWS_RUNTIME"] = "msys2"
+        if self.managed:
+            # The MSYS-side privacy exception independently verifies the
+            # matching on-disk runtime marker before trusting this identifier.
+            child["RAILMUX_MSYS2_RUNTIME_ID"] = MSYS2_RUNTIME_ID
         # Native PowerShell commonly has no TERM; OpenSSH-hosted PowerShell
         # can explicitly inherit ``dumb``, which makes tmux reject attach.
         if not child.get("TERM") or child.get("TERM") == "dumb":

@@ -62,6 +62,17 @@ cannot be misreported or queried concurrently by its closing SSH views. These
 sentinels classify lifecycle only; they never authorize session mutation or
 recovery.
 
+MSYS2 tmux may leave its AF_UNIX pathname after the last session exits, causing
+the next client to wait on an endpoint without a listener. The Windows wrapper
+may arm one separate cleanup proof only after a server-wide snapshot shows the
+managed `railmux` session and its exact outer pane are the server's sole session
+and pane. Recovery requires the same safe label, same-user socket directory,
+exact socket and parent inode/time identity, a short exit-settle interval, and
+two failed connection probes; a live or replaced endpoint, malformed proof,
+extra pane/session, or incomplete enumeration fails closed. Cleanup removes
+only that abandoned socket pathname and its private proof. It never kills a
+process, opens provider history, or authorizes provider/session mutation.
+
 Doctor collection has one versioned structured snapshot authority. Human text
 and `doctor --json` are renderers of that same snapshot, not independent probe
 paths. Stable JSON fields contain only bounded status/category values, numeric
@@ -455,7 +466,16 @@ bindings. It duplicates the current sidebar view so a shared portable
 last-writer never changes an exact instance restart. Files are atomically
 replaced as 0600 inside a verified user-owned 0700 runtime directory. Cleanup
 is bounded and removes only recognized owners proven dead; unknown/newer state
-and old but possibly-live private servers are retained.
+and old but possibly-live private servers are retained. MSYS2's `noacl`
+projection cannot represent those POSIX modes and reports the corresponding
+NTFS objects as 0644/0755. Only the real Cygwin/MSYS Python platform inside the
+managed Windows wrapper may accept this projection, after matching the
+same-owner on-disk runtime marker against its exact runtime and Railmux
+versions, and only for same-UID, non-symlink state with no group/world write
+bits. The user-owned managed runtime's Windows ACL remains the privacy
+boundary. This predicate is shared by restart coordination, startup caches,
+and tmux binding/lock state; ordinary POSIX permission checks are never
+relaxed.
 
 Portable state lives beside `config.toml` and contains an active mode,
 per-mode project/session selections and filters, plus an optional right-display

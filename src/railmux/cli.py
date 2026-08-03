@@ -20,6 +20,7 @@ from railmux.runtime_config import (
 )
 from railmux import tmux_health
 from railmux import tmux_server
+from railmux import windows_tmux_lifecycle
 from railmux.system_deps import ensure_tmux_available
 from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
 
@@ -126,7 +127,16 @@ def _run_tmux_client_with_watchdog(
                     file=sys.stderr,
                 )
                 return 2
+        # tmux may leave the client TTY in raw mode even after its process
+        # exits. Restore it before a bounded recovery probe or user message.
+        _restore_terminal(attributes)
         returncode = process.returncode or 0
+        if windows_tmux_lifecycle.recover_abandoned_socket():
+            print(
+                "info: cleaned an abandoned Windows tmux socket; Codex and "
+                "Claude session files were not changed",
+                file=sys.stderr,
+            )
         if returncode and expected_target is not None:
             try:
                 current_target = tmux_server.discover_target(timeout=1.0)
@@ -367,6 +377,12 @@ def main(argv: list[str] | None = None) -> int:
         # Validate before any command can address a tmux server. ``tmux -V``
         # above is server-independent.
         tmux_server.socket_label()
+        if windows_tmux_lifecycle.recover_abandoned_socket():
+            print(
+                "info: cleaned an abandoned Windows tmux socket; Codex and "
+                "Claude session files were not changed",
+                file=sys.stderr,
+            )
         dedicated_target = tmux_server.discover_target()
         on_dedicated_server = tmux_server.is_current_server(dedicated_target)
     except tmux_server.TmuxServerError as exc:

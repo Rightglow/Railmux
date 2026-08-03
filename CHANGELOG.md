@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev10] - 2026-08-03
+
+### Fixed
+
+- Recover from the abandoned AF_UNIX pathname that MSYS2 tmux 3.7b can leave
+  after the final Railmux session exits, so a subsequent Windows launch no
+  longer reports an unresponsive server.
+- Allow exact-owner restart state to persist under MSYS2's `noacl` permission
+  projection, and make the same verified exception available to Railmux's
+  startup caches and tmux binding/lock state so restore speed and clickable
+  status controls do not silently degrade. Linux and macOS remain strict.
+
+### Security
+
+- Authorize Windows socket cleanup only when immutable server-wide inventories
+  prove the managed outer UI is the sole session and pane, then require an
+  unchanged same-user socket identity, an exit-settle interval, and two failed
+  connection probes plus proof that the recorded tmux PID is gone. Provider
+  histories are never opened or modified, and any live PID, provider, or
+  unknown tmux session denies cleanup.
+- Keep the MSYS2 permission exception limited to the real Cygwin/MSYS managed
+  wrapper with an exact same-owner on-disk runtime marker, same-UID non-symlink
+  state, and no group/world write bits; the user-owned managed runtime's
+  Windows ACL remains the privacy boundary.
+
 ## [0.4.0.dev9] - 2026-08-03
 
 ### Added
@@ -1949,7 +1974,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev9...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev10...HEAD
+[0.4.0.dev10]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev9...v0.4.0.dev10
 [0.4.0.dev9]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...v0.4.0.dev9
 [0.4.0.dev8]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...v0.4.0.dev8
 [0.4.0.dev7]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...v0.4.0.dev7

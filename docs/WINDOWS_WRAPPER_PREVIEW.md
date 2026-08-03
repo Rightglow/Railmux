@@ -111,6 +111,20 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   disabled at the Windows boundary then restored before native providers run.
 - The parent waits through Ctrl-C instead of killing the child. tmux owns
   persistence after detach or outer-window closure.
+- MSYS2 projects NTFS ACLs as 0644/0755 even when POSIX chmod requests
+  0600/0700. Railmux accepts that representation only under the real
+  Cygwin/MSYS managed wrapper after verifying its same-owner on-disk marker and
+  exact runtime/Railmux versions, for same-UID non-symlink files/directories
+  without group/world write bits. The user-owned managed runtime's Windows ACL
+  remains the private-state boundary. Linux and macOS retain strict modes.
+- When the last tmux session exits, MSYS2 3.7b may leave a socket pathname that
+  makes the next client hang. Railmux writes cleanup authority only after exact
+  server-wide session and pane inventories prove the outer UI is alone. After
+  a settle interval and two failed endpoint probes, it may remove only the
+  unchanged same-user socket after the recorded server PID is proven gone, and
+  prints an info message that Codex/Claude session files were untouched. Any
+  live PID, provider or unknown session denies this cleanup; a failed outer
+  teardown revokes the proof immediately.
 - Startup repaints the restoring surface with separate read-only indexing and
   tmux-reconnection stages. A slow startup reports its measured initialization
   time and the private-cache boundary after the first frame.
@@ -146,6 +160,13 @@ outer shell, and starts the complete POSIX Railmux UI. Authentication-specific
 restore, preview, resize, mouse, menus, clipboard/browser bridges, and
 `railmux ssh` remain release-specific manual checks and are not inferred from
 that spike.
+
+On the same host, the dev10 candidate reproduced MSYS2 3.7b leaving an
+unresponsive AF_UNIX pathname after both hard and soft quit with zero provider
+sessions. The guarded sole-session/sole-pane cleanup removed the unchanged
+pathname, reported its read-only provider-data boundary, and the same isolated
+label launched again successfully. A separate live label and the pre-existing
+default server were left untouched.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

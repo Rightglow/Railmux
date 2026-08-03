@@ -10,6 +10,7 @@ from pathlib import Path
 from railmux.atomic_file import atomic_write_text
 from railmux.models import Project
 from railmux.path_codec import decode, is_encoded_project_name
+from railmux.provider_paths import private_mode_is_safe
 from railmux.session_index import _looks_like_uuid, _scan_session
 
 
@@ -55,7 +56,7 @@ def _load_persistent_validity(claude_home: Path) -> None:
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
             or info.st_size > _VALIDITY_CACHE_LIMIT
-            or info.st_mode & 0o077
+            or not private_mode_is_safe(info.st_mode)
         ):
             return
         raw = json.loads(path.read_text(encoding="utf-8"))
