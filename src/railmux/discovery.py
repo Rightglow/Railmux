@@ -1,8 +1,10 @@
 """Enumerate Claude project directories from ~/.claude/projects/."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import stat
 from pathlib import Path
 
 from railmux.atomic_file import atomic_write_text
@@ -19,6 +21,134 @@ _cache: dict[Path, tuple[int, list[Project]]] = {}
 _session_validity: dict[
     Path, dict[Path, tuple[tuple[int, int, int], bool]]
 ] = {}
+_persistent_validity_loaded: set[Path] = set()
+_persistent_validity_exact_only: set[Path] = set()
+_persistent_validity_dirty: set[Path] = set()
+_VALIDITY_CACHE_SCHEMA = 1
+_VALIDITY_CACHE_LIMIT = 16 * 1024 * 1024
+_VALIDITY_RECORD_LIMIT = 100_000
+
+
+def _windows_validity_cache_enabled() -> bool:
+    return os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2"
+
+
+def _validity_cache_file(claude_home: Path) -> Path:
+    base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+    identity = hashlib.sha256(
+        os.fsencode(os.path.abspath(claude_home))
+    ).hexdigest()[:16]
+    return base / "railmux" / f"claude-validity-{identity}.json"
+
+
+def _load_persistent_validity(claude_home: Path) -> None:
+    if (
+        not _windows_validity_cache_enabled()
+        or claude_home in _persistent_validity_loaded
+    ):
+        return
+    _persistent_validity_loaded.add(claude_home)
+    path = _validity_cache_file(claude_home)
+    try:
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_size > _VALIDITY_CACHE_LIMIT
+            or info.st_mode & 0o077
+        ):
+            return
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return
+    if not isinstance(raw, dict) or raw.get("schema") != _VALIDITY_CACHE_SCHEMA:
+        return
+    records = raw.get("records")
+    if not isinstance(records, list) or len(records) > _VALIDITY_RECORD_LIMIT:
+        return
+    projects_dir = claude_home / "projects"
+    loaded: list[Path] = []
+    try:
+        for record in records:
+            if not isinstance(record, list) or len(record) != 6:
+                raise ValueError("invalid validity record")
+            project, filename, inode, mtime_ns, size, valid = record
+            if (
+                not isinstance(project, str)
+                or not is_encoded_project_name(project)
+                or not isinstance(filename, str)
+                or Path(filename).name != filename
+                or not filename.endswith(".jsonl")
+                or not _looks_like_uuid(Path(filename).stem)
+                or not all(isinstance(value, int) and value >= 0
+                           for value in (inode, mtime_ns, size))
+                or not isinstance(valid, bool)
+            ):
+                raise ValueError("invalid validity record")
+            project_dir = projects_dir / project
+            session_path = project_dir / filename
+            _session_validity.setdefault(project_dir, {})[session_path] = (
+                (inode, mtime_ns, size), valid,
+            )
+            loaded.append(session_path)
+    except ValueError:
+        for session_path in loaded:
+            cached = _session_validity.get(session_path.parent)
+            if cached is not None:
+                cached.pop(session_path, None)
+                if not cached:
+                    _session_validity.pop(session_path.parent, None)
+        return
+    _persistent_validity_exact_only.update(loaded)
+
+
+def _mark_persistent_validity_dirty(claude_dir: Path) -> None:
+    if _windows_validity_cache_enabled():
+        _persistent_validity_dirty.add(claude_dir.parent.parent)
+
+
+def _save_persistent_validity(claude_home: Path) -> None:
+    if (
+        not _windows_validity_cache_enabled()
+        or claude_home not in _persistent_validity_dirty
+    ):
+        return
+    projects_dir = claude_home / "projects"
+    records: list[list[object]] = []
+    for project_dir, values in _session_validity.items():
+        if (
+            project_dir.parent != projects_dir
+            or not is_encoded_project_name(project_dir.name)
+        ):
+            continue
+        for session_path, (signature, valid) in values.items():
+            if session_path.parent != project_dir:
+                continue
+            inode, mtime_ns, size = signature
+            records.append([
+                project_dir.name,
+                session_path.name,
+                inode,
+                mtime_ns,
+                size,
+                valid,
+            ])
+    records.sort(key=lambda item: int(item[3]), reverse=True)
+    records = records[:_VALIDITY_RECORD_LIMIT]
+    path = _validity_cache_file(claude_home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(
+            path,
+            json.dumps(
+                {"schema": _VALIDITY_CACHE_SCHEMA, "records": records},
+                separators=(",", ":"),
+            ),
+        )
+        os.chmod(path, 0o600)
+    except OSError:
+        return
+    _persistent_validity_dirty.discard(claude_home)
 
 
 def invalidate_session(path: Path) -> None:
@@ -27,6 +157,8 @@ def invalidate_session(path: Path) -> None:
     if cached is None:
         return
     cached.pop(path, None)
+    _persistent_validity_exact_only.discard(path)
+    _mark_persistent_validity_dirty(path.parent)
     if not cached:
         _session_validity.pop(path.parent, None)
 
@@ -64,6 +196,7 @@ def list_projects(claude_home: Path) -> list[Project]:
     session counts and recency track files created, changed, or removed below
     the cached top-level directory.
     """
+    _load_persistent_validity(claude_home)
     projects_dir = claude_home / "projects"
     if not projects_dir.is_dir():
         return []
@@ -79,6 +212,7 @@ def list_projects(claude_home: Path) -> list[Project]:
         # without re-decoding every project name.
         refreshed = _refresh_activity(cached[1])
         _cache[claude_home] = (parent_mtime, refreshed)
+        _save_persistent_validity(claude_home)
         return refreshed
 
     # Full scan needed.
@@ -153,6 +287,7 @@ def list_projects(claude_home: Path) -> list[Project]:
 
     results.sort(key=lambda p: p.last_activity_ts, reverse=True)
     _cache[claude_home] = (parent_mtime, results)
+    _save_persistent_validity(claude_home)
     return results
 
 
@@ -198,6 +333,7 @@ def _count_and_latest_mtime(claude_dir: Path, real_path: Path) -> tuple[int, flo
             if cached is not None and cached[0] == signature:
                 valid = cached[1]
             elif (cached is not None and cached[1]
+                  and path not in _persistent_validity_exact_only
                   and cached[0][0] == stat.st_ino
                   and stat.st_size > cached[0][2]):
                 # Claude session JSONLs are append-only. Once a file is valid,
@@ -208,9 +344,12 @@ def _count_and_latest_mtime(claude_dir: Path, real_path: Path) -> tuple[int, flo
                 # explicitly via ``invalidate_session``).
                 valid = True
                 validity[path] = (signature, True)
+                _mark_persistent_validity_dirty(claude_dir)
             else:
                 valid = _scan_session(temp_project, path) is not None
                 validity[path] = (signature, valid)
+                _persistent_validity_exact_only.discard(path)
+                _mark_persistent_validity_dirty(claude_dir)
             if not valid:
                 continue
             count += 1
@@ -219,6 +358,8 @@ def _count_and_latest_mtime(claude_dir: Path, real_path: Path) -> tuple[int, flo
                 latest = m
     for stale in set(validity) - current_paths:
         del validity[stale]
+        _persistent_validity_exact_only.discard(stale)
+        _mark_persistent_validity_dirty(claude_dir)
     if not validity:
         _session_validity.pop(claude_dir, None)
     return count, latest

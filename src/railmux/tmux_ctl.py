@@ -1815,6 +1815,15 @@ _ROOT_TERMUX_TAP_MARKER = "railmux-termux-tap-v1"
 STATUS_ACTION_MODE = "railmux-mode"
 STATUS_ACTION_LAYOUT = "railmux-layout"
 STATUS_ACTION_COPY = "railmux-copy"
+_ROOT_STATUS_ACTION_KEYS = {
+    STATUS_ACTION_MODE: "MouseDown1Control0",
+    STATUS_ACTION_LAYOUT: "MouseDown1Control1",
+    STATUS_ACTION_COPY: "MouseDown1Control2",
+}
+_ROOT_STATUS_CLICK_KEYS = (
+    _ROOT_STATUS_CLICK_KEY,
+    *_ROOT_STATUS_ACTION_KEYS.values(),
+)
 _STATUS_ACTIONS = frozenset({
     STATUS_ACTION_MODE,
     STATUS_ACTION_LAYOUT,
@@ -1897,6 +1906,14 @@ def status_action_range(action: str, content: str) -> str:
         raise ValueError(f"invalid Railmux status action: {action!r}")
     if not status_pane_ranges_supported():
         return content
+    # tmux 3.7 gives control ranges distinct root-table mouse keys. Using those
+    # keys avoids routing fixed actions through the generic user-range
+    # dispatcher and provides deterministic bindings on the 3.7b version
+    # bundled by the managed Windows runtime.
+    if tmux_version() >= (3, 7):
+        key = _ROOT_STATUS_ACTION_KEYS[action]
+        index = key.removeprefix("MouseDown1Control")
+        return f"#[range=control|{index}]{content}#[norange]"
     return f"#[range=user|{action}]{content}#[norange]"
 
 
@@ -2752,11 +2769,26 @@ def restore_root_termux_tap_binding(
 
 
 def read_root_status_click_binding() -> RootStatusClickBindingBackup:
-    """Capture the root binding used for pane ranges in the status line."""
+    """Capture every root binding used by status ranges and controls."""
     return {
-        _ROOT_STATUS_CLICK_KEY:
-        _read_key_binding("root", _ROOT_STATUS_CLICK_KEY),
+        key: _read_key_binding("root", key)
+        for key in _ROOT_STATUS_CLICK_KEYS
     }
+
+
+def _status_click_backup_replayable(
+    backup: RootStatusClickBindingBackup,
+) -> bool:
+    if set(backup) != set(_ROOT_STATUS_CLICK_KEYS):
+        return False
+    for binding in backup.values():
+        if binding is None:
+            continue
+        try:
+            _binding_command(binding)
+        except ValueError:
+            return False
+    return True
 
 
 def prepare_root_status_click_binding() -> RootStatusClickBindingBackup | None:
@@ -2764,15 +2796,73 @@ def prepare_root_status_click_binding() -> RootStatusClickBindingBackup | None:
     if not status_pane_ranges_supported():
         return None
     backup = read_root_status_click_binding()
-    binding = backup[_ROOT_STATUS_CLICK_KEY]
-    if binding and _ROOT_STATUS_CLICK_MARKER in binding:
+    if any(
+        binding and _ROOT_STATUS_CLICK_MARKER in binding
+        for binding in backup.values()
+    ):
         return None
-    if binding is not None:
-        try:
-            _binding_command(binding)
-        except ValueError:
-            return None
-    return backup
+    return backup if _status_click_backup_replayable(backup) else None
+
+
+def upgrade_root_status_click_binding(
+    previous: RootStatusClickBindingBackup,
+    token: str,
+) -> RootStatusClickBindingBackup | None:
+    """Expand a pre-control-range lease without losing user bindings.
+
+    Versions 5-8 saved only MouseDown1Status.  Before version 9 installs the
+    tmux 3.7 control keys it captures their exact current commands, while also
+    verifying that the old status wrapper is still either original or ours.
+    """
+    if set(previous) != {_ROOT_STATUS_CLICK_KEY}:
+        return None
+    current = read_root_status_click_binding()
+    if not root_status_click_binding_is_original_or_owned(
+        current.get(_ROOT_STATUS_CLICK_KEY),
+        previous.get(_ROOT_STATUS_CLICK_KEY),
+        token,
+    ):
+        return None
+    upgraded = dict(current)
+    upgraded[_ROOT_STATUS_CLICK_KEY] = previous[_ROOT_STATUS_CLICK_KEY]
+    return upgraded if _status_click_backup_replayable(upgraded) else None
+
+
+def _status_click_fallback(binding: str | None) -> str:
+    return _binding_command(binding) if binding is not None else 'run-shell "true"'
+
+
+def _set_root_status_control_forwarding(
+    backup: RootStatusClickBindingBackup,
+    token: str,
+) -> None:
+    if tmux_version() < (3, 7):
+        return
+    marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
+    action_keys = {
+        STATUS_ACTION_MODE: "F5",
+        STATUS_ACTION_LAYOUT: "F7",
+        STATUS_ACTION_COPY: "F6",
+    }
+    condition = (
+        "#{&&:"
+        f"#{{!=:#{{{RAILMUX_CONTROLLER_OPTION}}},}},"
+        f"#{{==:{marker},{marker}}}}}"
+    )
+    for action, key in _ROOT_STATUS_ACTION_KEYS.items():
+        dispatch = (
+            f"run-shell \"{_tmux_shell_executable()} send-keys -t "
+            f"'#{{{RAILMUX_CONTROLLER_OPTION}}}' {action_keys[action]}\""
+        )
+        subprocess.check_call(
+            [
+                "tmux", "bind-key", "-T", "root", key,
+                "if-shell", "-F", condition, dispatch,
+                _status_click_fallback(backup.get(key)),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def set_root_status_click_forwarding(
@@ -2780,6 +2870,8 @@ def set_root_status_click_forwarding(
 ) -> bool:
     """Dispatch Railmux user ranges and replay all other status clicks."""
     if not status_pane_ranges_supported():
+        return False
+    if not _status_click_backup_replayable(backup):
         return False
     marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
     condition = (
@@ -2791,10 +2883,7 @@ def set_root_status_click_forwarding(
     )
     original = backup.get(_ROOT_STATUS_CLICK_KEY)
     try:
-        fallback = (
-            _binding_command(original)
-            if original is not None else 'run-shell "true"'
-        )
+        fallback = _status_click_fallback(original)
         dispatch = (
             'run-shell "case \'#{mouse_status_range}\' in '
             f'%*) {_tmux_shell_executable()} select-pane -Z -t '
@@ -2820,20 +2909,32 @@ def set_root_status_click_forwarding(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        _set_root_status_control_forwarding(backup, token)
         return True
     except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
+        # A later control-key write can fail after MouseDown1Status was
+        # installed. Restore only bindings bearing this lease's marker.
+        restore_root_status_click_binding(backup, token=token)
         return False
 
 
 def root_status_click_binding_owned_by(token: str) -> bool:
     marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
-    binding = read_root_status_click_binding().get(_ROOT_STATUS_CLICK_KEY)
-    return bool(
-        binding
-        and marker in binding
+    current = read_root_status_click_binding()
+    binding = current.get(_ROOT_STATUS_CLICK_KEY)
+    base_owned = bool(
+        binding and marker in binding
         and RAILMUX_CONTROLLER_OPTION in binding
         and "mouse_status_range" in binding
         and "select-pane -Z -t" in binding
+    )
+    if not base_owned or tmux_version() < (3, 7):
+        return base_owned
+    return all(
+        (binding := current.get(key)) is not None
+        and marker in binding
+        and RAILMUX_CONTROLLER_OPTION in binding
+        for key in _ROOT_STATUS_ACTION_KEYS.values()
     )
 
 
@@ -2851,35 +2952,36 @@ def root_status_click_binding_is_original_or_owned(
 def restore_root_status_click_binding(
     backup: RootStatusClickBindingBackup, *, token: str,
 ) -> None:
-    """Restore MouseDown1Status only while the live wrapper is still ours."""
-    live = read_root_status_click_binding().get(_ROOT_STATUS_CLICK_KEY)
+    """Restore status bindings only while each live wrapper is still ours."""
+    live = read_root_status_click_binding()
     marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
-    if live is None or marker not in live:
-        return
-    original = backup.get(_ROOT_STATUS_CLICK_KEY)
-    try:
-        if original is None:
-            subprocess.check_call(
-                ["tmux", "unbind-key", "-T", "root",
-                 _ROOT_STATUS_CLICK_KEY],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        else:
-            fd, path = tempfile.mkstemp(
-                prefix="railmux-root-status-click-", suffix=".conf")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    fh.write(original + "\n")
+    for key in _ROOT_STATUS_CLICK_KEYS:
+        current = live.get(key)
+        if current is None or marker not in current:
+            continue
+        original = backup.get(key)
+        try:
+            if original is None:
                 subprocess.check_call(
-                    ["tmux", "source-file", path],
+                    ["tmux", "unbind-key", "-T", "root", key],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            finally:
-                os.unlink(path)
-    except (OSError, subprocess.CalledProcessError, FileNotFoundError):
-        pass
+            else:
+                fd, path = tempfile.mkstemp(
+                    prefix="railmux-root-status-click-", suffix=".conf")
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                        fh.write(original + "\n")
+                    subprocess.check_call(
+                        ["tmux", "source-file", path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                finally:
+                    os.unlink(path)
+        except (OSError, subprocess.CalledProcessError, FileNotFoundError):
+            pass
 
 
 def read_prefix_target_binding() -> PrefixTargetBindingBackup:

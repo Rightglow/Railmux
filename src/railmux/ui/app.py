@@ -40,6 +40,7 @@ from railmux.help_workspace import (
     is_help_workspace,
     materialize_help_workspace,
 )
+from railmux.provider_paths import running_in_windows_wrapper
 from railmux.settings import LayoutProfile, Settings
 from railmux.tool_panes import ToolPaneManager, manager_for_session
 from railmux.launcher import (
@@ -702,7 +703,12 @@ class App:
 
     def __init__(self, claude_home: Path, config: Config,
                  auto_launched: bool = False,
-                 scroll_coalescing: bool = True) -> None:
+                 scroll_coalescing: bool = True,
+                 startup_progress: Callable[[str], None] | None = None) -> None:
+        self._startup_started_at = time.monotonic()
+        self._startup_project_scan_seconds = 0.0
+        self._startup_recovery_seconds = 0.0
+        self._startup_progress = startup_progress
         # Capture before any pane may be split or moved. The server-lifetime
         # digest plus immutable pane id namespaces local recovery state across
         # windows, sessions, and private tmux servers.
@@ -815,6 +821,7 @@ class App:
         )
         self._projected_target_pane_id: str | None = None
         self._target_toggle_warning_shown = False
+        self._status_navigation_warning_shown = False
         self._teardown_core_done: bool = False
         self._outer_teardown_done: bool = False
         self._exit_in_progress: bool = False
@@ -886,7 +893,12 @@ class App:
             tuple[list[Project] | None, str | None] | None
         ) = None
 
+        self._notify_startup_progress(
+            "Indexing local agent sessions (read-only)…")
+        project_scan_started = time.monotonic()
         projects = list_projects(claude_home)
+        self._startup_project_scan_seconds = (
+            time.monotonic() - project_scan_started)
         self._project_snapshot = projects
         self._project_snapshot_at = time.monotonic()
         initial_mode = self._active_mode()
@@ -969,6 +981,9 @@ class App:
         # audits the explicitly targeted dedicated server before
         # ``new-session -A`` so a stale outer session cannot prevent a new App
         # process from launching.
+        self._notify_startup_progress(
+            "Reconnecting tmux panes (session files stay untouched)…")
+        recovery_started = time.monotonic()
         if tmux_ctl.in_tmux():
             recover_interrupted_swaps()
         state = self._load_state()
@@ -978,6 +993,7 @@ class App:
         # reconstruct the real session id on platforms without procfs.
         recovery_ok, recovery_generation = self._discover_orphans_consistent(state)
         self._discover_legacy_running(force=True)
+        self._startup_recovery_seconds = time.monotonic() - recovery_started
         if recovery_generation == 0 and self._codex_recovery_candidates_seen:
             self._codex_recovery_pending = True
             self._codex_recovery_state = state
@@ -1034,6 +1050,28 @@ class App:
             isinstance(workspace_state, dict)
             and workspace_state.get("focus")
             in {AgentWorkspace.PRIMARY, AgentWorkspace.SECONDARY}
+        )
+    def _notify_startup_progress(self, detail: str) -> None:
+        callback = getattr(self, "_startup_progress", None)
+        if callback is None:
+            return
+        try:
+            callback(detail)
+        except Exception:
+            # Startup feedback is cosmetic and must not obstruct recovery.
+            pass
+
+    def _report_windows_startup_summary(self, _loop, _user_data) -> None:
+        """Explain a slow Windows restore without exposing provider content."""
+        elapsed = time.monotonic() - self._startup_started_at
+        if elapsed < 2.0:
+            return
+        self._set_status(
+            f"Restored in {elapsed:.1f}s (index "
+            f"{self._startup_project_scan_seconds:.1f}s, panes "
+            f"{self._startup_recovery_seconds:.1f}s) · histories are read-only; "
+            "unchanged files use Railmux's private cache.",
+            "info",
         )
 
     def _set_slot_active_target(
@@ -2408,6 +2446,14 @@ class App:
                 # Mode/Layout ranges (and compact page ranges) are immediately
                 # live rather than waiting for the next unrelated transition.
                 self._apply_tmux_bar(self._tmux_error_bar)
+            elif (running_in_windows_wrapper()
+                  and not self._status_navigation_warning_shown):
+                self._status_navigation_warning_shown = True
+                self._set_status(
+                    "Status clicks unavailable; use m for Mode and F8 for "
+                    "Layout.",
+                    "warn",
+                )
             self._sync_termux_tap_route()
 
     def _set_workspace_target(self, slot_key: str) -> AgentSlot:
@@ -10528,6 +10574,9 @@ class App:
             if self._pending_restore_state is not None:
                 self._loop.set_alarm_in(
                     0, self._restore_pending_right_pane)
+            if running_in_windows_wrapper():
+                self._loop.set_alarm_in(
+                    0.05, self._report_windows_startup_summary)
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.

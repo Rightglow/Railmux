@@ -11,11 +11,21 @@ def isolate_path_cache(tmp_path, monkeypatch):
     import railmux.discovery as discovery
     discovery._cache.clear()
     discovery._session_validity.clear()
+    discovery._persistent_validity_loaded.clear()
+    discovery._persistent_validity_exact_only.clear()
+    discovery._persistent_validity_dirty.clear()
     cache_file = tmp_path / "path-cache.json"
+    validity_file = tmp_path / "claude-validity.json"
     monkeypatch.setattr(discovery, "_path_cache_file", lambda: cache_file)
+    monkeypatch.setattr(
+        discovery, "_validity_cache_file", lambda _claude_home: validity_file
+    )
     yield
     discovery._cache.clear()
     discovery._session_validity.clear()
+    discovery._persistent_validity_loaded.clear()
+    discovery._persistent_validity_exact_only.clear()
+    discovery._persistent_validity_dirty.clear()
 
 
 @pytest.fixture
