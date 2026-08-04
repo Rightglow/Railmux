@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev13] - 2026-08-04
+
+### Fixed
+
+- Allow managed-MSYS2 startup discovery five seconds to classify an abandoned
+  tmux socket as having no live server. MSYS2 3.7b can return that authoritative
+  result just after the previous two-second bound; Railmux now continues into
+  tmux's normal safe `new-session` replacement instead of reporting a false
+  unresponsive-server failure. POSIX discovery and explicit watchdog bounds
+  are unchanged.
+
 ## [0.4.0.dev12] - 2026-08-04
 
 ### Fixed

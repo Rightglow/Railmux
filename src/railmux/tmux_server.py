@@ -22,6 +22,8 @@ _SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,256}\Z")
 _HISTORY_SOURCE_SCHEMA = 1
 _TRANSCRIPT_SOURCE_SCHEMA = 1
 _MAX_TRANSCRIPT_SOURCE_BYTES = 8192
+_DEFAULT_DISCOVERY_TIMEOUT = 2.0
+_WINDOWS_DISCOVERY_TIMEOUT = 5.0
 
 
 class TmuxServerError(RuntimeError):
@@ -179,10 +181,25 @@ def current_target(
 
 def discover_target(
     *,
-    timeout: float = 2.0,
+    timeout: float | None = None,
     env: Mapping[str, str] | None = None,
 ) -> TmuxServerTarget | None:
-    """Resolve the live dedicated server without starting a new server."""
+    """Resolve the live dedicated server without starting a new server.
+
+    MSYS2 tmux can need slightly more than two seconds to classify an
+    abandoned AF_UNIX pathname as having no live server.  Give only the
+    managed Windows wrapper enough time to receive that authoritative result;
+    explicit watchdog probes retain their caller-selected bounds.
+    """
+    if timeout is None:
+        from railmux.provider_paths import running_in_windows_wrapper
+
+        source = os.environ if env is None else env
+        timeout = (
+            _WINDOWS_DISCOVERY_TIMEOUT
+            if running_in_windows_wrapper(source)
+            else _DEFAULT_DISCOVERY_TIMEOUT
+        )
     return _discover_label_target(socket_label(env), timeout=timeout, env=env)
 
 

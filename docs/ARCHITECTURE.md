@@ -72,6 +72,11 @@ two failed connection probes; a live or replaced endpoint, malformed proof,
 extra pane/session, or incomplete enumeration fails closed. Cleanup removes
 only that abandoned socket pathname and its private proof. It never kills a
 process, opens provider history, or authorizes provider/session mutation.
+If an abrupt exit or older build left no such proof, the managed-Windows
+startup discovery alone allows a five-second bound for tmux to classify the
+endpoint as having no live server; the normal `new-session -A` path can then
+replace it. This fallback neither unlinks the socket itself nor changes the
+shorter explicit bounds used to monitor a server already believed to be live.
 
 Doctor collection has one versioned structured snapshot authority. Human text
 and `doctor --json` are renderers of that same snapshot, not independent probe

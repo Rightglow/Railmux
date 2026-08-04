@@ -240,6 +240,15 @@ without archive, extraction, or pacman work. Its MSYS doctor reported dev12,
 Python 3.12.13, tmux 3.7b, and both native providers; the classified retry
 itself remains to be field-validated on the affected user network.
 
+The same host later reproduced a dev12 launch failure with an abandoned
+dedicated socket but no live managed-runtime tmux process. A direct tmux
+identity probe returned the authoritative `no server running` result after
+2.09 seconds, just beyond Railmux's former 2.0-second startup bound; an isolated
+label then proved that `new-session` safely replaced the same endpoint in 4.20
+seconds. The dev13 candidate gives only managed-Windows default startup
+discovery a five-second bound. Explicit health/watchdog probes, the POSIX
+default, and the proof-gated socket unlink authority remain unchanged.
+
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
 website remain unchanged until the manual checklist is complete.

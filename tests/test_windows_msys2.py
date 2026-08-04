@@ -33,7 +33,7 @@ from railmux.windows_msys2 import (
 from railmux.windows_pacman import PacmanMirrorDecision
 
 
-VERSION = "0.4.0.dev12"
+VERSION = "0.4.0.dev13"
 LEGACY_VERSION = "0.4.0.dev10"
 _ANSI_STYLE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
