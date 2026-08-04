@@ -64,7 +64,7 @@ def test_rollout_uuid_from_path_requires_canonical_filename():
         Path(f"/sessions/{session_id}.jsonl.bak")) is None
 
 
-def test_reset_pane_history_revalidates_and_redraws_exact_identity():
+def test_reset_pane_view_revalidates_and_redraws_exact_identity():
     identity = tmux_ctl.PaneIdentity(
         "%7", 123, "agent", "$4", "@5", False, 80, 24)
     moved = tmux_ctl.PaneIdentity(
@@ -72,19 +72,16 @@ def test_reset_pane_history_revalidates_and_redraws_exact_identity():
 
     with patch.object(tmux_ctl, "pane_identity", return_value=moved), \
             patch.object(tmux_ctl.subprocess, "check_call") as call:
-        assert tmux_ctl.reset_pane_history(identity) is False
+        assert tmux_ctl.reset_pane_view(identity) is False
     call.assert_not_called()
 
     with patch.object(tmux_ctl, "pane_identity", return_value=identity), \
             patch.object(tmux_ctl.subprocess, "check_call") as call, \
             patch.object(tmux_ctl.os, "getpgid", return_value=321), \
             patch.object(tmux_ctl.os, "killpg") as killpg:
-        assert tmux_ctl.reset_pane_history(identity) is True
+        assert tmux_ctl.reset_pane_view(identity) is True
     call.assert_called_once_with(
-        [
-            "tmux", "send-keys", "-R", "-t", "%7",
-            ";", "clear-history", "-t", "%7",
-        ],
+        ["tmux", "send-keys", "-R", "-t", "%7"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

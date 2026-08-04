@@ -307,11 +307,21 @@ def encode_transcript_source(
 ) -> str | None:
     """Encode an exact transcript hint for a displayed managed agent pane."""
     raw_path = str(path)
+    valid_name = (
+        path.name == f"{session_id}.jsonl"
+        if provider == "claude"
+        else (
+            path.name.startswith("rollout-")
+            and path.name.endswith(f"-{session_id}.jsonl")
+        )
+        if provider == "codex"
+        else False
+    )
     if (
-        provider != "claude"
+        provider not in {"claude", "codex"}
         or not _SESSION_ID_RE.fullmatch(session_id)
         or not path.is_absolute()
-        or path.name != f"{session_id}.jsonl"
+        or not valid_name
         or len(raw_path) > 4096
     ):
         return None
@@ -348,7 +358,7 @@ def decode_transcript_source(raw: str) -> TranscriptSource | None:
     raw_path = payload.get("path")
     if (
         payload.get("schema_version") != _TRANSCRIPT_SOURCE_SCHEMA
-        or provider != "claude"
+        or provider not in {"claude", "codex"}
         or not isinstance(session_id, str)
         or not _SESSION_ID_RE.fullmatch(session_id)
         or not isinstance(raw_path, str)
@@ -357,7 +367,15 @@ def decode_transcript_source(raw: str) -> TranscriptSource | None:
     ):
         return None
     path = Path(raw_path)
-    if not path.is_absolute() or path.name != f"{session_id}.jsonl":
+    valid_name = (
+        path.name == f"{session_id}.jsonl"
+        if provider == "claude"
+        else (
+            path.name.startswith("rollout-")
+            and path.name.endswith(f"-{session_id}.jsonl")
+        )
+    )
+    if not path.is_absolute() or not valid_name:
         return None
     return TranscriptSource(provider, session_id, path)
 

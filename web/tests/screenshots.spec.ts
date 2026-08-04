@@ -359,6 +359,9 @@ test("show real entry points and the workflow session menu", async ({ page }) =>
   });
   await expect(
     page.getByText("without entering tmux copy-mode", { exact: false }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Click URLs to open them locally", { exact: false }),
   ).toBeVisible();
   const terminalWidths = await page
     .locator(".entrypoint-terminal-viewport")

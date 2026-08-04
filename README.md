@@ -201,8 +201,9 @@ The rename popup starts with the current title pre-filled. Press
 to cancel.
 
 After a delete is confirmed, its popup closes immediately. The bottom-right
-status shows **Deleting…** while Railmux stops the exact provider session and
-removes its history in the background, then reports the final result.
+status shows **Deleting “session name”…** while Railmux stops the exact
+provider session and removes its history in the background, then reports the
+final result.
 
 Press `/` in Projects, Sessions, or Running to filter that section. Active
 filters are marked with `[filtered]` and survive a soft restart; reopening `/`
@@ -336,8 +337,9 @@ internal context and encrypted reasoning are hidden. Codex rewind lineages and
 Claude Code `parentUuid` branches are projected onto the provider's current
 conversation: the retained prefix and replacement suffix remain visible, while
 the abandoned suffix is hidden. When Railmux observes a running Codex session
-advance to its rewind child, it also removes the abandoned terminal screen and
-tmux scrollback before Codex redraws the live pane.
+advance after rewind or steering, it resets only the current terminal view
+before Codex redraws. Retained tmux scrollback is not erased, and managed
+history continues from the canonical rollout without its abandoned suffix.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between

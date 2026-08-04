@@ -547,16 +547,20 @@ rendered. Missing parents at a tail boundary stop traversal safely. Neither
 projection rewrites provider data, and abandoned suffixes are not part of the
 default history view.
 
-A live Codex rewind also advances the canonical rollout while retaining the
-same provider pane. Railmux baselines the first indexed rollout for each live
-entry and treats only a direct canonical child as a rewind transition. Where
+A live Codex rewind or running-turn steering also advances the canonical
+rollout while retaining the same provider pane. Railmux baselines the first
+indexed rollout for each live entry and treats only a direct canonical child as
+a branch transition. Where
 procfs is available, that child rollout must be open in the exact pane process
 tree; a negative probe waits, while platforms without procfs use the explicit
 provider parent link. After revalidating the real pane identity across either
-its detached home or swap display location, Railmux resets tmux's visible
-terminal cache and scrollback, then sends the unchanged foreground process
-group `SIGWINCH` so the provider redraws at the same geometry and reasserts its
-terminal modes. This sends no keyboard input, never resizes the pane, never
+its detached home or swap display location, Railmux resets only tmux's visible
+terminal state, preserving its retained scrollback, then sends the unchanged
+foreground process group `SIGWINCH` so the provider redraws at the same geometry
+and reasserts its terminal modes. The canonical Codex rollout is stamped as the
+managed history source; local preview and full-window SSH history therefore
+retain the current branch while excluding the abandoned suffix. This sends no
+provider input, never resizes the pane, never deletes tmux history, never
 touches provider history, and never mutates a legacy-server session.
 
 While that first generation is pending, Codex Projects and Sessions display an
@@ -695,7 +699,8 @@ the exited slot becomes the branded empty surface, while the other slot keeps
 its position and Target remains on the same numbered pane.
 
 Confirmed deletion is split at that same ownership boundary. The Urwid thread
-closes the confirmation, paints a durable `Deleting…` status-right message,
+closes the confirmation, paints a durable bounded
+`Deleting “session name”…` status-right message,
 returns any displayed pane, and freezes the revalidated tmux identity plus the
 provider-history targets into one immutable task. One worker performs the
 blocking exact kill, bounded writer-exit wait, and provider/filesystem cleanup;
@@ -703,8 +708,9 @@ it must not touch widgets, Running state, or mutable indexes. A later Urwid
 refresh atomically consumes the result, invalidates the appropriate provider
 views, and replaces progress with the final success, partial-failure, or error
 message. A second delete cannot start while that task or its unpublished result
-exists. Routine status TTL expiry must not replace `Deleting…` before result
-publication, though a fresh warning or error retains its short severity hold.
+exists. Routine status TTL expiry must not replace that deleting message before
+result publication, though a fresh warning or error retains its short severity
+hold.
 
 A real swap-owned pane may temporarily outlive an in-memory `_running` entry.
 Refresh may re-adopt it only when the displayed pane id, pane PID, display

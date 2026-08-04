@@ -6827,6 +6827,57 @@ def test_server_waits_for_local_choice_before_rendering_claude_transcript(
     transcript_rows.assert_not_called()
 
 
+def test_server_codex_history_uses_canonical_transcript_after_rewind(
+    monkeypatch,
+):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        40,
+        2,
+        mouse_forwardable=True,
+        history_size=500,
+        alternate_on=False,
+        transcript_source="codex-marker",
+        transcript_backed=True,
+        transcript_provider="codex",
+        history_generation=19,
+    )
+    canonical = (b"retained prompt", b"replacement answer")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: (
+            b"abandoned red interruption\nlive-a\nlive-b\n"
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_transcript_rows",
+        lambda *_args, **_kwargs: fast_display_server._TranscriptCacheEntry(
+            (1, 2, 3, 4), canonical, False
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_line",
+        lambda _pyte, line, _width: line,
+    )
+
+    snapshot = fast_display_server._capture_pane_history(
+        object(), pane, 7, 100)
+
+    assert snapshot is not None
+    assert snapshot.transcript_backed
+    assert not snapshot.history_choice_required
+    assert snapshot.generation == 19
+    assert b"retained prompt" in snapshot.lines
+    assert snapshot.lines[-2:] == (b"live-a", b"live-b")
+    assert all(b"abandoned red interruption" not in line
+               for line in snapshot.lines)
+
+
 def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
     monkeypatch,
 ):
@@ -6898,6 +6949,28 @@ def test_transcript_cache_evicts_least_recent_file_width(monkeypatch, tmp_path):
             keys.append((str(path), 40))
 
         assert tuple(fast_display_server._TRANSCRIPT_CACHE) == tuple(keys[-2:])
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+
+
+def test_transcript_rows_render_codex_locator_with_codex_formatter(tmp_path):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    session_id = "019fcaad-27a1-70c0-8029-8a9c7803fa6b"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    path.write_text(
+        '{"type":"response_item","payload":{"type":"message",'
+        '"role":"user","content":[{"type":"input_text",'
+        '"text":"retained question"}]}}\n'
+    )
+    marker = fast_display_server.tmux_server.encode_transcript_source(
+        "codex", session_id, path)
+    assert marker is not None
+    fast_display_server._TRANSCRIPT_CACHE.clear()
+    try:
+        entry = fast_display_server._transcript_rows(
+            pyte, marker, 60, allow_stale=False)
+        assert entry is not None
+        assert any(b"retained question" in row for row in entry.rows)
     finally:
         fast_display_server._TRANSCRIPT_CACHE.clear()
 

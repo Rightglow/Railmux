@@ -553,6 +553,7 @@ class App:
     _status_text: str | None = None
     _status_level: str = "info"
     _status_since: float = 0.0
+    _delete_progress_text: str = "Deleting…"
     _attention_notice_key: tuple[str, int] | None = None
     _tip_index: int = 0
     _tip_since: float = 0.0
@@ -748,6 +749,7 @@ class App:
         self._status_text: str | None = None
         self._status_level: str = "info"
         self._status_since: float = 0.0
+        self._delete_progress_text: str = "Deleting…"
         self._rendered_status_text: str | None = None
         self._rendered_status_level: str = "tip"
         self._status_feedback_alarm: object | None = None
@@ -1136,6 +1138,19 @@ class App:
                 logical_id,
                 running.project.claude_dir / f"{logical_id}.jsonl",
             )
+        elif (
+            running is not None
+            and running.session_type == "codex"
+            and logical_id is not None
+            and not running.is_placeholder
+        ):
+            representative = self._codex_representative(logical_id)
+            if representative is not None:
+                marker = tmux_server.encode_transcript_source(
+                    "codex",
+                    representative.session_id,
+                    representative.jsonl_path,
+                )
         tmux_ctl.set_pane_user_option(
             pane_id,
             tmux_server.TRANSCRIPT_SOURCE_OPTION,
@@ -8605,26 +8620,28 @@ class App:
         server: tmux_ctl.ServerSnapshot | None,
         codex_rollout_probes: dict[str, set[str] | None] | None,
     ) -> None:
-        """Drop stale tmux bytes after an exact live Codex rewind transition.
+        """Advance managed history after an exact live Codex branch transition.
 
         The provider rollout is the history authority, but Codex keeps using
         the same terminal pane after a rewind.  Its abandoned suffix can
-        therefore survive in tmux scrollback even though the canonical JSONL
-        is already correct.  Baseline the first observed rollout, then clear
-        only when the next canonical rollout names that baseline as its parent.
-        On procfs systems the new rollout must also be open in this exact pane's
-        process tree; an unavailable probe degrades to the provider lineage
-        link, while a negative probe waits for a later refresh.
+        therefore survive in raw tmux scrollback even though the canonical
+        JSONL is already correct. Baseline the first observed rollout, then
+        reset only the live terminal view when the next canonical rollout names
+        that baseline as its parent. Managed local/SSH history reads the stamped
+        canonical transcript instead of the abandoned raw suffix. On procfs
+        systems the new rollout must also be open in this exact pane's process
+        tree; an unavailable probe degrades to the provider lineage link, while
+        a negative probe waits for a later refresh.
         """
         current_id = meta.session_id
         previous_id = running.codex_canonical_session_id
         if previous_id is None:
             running.codex_canonical_session_id = current_id
-            self._stamp_codex_history_generation(running, current_id)
+            self._stamp_codex_history_state(running, meta)
             return
         if current_id == previous_id:
             if not running.codex_history_generation_stamped:
-                self._stamp_codex_history_generation(running, current_id)
+                self._stamp_codex_history_state(running, meta)
             return
         if (running.is_legacy or meta.forked_from_id != previous_id
                 or current_id not in self._codex_lineage_ids(previous_id)):
@@ -8643,14 +8660,10 @@ class App:
             return
 
         identity = self._codex_real_pane_identity(running)
-        if identity is None or not tmux_ctl.reset_pane_history(identity):
+        if identity is None or not tmux_ctl.reset_pane_view(identity):
             return
         running.codex_canonical_session_id = current_id
-        running.codex_history_generation_stamped = tmux_ctl.set_pane_user_option(
-            identity.pane_id,
-            tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
-            current_id,
-        )
+        self._stamp_codex_history_state(running, meta)
 
     def _codex_real_pane_identity(
         self, running: _Running,
@@ -8663,20 +8676,46 @@ class App:
         topology = tmux_ctl.session_topology(running.tmux_name)
         return topology.single_live_pane if topology is not None else None
 
-    def _stamp_codex_history_generation(
-        self, running: _Running, session_id: str,
+    def _stamp_codex_history_state(
+        self, running: _Running, meta: SessionMeta,
     ) -> None:
-        """Publish a content-free epoch for full-window SSH history caches."""
+        """Publish the canonical transcript and its content-free cache epoch."""
         if running.is_legacy:
             return
         identity = self._codex_real_pane_identity(running)
         if identity is None:
             return
-        running.codex_history_generation_stamped = tmux_ctl.set_pane_user_option(
-            identity.pane_id,
-            tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
-            session_id,
+        marker = tmux_server.encode_transcript_source(
+            "codex", meta.session_id, meta.jsonl_path)
+        pane_ids = {identity.pane_id}
+        workspace = getattr(self, "_workspace", None)
+        if workspace is not None:
+            pane_ids.update(
+                slot.pane_id
+                for slot in workspace.slots
+                if slot.agent_tmux_name == running.tmux_name
+                and slot.pane_id is not None
+            )
+        transcript_results = (
+            [tmux_ctl.set_pane_user_option(
+                pane_id,
+                tmux_server.TRANSCRIPT_SOURCE_OPTION,
+                marker,
+            ) for pane_id in sorted(pane_ids)]
+            if marker is not None else []
         )
+        generation_results = [
+            tmux_ctl.set_pane_user_option(
+                pane_id,
+                tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
+                meta.session_id,
+            )
+            for pane_id in sorted(pane_ids)
+        ]
+        transcript_stamped = marker is not None and all(transcript_results)
+        generation_stamped = all(generation_results)
+        running.codex_history_generation_stamped = bool(
+            transcript_stamped and generation_stamped)
 
     def _maybe_resort_running(self) -> None:
         """Re-order the Running registry by recency, at most once per minute.
@@ -9159,7 +9198,8 @@ class App:
         # Paint the closed confirmation and durable progress message before
         # even the bounded tmux preparation probes run. This makes Enter feel
         # immediate on slow homes and provider installations.
-        self._set_status("Deleting…", "info", force=True)
+        self._delete_progress_text = self._deleting_status(label)
+        self._set_status(self._delete_progress_text, "info", force=True)
         self._redraw_focus_state_now()
 
         if tmux_name is None and session_id is not None:
@@ -9247,6 +9287,16 @@ class App:
         )
         self._delete_thread = thread
         thread.start()
+
+    @staticmethod
+    def _deleting_status(label: str) -> str:
+        """Return one stable, bounded progress label for the status bar."""
+        display = " ".join(label.split())
+        if not display:
+            return "Deleting…"
+        if len(display) > 40:
+            display = display[:39].rstrip() + "…"
+        return f"Deleting “{display}”…"
 
     def _execute_delete_task(self, task: _DeleteTask) -> _DeleteResult:
         """Perform blocking exact kill and provider cleanup without UI state."""
@@ -10489,9 +10539,10 @@ class App:
             # This is operation state, not a one-shot acknowledgement. Keep it
             # alive past the ordinary info TTL. A newly raised warning/error
             # retains its short severity hold, after which progress returns.
-            if self._status_text != "Deleting…":
-                self._set_status("Deleting…", "info")
-            if self._status_text == "Deleting…":
+            progress = getattr(self, "_delete_progress_text", "Deleting…")
+            if self._status_text != progress:
+                self._set_status(progress, "info")
+            if self._status_text == progress:
                 self._status_since = now
             return
         if self._status_text is not None:

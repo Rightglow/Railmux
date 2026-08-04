@@ -403,6 +403,7 @@ class _PaneGeometry:
     alternate_on: bool = False
     transcript_source: str | None = None
     transcript_backed: bool = False
+    transcript_provider: str | None = None
     claude_history_policy: str = "ask"
     history_generation: int = 0
 
@@ -916,10 +917,11 @@ def _list_agent_panes(
                 if history_pane_id is None:
                     history_server = None
         transcript_marker = fields[14] or None
-        transcript_backed = (
-            transcript_marker is not None
-            and tmux_server.decode_transcript_source(transcript_marker) is not None
+        transcript_locator = (
+            tmux_server.decode_transcript_source(transcript_marker)
+            if transcript_marker is not None else None
         )
+        transcript_backed = transcript_locator is not None
         if not transcript_backed and fields[11] == "1" and fields[12] == "1":
             transcript_backed, transcript_marker = _inferred_transcript_source(
                 session_id=session_id,
@@ -933,6 +935,7 @@ def _list_agent_panes(
             opened = tmux_server.open_transcript_source(transcript_marker)
             transcript_backed = opened is not None
             if opened is not None:
+                transcript_locator = opened[0]
                 os.close(opened[1])
         rows.append(
             (
@@ -951,6 +954,11 @@ def _list_agent_panes(
                     alternate_on=fields[11] == "1",
                     transcript_source=transcript_marker,
                     transcript_backed=transcript_backed,
+                    transcript_provider=(
+                        transcript_locator.provider
+                        if transcript_backed and transcript_locator is not None
+                        else None
+                    ),
                     claude_history_policy=claude_history_policy,
                     history_generation=_history_generation(fields[15]),
                 ),
@@ -1267,7 +1275,9 @@ def _transcript_rows(
             return None
         formatted = "".join(
             transcript_renderer.format_transcript(
-                io.StringIO(raw), "claude", claude_native=True
+                io.StringIO(raw),
+                source.provider,
+                claude_native=source.provider == "claude",
             )
         )
         rows, dropped = _wrap_transcript_rows(pyte, formatted, width)
@@ -1330,12 +1340,21 @@ def _capture_pane_history(
     # pane's current viewport merely to retain older scrollback.
     current_raw = raw_lines[-pane.height :]
     transcript_entry = None
+    # ``None`` is retained only for old/test geometry that predates the
+    # provider field; every validated live marker carries an explicit value.
+    transcript_provider = pane.transcript_provider or "claude"
     if (
         pane.transcript_backed
-        and pane.claude_history_policy == "local"
-        and pane.alternate_on
-        and pane.history_size == 0
         and pane.transcript_source
+        and (
+            transcript_provider == "codex"
+            or (
+                transcript_provider == "claude"
+                and pane.claude_history_policy == "local"
+                and pane.alternate_on
+                and pane.history_size == 0
+            )
+        )
     ):
         transcript_entry = _transcript_rows(
             pyte,
@@ -1387,7 +1406,9 @@ def _capture_pane_history(
         transcript_backed=transcript_used,
         transcript_available=pane.transcript_backed,
         history_choice_required=(
-            pane.transcript_backed and pane.claude_history_policy == "ask"
+            pane.transcript_backed
+            and transcript_provider == "claude"
+            and pane.claude_history_policy == "ask"
         ),
         more_available=(
             budget_truncated

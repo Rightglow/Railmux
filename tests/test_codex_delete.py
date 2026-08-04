@@ -295,7 +295,7 @@ def test_cleanup_runs_blocking_work_in_background_and_publishes_on_refresh(
     assert started.wait(0.5)
     assert app._delete_thread is not None
     assert app._delete_thread.is_alive()
-    assert statuses[-1] == ("Deleting…", "info")
+    assert statuses[-1] == ("Deleting “x”…", "info")
     assert redraws == [True]
 
     # A second destructive request cannot race the in-flight transaction.
