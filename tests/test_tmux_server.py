@@ -29,7 +29,9 @@ def test_launcher_argv_preserves_multi_argument_python_module_prefix():
         ["/usr/bin/python3", "-m", "railmux"],
         ["--mode", "codex"],
     ) == [
-        "tmux", "-L", "railmux", "new-session", "-A", "-s", "railmux",
+        "tmux", "-L", "railmux",
+        "start-server", ";", "set-option", "-g", "status", "off", ";",
+        "new-session", "-A", "-s", "railmux",
         "/usr/bin/python3", "-m", "railmux", "--inside-tmux",
         "--mode", "codex",
     ]

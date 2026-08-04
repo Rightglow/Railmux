@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-04
+
+### Fixed
+
+- Restore live-pane scrolling after the 0.3.3 regression: direct Railmux keeps
+  tmux/provider-native wheel behavior, while `railmux ssh` retains its bounded
+  per-pane history manager and normally renders styled raw pane capture instead
+  of formatting every Codex session like Preview. Only an exactly matched,
+  confirmed rewind generation may use canonical transcript history to hide the
+  abandoned suffix; regression tests lock down both sides of this boundary.
+- Keep the direct-launch restoration surface clean by hiding the dedicated
+  tmux server's stock status row until Railmux's managed UI and status bar are
+  ready; initialization failures and soft-quit shells inherit the same hidden
+  baseline instead of exposing an unmanaged `tmux` bar.
+
 ## [0.3.4.dev1] - 2026-08-04
 
 ### Fixed
@@ -1869,7 +1884,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.4.dev1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/Rightglow/Railmux/compare/v0.3.3...v0.3.4
 [0.3.4.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.3...v0.3.4.dev1
 [0.3.3]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3
 [0.3.3.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev5...v0.3.3.dev6

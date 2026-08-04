@@ -10598,10 +10598,9 @@ class App:
         # - set-clipboard on: text selection in either pane is copied to the
         #   system clipboard.
         import subprocess as _sp
-        # Wrap the whole setup (not just loop.run) so `finally` reverts our tmux
-        # status-bar overrides even if Screen()/MainLoop() construction raises
-        # after we've mutated the outer session — otherwise the user's bar would
-        # keep railmux's `status on`, style, brand and blanked window-list.
+        # Wrap the whole setup (not just loop.run) so `finally` reverts any tmux
+        # state acquired before the UI loop exits or initialization fails.
+        sess: str | None = None
         try:
             if tmux_ctl.in_tmux():
                 sess = tmux_ctl.current_session_name() or "railmux"
@@ -10628,25 +10627,6 @@ class App:
                         "custom root wheel bindings.",
                         "warn",
                     )
-                # Shared binding ownership below scopes right-click forwarding
-                # to Railmux windows and preserves the user's original command
-                # everywhere else. Left-click keeps tmux's stock
-                # select-pane-and-forward behavior.
-                # The outer tmux status bar is now railmux's only status surface (the
-                # in-pane StatusBar was removed). Apply the static options (window
-                # list blanked, bar forced on, length cap) here; the bar background
-                # + brand are set by _apply_tmux_bar (green now, dark red on error).
-                # All session-scoped + reverted on teardown, so the user's global
-                # tmux config is untouched.
-                for opt, val in self._TMUX_BAR_OPTIONS:
-                    _sp.run(
-                        ["tmux", "set-option", "-t", sess, opt, val],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
-                self._tmux_status_session = sess
-                self._tmux_status_enabled = True
-                self._apply_tmux_bar(error=False)  # initial green bar
-
             self._railmux_pane_id = tmux_ctl.current_pane_id()
             if (self._railmux_pane_id is not None
                     and tmux_ctl.current_session_name() == "railmux"
@@ -10688,6 +10668,22 @@ class App:
                 self._loop.screen.set_terminal_properties(colors=_TERMINAL_COLORS)
             except Exception:
                 pass
+            if sess is not None:
+                # The dedicated server inherits ``status off`` while the
+                # terminal-native Restoring surface is visible.  Claim and
+                # reveal Railmux's sole status surface only after Screen and
+                # MainLoop are ready; an earlier initialization failure stays
+                # visually clean.  These overrides remain session-scoped and
+                # teardown reverts them to the dedicated server's hidden
+                # baseline.
+                for opt, val in self._TMUX_BAR_OPTIONS:
+                    _sp.run(
+                        ["tmux", "set-option", "-t", sess, opt, val],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                    )
+                self._tmux_status_session = sess
+                self._tmux_status_enabled = True
+                self._apply_tmux_bar(error=False)  # initial green bar
             self._check_terminal_size()
             # If a saved agent workspace is valid, establish its final empty
             # tmux boundaries before Urwid emits the first sidebar frame. The
