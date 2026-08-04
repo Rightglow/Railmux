@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev12] - 2026-08-04
+
+### Fixed
+
+- Keep managed-MSYS2 application wheels in a shared Railmux-private pip cache
+  instead of discarding every completed download after an app-layer install.
+  Preview upgrades now use a 60-second read timeout and, if installation does
+  not complete, retry once in the same launch with the same cache and a
+  120-second timeout. This fixes app-only upgrades failing on transient
+  `files.pythonhosted.org` read timeouts without reinstalling the shared MSYS2,
+  tmux, or Python base.
+
+### Security
+
+- Keep the new pip cache outside provider-owned directories and retain the
+  existing marker-gated application publication: a failed retry leaves only an
+  unpublished Railmux app directory for bounded cleanup on the next launch,
+  while existing Codex/Claude session files and older app layers remain
+  untouched.
+
 ## [0.4.0.dev11] - 2026-08-04
 
 ### Changed
@@ -2004,7 +2024,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev11...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev12...HEAD
+[0.4.0.dev12]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev11...v0.4.0.dev12
 [0.4.0.dev11]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev10...v0.4.0.dev11
 [0.4.0.dev10]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev9...v0.4.0.dev10
 [0.4.0.dev9]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...v0.4.0.dev9

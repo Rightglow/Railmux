@@ -248,3 +248,16 @@ def test_reporter_heartbeat_and_network_failure_classification(tmp_path):
 
     assert "Still working" in stream.getvalue()
     assert "downloading package 1/2" in stream.getvalue()
+
+
+def test_reporter_keeps_pip_network_markers_out_of_pacman_policy(tmp_path):
+    path = tmp_path / "install-0.4.0.dev12-20260804T000000Z-12.log"
+
+    with InstallReporter(path, verbose=False, stream=io.StringIO()) as reporter:
+        reporter.command_started("pip")
+        reporter.command_output(
+            "pip._vendor.urllib3.exceptions.ReadTimeoutError: Read timed out.\n"
+        )
+
+        assert reporter.command_had_pip_network_failure
+        assert not reporter.command_had_network_failure

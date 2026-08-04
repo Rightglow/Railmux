@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -93,14 +94,21 @@ _VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z")
 
 _PACMAN_CONFIG = "/etc/railmux-pacman.conf"
 _PACMAN_PACKAGES = "tmux python python-pip"
+_PIP_CACHE_NAME = "pip"
+_PIP_INITIAL_TIMEOUT_SECONDS = 60
+_PIP_RETRY_TIMEOUT_SECONDS = 120
+_PIP_INITIAL_RETRIES = 5
+_PIP_RECOVERY_RETRIES = 5
 _PACKAGE_URL_COMMAND = (
     f"pacman --config {_PACMAN_CONFIG} -Sp --print-format '%l' "
     f"--needed {_PACMAN_PACKAGES} 2>/dev/null"
 )
 _VENV_COMMAND = 'python -m venv "$1/venv"'
 _PACKAGE_COMMAND = (
+    'cache=$(cygpath -u "$3") && mkdir -p "$cache" && '
     '"$1/venv/bin/python" -m pip install --disable-pip-version-check '
-    '--no-cache-dir --only-binary=:all: "railmux[ssh]==$2"'
+    '--cache-dir "$cache" --only-binary=:all: '
+    '--timeout "$4" --retries "$5" "railmux[ssh]==$2"'
 )
 
 
@@ -988,7 +996,7 @@ def _run_checked(
     runner: Runner | None = None,
     progress: str | None = None,
     allow_failure: bool = False,
-) -> bool:
+) -> int:
     reporter.command_started(label, progress=progress)
     try:
         if runner is None:
@@ -1011,11 +1019,11 @@ def _run_checked(
         raise RuntimeInstallError(f"could not start {label}") from exc
     if returncode:
         if allow_failure:
-            return False
+            return returncode
         reporter.command_failed(label, returncode)
         raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
     reporter.command_succeeded()
-    return True
+    return 0
 
 
 def _pacman_command(*, packages: bool, relaxed: bool) -> str:
@@ -1077,7 +1085,7 @@ def _run_pacman_with_recovery(
     mirror_optimizer: MirrorOptimizer,
 ) -> None:
     argv = _bash_command(root, _pacman_command(packages=packages, relaxed=False), str(cache))
-    if _run_checked(
+    returncode = _run_checked(
         argv,
         env=env,
         reporter=reporter,
@@ -1085,13 +1093,14 @@ def _run_pacman_with_recovery(
         label=label,
         progress="pacman",
         allow_failure=True,
-    ):
+    )
+    if returncode == 0:
         return
     network_failure = reporter.command_had_network_failure
     hard_failed_hosts = reporter.hard_failed_mirror_hosts
     if not network_failure:
-        reporter.command_failed(label, 1)
-        raise RuntimeInstallError(f"{label} failed with exit code 1")
+        reporter.command_failed(label, returncode)
+        raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
     reporter.note(
         "Measured package sources were exhausted; rechecking them before "
         "one resilient retry."
@@ -1344,10 +1353,27 @@ def _find_reusable_legacy_root(
     return None
 
 
+def _validate_pip_cache_path(cache: Path) -> None:
+    if not (cache.exists() or cache.is_symlink()):
+        return
+    attributes = getattr(cache.lstat(), "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if cache.is_symlink() or attributes & reparse_flag:
+        raise RuntimeInstallError(
+            "the Railmux pip cache path is a link or reparse point and was "
+            f"left untouched: {cache}"
+        )
+    if not cache.is_dir():
+        raise RuntimeInstallError(
+            f"the Railmux pip cache path is not a directory: {cache}"
+        )
+
+
 def _install_application(
     root: Path,
     *,
     version: str,
+    cache: Path,
     environ: Mapping[str, str],
     reporter: InstallReporter,
     runner: Runner | None,
@@ -1358,6 +1384,7 @@ def _install_application(
     applications = root / "opt" / "railmux" / "apps"
     final_app = applications / app_name
     applications.mkdir(parents=True, exist_ok=True)
+    _validate_pip_cache_path(cache)
     if final_app.is_symlink():
         raise RuntimeInstallError(
             f"the versioned Railmux application path is a link and was left "
@@ -1411,6 +1438,8 @@ def _install_application(
                 time.sleep(0.1)
     else:
         final_app.mkdir()
+    cache.mkdir(parents=True, exist_ok=True)
+    _validate_pip_cache_path(cache)
     final_posix = _app_posix(app_name)
     child_env = Msys2Runtime(root, managed=False).environment(environ)
     _run_checked(
@@ -1420,13 +1449,54 @@ def _install_application(
         runner=runner,
         label="Railmux virtual environment creation",
     )
-    _run_checked(
-        _bash_command(root, _PACKAGE_COMMAND, final_posix, version),
+    package_arguments = (
+        final_posix,
+        version,
+        str(cache),
+        str(_PIP_INITIAL_TIMEOUT_SECONDS),
+        str(_PIP_INITIAL_RETRIES),
+    )
+    package_returncode = _run_checked(
+        _bash_command(root, _PACKAGE_COMMAND, *package_arguments),
         env=child_env,
         reporter=reporter,
         runner=runner,
         label="Railmux runtime package installation",
+        allow_failure=True,
     )
+    if package_returncode:
+        network_failure = (
+            reporter.command_had_network_failure
+            or reporter.command_had_pip_network_failure
+        )
+        if not network_failure:
+            reporter.command_failed(
+                "Railmux runtime package installation", package_returncode
+            )
+            raise RuntimeInstallError(
+                "Railmux runtime package installation failed with exit code "
+                f"{package_returncode}"
+            )
+        reporter.note(
+            "The PyPI transfer was interrupted; retrying once with the "
+            "Railmux-private cache and a 120-second network timeout. Completed "
+            "downloads will be reused.",
+            level="warning",
+        )
+        retry_arguments = (
+            final_posix,
+            version,
+            str(cache),
+            str(_PIP_RETRY_TIMEOUT_SECONDS),
+            str(_PIP_RECOVERY_RETRIES),
+        )
+        _run_checked(
+            _bash_command(root, _PACKAGE_COMMAND, *retry_arguments),
+            env=child_env,
+            reporter=reporter,
+            runner=runner,
+            label="Railmux runtime package installation retry",
+        )
 
     installed = Msys2Runtime(root, managed=False, app_name=app_name)
     if not probe_runtime(
@@ -1500,6 +1570,7 @@ def install_managed_runtime(
     except OSError as exc:
         raise RuntimeInstallError("could not create the private runtime log") from exc
     final_root = base / "shared" / MSYS2_RUNTIME_ID
+    pip_cache = cache_base / _PIP_CACHE_NAME
     final_root.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -1554,6 +1625,7 @@ def install_managed_runtime(
                     _install_application(
                         shared_root,
                         version=version,
+                        cache=pip_cache,
                         environ=environ,
                         reporter=reporter,
                         runner=runner,
@@ -1710,6 +1782,7 @@ def install_managed_runtime(
                     _install_application(
                         root,
                         version=version,
+                        cache=pip_cache,
                         environ=environ,
                         reporter=reporter,
                         runner=runner,

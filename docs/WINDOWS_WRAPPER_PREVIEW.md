@@ -98,6 +98,17 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   that reuses the cache and disables pacman's low-speed abort. This preview does
   not yet freeze a repository snapshot, so package versions may advance between
   installations.
+- Versioned Railmux application installs use a separate pip-managed cache at
+  `%LOCALAPPDATA%\Railmux\cache\pip`, outside both the shared base and every
+  provider directory. The first attempt uses a 60-second network timeout with five
+  pip retries. If the command still does not complete, the same launch retries
+  it once with the same cache, a 120-second network timeout, and five pip retries;
+  successfully cached dependency wheels are therefore reusable across the
+  recovery attempt and later preview versions. A failed final attempt never
+  publishes the app marker, never falls back to reinstalling the base, and
+  never opens or modifies Codex/Claude histories. The pip cache is disposable
+  and may be deleted to recover from suspected cache damage while no Railmux
+  installation is running.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
   run archive download, extraction, pacman update, or package installation.
@@ -129,10 +140,11 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   silently removed. User-selected `RAILMUX_MSYS2_ROOT` runtimes are probed
   read-only and never provisioned, adopted, or updated.
 - Versioned app layers are deliberately retained for preview rollback and are
-  not automatically pruned in dev11. Their growth is the application-layer
+  not automatically pruned in dev12. Their growth is the application-layer
   size (22.4 MiB in the measured dev11 environment), not another MSYS2 base;
   a future bounded-retention command must preserve the active and immediately
-  previous versions and remain limited to exact marked app directories.
+  previous versions, remain limited to exact marked app directories, and also
+  bound the separate pip cache without removing files from a live install.
 - No system `PATH`, shell profile, Windows package manager, user-owned MSYS2,
   or provider history is modified. All captured text and marker files use an
   explicit UTF-8 codec; CP936/GBK is never an implicit file encoding.
@@ -216,6 +228,17 @@ from the locally supplied wheel. `runtime status` and the real MSYS `doctor`
 handoff reported dev11, tmux 3.7b, native Codex 0.146.0, and native Claude Code
 2.1.220. The complete adopted tree measured 584.4 MiB, of which the dev11 app
 layer was 22.4 MiB, and the legacy dev9 marker remained unchanged.
+
+dev12 automation reproduces the field-reported app-layer PyPI read timeout
+after successful dev11 base reuse. It proves that venv creation runs once, the
+package command retries once with the same external pip cache and a longer
+timeout, the dev11 app marker remains byte-for-byte unchanged, and dev12 is
+published only after its exact executable probe succeeds. On 2026-08-04 the
+dedicated Windows 10 host then installed the local dev12 candidate through the
+three-phase shared-base path with the real MSYS `cygpath` cache conversion and
+without archive, extraction, or pacman work. Its MSYS doctor reported dev12,
+Python 3.12.13, tmux 3.7b, and both native providers; the classified retry
+itself remains to be field-validated on the affected user network.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

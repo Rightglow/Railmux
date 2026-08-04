@@ -48,6 +48,14 @@ _NETWORK_ERROR_MARKERS = (
     "connection timed out",
     "failed to synchronize all databases",
 )
+_PIP_NETWORK_ERROR_MARKERS = (
+    "read timed out",
+    "readtimeouterror",
+    "connection reset",
+    "connection broken",
+    "connection aborted",
+    "temporary failure in name resolution",
+)
 _EXTRACTION_PERCENT_RE = re.compile(r"(?:^|\s)([0-9]{1,3})%\s")
 _PACKAGE_COUNT_RE = re.compile(r"^Packages \(([0-9]+)\)")
 _PACKAGE_DOWNLOAD_RE = re.compile(r"^\s*([^ ]+) downloading\.\.\.\s*$")
@@ -132,6 +140,7 @@ class InstallReporter:
         self._package_changed = 0
         self._package_step = 1
         self._network_failure = False
+        self._pip_network_failure = False
         self._hard_failed_hosts: set[str] = set()
 
     def __enter__(self) -> InstallReporter:
@@ -198,6 +207,7 @@ class InstallReporter:
         self._package_changed = 0
         self._package_step = 1
         self._network_failure = False
+        self._pip_network_failure = False
         self._hard_failed_hosts.clear()
         self._write_log(f"\n--- {label} ---\n")
 
@@ -233,6 +243,8 @@ class InstallReporter:
         lowered = line.lower()
         if any(marker in lowered for marker in _NETWORK_ERROR_MARKERS):
             self._network_failure = True
+        if any(marker in lowered for marker in _PIP_NETWORK_ERROR_MARKERS):
+            self._pip_network_failure = True
         hard_failure = _HARD_MIRROR_ERROR_RE.search(line)
         if hard_failure is not None:
             self._hard_failed_hosts.add(hard_failure.group(1).lower())
@@ -325,6 +337,10 @@ class InstallReporter:
     @property
     def command_had_network_failure(self) -> bool:
         return self._network_failure
+
+    @property
+    def command_had_pip_network_failure(self) -> bool:
+        return self._pip_network_failure
 
     @property
     def hard_failed_mirror_hosts(self) -> frozenset[str]:
