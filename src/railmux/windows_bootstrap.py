@@ -14,6 +14,7 @@ from railmux.windows_msys2 import (
     find_runtime,
     install_managed_runtime,
     managed_root,
+    reusable_managed_base_candidate,
 )
 
 
@@ -45,7 +46,7 @@ def _runtime_status(
         ownership = "Railmux-managed" if runtime.managed else "user-owned override"
         print(f"Runtime: {ownership} at {runtime.root}")
     else:
-        root = managed_root(environ, version=__version__)
+        root = managed_root(environ)
         if root is not None:
             print(f"Managed location: {root}")
     print("Provider data: shared from the Windows user profile")
@@ -55,7 +56,8 @@ def _runtime_status(
 def _confirm_install(*, input_fn: Callable[[str], str] = input) -> bool:
     try:
         answer = input_fn(
-            "Install the private MSYS2/tmux runtime now? On Windows, Railmux "
+            "No reusable MSYS2 base was found. Install the private MSYS2/tmux "
+            "runtime now? On Windows, Railmux "
             "depends on a complete private MSYS2 compatibility wrapper, "
             "including tmux and Python. This downloads a 50 MB base plus "
             "required updates and packages, "
@@ -74,14 +76,30 @@ def _install(
     verbose: bool = False,
     input_fn: Callable[[str], str] = input,
 ) -> Msys2Runtime | None:
-    if not assume_yes and not _confirm_install(input_fn=input_fn):
-        print("MSYS2 runtime installation cancelled.", file=sys.stderr)
-        return None
+    reuse_only = False
+    if not assume_yes:
+        reusable = reusable_managed_base_candidate(environ)
+        if reusable is None:
+            if not _confirm_install(input_fn=input_fn):
+                print("MSYS2 runtime installation cancelled.", file=sys.stderr)
+                return None
+        else:
+            _root, source_version = reusable
+            detail = (
+                f" from Railmux {source_version}" if source_version else ""
+            )
+            print(
+                f"Reusing the matching MSYS2 {MSYS2_RELEASE} private base"
+                f"{detail}; only the Railmux {__version__} app layer will be "
+                "installed."
+            )
+            reuse_only = True
     try:
         runtime = install_managed_runtime(
             version=__version__,
             environ=environ,
             verbose=verbose,
+            reuse_only=reuse_only,
         )
     except RuntimeInstallError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -166,7 +184,7 @@ def main(
         return 0 if runtime is not None else 2
 
     if runtime is None:
-        root = managed_root(environ, version=__version__)
+        root = managed_root(environ)
         print(
             "Railmux for Windows needs its private MSYS2/tmux runtime.\n"
             "The Windows Codex/Claude executables and their existing session "
@@ -175,7 +193,10 @@ def main(
         )
         if root is not None:
             print(f"Managed location: {root}", file=sys.stderr)
-        if not stdin_isatty():
+        if (
+            not stdin_isatty()
+            and reusable_managed_base_candidate(environ) is None
+        ):
             print(
                 "Run 'railmux runtime install' interactively or "
                 "'railmux runtime install --yes' to install it.",

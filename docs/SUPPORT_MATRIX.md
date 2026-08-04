@@ -196,9 +196,11 @@ is labelled supported.
    caches, network-failure recovery, bounded phase progress/heartbeats,
    complete UTF-8 diagnostic logs, private ownership, and no system-wide PATH
    or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
-3. Keep one versioned runtime authority and make interrupted installation or
-   upgrade transactional and recoverable. Never overwrite user-owned MSYS2
-   files.
+3. Key one private shared base authority by the pinned MSYS2 compatibility
+   identifier and keep Railmux application venvs version-isolated beneath it.
+   Make base creation, released-runtime adoption, and app upgrades transactional
+   and recoverable; bump the base identifier whenever its contents must be
+   refreshed. Never adopt or overwrite user-owned MSYS2 files.
 4. Translate Windows paths, Unicode arguments, environment, exit status, and
    Ctrl-C exactly across the handoff without `shell=True` or command-string
    interpolation.

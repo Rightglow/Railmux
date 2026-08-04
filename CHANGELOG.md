@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev11] - 2026-08-04
+
+### Changed
+
+- Reuse one verified private MSYS2/tmux/Python base across Windows preview
+  upgrades while its pinned runtime identifier remains unchanged. Each Railmux
+  build keeps a separate application venv published by an atomic validity
+  marker, so normal preview upgrades no longer repeat the roughly 700 MB base
+  installation.
+- Adopt a complete dev4-dev10 Railmux-managed runtime in place after exact
+  validation, preserving its legacy app for rollback and showing a compact
+  three-phase app-layer upgrade instead of the seven-phase base install. A
+  matching base upgrade continues without a redundant confirmation; the
+  roughly 700 MB first installation still asks once unless `--yes` was given.
+
+### Security
+
+- Keep user-selected MSYS2 roots read-only and limit adoption to an exact
+  Railmux-owned legacy directory, marker, runtime identifier, version, and
+  executable probe. Provider histories remain outside the installation path
+  and are never opened or modified by base reuse.
+- Constrain confirmation-free upgrades to a `reuse_only` installer path that
+  fails instead of escalating to a full base download if the candidate changes
+  or cannot be validated.
+- Validate separate same-owner base and versioned-application markers before
+  granting MSYS2's narrow `noacl` permission exception.
+- Treat the adopted base marker as the lasting discovery authority while
+  retaining the old runtime marker only for rollback, so later rollback-state
+  cleanup cannot orphan the shared base and trigger a duplicate installation.
+
 ## [0.4.0.dev10] - 2026-08-03
 
 ### Fixed
@@ -1974,7 +2004,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev10...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev11...HEAD
+[0.4.0.dev11]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev10...v0.4.0.dev11
 [0.4.0.dev10]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev9...v0.4.0.dev10
 [0.4.0.dev9]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...v0.4.0.dev9
 [0.4.0.dev8]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...v0.4.0.dev8
