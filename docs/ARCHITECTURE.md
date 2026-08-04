@@ -511,6 +511,41 @@ NUL-delimited process argv element equal to the stamped resume UUID preserves
 the binding. A substring, rendered shell command, cwd match, or sibling rollout
 without that exact argv evidence must retain the stale-writer veto.
 
+Provider history roots are also the cross-host single-writer authority. When
+`CODEX_HOME` or the Claude Code configuration/history root is shared, Railmux
+stores rendezvous files under that same root and takes non-blocking advisory
+locks before resume. They request private POSIX modes where the filesystem
+supports them; type, ownership, and no-symlink checks remain authoritative on
+mode-masking DrvFs/CIFS-style mounts. A Claude lease names its session UUID; a
+Codex resume atomically covers every alias known at launch, while later rewinds
+that the index can link retain that stable lineage anchor instead of
+accumulating holder processes. The lock is authority and its bounded JSON owner
+record is diagnostic only: an unlocked stale file is inactive, while an
+unavailable lock service fails resume closed.
+
+The acquired descriptors transfer to a small independent holder tied to the
+exact provider pane PID and process-birth token. They therefore survive UI
+Soft Quit, but are released by the operating system when that pane exits or the
+holder dies. New sessions acquire their UUID immediately when placeholder
+resolution proves it. A live UI periodically revalidates the advisory locks
+rather than trusting its in-memory lease list, so it can replace an
+unexpectedly dead holder while the exact provider pane remains alive; a sticky
+Running-row warning remains visible until protection is restored. Confirmed
+deletion also takes a fresh lease (or verifies the exact locally owned provider
+pane) and refuses to touch history owned on another host. A remote owner may
+annotate a Sessions row as `running on HOST`, but cannot enter the node-local
+Running registry or authorize attach, kill, delete, or process adoption.
+Node-local immutable tmux identity remains the authority for all of those
+actions.
+
+Lease files are deliberately persistent rendezvous points. An unlocked stale
+record is inactive and consumes only one small file per provider UUID; unlinking
+a locked pathname would permit two hosts to lock different inodes. The shared
+provider root must therefore provide real cross-host POSIX `flock` semantics.
+Mount options or filesystems that silently make locks node-local cannot be
+detected reliably by Railmux and are outside this guarantee; an explicit lock
+error always fails resume and delete closed.
+
 ## Session indexes publish immutable generations
 
 The Codex history tree is owned by one `BackgroundCodexIndex` worker. Urwid

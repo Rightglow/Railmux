@@ -542,6 +542,21 @@ def test_stopped_session_row_uses_neutral_hollow_marker():
     assert title.attrib[0] == ("dim", 1)
 
 
+def test_remote_lease_marks_host_without_local_running_route():
+    project = _project()
+    base = _session(project)
+    session = SessionMeta(
+        **{**base.__dict__, "remote_owner": "computelab-303", "status": "busy"}
+    )
+
+    row = _SessionRow(session, is_running=False)
+    title = row._wrapped_widget.base_widget.contents[0][0]
+
+    assert title.text.startswith("•")
+    assert title.attrib[0][0] == "live"
+    assert "running on computelab-303" in _session_meta_text(row)
+
+
 def _session_meta_text(row: _SessionRow) -> str:
     return row._wrapped_widget.base_widget.contents[1][0].text
 

@@ -1222,6 +1222,9 @@ def test_resume_status_omits_running_count(monkeypatch):
     app._set_status = MagicMock()
     monkeypatch.setattr(
         "railmux.ui.app.build_resume_command", lambda **kw: ["claude"])
+    claim = MagicMock(session_ids=("id1",))
+    monkeypatch.setattr(
+        "railmux.ui.app.session_lease.acquire", lambda *_args: claim)
 
     session = MagicMock()
     session.session_type = "claude"
@@ -1235,6 +1238,7 @@ def test_resume_status_omits_running_count(monkeypatch):
     msg = app._set_status.call_args.args[0]
     assert msg == "→ sess-x"
     assert "running" not in msg
+    assert app._launch.call_args.kwargs["lease_claim"] is claim
 
 
 def test_preview_reports_info_status():

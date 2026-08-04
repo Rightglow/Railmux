@@ -77,12 +77,12 @@ product capability.
 | P02 | Discover resumable sessions created outside Railmux | Supported | Supported | One-shot `codex exec` and private Help sessions are filtered. |
 | P03 | Project list, project selection, and new project/directory creation | Supported | Supported | Creation is explicit and never inferred from an arbitrary failed match. |
 | P04 | Read-only history preview with provider-aware formatting | Supported | Supported | Latest 2,000 saved records are projected onto the provider's current branch; rewound suffixes and internal/encrypted reasoning are hidden. |
-| P05 | Start a new session and resume an existing session | Supported | Supported | Starting, resuming, previewing, and switching never rewrite provider history; confirmed P09 deletion is the explicit exception. |
+| P05 | Start a new session and resume an existing session | Supported | Supported | Starting, resuming, previewing, and switching never rewrite provider history; confirmed P09 deletion is the explicit exception. Shared provider roots use fail-closed per-session leases for both Claude Code and Codex so two hosts cannot resume one conversation concurrently. |
 | P06 | Live open on click/Enter; live scrolling on wheel; canonical history on Space or Preview | Supported | Supported | Direct wheel input remains tmux/provider-native; `railmux ssh` owns bounded per-pane scrolling and normally uses styled raw pane capture. A confirmed Codex rewind/steer resets only the live view and marks that SSH generation canonical so the abandoned suffix stays hidden. |
 | P07 | Session Info, rename, star, and copy title | Supported | Supported | Rename and favorites are Railmux metadata; copy depends on clipboard capability. |
 | P08 | Kill a live provider while retaining history | Supported | Supported | Revalidates immutable tmux/provider identity before mutation. |
-| P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or changed live identity fails closed; confirmed cleanup runs in one background transaction with durable status-right progress. |
-| P10 | Activity, blocked, attention, live, and unresolved status | Supported | Supported | Liveness, activity, and attention remain separate states. |
+| P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or changed live identity, a remote lease, or unavailable shared locking fails closed; confirmed cleanup runs in one background transaction with durable status-right progress. |
+| P10 | Activity, blocked, attention, live, remote-owner, and unresolved status | Supported | Supported | Liveness, activity, and attention remain separate states. `running on HOST` is shared-storage ownership, not a locally attachable Running entry. |
 | P11 | Per-provider Projects, Sessions, and Running filters | Supported | Supported | Current filters and selection survive soft restart. |
 | P12 | Switch Claude Code/Codex mode without stopping the other provider | Supported | Supported | Each mode keeps independent sidebar view state. |
 

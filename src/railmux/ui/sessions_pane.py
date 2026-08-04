@@ -108,6 +108,7 @@ _ATTENTION_MARK = ("attention", "!")
 # When a row is active in the right pane (or targeted by a context menu), map
 # status-dot attributes to variants with the selected background.
 _SELECTED_MAP = {None: "selected", "dim": "selected",
+                 "live": "selected",
                  "session_meta": "session_meta_sel",
                  "status_idle": "status_idle_sel",
                  "status_busy": "status_busy_sel",
@@ -143,8 +144,13 @@ class _SessionRow(ClickableRow):
         # Lifecycle status is meaningful only while a tmux session is live.
         # Historical rows use one neutral hollow marker rather than preserving
         # a stale idle/busy/blocked state from their final saved event.
-        dot = (_STATUS_DOTS.get(session.status, ("dim", "◦"))
-               if is_running else ("dim", "◦"))
+        remotely_running = session.remote_owner is not None and not is_running
+        dot = (
+            _STATUS_DOTS.get(session.status, ("dim", "◦"))
+            if is_running
+            else ("live", "•") if remotely_running
+            else ("dim", "◦")
+        )
         title_markup.append(dot)
         title_markup.append(" ")
         if session.attention is not None:
@@ -159,6 +165,7 @@ class _SessionRow(ClickableRow):
 
         parts = [
             _live_state(session) if is_running
+            else f"running on {session.remote_owner}" if remotely_running
             else _format_when(session.last_mtime)
         ]
         parts.append(f"{_format_count(session.message_count)} msg")
@@ -169,7 +176,7 @@ class _SessionRow(ClickableRow):
         body = urwid.Pile([title_text, meta_text])
         if is_selected:
             row_attr: str | dict | None = _SELECTED_MAP
-        elif is_running:
+        elif is_running or remotely_running:
             row_attr = "live"
         else:
             row_attr = None

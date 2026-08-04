@@ -385,6 +385,18 @@ Railmux also indexes resumable Claude Code and Codex sessions started outside
 Railmux, so existing conversations appear in the sidebar and resume the same
 way. Non-resumable one-off runs such as `codex exec` are filtered out.
 
+If the same Claude Code or Codex history root is shared across hosts, Railmux
+uses a provider-session lease to prevent two machines from resuming the same
+conversation concurrently. A remotely owned conversation remains in Sessions
+as **running on HOST**, but is not presented as a locally attachable Running
+entry; resume fails safely until that host's exact provider pane exits. The
+lease follows detached agents across Soft Quit and covers every known Codex
+rewind-lineage ID at resume; later rewinds retain a stable locked lineage
+anchor. Delete also checks the shared lease immediately before
+starting and refuses remotely owned history. The shared filesystem must provide
+cross-host POSIX advisory-lock semantics; mounts configured with local-only or
+disabled locking cannot provide this guarantee.
+
 ### Restarts and quitting
 
 Each opened agent runs in a detached tmux session, so switching sessions does
