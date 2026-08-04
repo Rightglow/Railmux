@@ -39,10 +39,17 @@ reopened read-only. The cache is disposable, uses a private atomic file, and is
 never sufficient evidence to resume, delete, or otherwise mutate a provider
 session.
 
-The preview supports local Railmux and the local side of `railmux ssh` to a
-Linux, macOS, or compatible Unix host. Providers and SSH servers running on
-native Windows remain out of scope. WSL remains usable only when the user
-independently opens a WSL shell and runs the ordinary POSIX product there.
+The preview is intended to support local Railmux, the local side of
+`railmux ssh` to a Linux, macOS, or compatible Unix host, and an ordinary
+OpenSSH login to the
+same Windows account followed by `railmux`. A desktop terminal and that SSH
+login must converge on the same dedicated tmux workspace rather than create
+per-terminal runtimes or session namespaces. Native Codex and Claude provider
+processes remain in scope in all of those entry surfaces and retain the same
+Windows-owned histories. Running Railmux's display-protocol remote server on
+Windows—meaning `railmux ssh user@windows` from another Railmux client—remains
+out of scope. WSL remains usable only when the user independently opens a WSL
+shell and runs the ordinary POSIX product there.
 
 ## Bootstrap contract
 
@@ -153,6 +160,21 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   disabled at the Windows boundary then restored before native providers run.
 - The parent waits through Ctrl-C instead of killing the child. tmux owns
   persistence after detach or outer-window closure.
+- The ordinary label-selected tmux attach remains the fast path. If Windows
+  rejects only that terminal attachment while the same server and immutable
+  Railmux session remain healthy, Railmux makes one fail-closed transparent
+  bridge attempt. The helper is spawned by that exact server, owns an
+  additional PTY-backed tmux client in the server's Windows Terminal Services
+  session, and forwards opaque bytes, resize, heartbeat, and exit frames to the
+  entry terminal. It never mirrors the UI, stores an origin preference,
+  detaches existing clients, or opens provider histories. A random same-user
+  private endpoint uses an independent random name and nonce challenge and is
+  removed by its creator. A later launch may clean a bounded old same-owner
+  endpoint only after it is unconnectable and its identity remains unchanged.
+  Output is suppressed at the `run-shell` boundary,
+  sends are time-bounded, and the helper drains tmux's terminal-restore tail
+  before reporting exit. Failure leaves the shared workspace running and is
+  exposed as a bounded `doctor` incident.
 - MSYS2 projects NTFS ACLs as 0644/0755 even when POSIX chmod requests
   0600/0700. Railmux accepts that representation only under the real
   Cygwin/MSYS managed wrapper after verifying separate same-owner on-disk base
@@ -164,8 +186,9 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   makes the next client hang. Railmux writes cleanup authority only after exact
   server-wide session and pane inventories prove the outer UI is alone. After
   a settle interval and two failed endpoint probes, it may remove only the
-  unchanged same-user socket after the recorded server PID is proven gone, and
-  prints an info message that Codex/Claude session files were untouched. Any
+  unchanged same-user socket after the recorded server PID is proven gone.
+  Routine post-exit cleanup is silent; a pre-launch recovery prints one info
+  message that Codex/Claude session files were untouched. Any
   live PID, provider or unknown session denies this cleanup; a failed outer
   teardown revokes the proof immediately.
 - Startup repaints the restoring surface with separate read-only indexing and
@@ -252,6 +275,18 @@ validation also exposed `doctor`'s separate explicit one-second probe; dev14
 routes only the managed-Windows doctor through the same settle allowance.
 Explicit health/watchdog probes, POSIX launcher and doctor bounds, and the
 proof-gated socket unlink authority remain unchanged.
+
+The dev15 candidate was installed on the same Windows 10 host through exact
+shared-base reuse. An ordinary OpenSSH login followed by `railmux` entered and
+detached the existing dedicated workspace. A separate forced bridge smoke used
+the released app layout and real MSYS2 AF_UNIX/tmux paths: the pinned server
+started the versioned helper, completed the nonce/HMAC handshake, attached an
+additional PTY client, transported the live UI, detached with `C-b d`, drained
+terminal restoration, and returned zero. `doctor` still reported the same
+healthy server afterward. The automatic fallback from an interactive Windows
+Terminal session to an SSH-origin server (and the reverse origin) remains a
+manual dev15 check because SSH access alone cannot create the desktop Terminal
+Services side of that boundary.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

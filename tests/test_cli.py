@@ -5,6 +5,7 @@ import pytest
 
 from railmux import tmux_server
 from railmux.cli import (
+    _reset_terminal_modes,
     _run_tmux_client_with_watchdog,
     _show_startup_message,
     is_ssh_session,
@@ -570,6 +571,118 @@ def test_intentional_hard_quit_does_not_record_launcher_incident(monkeypatch):
     ) == 1
     consume.assert_called_once_with(server_pid=77, session_id="$7")
     record.assert_not_called()
+
+
+def test_posix_attach_rejection_does_not_record_windows_incident(monkeypatch):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class ExitedClient:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: ExitedClient())
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda **_kw: target)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket",
+        lambda: False,
+    )
+    record = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.cli.tmux_health.record_incident", record)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], {}, expected_target=target,
+        expected_session_id="$7",
+    ) == 1
+    record.assert_not_called()
+
+
+def test_terminal_recovery_resets_keyboard_focus_mouse_and_wrap(monkeypatch):
+    write = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.write", write)
+
+    _reset_terminal_modes(12)
+
+    payload = write.call_args.args[1]
+    assert b"\x1b[?1l\x1b>" in payload
+    assert b"\x1b[?1004l" in payload
+    assert b"\x1b[?7h" in payload
+
+
+def test_managed_windows_fast_attach_rejection_uses_one_terminal_bridge(
+    monkeypatch, capsys,
+):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class ExitedClient:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    class SuccessfulRelay:
+        returncode = 0
+        closed = False
+
+        def poll(self):
+            return self.returncode
+
+        def close(self):
+            self.closed = True
+
+    relay = SuccessfulRelay()
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: ExitedClient())
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
+    monkeypatch.setattr("railmux.cli.sys.stdout.fileno", lambda: 11)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    monkeypatch.setattr("railmux.cli.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("railmux.cli.tty.setraw", lambda _fd: None)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda **_kw: target)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    start = MagicMock(return_value=relay)
+    monkeypatch.setattr(
+        "railmux.windows_attach_relay.start_relay_client", start)
+    recover = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket", recover)
+    record = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.cli.tmux_health.record_incident", record)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"],
+        {"RAILMUX_WINDOWS_RUNTIME": "msys2"},
+        expected_target=target,
+        expected_session_id="$7",
+    ) == 0
+
+    start.assert_called_once_with(
+        target=target,
+        session_id="$7",
+        environ={"RAILMUX_WINDOWS_RUNTIME": "msys2"},
+        stdin_fd=10,
+        stdout_fd=11,
+    )
+    assert relay.closed
+    recover.assert_called_once_with()
+    record.assert_not_called()
+    stderr = capsys.readouterr().err
+    assert "Windows terminal bridge" in stderr
+    assert "cleaned an abandoned" not in stderr
 
 
 def test_invalid_config_is_actionable_without_traceback(

@@ -426,6 +426,8 @@ def _incident_text(diagnostic: IncidentDiagnostic) -> str:
     if diagnostic.status == "none":
         return "none recorded"
     descriptions = {
+        "launcher-attach-rejected": "Windows tmux client attach rejected",
+        "launcher-relay-failed": "Windows terminal bridge failed",
         "launcher-watchdog-timeout": "local client watchdog timeout",
         "launcher-server-exit": "dedicated tmux server exited",
         "remote-display-watchdog-timeout": "SSH display watchdog timeout",

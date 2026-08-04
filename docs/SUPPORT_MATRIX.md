@@ -40,13 +40,16 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux ssh HOST` | Android Termux | Linux | **Field-validated** | Real phone use plus automated compact projection, SGR touch, soft-keyboard, cursor-focus, resize, and clipboard-fallback state tests. |
 | Either entry point | Native Windows Python in PowerShell, CMD, or Windows Terminal | — or Linux | **Not supported** | The `main` package has no native runtime adapter; use the supported WSL path. Installing the package does not yet provision or enter a delegated runtime. |
 | `railmux` or `railmux ssh HOST` | Native Windows bootstrap using managed MSYS2/tmux | — or Linux | **Planned** | The wrapper is developed only on `windows-preview`; the current `main` package does not install a runtime or claim native launch support. Railmux runs under MSYS2 while Windows-native providers retain the user's existing session/config directories. |
+| Ordinary `ssh USER@WINDOWS`, then `railmux` | Managed MSYS2/tmux on native Windows | — | **Planned** | The Windows preview shares the same private runtime, provider histories, and dedicated workspace with desktop launch. A one-attempt server-origin PTY bridge handles Windows Terminal Services boundaries; this is distinct from Railmux's display protocol. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
 The ordinary `ssh HOST` followed by remote `railmux` path depends primarily on
-the local terminal and remote POSIX environment. It does not use Railmux's
+the local terminal and remote runtime. On POSIX it attaches normally; the
+managed Windows preview may transparently bridge a healthy tmux workspace
+across Windows Terminal Services sessions. This path does not use Railmux's
 local latest-state client, local history cache, semantic link handling, or
-pane-bounded drag-to-copy.
+pane-bounded drag-to-copy and is not the same as `railmux ssh HOST`.
 
 ## Dependency and terminal capability floors
 
@@ -216,8 +219,11 @@ is labelled supported.
 8. Define clipboard, browser, and separate-terminal bridges for each runtime;
    keep bounded OSC 52 as a policy-dependent fallback and quote remote SSH/Vim
    commands without `shell=True` or command-string interpolation.
-9. Prove local session restore and `railmux ssh` to Linux/macOS/Unix hosts.
-   Running providers or an SSH server on native Windows remains out of scope.
+9. Prove local session restore, `railmux ssh` to Linux/macOS/Unix hosts, and
+   ordinary OpenSSH login to the same Windows account followed by `railmux`.
+   Desktop and SSH entry surfaces must attach the same workspace even when
+   Windows assigns different Terminal Services sessions. Running Railmux's
+   display-protocol remote server on native Windows remains out of scope.
 10. Add unconditional native Windows bootstrap/import/package CI plus a real
     managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
     record a named and dated real Windows Terminal pass here for every release

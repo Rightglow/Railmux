@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev15] - 2026-08-04
+
+### Added
+
+- Allow the managed-Windows preview to reach one dedicated tmux workspace from
+  both an interactive desktop terminal and an ordinary OpenSSH login to the
+  same Windows account. Railmux keeps direct tmux attachment as the fast path;
+  after a quick terminal-only rejection it may make one server-origin PTY
+  bridge attempt pinned to the unchanged server and immutable session.
+- Forward opaque terminal bytes, resize, heartbeat, and exit frames through a
+  random same-user private endpoint. The bridge is an additional tmux client,
+  never a second UI or workspace, and can stop only its own attach process.
+  Failures leave Codex, Claude, and the existing tmux workspace running and add
+  a privacy-safe `railmux doctor` incident category.
+
+### Changed
+
+- Keep routine proof-authorized Windows socket cleanup after normal exit
+  silent. A pre-launch recovery remains visible and now describes the recovered
+  unresponsive socket without implying that provider session files were read.
+
 ## [0.4.0.dev14] - 2026-08-04
 
 ### Fixed

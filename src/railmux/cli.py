@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 import termios
+import threading
 import time
+import tty
 from dataclasses import replace
 from pathlib import Path
 
@@ -50,7 +53,20 @@ def _restore_terminal(attributes: list | None) -> None:
         pass
 
 
-def _stop_tmux_client(process: subprocess.Popen) -> None:
+def _reset_terminal_modes(fd: int) -> None:
+    """Best-effort recovery when a relay ends before tmux's restore tail."""
+    try:
+        os.write(
+            fd,
+            b"\x1b[?1049l\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l"
+            b"\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?2004l"
+            b"\x1b[?7h\x1b[?25h\x1b[0m\r",
+        )
+    except OSError:
+        pass
+
+
+def _stop_tmux_client(process: object) -> None:
     if process.poll() is not None:
         return
     process.terminate()
@@ -75,20 +91,43 @@ def _run_tmux_client_with_watchdog(
             attributes = termios.tcgetattr(sys.stdin.fileno())
         except (OSError, termios.error):
             pass
+    started_at = time.monotonic()
     try:
-        process = subprocess.Popen(argv, env=env)
+        process: object = subprocess.Popen(argv, env=env)
     except OSError as exc:
         print(f"error: could not start tmux client: {exc}", file=sys.stderr)
         return 2
-    watchdog = tmux_health.FailureWatchdog.starting(
-        time.monotonic(),
-        interval=_LOCAL_WATCHDOG_INTERVAL,
-        failure_limit=_LOCAL_WATCHDOG_FAILURES,
-    )
-    next_session_probe = watchdog.next_probe - watchdog.interval
-    try:
+    def monitor_client(
+        monitor_started_at: float | None = None,
+        *,
+        asynchronous_probe: bool = False,
+    ) -> tuple[int, bool]:
+        nonlocal expected_target, expected_session_id
+        watchdog = tmux_health.FailureWatchdog.starting(
+            (
+                time.monotonic()
+                if monitor_started_at is None
+                else monitor_started_at
+            ),
+            interval=_LOCAL_WATCHDOG_INTERVAL,
+            failure_limit=_LOCAL_WATCHDOG_FAILURES,
+        )
+        next_session_probe = watchdog.next_probe - watchdog.interval
+        probe_thread: threading.Thread | None = None
+        probe_result: list[tmux_server.TmuxServerTarget | None] = []
+
+        def discover() -> tmux_server.TmuxServerTarget | None:
+            try:
+                return tmux_server.discover_target(timeout=1.0)
+            except tmux_server.TmuxServerError:
+                return None
+
         while process.poll() is None:
-            time.sleep(0.25)
+            pump = getattr(process, "pump", None)
+            if pump is None:
+                time.sleep(0.25)
+            else:
+                pump(0.25)
             now = time.monotonic()
             if (
                 expected_target is not None
@@ -100,10 +139,26 @@ def _run_tmux_client_with_watchdog(
                 next_session_probe = now + 1.0
             if not watchdog.due(now):
                 continue
-            try:
-                current_target = tmux_server.discover_target(timeout=1.0)
-            except tmux_server.TmuxServerError:
-                current_target = None
+            if asynchronous_probe:
+                if probe_thread is None:
+                    probe_result.clear()
+
+                    def run_probe() -> None:
+                        probe_result.append(discover())
+
+                    probe_thread = threading.Thread(
+                        target=run_probe,
+                        name="railmux-tmux-health",
+                        daemon=True,
+                    )
+                    probe_thread.start()
+                    continue
+                if probe_thread.is_alive():
+                    continue
+                current_target = probe_result[0] if probe_result else None
+                probe_thread = None
+            else:
+                current_target = discover()
             if expected_target is None and current_target is not None:
                 expected_target = current_target
                 expected_session_id = tmux_server.target_session_id(
@@ -126,23 +181,94 @@ def _run_tmux_client_with_watchdog(
                     "responding; run 'railmux doctor' for diagnostics",
                     file=sys.stderr,
                 )
-                return 2
+                return 2, True
+        return process.returncode or 0, False
+
+    relay = None
+    relay_attempted = False
+    try:
+        returncode, watchdog_failed = monitor_client(started_at)
+        if watchdog_failed:
+            return returncode
+        failed_at = time.monotonic()
         # tmux may leave the client TTY in raw mode even after its process
         # exits. Restore it before a bounded recovery probe or user message.
         _restore_terminal(attributes)
-        returncode = process.returncode or 0
-        if windows_tmux_lifecycle.recover_abandoned_socket():
-            print(
-                "info: cleaned an abandoned Windows tmux socket; Codex and "
-                "Claude session files were not changed",
-                file=sys.stderr,
-            )
+        current_target = None
         if returncode and expected_target is not None:
             try:
                 current_target = tmux_server.discover_target(timeout=1.0)
             except tmux_server.TmuxServerError:
                 current_target = None
-            if current_target != expected_target:
+            if current_target == expected_target and expected_session_id is None:
+                expected_session_id = tmux_server.target_session_id(
+                    expected_target, "railmux", timeout=0.5)
+
+            from railmux.provider_paths import running_in_managed_windows_wrapper
+
+            managed_windows = running_in_managed_windows_wrapper()
+
+            can_relay = bool(
+                current_target == expected_target
+                and expected_session_id is not None
+                and failed_at - started_at < 5.0
+                and attributes is not None
+                and sys.stdout.isatty()
+                and managed_windows
+            )
+            if can_relay:
+                relay_attempted = True
+                from railmux.windows_attach_relay import (
+                    WindowsAttachRelayError,
+                    start_relay_client,
+                )
+
+                print(
+                    "info: direct tmux attach was unavailable; reconnecting "
+                    "through the Windows terminal bridge",
+                    file=sys.stderr,
+                )
+                try:
+                    tty.setraw(sys.stdin.fileno())
+                    relay = start_relay_client(
+                        target=expected_target,
+                        session_id=expected_session_id,
+                        environ=env,
+                        stdin_fd=sys.stdin.fileno(),
+                        stdout_fd=sys.stdout.fileno(),
+                    )
+                    process = relay
+                    returncode, watchdog_failed = monitor_client(
+                        asynchronous_probe=True)
+                    if returncode:
+                        _reset_terminal_modes(sys.stdout.fileno())
+                    if watchdog_failed:
+                        return returncode
+                except (OSError, termios.error, WindowsAttachRelayError):
+                    _reset_terminal_modes(sys.stdout.fileno())
+                    _restore_terminal(attributes)
+                    outcome = (
+                        "could not attach"
+                        if relay is None
+                        else "connection ended unexpectedly"
+                    )
+                    print(
+                        f"error: the Windows terminal bridge {outcome}; the "
+                        "existing workspace was left running; run "
+                        "'railmux doctor' for diagnostics",
+                        file=sys.stderr,
+                    )
+                    returncode = 2
+                finally:
+                    _restore_terminal(attributes)
+
+                if returncode:
+                    try:
+                        current_target = tmux_server.discover_target(timeout=1.0)
+                    except tmux_server.TmuxServerError:
+                        current_target = None
+
+            if returncode and current_target != expected_target:
                 clean_exit = bool(
                     expected_session_id is not None
                     and tmux_health.consume_clean_exit(
@@ -156,16 +282,41 @@ def _run_tmux_client_with_watchdog(
                         reason="launcher-server-exit",
                         consecutive_failures=1,
                     )
+            elif (
+                returncode
+                and current_target == expected_target
+                and managed_windows
+            ):
+                tmux_health.record_incident(
+                    component="launcher",
+                    reason=(
+                        "launcher-relay-failed"
+                        if relay_attempted
+                        else "launcher-attach-rejected"
+                    ),
+                    consecutive_failures=1,
+                )
+        # Routine post-exit removal of a proof-authorized last-session socket
+        # is housekeeping. Only pre-launch recovery is user-visible.
+        windows_tmux_lifecycle.recover_abandoned_socket()
         return returncode
     except KeyboardInterrupt:
         _stop_tmux_client(process)
+        if relay is not None:
+            _reset_terminal_modes(sys.stdout.fileno())
         return 130
     finally:
+        if relay is not None:
+            relay.close()
         _restore_terminal(attributes)
 
 
 def main(argv: list[str] | None = None) -> int:
     raw_args = list(sys.argv[1:] if argv is None else argv)
+    if raw_args and raw_args[0] == "_windows-attach-relay":
+        from railmux.windows_attach_relay import relay_server_main
+
+        return relay_server_main(raw_args[1:])
     if raw_args and raw_args[0] == "config":
         from railmux.config_cli import main as config_main
 
@@ -379,8 +530,9 @@ def main(argv: list[str] | None = None) -> int:
         tmux_server.socket_label()
         if windows_tmux_lifecycle.recover_abandoned_socket():
             print(
-                "info: cleaned an abandoned Windows tmux socket; Codex and "
-                "Claude session files were not changed",
+                "info: recovered an unresponsive Windows tmux socket left by "
+                "a previous session; Codex and Claude session files were not "
+                "changed",
                 file=sys.stderr,
             )
         dedicated_target = tmux_server.discover_target()

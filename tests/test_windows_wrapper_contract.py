@@ -55,6 +55,7 @@ def test_ledger_retains_high_risk_real_terminal_scenarios():
         "WW-RESIZE-REFLOW",
         "WW-MOUSE-CHROME",
         "WW-LIFECYCLE",
+        "WW-ENTRY-SURFACES",
         "WW-SSH-POSIX",
     } <= scenario_ids
     feature_ids = set(ledger["features"])
