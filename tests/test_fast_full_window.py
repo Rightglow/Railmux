@@ -1718,7 +1718,9 @@ def test_terminal_surface_hides_cursor_covered_by_a_frozen_pane():
 
     TerminalSurface(stream).paint(screen, ((covering, (b"a", b"b")),))
 
-    assert stream.getvalue().endswith(b"\033[?25l")
+    rendered = stream.getvalue()
+    assert rendered.endswith(b"\033[1;2H")
+    assert rendered.count(b"\033[?25l") == 1
 
 
 def test_terminal_surface_reasserts_cached_cursor_without_repainting():
@@ -1739,6 +1741,55 @@ def test_terminal_surface_reasserts_cached_cursor_without_repainting():
     surface.reassert_cursor()
 
     assert stream.getvalue() == b"\033[0m\033[?7h\033[2;5H\033[?25h"
+
+
+def test_terminal_surface_local_highlight_repaints_only_changed_rows():
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=20, height=4))
+        )[0],
+        os.terminal_size((20, 4)),
+    )
+    assert screen is not None
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+    surface.paint(screen)
+    stream.seek(0)
+    stream.truncate()
+
+    surface.paint_changed_rows(
+        screen,
+        (),
+        ((1, 4, b"https://example"),),
+        {1},
+    )
+
+    rendered = stream.getvalue()
+    assert b"\033[2J" not in rendered
+    assert b"\033[2;1H\033[2Krow-1" in rendered
+    assert b"\033[2;5H\033[0;7mhttps://example" in rendered
+
+
+def test_terminal_surface_stable_cursor_visibility_is_not_reasserted_per_patch():
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=12, height=3))
+        )[0],
+        os.terminal_size((12, 3)),
+    )
+    assert screen is not None
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+    surface.paint(screen)
+    stream.seek(0)
+    stream.truncate()
+
+    surface.paint(replace(screen, changed_rows=(1,), clear=False))
+
+    rendered = stream.getvalue()
+    assert b"\033[?25h" not in rendered
+    assert b"\033[?25l" not in rendered
+    assert rendered.endswith(b"\033[1;2H")
     assert b"\033[2J" not in stream.getvalue()
 
 
@@ -1798,7 +1849,8 @@ def test_terminal_surface_clips_projected_patches_overlays_and_cursor():
     assert b"\033[4;1H\033[2Krow-14" in rendered
     assert b"hidden" not in rendered
     assert b"\033[1;4H\033[6Xone" in rendered
-    assert rendered.endswith(b"\033[1;1H\033[?25l")
+    assert rendered.endswith(b"\033[1;1H")
+    assert rendered.count(b"\033[?25l") == 1
 
 
 def test_terminal_surface_maps_projected_mouse_rows_to_logical_screen():
@@ -4869,6 +4921,8 @@ def test_local_status_preserves_painted_status_left_and_background():
     assert b"\033[4;21H" in painted
     assert b"\033[48;2;95;175;0m\033[1;38;5;17m\033[K" in painted
     assert b"Copied 12 chars." in painted
+    assert b"\033[?25h" not in painted
+    assert b"\033[?25l" not in painted
 
 
 def test_reconnect_status_uses_retained_status_right_without_stale_cursor():

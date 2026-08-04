@@ -202,6 +202,14 @@ def full_repaint(screen: AppliedScreen) -> AppliedScreen:
     )
 
 
+def selection_changed_rows(
+    before: tuple[SelectionSegment, ...],
+    after: tuple[SelectionSegment, ...],
+) -> set[int]:
+    """Rows that must be restored when one local highlight changes."""
+    return {row for row, _column, _text in (*before, *after)}
+
+
 def focus_in_frame_for_screen(screen: AppliedScreen | None) -> bytes | None:
     """Reassert focus only while the remote application requested events."""
     if screen is None or not screen.terminal_modes & TerminalMode.FOCUS_EVENTS:
@@ -637,6 +645,10 @@ class TerminalSurface:
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
+        # Track the physical emulator cursor separately from the remote model.
+        # Re-sending DECSET/DECRST 25 on every 20 fps patch restarts the cursor
+        # animation in Windows Terminal and presents as a rapid flash.
+        self._painted_cursor_visible: bool | None = None
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
         self._last_screen: AppliedScreen | None = None
@@ -694,6 +706,7 @@ class TerminalSurface:
         if interactive and not self.cursor_hidden:
             controls.append(b"\033[?25l")
             self.cursor_hidden = True
+            self._painted_cursor_visible = False
         if (
             interactive
             and self.mouse
@@ -793,6 +806,7 @@ class TerminalSurface:
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
+        self._painted_cursor_visible = True
         self.interaction_active = True
 
     def show_local_status(
@@ -813,7 +827,8 @@ class TerminalSurface:
         self._local_status_level = level
         self._local_status_interruptible = interruptible
         self._local_status_expires_at = expires_at
-        rendered = [self._render_local_status()]
+        restore_cursor = self._last_screen is not None
+        rendered = [self._render_local_status(hide_cursor=not restore_cursor)]
         if self._last_screen is not None:
             projection_top, visible_height = self._projection(
                 self._last_screen.height
@@ -828,7 +843,7 @@ class TerminalSurface:
         self.stream.write(b"".join(rendered))
         self.stream.flush()
 
-    def _render_local_status(self) -> bytes:
+    def _render_local_status(self, *, hide_cursor: bool = True) -> bytes:
         """Render and locate the current local status-right replacement."""
         if self._local_status_text is None:
             self._local_status_bounds = None
@@ -841,10 +856,14 @@ class TerminalSurface:
             if self.physical_size is not None:
                 safe = safe[: self.physical_size.columns]
             self._local_status_bounds = (max(1, height), 1, max(1, len(safe)))
-            return (
+            rendered = (
                 f"\033[?7l\033[0m\033[{max(1, height)};1H\033[2K{safe}"
-                "\033[0m\033[?7h\033[?25l"
+                "\033[0m\033[?7h"
             ).encode("utf-8")
+            if hide_cursor:
+                rendered += b"\033[?25l"
+                self._painted_cursor_visible = False
+            return rendered
         width = screen.width
         if self.physical_size is not None:
             width = min(width, self.physical_size.columns)
@@ -862,8 +881,8 @@ class TerminalSurface:
             "warning": b"\033[1;38;5;220m",
             "error": b"\033[1;38;5;196m",
         }.get(level, b"\033[38;5;231m")
-        return b"".join(
-            (
+        rendered = b"".join(
+            [
                 b"\033[?7l\033[0m",
                 f"\033[{max(1, height)};{reserved + 1}H".encode(),
                 background,
@@ -871,9 +890,13 @@ class TerminalSurface:
                 b"\033[K",
                 f"\033[{max(1, height)};{column}H".encode(),
                 safe.encode("utf-8"),
-                b"\033[0m\033[?25l",
-            )
+                b"\033[0m",
+            ]
         )
+        if hide_cursor:
+            rendered += b"\033[?25l"
+            self._painted_cursor_visible = False
+        return rendered
 
     def clear_local_status(self) -> None:
         """Forget local feedback before restoring the authoritative screen."""
@@ -991,6 +1014,7 @@ class TerminalSurface:
             )
         self.stream.write(b"".join(rendered))
         self.stream.flush()
+        self._painted_cursor_visible = False
 
     def claude_history_prompt_choice(
         self,
@@ -1052,6 +1076,7 @@ class TerminalSurface:
             )
         self.stream.write(b"".join(rendered))
         self.stream.flush()
+        self._painted_cursor_visible = False
 
     def path_open_prompt_choice(
         self,
@@ -1108,6 +1133,7 @@ class TerminalSurface:
         # scroll the alternate screen.
         self.stream.write(b"\033[0m\033[?7h\033[?25l")
         self.stream.flush()
+        self._painted_cursor_visible = False
 
     @staticmethod
     def _cursor_is_covered(
@@ -1171,38 +1197,37 @@ class TerminalSurface:
                 )
             )
 
-    @classmethod
     def _append_cursor(
-        cls,
+        self,
         rendered: list[bytes],
         screen: AppliedScreen,
         overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
         *,
         projection_top: int = 0,
         visible_height: int | None = None,
+        force_visibility: bool = False,
     ) -> None:
         cursor_in_projection = (
             visible_height is None
             or projection_top <= screen.cursor_y < projection_top + visible_height
         )
-        rendered.extend(
-            (
-                b"\033[0m\033[?7h",
-                (
-                    f"\033[{screen.cursor_y - projection_top + 1};"
-                    f"{screen.cursor_x + 1}H"
-                ).encode()
-                if cursor_in_projection
-                else b"\033[1;1H",
-                (
-                    b"\033[?25h"
-                    if screen.cursor_visible
-                    and cursor_in_projection
-                    and not cls._cursor_is_covered(screen, overlays)
-                    else b"\033[?25l"
-                ),
-            )
+        visible = bool(
+            screen.cursor_visible
+            and cursor_in_projection
+            and not self._cursor_is_covered(screen, overlays)
         )
+        rendered.extend((
+            b"\033[0m\033[?7h",
+            (
+                f"\033[{screen.cursor_y - projection_top + 1};"
+                f"{screen.cursor_x + 1}H"
+            ).encode()
+            if cursor_in_projection
+            else b"\033[1;1H",
+        ))
+        if force_visibility or self._painted_cursor_visible is not visible:
+            rendered.append(b"\033[?25h" if visible else b"\033[?25l")
+            self._painted_cursor_visible = visible
 
     def paint(
         self,
@@ -1250,7 +1275,7 @@ class TerminalSurface:
             visible_height=visible_height,
         )
         if self._local_status_text is not None:
-            rendered.append(self._render_local_status())
+            rendered.append(self._render_local_status(hide_cursor=False))
         # Status and selection painting move and may temporarily hide the
         # terminal cursor.  Restoring the authoritative cursor must therefore
         # be the final operation in every complete paint.
@@ -1289,7 +1314,61 @@ class TerminalSurface:
             visible_height=visible_height,
         )
         if self._local_status_text is not None:
-            rendered.append(self._render_local_status())
+            rendered.append(self._render_local_status(hide_cursor=False))
+        self._append_cursor(
+            rendered,
+            screen,
+            overlays,
+            projection_top=projection_top,
+            visible_height=visible_height,
+        )
+        self.stream.write(b"".join(rendered))
+        self.stream.flush()
+
+    def paint_changed_rows(
+        self,
+        screen: AppliedScreen,
+        overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
+        selection: tuple[SelectionSegment, ...],
+        changed_rows: set[int] | frozenset[int],
+    ) -> None:
+        """Restore and repaint only rows touched by a local highlight.
+
+        Hover, drag selection, and click flash are local overlays. Clearing the
+        whole alternate screen for them is both unnecessary and visibly flashes
+        in Windows Terminal. Restore each affected row from the authoritative
+        live frame, then layer frozen history and the new highlight back on it.
+        """
+        self.start()
+        self._last_screen = screen
+        self._last_overlays = overlays
+        projection_top, visible_height = self._projection(screen.height)
+        rows = frozenset(
+            row for row in changed_rows
+            if projection_top <= row < projection_top + visible_height
+        )
+        rendered: list[bytes] = [b"\033[?7l"]
+        for row in sorted(rows):
+            rendered.extend((
+                f"\033[{row - projection_top + 1};1H".encode(),
+                b"\033[2K",
+                screen.rows[row],
+            ))
+        self._append_overlay_rows(
+            rendered,
+            overlays,
+            projection_top=projection_top,
+            visible_height=visible_height,
+            changed_rows=rows,
+        )
+        self._append_selection_segments(
+            rendered,
+            selection,
+            projection_top=projection_top,
+            visible_height=visible_height,
+        )
+        if self._local_status_text is not None and screen.height - 1 in rows:
+            rendered.append(self._render_local_status(hide_cursor=False))
         self._append_cursor(
             rendered,
             screen,
@@ -1312,6 +1391,7 @@ class TerminalSurface:
             self._last_overlays,
             projection_top=projection_top,
             visible_height=visible_height,
+            force_visibility=True,
         )
         self.stream.write(b"".join(rendered))
         self.stream.flush()
@@ -1333,6 +1413,7 @@ class TerminalSurface:
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
+        self._painted_cursor_visible = None
         self.clear_local_status()
         self._last_screen = None
         self._reconnect_status_screen = None
@@ -2627,11 +2708,14 @@ def run(args: argparse.Namespace) -> int:
                     focused_pane_id=focused_pane_id,
                 )
             )
+            before = selection.segments()
             if selection.hover(hover_event, source) and latest_screen is not None:
-                surface.paint(
-                    full_repaint(latest_screen),
+                after = selection.segments()
+                surface.paint_changed_rows(
+                    latest_screen,
                     history.overlays(),
-                    selection.segments(),
+                    after,
+                    selection_changed_rows(before, after),
                 )
             return
         if path_open_prompt is not None:
@@ -2751,6 +2835,7 @@ def run(args: argparse.Namespace) -> int:
             # one persistent choice is still being confirmed.
             return
         if isinstance(part, SgrMouseEvent):
+            selection_before = selection.segments()
             displayed_height = (
                 latest_screen.height
                 if latest_screen is not None
@@ -2807,10 +2892,12 @@ def run(args: argparse.Namespace) -> int:
             if selection.capturing or not selection.active:
                 selection_clear_at = None
             if selection_action.repaint and latest_screen is not None:
-                surface.paint(
-                    full_repaint(latest_screen),
+                selection_after = selection.segments()
+                surface.paint_changed_rows(
+                    latest_screen,
                     history.overlays(),
-                    selection.segments(),
+                    selection_after,
+                    selection_changed_rows(selection_before, selection_after),
                 )
             for replay_event in selection_action.replay_events:
                 if not claim_batched_wheel(replay_event, handled_wheels):
@@ -2835,6 +2922,7 @@ def run(args: argparse.Namespace) -> int:
                 selection_clear_at = time.monotonic() + _SELECTION_HIGHLIGHT_SECONDS
             if selection_action.open_target is not None:
                 target = selection_action.open_target
+                flash_before = selection.segments()
                 if (
                     selection.flash(
                         target,
@@ -2843,10 +2931,12 @@ def run(args: argparse.Namespace) -> int:
                     )
                     and latest_screen is not None
                 ):
-                    surface.paint(
-                        full_repaint(latest_screen),
+                    flash_after = selection.segments()
+                    surface.paint_changed_rows(
+                        latest_screen,
                         history.overlays(),
-                        selection.segments(),
+                        flash_after,
+                        selection_changed_rows(flash_before, flash_after),
                     )
                 if target.kind == "url":
                     show_open_result(local_open.open_url(target.value))
@@ -3301,6 +3391,7 @@ def run(args: argparse.Namespace) -> int:
                 restore_local_status = surface.expire_local_status(now) or (
                     history_info_until is not None and now >= history_info_until
                 )
+                timed_selection_before = selection.segments()
                 clear_selection = (
                     selection_clear_at is not None and now >= selection_clear_at
                 )
@@ -3310,13 +3401,24 @@ def run(args: argparse.Namespace) -> int:
                         selection.cancel()
                     if restore_local_status:
                         surface.clear_local_status()
-                    if latest_screen is not None:
+                    timed_selection_after = selection.segments()
+                    if latest_screen is not None and restore_local_status:
                         surface.paint(
                             full_repaint(latest_screen),
                             history.overlays(),
-                            selection.segments(),
+                            timed_selection_after,
                         )
                         redraw_local_prompt()
+                    elif latest_screen is not None:
+                        surface.paint_changed_rows(
+                            latest_screen,
+                            history.overlays(),
+                            timed_selection_after,
+                            selection_changed_rows(
+                                timed_selection_before,
+                                timed_selection_after,
+                            ),
+                        )
                     if restore_local_status:
                         history_info_until = None
                     if clear_selection:
