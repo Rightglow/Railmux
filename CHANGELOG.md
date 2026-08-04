@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3.dev6] - 2026-08-04
+
+### Fixed
+
+- Preserve a live Codex pane's retained tmux scrollback across rewind and
+  running-turn steering while resetting only the stale viewport; local preview
+  and full-window SSH history now read the canonical rollout so retained
+  conversation remains visible and the abandoned interruption suffix stays
+  hidden.
+- Name the exact target in the durable background-delete status, with bounded
+  whitespace-normalized text such as `Deleting “session name”…`.
+
+### Changed
+
+- Keep detailed SSH URL/path and clipboard instructions in the README while
+  reducing the website's repeated selection note to a concise overview of
+  local URL/path opening and pane-bounded drag-to-copy.
+
 ## [0.3.3.dev5] - 2026-08-04
 
 ### Fixed
@@ -1807,7 +1825,9 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev4...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev6...HEAD
+[0.3.3.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev5...v0.3.3.dev6
+[0.3.3.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev4...v0.3.3.dev5
 [0.3.3.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev3...v0.3.3.dev4
 [0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2
