@@ -101,6 +101,32 @@ def test_discover_target_uses_explicit_label_and_times_out(monkeypatch):
     }
 
 
+@pytest.mark.parametrize(
+    ("env", "expected_timeout"),
+    [
+        ({}, 2.0),
+        ({"RAILMUX_WINDOWS_RUNTIME": "msys2"}, 5.0),
+    ],
+)
+def test_discover_target_allows_managed_msys_stale_socket_settle(
+    monkeypatch, env, expected_timeout,
+):
+    observed = {}
+
+    def discover(label, *, timeout, env):
+        observed.update(label=label, timeout=timeout, env=env)
+        return None
+
+    monkeypatch.setattr(tmux_server, "_discover_label_target", discover)
+
+    assert tmux_server.discover_target(env=env) is None
+    assert observed == {
+        "label": "railmux",
+        "timeout": expected_timeout,
+        "env": env,
+    }
+
+
 def test_discover_target_classifies_tmux_client_server_mismatch(monkeypatch):
     monkeypatch.setattr(
         subprocess,
