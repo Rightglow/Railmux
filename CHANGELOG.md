@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3.dev5] - 2026-08-04
+
 ### Fixed
 
 - Close the delete confirmation immediately and move tmux shutdown waits plus
