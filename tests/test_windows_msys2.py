@@ -33,7 +33,7 @@ from railmux.windows_msys2 import (
 from railmux.windows_pacman import PacmanMirrorDecision
 
 
-VERSION = "0.4.0.dev11"
+VERSION = "0.4.0.dev12"
 LEGACY_VERSION = "0.4.0.dev10"
 _ANSI_STYLE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -542,7 +542,9 @@ def test_managed_runtime_requires_utf8_marker_and_exact_package_version(tmp_path
     root = managed_root(environ)
     assert root is not None
     runtime = make_runtime(root, managed=True, shared=True)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev11\n"))
+    probe = MagicMock(
+        return_value=completed([], stdout=f"railmux {VERSION}\n".encode())
+    )
 
     assert probe_runtime(runtime, version=VERSION, environ=environ, probe=probe)
     assert not probe_runtime(runtime, version="0.4.0.dev8", environ=environ, probe=probe)
@@ -553,7 +555,7 @@ def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
     probe = MagicMock(
         side_effect=[
             completed([], returncode=1),
-            completed([], stdout=b"railmux 0.4.0.dev11\n"),
+            completed([], stdout=f"railmux {VERSION}\n".encode()),
         ]
     )
 
@@ -576,7 +578,9 @@ def test_preview_versions_share_one_base_but_use_separate_app_layers(tmp_path):
 def test_explicit_user_runtime_is_probed_but_never_requires_managed_marker(tmp_path):
     root = tmp_path / "用户-owned-msys"
     runtime = make_runtime(root, managed=False)
-    probe = MagicMock(return_value=completed([], stdout=b"railmux 0.4.0.dev11\n"))
+    probe = MagicMock(
+        return_value=completed([], stdout=f"railmux {VERSION}\n".encode())
+    )
     environ = {"RAILMUX_MSYS2_ROOT": str(root), "USERPROFILE": r"C:\Users\u"}
 
     found = find_runtime(version=VERSION, environ=environ, probe=probe)
@@ -698,7 +702,7 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         return completed(argv)
 
     def probe(argv, *, env, timeout):
-        return completed(argv, stdout=b"railmux 0.4.0.dev11\n")
+        return completed(argv, stdout=f"railmux {VERSION}\n".encode())
 
     @contextmanager
     def unlocked(_base):
@@ -809,7 +813,10 @@ def test_dev11_adopts_verified_dev10_base_without_downloading_or_copying(tmp_pat
     assert len(commands) == 2
     final_posix = f"/opt/railmux/apps/railmux-{VERSION}"
     assert commands[0][-1] == final_posix
-    assert commands[1][-2:] == [final_posix, VERSION]
+    pip_cache = str(Path(environ["LOCALAPPDATA"]) / "Railmux" / "cache" / "pip")
+    assert commands[1][-5:] == [final_posix, VERSION, pip_cache, "60", "5"]
+    assert '--cache-dir "$cache"' in commands[1][4]
+    assert "--no-cache-dir" not in commands[1][4]
     assert find_runtime(version=VERSION, environ=environ, probe=probe) == runtime
     assert probe_runtime(
         Msys2Runtime(legacy_root, managed=True),
@@ -824,6 +831,223 @@ def test_dev11_adopts_verified_dev10_base_without_downloading_or_copying(tmp_pat
     ).read_text(encoding="utf-8")
     assert "[1/3] Reusing verified MSYS2" in log
     assert "will not be downloaded, copied, or upgraded" in log
+
+
+def test_shared_base_app_download_retries_with_private_cache_and_longer_timeout(
+    tmp_path,
+):
+    environ = {"LOCALAPPDATA": str(tmp_path), "USERPROFILE": r"C:\Users\u"}
+    root = managed_root(environ)
+    assert root is not None
+    previous_version = "0.4.0.dev11"
+    make_runtime(
+        root,
+        managed=True,
+        version=previous_version,
+        shared=True,
+    )
+    previous_marker = (
+        root
+        / "opt"
+        / "railmux"
+        / "apps"
+        / f"railmux-{previous_version}"
+        / "railmux-app.json"
+    )
+    original_marker = previous_marker.read_bytes()
+    commands = []
+    package_attempts = 0
+
+    def runner(argv, *, env, check):
+        nonlocal package_attempts
+        commands.append(argv)
+        if "pip install" in argv[4]:
+            package_attempts += 1
+            if package_attempts == 1:
+                return completed(
+                    argv,
+                    returncode=2,
+                    stderr=b"ReadTimeoutError: files.pythonhosted.org\n",
+                )
+        return completed(argv)
+
+    def probe(argv, **_kwargs):
+        executable = argv[6]
+        version = VERSION if executable.endswith(
+            f"/railmux-{VERSION}/venv/bin/railmux"
+        ) else previous_version
+        return completed(argv, stdout=f"railmux {version}\n".encode())
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    runtime = install_managed_runtime(
+        version=VERSION,
+        environ=environ,
+        runner=runner,
+        probe=probe,
+        lock_factory=unlocked,
+    )
+
+    cache = Path(environ["LOCALAPPDATA"]) / "Railmux" / "cache" / "pip"
+    final_posix = f"/opt/railmux/apps/railmux-{VERSION}"
+    assert runtime.app_name == f"railmux-{VERSION}"
+    assert package_attempts == 2
+    assert len(commands) == 3
+    assert commands[1][-5:] == [final_posix, VERSION, str(cache), "60", "5"]
+    assert commands[2][-5:] == [final_posix, VERSION, str(cache), "120", "5"]
+    assert cache.is_dir()
+    assert previous_marker.read_bytes() == original_marker
+    assert windows_msys2._app_marker_matches(
+        root, app_name=f"railmux-{VERSION}", version=VERSION
+    )
+    log = next(
+        (Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8")
+    assert "retrying once with the Railmux-private cache" in log
+    assert "120-second network timeout" in log
+
+
+def test_shared_base_failed_package_recovery_never_publishes_or_escalates(
+    tmp_path,
+):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    previous_version = "0.4.0.dev11"
+    make_runtime(root, managed=True, version=previous_version, shared=True)
+    previous_marker = (
+        root
+        / "opt"
+        / "railmux"
+        / "apps"
+        / f"railmux-{previous_version}"
+        / "railmux-app.json"
+    )
+    original_marker = previous_marker.read_bytes()
+    commands = []
+
+    def runner(argv, *, env, check):
+        commands.append(argv)
+        if "pip install" in argv[4]:
+            return completed(
+                argv,
+                returncode=2,
+                stderr=b"ReadTimeoutError: files.pythonhosted.org\n",
+            )
+        return completed(argv)
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    with pytest.raises(RuntimeInstallError, match="exit code 2"):
+        install_managed_runtime(
+            version=VERSION,
+            environ=environ,
+            runner=runner,
+            probe=lambda argv, **_kwargs: completed(
+                argv, stdout=f"railmux {previous_version}\n".encode()
+            ),
+            lock_factory=unlocked,
+            downloader=lambda *_args: pytest.fail("must not download a base"),
+            mirror_optimizer=lambda _root: pytest.fail("pacman must not run"),
+        )
+
+    app = root / "opt" / "railmux" / "apps" / f"railmux-{VERSION}"
+    assert len(commands) == 3
+    assert sum("pip install" in command[4] for command in commands) == 2
+    assert all("pacman" not in command[4] for command in commands)
+    assert not (app / "railmux-app.json").exists()
+    assert previous_marker.read_bytes() == original_marker
+
+
+def test_non_network_package_failure_is_not_retried(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    previous_version = "0.4.0.dev11"
+    make_runtime(root, managed=True, version=previous_version, shared=True)
+    commands = []
+
+    def runner(argv, *, env, check):
+        commands.append(argv)
+        if "pip install" in argv[4]:
+            return completed(
+                argv,
+                returncode=1,
+                stderr=b"No matching distribution found\n",
+            )
+        return completed(argv)
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    with pytest.raises(RuntimeInstallError, match="exit code 1"):
+        install_managed_runtime(
+            version=VERSION,
+            environ=environ,
+            runner=runner,
+            probe=lambda argv, **_kwargs: completed(
+                argv, stdout=f"railmux {previous_version}\n".encode()
+            ),
+            lock_factory=unlocked,
+        )
+
+    assert len(commands) == 2
+    assert sum("pip install" in command[4] for command in commands) == 1
+
+
+def test_pip_cache_reparse_point_is_rejected_before_app_commands(
+    tmp_path, monkeypatch
+):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    previous_version = "0.4.0.dev11"
+    make_runtime(root, managed=True, version=previous_version, shared=True)
+    app = root / "opt" / "railmux" / "apps" / f"railmux-{VERSION}"
+    app.mkdir()
+    unpublished = app / "unpublished"
+    unpublished.write_bytes(b"preserve until cache validation passes")
+    cache = Path(environ["LOCALAPPDATA"]) / "Railmux" / "cache" / "pip"
+    cache.mkdir(parents=True)
+    original_lstat = Path.lstat
+    original_is_symlink = Path.is_symlink
+
+    def fake_lstat(path):
+        if path == cache:
+            return SimpleNamespace(st_file_attributes=0x400)
+        return original_lstat(path)
+
+    def fake_is_symlink(path):
+        if path == cache:
+            return False
+        return original_is_symlink(path)
+
+    monkeypatch.setattr(Path, "lstat", fake_lstat)
+    monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    with pytest.raises(RuntimeInstallError, match="link or reparse point"):
+        install_managed_runtime(
+            version=VERSION,
+            environ=environ,
+            runner=lambda *_args, **_kwargs: pytest.fail(
+                "app commands must not start"
+            ),
+            probe=lambda argv, **_kwargs: completed(
+                argv, stdout=f"railmux {previous_version}\n".encode()
+            ),
+            lock_factory=unlocked,
+        )
+
+    assert unpublished.read_bytes() == b"preserve until cache validation passes"
 
 
 def test_mismatched_legacy_marker_is_never_an_adoption_candidate(tmp_path):
