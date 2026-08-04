@@ -15,6 +15,7 @@ from typing import TextIO
 from railmux import __version__
 from railmux import legacy_sessions, tmux_health, tmux_server
 from railmux.config import Config, ConfigError, default_config_path, load_config
+from railmux.provider_paths import running_in_windows_wrapper
 from railmux.runtime_config import normalized_command, runtime_environment
 from railmux.ssh_display_diagnostics import (
     SshDisplayDiagnostic,
@@ -204,8 +205,10 @@ def _dedicated_tmux_diagnostic(
     )
     if found is None:
         return TmuxServerDiagnostic("unavailable")
+    source = os.environ if environ is None else environ
+    timeout = None if running_in_windows_wrapper(source) else 1.0
     try:
-        target = tmux_server.discover_target(timeout=1.0, env=environ)
+        target = tmux_server.discover_target(timeout=timeout, env=environ)
     except tmux_server.TmuxClientServerMismatch:
         return TmuxServerDiagnostic("client_server_mismatch")
     except tmux_server.TmuxServerUnresponsive:
