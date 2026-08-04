@@ -24,6 +24,8 @@ GitHub pre-release; pip excludes it from ordinary stable upgrades unless the
 version is explicitly requested or pre-releases are enabled. Never append
 `.devN` to an already released final version: `0.2.10.devN` sorts before
 `0.2.10`, so development builds after 0.2.10 must target `0.2.11.devN`.
+After `v0.3.3`, the POSIX/WSL field-test line therefore starts at
+`0.3.4.dev1` and continues as `0.3.4.devN`.
 
 Final releases are cut only from `main`, whose product scope is POSIX/WSL.
 The delegated-runtime Windows bootstrap experiment lives on `windows-preview`
