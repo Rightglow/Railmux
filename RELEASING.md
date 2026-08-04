@@ -26,9 +26,10 @@ version is explicitly requested or pre-releases are enabled. Never append
 `0.2.10`, so development builds after 0.2.10 must target `0.2.11.devN`.
 
 Final releases are cut only from `main`, whose product scope is POSIX/WSL.
-The delegated-runtime Windows bootstrap experiment lives on `windows-preview`
-and continues the unreleased `0.4.0` preview line at `0.4.0.dev3`; it may
-publish only later `0.4.0.devN` builds until that work is explicitly promoted.
+The delegated-runtime Windows bootstrap experiment lives on `windows-preview`.
+The archived WSL experiment ended at `0.4.0.dev3`; the active MSYS2 wrapper may
+publish only `0.4.0.dev4` or later builds until that work is explicitly
+promoted.
 The abandoned ConPTY experiment is frozen at `v0.4.0.dev2` on
 `archive/windows-conpty-deprecated`; it is not release-eligible. Shared fixes
 land on `main` first and are merged into the active preview branch; never merge

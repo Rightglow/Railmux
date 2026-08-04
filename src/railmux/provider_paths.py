@@ -11,7 +11,11 @@ from pathlib import Path
 
 
 _DRIVE_PATH = re.compile(r"^(?:\\\\\?\\)?([A-Za-z]):[\\/](.*)\Z")
-_MANAGED_RUNTIME_MARKER = Path("/railmux-runtime.json")
+_MANAGED_BASE_MARKER = Path("/railmux-base.json")
+_MANAGED_APP_ROOT = Path("/opt/railmux/apps")
+_MANAGED_APP_ID = re.compile(
+    r"railmux-[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z"
+)
 
 
 def running_in_windows_wrapper(environ: Mapping[str, str] = os.environ) -> bool:
@@ -25,22 +29,40 @@ def running_in_managed_windows_wrapper(
     """Verify the installed MSYS2 runtime, not merely its environment hint."""
     if sys.platform != "cygwin" or not running_in_windows_wrapper(environ):
         return False
-    marker = _MANAGED_RUNTIME_MARKER
-    try:
-        info = marker.lstat()
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.getuid()
-            or info.st_mode & 0o022
-            or info.st_size > 4096
-        ):
-            return False
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    from railmux import __version__
     runtime_id = environ.get("RAILMUX_MSYS2_RUNTIME_ID")
-    return isinstance(runtime_id, str) and bool(runtime_id) and payload == {
+    app_id = environ.get("RAILMUX_MSYS2_APP_ID")
+    if (
+        not isinstance(runtime_id, str)
+        or not runtime_id
+        or not isinstance(app_id, str)
+        or _MANAGED_APP_ID.fullmatch(app_id) is None
+    ):
+        return False
+
+    def read_safe_marker(marker: Path) -> object | None:
+        try:
+            info = marker.lstat()
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o022
+                or info.st_size > 4096
+            ):
+                return None
+            return json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+
+    base_payload = read_safe_marker(_MANAGED_BASE_MARKER)
+    app_payload = read_safe_marker(
+        _MANAGED_APP_ROOT / app_id / "railmux-app.json"
+    )
+    from railmux import __version__
+
+    return base_payload == {
+        "schema": 1,
+        "runtime": runtime_id,
+    } and app_payload == {
         "schema": 1,
         "runtime": runtime_id,
         "railmux": __version__,

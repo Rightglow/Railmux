@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from unittest.mock import MagicMock
 
@@ -7,7 +8,7 @@ from railmux import __version__
 from railmux import windows_bootstrap
 from railmux.entrypoint import main as entrypoint_main
 from railmux.windows_bootstrap import main
-from railmux.windows_msys2 import Msys2Runtime
+from railmux.windows_msys2 import MSYS2_RUNTIME_ID, Msys2Runtime
 
 
 def test_windows_version_does_not_probe_or_install(capsys):
@@ -150,6 +151,81 @@ def test_runtime_install_consent_describes_updates_and_private_disk(capsys):
     assert "including tmux and Python" in output
     assert "700 MB or more" in output
     assert "private disk space" in output
+
+
+def test_matching_private_base_installs_app_layer_without_prompt(
+    tmp_path, monkeypatch, capsys
+):
+    legacy_version = "0.4.0.dev10"
+    root = (
+        tmp_path
+        / "Railmux"
+        / "runtimes"
+        / MSYS2_RUNTIME_ID
+        / f"railmux-{legacy_version}"
+    )
+    bash = root / "usr" / "bin" / "bash.exe"
+    bash.parent.mkdir(parents=True)
+    bash.write_bytes(b"fixture")
+    (root / "railmux-runtime.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "runtime": MSYS2_RUNTIME_ID,
+                "railmux": legacy_version,
+            }
+        ),
+        encoding="utf-8",
+    )
+    installed = Msys2Runtime(root, managed=True, app_name=f"railmux-{__version__}")
+    install = MagicMock(return_value=installed)
+    monkeypatch.setattr(windows_bootstrap, "install_managed_runtime", install)
+
+    assert main(
+        ["runtime", "install"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: None,
+        input_fn=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("reuse must not prompt")
+        ),
+        version_info=(3, 10),
+    ) == 0
+
+    assert install.call_args.kwargs["reuse_only"] is True
+    assert "only the Railmux" in capsys.readouterr().out
+
+
+def test_noninteractive_launch_may_only_auto_install_from_reusable_base(
+    tmp_path, monkeypatch
+):
+    runtime = Msys2Runtime(
+        tmp_path / "managed",
+        managed=True,
+        app_name=f"railmux-{__version__}",
+    )
+    install = MagicMock(return_value=runtime)
+    monkeypatch.setattr(windows_bootstrap, "install_managed_runtime", install)
+    monkeypatch.setattr(
+        windows_bootstrap,
+        "reusable_managed_base_candidate",
+        lambda _environ: (runtime.root, "0.4.0.dev10"),
+    )
+    process = MagicMock()
+    process.wait.return_value = 0
+
+    assert main(
+        ["doctor"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: None,
+        popen=MagicMock(return_value=process),
+        input_fn=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("reuse must not prompt")
+        ),
+        stdin_isatty=lambda: False,
+        version_info=(3, 10),
+    ) == 0
+
+    assert install.call_args.kwargs["reuse_only"] is True
 
 
 def test_ready_runtime_receives_exact_argv_and_child_environment(tmp_path):

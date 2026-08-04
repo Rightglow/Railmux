@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -71,10 +72,12 @@ RUNTIME_SCHEMA = 1
 
 _RUNTIME_OVERRIDE = "RAILMUX_MSYS2_ROOT"
 _RUNTIME_MARKER = "railmux-runtime.json"
-_RAILMUX_EXECUTABLE = "/opt/railmux/venv/bin/railmux"
-_RAILMUX_PYTHON = "/opt/railmux/venv/bin/python"
+_BASE_MARKER = "railmux-base.json"
+_APP_MARKER = "railmux-app.json"
+_APP_ROOT = "/opt/railmux/apps"
+_LEGACY_RAILMUX_EXECUTABLE = "/opt/railmux/venv/bin/railmux"
 _HANDOFF_COMMAND = (
-    'unset MSYS2_ARG_CONV_EXCL; exec /opt/railmux/venv/bin/railmux "$@"'
+    'unset MSYS2_ARG_CONV_EXCL; executable=$1; shift; exec "$executable" "$@"'
 )
 _PROBE_TIMEOUT_SECONDS = 15.0
 _DOWNLOAD_LIMIT = 128 * 1024 * 1024
@@ -94,10 +97,10 @@ _PACKAGE_URL_COMMAND = (
     f"pacman --config {_PACMAN_CONFIG} -Sp --print-format '%l' "
     f"--needed {_PACMAN_PACKAGES} 2>/dev/null"
 )
-_VENV_COMMAND = "python -m venv /opt/railmux/venv"
+_VENV_COMMAND = 'python -m venv "$1/venv"'
 _PACKAGE_COMMAND = (
-    f'{_RAILMUX_PYTHON} -m pip install --disable-pip-version-check '
-    '--no-cache-dir --only-binary=:all: "railmux[ssh]==$1"'
+    '"$1/venv/bin/python" -m pip install --disable-pip-version-check '
+    '--no-cache-dir --only-binary=:all: "railmux[ssh]==$2"'
 )
 
 
@@ -388,6 +391,7 @@ def _select_probe(
 class Msys2Runtime:
     root: Path
     managed: bool
+    app_name: str | None = None
 
     @property
     def bash(self) -> Path:
@@ -418,6 +422,8 @@ class Msys2Runtime:
             # The MSYS-side privacy exception independently verifies the
             # matching on-disk runtime marker before trusting this identifier.
             child["RAILMUX_MSYS2_RUNTIME_ID"] = MSYS2_RUNTIME_ID
+            if self.app_name is not None:
+                child["RAILMUX_MSYS2_APP_ID"] = self.app_name
         # Native PowerShell commonly has no TERM; OpenSSH-hosted PowerShell
         # can explicitly inherit ``dumb``, which makes tmux reject attach.
         if not child.get("TERM") or child.get("TERM") == "dumb":
@@ -432,6 +438,11 @@ class Msys2Runtime:
         return child
 
     def argv(self, arguments: Sequence[str]) -> list[str]:
+        executable = (
+            f"{_APP_ROOT}/{self.app_name}/venv/bin/railmux"
+            if self.app_name is not None
+            else _LEGACY_RAILMUX_EXECUTABLE
+        )
         return [
             str(self.bash),
             "--noprofile",
@@ -439,6 +450,7 @@ class Msys2Runtime:
             "-c",
             _HANDOFF_COMMAND,
             "railmux",
+            executable,
             *arguments,
         ]
 
@@ -491,13 +503,24 @@ def _prepare_cached_archive(
     return archive, source
 
 
-def managed_root(environ: Mapping[str, str], *, version: str) -> Path | None:
+def managed_root(environ: Mapping[str, str]) -> Path | None:
     base = _managed_base(environ)
-    return (
-        None
-        if base is None
-        else base / MSYS2_RUNTIME_ID / f"railmux-{version}"
-    )
+    if base is None:
+        return None
+    shared = _find_shared_root(base)
+    return shared if shared is not None else base / "shared" / MSYS2_RUNTIME_ID
+
+
+def _app_name(version: str) -> str:
+    return f"railmux-{version}"
+
+
+def _app_root(root: Path, *, app_name: str) -> Path:
+    return root / "opt" / "railmux" / "apps" / app_name
+
+
+def _app_posix(app_name: str) -> str:
+    return f"{_APP_ROOT}/{app_name}"
 
 
 def _probe(
@@ -530,6 +553,65 @@ def _marker_matches(root: Path, *, version: str) -> bool:
     }
 
 
+def _read_json_marker(path: Path) -> object | None:
+    try:
+        if path.is_symlink() or path.stat().st_size > 4096:
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+
+
+def _base_marker_matches(root: Path) -> bool:
+    if root.is_symlink() or not root.is_dir():
+        return False
+    return _read_json_marker(root / _BASE_MARKER) == {
+        "schema": RUNTIME_SCHEMA,
+        "runtime": MSYS2_RUNTIME_ID,
+    }
+
+
+def _app_marker_matches(root: Path, *, app_name: str, version: str) -> bool:
+    application = _app_root(root, app_name=app_name)
+    if application.is_symlink() or not application.is_dir():
+        return False
+    return _read_json_marker(application / _APP_MARKER) == {
+        "schema": RUNTIME_SCHEMA,
+        "runtime": MSYS2_RUNTIME_ID,
+        "railmux": version,
+    }
+
+
+def _version_key(version: str) -> tuple[tuple[int, ...], int]:
+    base, separator, dev = version.partition(".dev")
+    numbers = tuple(int(part) for part in base.split("."))
+    return numbers, int(dev) if separator else sys.maxsize
+
+
+def _find_shared_root(base: Path) -> Path | None:
+    canonical = base / "shared" / MSYS2_RUNTIME_ID
+    if _base_marker_matches(canonical):
+        return canonical
+    legacy_parent = base / MSYS2_RUNTIME_ID
+    candidates: list[tuple[tuple[tuple[int, ...], int], Path]] = []
+    try:
+        paths = list(legacy_parent.glob("railmux-*"))
+    except OSError:
+        return None
+    for candidate in paths:
+        prefix = "railmux-"
+        version = candidate.name[len(prefix) :] if candidate.name.startswith(prefix) else ""
+        if (
+            not candidate.is_symlink()
+            and _base_marker_matches(candidate)
+            and _VERSION_RE.fullmatch(version)
+        ):
+            candidates.append((_version_key(version), candidate))
+    if candidates:
+        return max(candidates)[1]
+    return None
+
+
 def probe_runtime(
     runtime: Msys2Runtime,
     *,
@@ -539,8 +621,17 @@ def probe_runtime(
 ) -> bool:
     if not runtime.bash.is_file():
         return False
-    if runtime.managed and not _marker_matches(runtime.root, version=version):
-        return False
+    if runtime.managed:
+        if runtime.app_name is None:
+            if not _marker_matches(runtime.root, version=version):
+                return False
+        elif not (
+            _base_marker_matches(runtime.root)
+            and _app_marker_matches(
+                runtime.root, app_name=runtime.app_name, version=version
+            )
+        ):
+            return False
     for _attempt in range(2):
         try:
             result = probe(
@@ -566,16 +657,25 @@ def find_runtime(
 ) -> Msys2Runtime | None:
     requested = environ.get(_RUNTIME_OVERRIDE, "").strip()
     if requested:
-        candidate = Msys2Runtime(Path(requested), managed=False)
-        return (
-            candidate
-            if probe_runtime(candidate, version=version, environ=environ, probe=probe)
-            else None
-        )
-    root = managed_root(environ, version=version)
+        root = Path(requested)
+        app_name = _app_name(version)
+        candidates = []
+        application = _app_root(root, app_name=app_name)
+        if not application.is_symlink() and application.is_dir():
+            candidates.append(
+                Msys2Runtime(root, managed=False, app_name=app_name)
+            )
+        candidates.append(Msys2Runtime(root, managed=False))
+        for candidate in candidates:
+            if probe_runtime(
+                candidate, version=version, environ=environ, probe=probe
+            ):
+                return candidate
+        return None
+    root = managed_root(environ)
     if root is None:
         return None
-    candidate = Msys2Runtime(root, managed=True)
+    candidate = Msys2Runtime(root, managed=True, app_name=_app_name(version))
     return (
         candidate
         if probe_runtime(candidate, version=version, environ=environ, probe=probe)
@@ -1146,20 +1246,197 @@ def _bash_command(root: Path, command: str, *arguments: str) -> list[str]:
     ]
 
 
-def _write_marker(root: Path, *, version: str) -> None:
-    marker = root / _RUNTIME_MARKER
-    temporary = marker.with_suffix(".tmp")
-    payload = json.dumps(
+def _write_json_marker(path: Path, payload: Mapping[str, object]) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n"
+    with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def _write_base_marker(root: Path) -> None:
+    _write_json_marker(
+        root / _BASE_MARKER,
+        {"schema": RUNTIME_SCHEMA, "runtime": MSYS2_RUNTIME_ID},
+    )
+
+
+def _write_app_marker(app_root: Path, *, version: str) -> None:
+    _write_json_marker(
+        app_root / _APP_MARKER,
         {
             "schema": RUNTIME_SCHEMA,
             "runtime": MSYS2_RUNTIME_ID,
             "railmux": version,
         },
-        ensure_ascii=False,
-        sort_keys=True,
     )
-    temporary.write_text(payload + "\n", encoding="utf-8")
-    os.replace(temporary, marker)
+
+
+def _legacy_candidates(base: Path) -> list[tuple[Path, str]]:
+    parent = base / MSYS2_RUNTIME_ID
+    candidates: list[tuple[tuple[tuple[int, ...], int], Path, str]] = []
+    try:
+        paths = list(parent.glob("railmux-*"))
+    except OSError:
+        return []
+    for root in paths:
+        if root.is_symlink() or not root.is_dir() or _base_marker_matches(root):
+            continue
+        payload = _read_json_marker(root / _RUNTIME_MARKER)
+        if not isinstance(payload, dict):
+            continue
+        version = payload.get("railmux")
+        if (
+            not isinstance(version, str)
+            or not _VERSION_RE.fullmatch(version)
+            or payload
+            != {
+                "schema": RUNTIME_SCHEMA,
+                "runtime": MSYS2_RUNTIME_ID,
+                "railmux": version,
+            }
+            or root.name != f"railmux-{version}"
+            or not (root / "usr" / "bin" / "bash.exe").is_file()
+        ):
+            continue
+        candidates.append((_version_key(version), root, version))
+    return [
+        (root, version)
+        for _key, root, version in sorted(candidates, reverse=True)
+    ]
+
+
+def reusable_managed_base_candidate(
+    environ: Mapping[str, str],
+) -> tuple[Path, str | None] | None:
+    """Return a structurally valid private base candidate without modifying it.
+
+    Exact executable probing remains inside the serialized installer. Callers
+    may use this only to choose a narrower, reuse-only authorization path.
+    """
+    if environ.get(_RUNTIME_OVERRIDE, "").strip():
+        return None
+    base = _managed_base(environ)
+    if base is None:
+        return None
+    shared = _find_shared_root(base)
+    if shared is not None:
+        return shared, None
+    candidates = _legacy_candidates(base)
+    return candidates[0] if candidates else None
+
+
+def _find_reusable_legacy_root(
+    base: Path,
+    *,
+    environ: Mapping[str, str],
+    probe: Probe,
+) -> tuple[Path, str] | None:
+    """Find a complete Railmux-owned pre-dev11 runtime without modifying it."""
+    for root, version in _legacy_candidates(base):
+        legacy = Msys2Runtime(root, managed=True)
+        if probe_runtime(
+            legacy, version=version, environ=environ, probe=probe
+        ):
+            return root, version
+    return None
+
+
+def _install_application(
+    root: Path,
+    *,
+    version: str,
+    environ: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+    probe: Probe,
+) -> Msys2Runtime:
+    """Install one versioned app layer without replacing the shared base."""
+    app_name = _app_name(version)
+    applications = root / "opt" / "railmux" / "apps"
+    final_app = applications / app_name
+    applications.mkdir(parents=True, exist_ok=True)
+    if final_app.is_symlink():
+        raise RuntimeInstallError(
+            f"the versioned Railmux application path is a link and was left "
+            f"untouched: {final_app}"
+        )
+    if final_app.exists():
+        candidate = Msys2Runtime(root, managed=False, app_name=app_name)
+        marker = final_app / _APP_MARKER
+        if _app_marker_matches(root, app_name=app_name, version=version):
+            if probe_runtime(
+                candidate, version=version, environ=environ, probe=probe
+            ):
+                return candidate
+            raise RuntimeInstallError(
+                "the published Railmux app has an exact marker but did not "
+                "start after two attempts; retry after checking antivirus or "
+                f"disk load. It was left untouched: {final_app}"
+            )
+        if marker.exists() or marker.is_symlink():
+            raise RuntimeInstallError(
+                "the versioned Railmux application marker is invalid; for "
+                "safety the directory was left untouched. Provider histories "
+                f"are outside this path: {final_app}"
+            )
+        reporter.note(
+            "Removing an unpublished app layer left by an interrupted install; "
+            "provider session files are outside this directory and untouched.",
+            level="warning",
+        )
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                if marker.exists() or marker.is_symlink():
+                    raise RuntimeInstallError(
+                        "the unpublished app layer gained a marker during "
+                        f"recovery and was left untouched: {final_app}"
+                    )
+                if final_app.exists():
+                    shutil.rmtree(final_app)
+                final_app.mkdir()
+                break
+            except RuntimeInstallError:
+                raise
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise RuntimeInstallError(
+                        "Windows could not clear the unpublished app layer; "
+                        "retry after checking antivirus or disk indexing: "
+                        f"{final_app}"
+                    ) from exc
+                time.sleep(0.1)
+    else:
+        final_app.mkdir()
+    final_posix = _app_posix(app_name)
+    child_env = Msys2Runtime(root, managed=False).environment(environ)
+    _run_checked(
+        _bash_command(root, _VENV_COMMAND, final_posix),
+        env=child_env,
+        reporter=reporter,
+        runner=runner,
+        label="Railmux virtual environment creation",
+    )
+    _run_checked(
+        _bash_command(root, _PACKAGE_COMMAND, final_posix, version),
+        env=child_env,
+        reporter=reporter,
+        runner=runner,
+        label="Railmux runtime package installation",
+    )
+
+    installed = Msys2Runtime(root, managed=False, app_name=app_name)
+    if not probe_runtime(
+        installed, version=version, environ=environ, probe=probe
+    ):
+        raise RuntimeInstallError(
+            "the unpublished Railmux application failed validation"
+        )
+    _write_app_marker(final_app, version=version)
+    return installed
 
 
 @contextmanager
@@ -1202,6 +1479,7 @@ def install_managed_runtime(
     lock_factory: Callable[[Path], object] = install_lock,
     mirror_optimizer: MirrorOptimizer = optimize_pacman_mirror,
     verbose: bool = False,
+    reuse_only: bool = False,
 ) -> Msys2Runtime:
     """Install a fresh private runtime and activate it only after verification."""
     if not _VERSION_RE.fullmatch(version):
@@ -1221,8 +1499,7 @@ def install_managed_runtime(
         log_path = install_log_path(environ, version=version)
     except OSError as exc:
         raise RuntimeInstallError("could not create the private runtime log") from exc
-    final_root = managed_root(environ, version=version)
-    assert final_root is not None
+    final_root = base / "shared" / MSYS2_RUNTIME_ID
     final_root.parent.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -1230,18 +1507,85 @@ def install_managed_runtime(
             with lock_factory(base):
                 existing = find_runtime(version=version, environ=environ, probe=probe)
                 if existing is not None:
-                    reporter.note("The exact managed runtime is already ready.")
+                    reporter.note(
+                        "The shared MSYS2 base and exact Railmux application "
+                        "are already ready."
+                    )
                     reporter.finish()
                     return existing
-                if final_root.exists():
-                    if _marker_matches(final_root, version=version):
-                        raise RuntimeInstallError(
-                            "the managed MSYS2 runtime is present but could not be "
-                            "verified; retry after checking antivirus or disk load"
-                        )
+
+                shared_root = _find_shared_root(base)
+                if final_root.exists() and shared_root != final_root:
                     raise RuntimeInstallError(
-                        "the managed MSYS2 directory exists but is incomplete; "
-                        "it was left untouched"
+                        "the canonical shared MSYS2 directory exists but is "
+                        f"incomplete; it was left untouched: {final_root}"
+                    )
+                if shared_root is not None and not (
+                    shared_root / "usr" / "bin" / "bash.exe"
+                ).is_file():
+                    raise RuntimeInstallError(
+                        "the shared MSYS2 base marker is valid but bash.exe is "
+                        "missing; retry after checking antivirus or disk damage. "
+                        f"The base was left untouched: {shared_root}"
+                    )
+                adopted_version: str | None = None
+                if shared_root is None:
+                    reusable = _find_reusable_legacy_root(
+                        base, environ=environ, probe=probe
+                    )
+                    if reusable is not None:
+                        shared_root, adopted_version = reusable
+
+                if shared_root is not None:
+                    reporter.phase(
+                        1, 3, f"Reusing verified MSYS2 {MSYS2_RELEASE} base"
+                    )
+                    if adopted_version is None:
+                        reporter.done("shared base")
+                    else:
+                        reporter.done(f"from Railmux {adopted_version}")
+                        reporter.note(
+                            "The existing private MSYS2, tmux, and Python files "
+                            "will not be downloaded, copied, or upgraded.",
+                            level="muted",
+                        )
+
+                    reporter.phase(2, 3, f"Installing Railmux {version} app layer")
+                    _install_application(
+                        shared_root,
+                        version=version,
+                        environ=environ,
+                        reporter=reporter,
+                        runner=runner,
+                        probe=probe,
+                    )
+                    reporter.done()
+
+                    reporter.phase(3, 3, "Validating the shared runtime")
+                    if not _base_marker_matches(shared_root):
+                        _write_base_marker(shared_root)
+                    installed = Msys2Runtime(
+                        shared_root,
+                        managed=True,
+                        app_name=_app_name(version),
+                    )
+                    if not probe_runtime(
+                        installed,
+                        version=version,
+                        environ=environ,
+                        probe=probe,
+                    ):
+                        raise RuntimeInstallError(
+                            "the shared Railmux runtime failed validation"
+                        )
+                    reporter.done("ready; MSYS2 base reused")
+                    reporter.finish()
+                    return installed
+
+                if reuse_only:
+                    raise RuntimeInstallError(
+                        "the reusable MSYS2 base changed or failed validation; "
+                        "no full runtime installation was started"
                     )
 
                 with tempfile.TemporaryDirectory(
@@ -1363,25 +1707,21 @@ def install_managed_runtime(
                     reporter.done()
 
                     reporter.phase(6, 7, f"Installing Railmux {version}")
-                    _run_checked(
-                        _bash_command(root, _VENV_COMMAND),
-                        env=child_env,
+                    _install_application(
+                        root,
+                        version=version,
+                        environ=environ,
                         reporter=reporter,
                         runner=runner,
-                        label="Railmux virtual environment creation",
-                    )
-                    _run_checked(
-                        _bash_command(root, _PACKAGE_COMMAND, version),
-                        env=child_env,
-                        reporter=reporter,
-                        runner=runner,
-                        label="Railmux runtime package installation",
+                        probe=probe,
                     )
                     reporter.done()
 
                     reporter.phase(7, 7, "Validating and activating the runtime")
-                    _write_marker(root, version=version)
-                    staged_runtime = Msys2Runtime(root, managed=True)
+                    _write_base_marker(root)
+                    staged_runtime = Msys2Runtime(
+                        root, managed=True, app_name=_app_name(version)
+                    )
                     if not probe_runtime(
                         staged_runtime,
                         version=version,
@@ -1393,7 +1733,9 @@ def install_managed_runtime(
                         )
                     os.replace(root, final_root)
 
-                installed = Msys2Runtime(final_root, managed=True)
+                installed = Msys2Runtime(
+                    final_root, managed=True, app_name=_app_name(version)
+                )
                 if not probe_runtime(
                     installed,
                     version=version,

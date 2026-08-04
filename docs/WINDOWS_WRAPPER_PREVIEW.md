@@ -9,14 +9,18 @@ fallback or a base for this implementation.
 ## Decision and ownership
 
 Native Windows Python is only a bootstrap. With explicit consent it installs a
-private, versioned MSYS2 runtime beneath `%LOCALAPPDATA%\Railmux\runtimes`, then
-hands the original argv to the normal POSIX Railmux/tmux application. That one
-application remains the owner of layout, mouse routing, previews, dialogs,
-restore state, SSH display, and provider lifecycle.
+private MSYS2 base beneath `%LOCALAPPDATA%\Railmux\runtimes`, then hands the
+original argv to a version-isolated Railmux application inside that base. The
+MSYS2 release identifier is the base compatibility and refresh boundary; a new
+Railmux development build reuses that base and installs only its own venv while
+the identifier remains unchanged. That one POSIX application remains the owner
+of layout, mouse routing, previews, dialogs, restore state, SSH display, and
+provider lifecycle.
 
 The footprint is about 700 MB or more because Windows needs a complete,
 internally consistent private MSYS2 compatibility base plus tmux and Python;
-it is not the size of the Railmux Python code. A measured dev8 runtime used
+it is not the size of the Railmux Python code. This is a one-base cost rather
+than a cost repeated for every preview build. A measured dev8 runtime used
 561 MiB and its reusable verified base/package caches used about 119 MiB. The
 private pacman configuration enables only `msys`, not mingw/clang SDK repos.
 
@@ -47,9 +51,15 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   interpreter floor; the native entrypoint enforces the Windows floor before
   runtime discovery.
 - `railmux --version`, `--help`, and `runtime status` do not install or enter a
-  runtime. `runtime install` prompts, `runtime install --yes` is the explicit
-  noninteractive operation, and `runtime install --verbose` streams the raw
-  subprocess output in addition to retaining it in the install log.
+  runtime. When an exact private base candidate already exists, ordinary launch
+  and `runtime install` state that only the versioned app layer is changing and
+  continue without redundant confirmation. That automatic path passes a
+  `reuse_only` authority into the serialized installer, so a validation race or
+  damaged base can only fail and can never escalate into an unconfirmed full
+  install. When no candidate exists, `runtime install` asks once for the roughly
+  700 MB base operation and `N` cancels immediately; `runtime install --yes` is
+  the explicit noninteractive authority. `runtime install --verbose` streams
+  raw subprocess output in addition to retaining it in the install log.
 - The official MSYS2 self-extracting base release, filename, size, and SHA-256
   are pinned. The bootstrap samples the official GitHub release first. When
   its projected remaining time exceeds 60 seconds, it concurrently samples
@@ -63,8 +73,8 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   every path must produce the same Railmux-pinned digest before execution.
   Interactive downloads show bytes, total size, and percentage, while
   redirected logs receive bounded milestones. A verified base is retained in
-  the Railmux-private cache so later versioned runtimes do not download it
-  again. Before pacman runs, the
+  the Railmux-private cache so a future base generation can recover without
+  downloading it again. Before pacman runs, the
   bootstrap concurrently samples the actual `msys.db` from the geo redirector,
   primary repository, TUNA, USTC, and NJU entries, but only when the exact URL
   is also present in the pinned runtime's official `mirrorlist.msys`. A source
@@ -88,9 +98,11 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   that reuses the cache and disables pacman's low-speed abort. This preview does
   not yet freeze a repository snapshot, so package versions may advance between
   installations.
-- Interactive setup renders seven stable phases rather than exposing all
-  pacman noise. Extraction percentages, repository/package milestones, and a
-  15-second heartbeat cover every long subprocess. Mirror fallback is
+- A new base renders seven stable phases rather than exposing all pacman noise;
+  an upgrade that can reuse the exact base renders three phases and does not
+  run archive download, extraction, pacman update, or package installation.
+  Extraction percentages, repository/package milestones, and a 15-second
+  heartbeat cover every long subprocess. Mirror fallback is
   summarized once, the console uses terminal-aware color while the log remains
   plain, printed `[Y/n]` prompts do not require input, and a command
   failure shows a bounded tail. Complete
@@ -99,10 +111,28 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   are redacted, unrelated files are never pruned, and at most five recognized
   install logs are retained. Legacy Windows console encodings affect only the
   best-effort display copy, not the UTF-8 evidence log.
-- Installation is serialized, staged outside the active directory, verified,
-  and atomically renamed. An incomplete pre-existing final directory fails
-  closed and is never silently removed. User-selected `RAILMUX_MSYS2_ROOT`
-  runtimes are probed read-only and never provisioned or updated.
+- Installation is serialized. A new base is staged, exactly probed, and
+  atomically renamed. A versioned Railmux venv is built at its final POSIX path
+  so console-script shebangs never retain a temporary path; it remains
+  undiscoverable until an exact probe succeeds and its marker is atomically
+  published. A crash can therefore leave only a markerless Railmux-owned app
+  directory, which the next locked installer removes before retrying while
+  explicitly reporting that provider data lives elsewhere. dev11 can
+  adopt a released dev4-dev10 private runtime as its shared base only after its
+  exact owner marker, directory name, runtime identifier, and installed
+  Railmux version all probe successfully. Adoption adds a base marker and a
+  new versioned app directory in place; it does not download, copy, upgrade, or
+  relocate the existing MSYS2 files, and it preserves the legacy venv and
+  marker for rollback. After adoption, the base marker is the durable discovery
+  authority, so removing rollback state cannot make Railmux orphan and
+  redownload the base. Incomplete final directories fail closed and are never
+  silently removed. User-selected `RAILMUX_MSYS2_ROOT` runtimes are probed
+  read-only and never provisioned, adopted, or updated.
+- Versioned app layers are deliberately retained for preview rollback and are
+  not automatically pruned in dev11. Their growth is the application-layer
+  size (22.4 MiB in the measured dev11 environment), not another MSYS2 base;
+  a future bounded-retention command must preserve the active and immediately
+  previous versions and remain limited to exact marked app directories.
 - No system `PATH`, shell profile, Windows package manager, user-owned MSYS2,
   or provider history is modified. All captured text and marker files use an
   explicit UTF-8 codec; CP936/GBK is never an implicit file encoding.
@@ -113,10 +143,11 @@ independently opens a WSL shell and runs the ordinary POSIX product there.
   persistence after detach or outer-window closure.
 - MSYS2 projects NTFS ACLs as 0644/0755 even when POSIX chmod requests
   0600/0700. Railmux accepts that representation only under the real
-  Cygwin/MSYS managed wrapper after verifying its same-owner on-disk marker and
-  exact runtime/Railmux versions, for same-UID non-symlink files/directories
-  without group/world write bits. The user-owned managed runtime's Windows ACL
-  remains the private-state boundary. Linux and macOS retain strict modes.
+  Cygwin/MSYS managed wrapper after verifying separate same-owner on-disk base
+  and application markers with exact runtime/Railmux versions, for same-UID
+  non-symlink files/directories without group/world write bits. The user-owned
+  managed runtime's Windows ACL remains the private-state boundary. Linux and
+  macOS retain strict modes.
 - When the last tmux session exits, MSYS2 3.7b may leave a socket pathname that
   makes the next client hang. Railmux writes cleanup authority only after exact
   server-wide session and pane inventories prove the outer UI is alone. After
@@ -167,6 +198,24 @@ sessions. The guarded sole-session/sole-pane cleanup removed the unchanged
 pathname, reported its read-only provider-data boundary, and the same isolated
 label launched again successfully. A separate live label and the pre-existing
 default server were left untouched.
+
+dev11 automation proves that a complete dev10-owned runtime is adopted in
+place, its legacy marker is byte-for-byte unchanged, only the two app-install
+commands target the final versioned POSIX path, interrupted markerless app
+layers recover without touching provider data, dev10 rollback remains
+discoverable, and later discovery selects the versioned dev11 app. Real
+Windows validation must still cover the exact dev10 upgrade on the user's
+machine.
+
+On 2026-08-04 the dedicated Windows 10 19045 / PowerShell 5.1 / Python 3.12.10
+host upgraded its installed dev9 runtime through the three-phase dev11 path.
+The first deliberately offline package lookup left a markerless app layer; the
+next run removed only that unpublished directory, reused the same base without
+archive, extraction, pacman, copy, or relocation, and completed successfully
+from the locally supplied wheel. `runtime status` and the real MSYS `doctor`
+handoff reported dev11, tmux 3.7b, native Codex 0.146.0, and native Claude Code
+2.1.220. The complete adopted tree measured 584.4 MiB, of which the dev11 app
+layer was 22.4 MiB, and the legacy dev9 marker remained unchanged.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
