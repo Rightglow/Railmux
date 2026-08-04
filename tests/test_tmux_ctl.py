@@ -585,20 +585,17 @@ def test_root_wheel_forwarding_installs_both_directions_with_owner_marker():
     )
     assert any("copy-mode -e" in arg for arg in up)
     assert not any("copy-mode -e" in arg for arg in down)
-    assert any(tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION in arg for arg in up)
-    assert any("\x1b[35~" in arg for arg in up)
-    assert any("\x1b[36~" in arg for arg in up)
-    assert not any(
-        tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION in arg for arg in down)
+    assert all(any("send-keys -M" in arg for arg in argv) for argv in (up, down))
+    assert not any("@railmux_history_preview_v1" in arg for arg in up)
+    assert not any("\x1b[35~" in arg or "\x1b[36~" in arg for arg in up)
 
 
-def test_root_wheel_current_version_requires_history_route():
+def test_root_wheel_current_version_requires_native_history_route():
     current = {
         "WheelUpPane": (
             "bind-key -T root WheelUpPane "
             "railmux-wheel-forward-v1-owner123 mouse_any_flag send-keys -M "
-            f"{tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION} "
-            "\x1b[35~ \x1b[36~"
+            "copy-mode -e"
         ),
         "WheelDownPane": (
             "bind-key -T root WheelDownPane "
@@ -609,8 +606,10 @@ def test_root_wheel_current_version_requires_history_route():
                return_value=current):
         assert tmux_ctl.root_wheel_bindings_are_current("owner123")
 
-    old = dict(current, WheelUpPane=current["WheelUpPane"].replace(
-        tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, ""))
+    old = dict(current, WheelUpPane=(
+        current["WheelUpPane"]
+        + " @railmux_history_preview_v1 \x1b[35~ \x1b[36~"
+    ))
     with patch("railmux.tmux_ctl.read_root_wheel_bindings", return_value=old):
         assert not tmux_ctl.root_wheel_bindings_are_current("owner123")
 
@@ -1050,6 +1049,21 @@ def test_unset_window_user_option_requires_exact_owner_value():
         assert not tmux_ctl.unset_window_user_option_if_value(
             "%1", tmux_ctl.RAILMUX_CONTROLLER_OPTION, "%1")
     call.assert_not_called()
+
+
+def test_pane_user_option_reads_exact_pane_local_value():
+    with _mock_check_output("canonical:session-id") as call:
+        assert tmux_ctl.pane_user_option(
+            "%9", tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION
+        ) == "canonical:session-id"
+    assert call.call_args.args[0] == [
+        "tmux",
+        "show-options",
+        "-pv",
+        "-t",
+        "%9",
+        tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
+    ]
 
 
 def test_window_user_option_uses_tmux_27_compatible_command():

@@ -1117,7 +1117,7 @@ class App:
         session_id: str | None,
         tmux_name: str | None,
     ) -> None:
-        """Stamp transcript/history routing for the displayed live agent."""
+        """Stamp the explicit transcript Preview source for a live agent."""
         pane_id = slot.pane_id
         if pane_id is None or not pane_id.startswith("%"):
             return
@@ -1155,19 +1155,6 @@ class App:
             pane_id,
             tmux_server.TRANSCRIPT_SOURCE_OPTION,
             marker,
-        )
-        history_slot = None
-        if (
-            running is not None
-            and running.session_type in ("claude", "codex")
-            and logical_id is not None
-            and not running.is_placeholder
-        ):
-            history_slot = slot.key
-        tmux_ctl.set_pane_user_option(
-            pane_id,
-            tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION,
-            history_slot,
         )
 
     def _paint_slot_active_target(
@@ -1973,9 +1960,9 @@ class App:
     def _on_session_preview(self, session: SessionMeta) -> None:
         """Show the provider's canonical current-branch history.
 
-        Stopped-row clicks, Space, context Preview, and live-pane wheel-up use
-        this read-only projection. A Codex rewind lineage is represented by its
-        newest rollout; Claude branches are projected by ``transcript``.
+        Stopped-row clicks, Space, and context Preview use this read-only
+        projection. A Codex rewind lineage is represented by its newest
+        rollout; Claude branches are projected by ``transcript``.
         """
         if session.session_type == "codex":
             representative = self._codex_representative(session.session_id)
@@ -2037,20 +2024,6 @@ class App:
                 or self._agent_workspace().target)
         self._set_workspace_target(slot.key)
         self._on_session_preview(session)
-
-    def _preview_slot_history(self, slot: AgentSlot) -> None:
-        """Handle a pane-local wheel-up routed through the controller."""
-        tmux_name = slot.agent_tmux_name
-        if tmux_name is None:
-            return
-        running = self._by_tmux(tmux_name)
-        if running is None:
-            return
-        self._preview_running_history(RunningEntry(
-            tmux_name=tmux_name,
-            label=running.label,
-            status=running.status,
-        ))
 
     def _restore_history_slot(self, slot: AgentSlot) -> None:
         """Return a closed live-history viewer to the exact saved agent."""
@@ -7458,18 +7431,6 @@ class App:
         if key == COMPACT_RESIZE_KEY.lower():
             self._handle_remote_compact_prepare()
             return
-        for slot_key, (preview_key, _sequence) in (
-                tmux_ctl.RAILMUX_HISTORY_PREVIEW_KEYS.items()):
-            if key == preview_key.lower():
-                if (getattr(self, "_loop", None) is not None
-                        and self._loop.widget is not self._frame):
-                    return
-                workspace = self._agent_workspace()
-                self._preview_slot_history(
-                    workspace.primary
-                    if slot_key == AgentWorkspace.PRIMARY
-                    else workspace.secondary)
-                return
         for slot_key, (restore_key, _sequence) in (
                 tmux_ctl.RAILMUX_HISTORY_RESTORE_KEYS.items()):
             if key == restore_key.lower():
@@ -8627,11 +8588,13 @@ class App:
         therefore survive in raw tmux scrollback even though the canonical
         JSONL is already correct. Baseline the first observed rollout, then
         reset only the live terminal view when the next canonical rollout names
-        that baseline as its parent. Managed local/SSH history reads the stamped
-        canonical transcript instead of the abandoned raw suffix. On procfs
-        systems the new rollout must also be open in this exact pane's process
-        tree; an unavailable probe degrades to the provider lineage link, while
-        a negative probe waits for a later refresh.
+        that baseline as its parent. Local wheel scrolling remains terminal-
+        native. The SSH display keeps owning wheel history and normally reads
+        raw pane capture; only this confirmed transition marks that history as
+        canonical-transcript-backed so the abandoned suffix stays hidden. On
+        procfs systems the new rollout must also be open in this exact pane's
+        process tree; an unavailable probe degrades to the provider lineage
+        link, while a negative probe waits for a later refresh.
         """
         current_id = meta.session_id
         previous_id = running.codex_canonical_session_id
@@ -8663,7 +8626,7 @@ class App:
         if identity is None or not tmux_ctl.reset_pane_view(identity):
             return
         running.codex_canonical_session_id = current_id
-        self._stamp_codex_history_state(running, meta)
+        self._stamp_codex_history_state(running, meta, canonical=True)
 
     def _codex_real_pane_identity(
         self, running: _Running,
@@ -8677,9 +8640,18 @@ class App:
         return topology.single_live_pane if topology is not None else None
 
     def _stamp_codex_history_state(
-        self, running: _Running, meta: SessionMeta,
+        self,
+        running: _Running,
+        meta: SessionMeta,
+        *,
+        canonical: bool = False,
     ) -> None:
-        """Publish the canonical transcript and its content-free cache epoch."""
+        """Publish Preview source plus the SSH history-source cache epoch.
+
+        A plain UUID keeps managed SSH history on raw pane capture. Only a
+        confirmed rewind transition writes ``canonical:<uuid>`` and permits a
+        transcript projection. Preserve that exact marker across app restarts.
+        """
         if running.is_legacy:
             return
         identity = self._codex_real_pane_identity(running)
@@ -8704,14 +8676,21 @@ class App:
             ) for pane_id in sorted(pane_ids)]
             if marker is not None else []
         )
-        generation_results = [
-            tmux_ctl.set_pane_user_option(
+        canonical_generation = (
+            f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{meta.session_id}"
+        )
+        generation_results = []
+        for pane_id in sorted(pane_ids):
+            existing = tmux_ctl.pane_user_option(
+                pane_id, tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION)
+            if not canonical and existing == canonical_generation:
+                generation_results.append(True)
+                continue
+            generation_results.append(tmux_ctl.set_pane_user_option(
                 pane_id,
                 tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
-                meta.session_id,
-            )
-            for pane_id in sorted(pane_ids)
-        ]
+                canonical_generation if canonical else meta.session_id,
+            ))
         transcript_stamped = marker is not None and all(transcript_results)
         generation_stamped = all(generation_results)
         running.codex_history_generation_stamped = bool(

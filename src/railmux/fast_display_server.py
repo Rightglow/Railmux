@@ -406,6 +406,7 @@ class _PaneGeometry:
     transcript_provider: str | None = None
     claude_history_policy: str = "ask"
     history_generation: int = 0
+    canonical_history: bool = False
 
 
 @dataclass(frozen=True)
@@ -432,11 +433,14 @@ _HISTORY_GENERATION_RE = re.compile(
 
 def _history_generation(marker: str) -> int:
     """Map one validated provider UUID to a bounded opaque wire epoch."""
+    generation_marker = marker
+    if marker.startswith(tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX):
+        marker = marker[len(tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX):]
     if not _HISTORY_GENERATION_RE.fullmatch(marker):
         return 0
     return int.from_bytes(
         hashlib.blake2b(
-            marker.lower().encode("ascii"),
+            generation_marker.lower().encode("ascii"),
             digest_size=8,
             person=b"railmux-history",
         ).digest(),
@@ -937,6 +941,15 @@ def _list_agent_panes(
             if opened is not None:
                 transcript_locator = opened[0]
                 os.close(opened[1])
+        history_marker = fields[15]
+        canonical_history = bool(
+            transcript_backed
+            and transcript_locator is not None
+            and history_marker == (
+                f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}"
+                f"{transcript_locator.session_id}"
+            )
+        )
         rows.append(
             (
                 fields[2] == "1",
@@ -960,7 +973,8 @@ def _list_agent_panes(
                         else None
                     ),
                     claude_history_policy=claude_history_policy,
-                    history_generation=_history_generation(fields[15]),
+                    history_generation=_history_generation(history_marker),
+                    canonical_history=canonical_history,
                 ),
             )
         )
@@ -1347,7 +1361,7 @@ def _capture_pane_history(
         pane.transcript_backed
         and pane.transcript_source
         and (
-            transcript_provider == "codex"
+            (transcript_provider == "codex" and pane.canonical_history)
             or (
                 transcript_provider == "claude"
                 and pane.claude_history_policy == "local"

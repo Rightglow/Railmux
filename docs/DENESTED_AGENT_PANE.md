@@ -415,8 +415,13 @@ response replaces its prior snapshot only when its visible multi-line anchor
 has one exact match, so repeated content, newly prepended history, or newly
 appended output cannot shift the user's view. A pane-local, content-free Codex
 generation changes only after a confirmed rewind; protocol v15 uses it to
-replace that pane's cache rather than merging the abandoned suffix. Each local
-wheel event advances
+replace that pane's cache rather than merging the abandoned suffix. Each Codex
+pane normally supplies styled raw `capture-pane` history even though it also
+carries a transcript locator for explicit Preview. Only a confirmed branch
+marker whose rollout UUID exactly matches that locator permits the SSH history
+server to substitute the canonical transcript; locator presence alone must
+never make ordinary live scrolling look like Preview. Each local wheel event
+advances
 exactly one row: macOS/Linux touchpad and terminal stacks already encode gesture
 speed as event frequency, so multiplying a burst again could skip a long code
 block. Codex tmux history and Claude transcript-backed local history share this

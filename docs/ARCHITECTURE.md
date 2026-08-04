@@ -557,10 +557,15 @@ provider parent link. After revalidating the real pane identity across either
 its detached home or swap display location, Railmux resets only tmux's visible
 terminal state, preserving its retained scrollback, then sends the unchanged
 foreground process group `SIGWINCH` so the provider redraws at the same geometry
-and reasserts its terminal modes. The canonical Codex rollout is stamped as the
-managed history source; local preview and full-window SSH history therefore
-retain the current branch while excluding the abandoned suffix. This sends no
-provider input, never resizes the pane, never deletes tmux history, never
+and reasserts its terminal modes. A pane-local generation marker is normally a
+plain rollout UUID, meaning the full-window SSH history manager must use styled
+raw pane capture. Only this confirmed branch transition may prefix that exact
+UUID as canonical and permit a transcript projection that excludes the
+abandoned suffix; the prefix and transcript locator must name the same rollout.
+The transcript locator alone is never authority to change scrolling format.
+Direct local wheel input remains native tmux/provider scrolling, while Space or
+context Preview remains the explicit formatted provider projection. This sends
+no provider input, never resizes the pane, never deletes tmux history, never
 touches provider history, and never mutates a legacy-server session.
 
 While that first generation is pending, Codex Projects and Sessions display an
@@ -810,13 +815,14 @@ routing with focus, selection, or history.
   reports the size limit.
 - Single-click and Enter on a running row attach its real provider pane;
   stopped-row click still opens history. `␣` and context Preview always open
-  read-only canonical history, including for a running row. Wheel-up over a
-  displayed live agent uses a pane-local primary/secondary marker and a
-  private controller key to enter the same viewer. The swap transport first
-  returns the real pane home, and normal viewer exit signals the controller to
-  restore that exact live agent. Every path uses the Target pane remembered
-  from tmux focus. A confirmed live Codex rewind discards the same pane's stale
-  pre-rewind terminal cache before its child rollout continues drawing.
+  read-only canonical history, including for a running row. Wheel input over a
+  displayed live agent never enters that viewer: direct Railmux preserves
+  tmux/provider-native scrolling, while `railmux ssh` keeps exclusive ownership
+  through its bounded per-pane history layer. Explicit Preview returns the real
+  pane home first and normal viewer exit signals the controller to restore that
+  exact live agent. Every action path uses the Target pane remembered from tmux
+  focus. A confirmed live Codex rewind invalidates the same pane's SSH cache
+  generation before its child rollout continues drawing.
 - Cycling back to single removes only the outer secondary pane, remembers its
   exact instance-local tmux target, and never kills the detached agent session.
 - The same background tmux session should not be attached in both slots.

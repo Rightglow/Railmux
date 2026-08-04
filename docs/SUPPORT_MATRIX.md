@@ -78,7 +78,7 @@ product capability.
 | P03 | Project list, project selection, and new project/directory creation | Supported | Supported | Creation is explicit and never inferred from an arbitrary failed match. |
 | P04 | Read-only history preview with provider-aware formatting | Supported | Supported | Latest 2,000 saved records are projected onto the provider's current branch; rewound suffixes and internal/encrypted reasoning are hidden. |
 | P05 | Start a new session and resume an existing session | Supported | Supported | Starting, resuming, previewing, and switching never rewrite provider history; confirmed P09 deletion is the explicit exception. |
-| P06 | Live open on click/Enter; canonical history on wheel-up, Space, or Preview | Supported | Supported | Wheel-up opens a read-only viewer and closing it restores that exact live session; a Codex rewind/steer resets only the live view, preserves tmux scrollback, and projects the canonical rollout without its abandoned suffix. |
+| P06 | Live open on click/Enter; live scrolling on wheel; canonical history on Space or Preview | Supported | Supported | Direct wheel input remains tmux/provider-native; `railmux ssh` owns bounded per-pane scrolling and normally uses styled raw pane capture. A confirmed Codex rewind/steer resets only the live view and marks that SSH generation canonical so the abandoned suffix stays hidden. |
 | P07 | Session Info, rename, star, and copy title | Supported | Supported | Rename and favorites are Railmux metadata; copy depends on clipboard capability. |
 | P08 | Kill a live provider while retaining history | Supported | Supported | Revalidates immutable tmux/provider identity before mutation. |
 | P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or changed live identity fails closed; confirmed cleanup runs in one background transaction with durable status-right progress. |
@@ -116,9 +116,9 @@ product capability.
 | S05 | Coalesced latest-state keyframes and row patches | Supported | Slow display output must not flow-control the real provider pane. |
 | S06 | Default-on bounded automatic reconnect | Supported | Only after a first frame; bottom-right retry status and display-only SSH keepalives bound silent outages; no install, takeover, session creation, detach, or provider mutation. |
 | S07 | Heartbeat lease and stale-helper cleanup | Supported | Stops only the helper's exact private tmux client, never the workspace or agents. |
-| S08 | Independent cached local history per agent pane | Supported | 300-line hot cache, 2,000-line cumulative expansion, configurable 2,000–20,000 cap. |
+| S08 | Independent cached local history per agent pane | Supported | 300-line hot cache, 2,000-line cumulative expansion, configurable 2,000–20,000 cap; ordinary Codex history preserves styled raw pane capture and never switches format merely because a Preview locator exists. |
 | S09 | Page Up/Down through verified agent history | Supported | Sidebar and dialogs retain their ordinary keys. |
-| S10 | Claude native history or styled local transcript policy | Supported | Choice can be persistent or current invocation; Codex uses tmux/history capture. |
+| S10 | Claude native history or styled local transcript policy | Supported | Choice can be persistent or current invocation; Codex normally uses tmux/history capture, with canonical transcript fallback gated by an exact confirmed branch marker. |
 | S11 | Pane-bounded local drag selection and automatic copy | Supported | Visible physical rows only; no autoscroll, soft-wrap join, or cross-pane selection. |
 | S12 | URL/path hover and clean-click recognition | Conditional | Hover needs mouse-motion reporting; open acts only in the already-focused agent route. |
 | S13 | Open HTTP(S) URL in the local browser | Supported on named local platforms | The remote never receives the browser action. |
