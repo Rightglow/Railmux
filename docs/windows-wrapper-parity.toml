@@ -55,7 +55,7 @@ S20 = "runtime-bridge"
 [limitations]
 rolling_repository = "The base archive is hash-pinned and pacman signatures are checked, but repository package versions are not yet snapshot-pinned."
 mirror_health = "CI archive Range and package-database checks are advisory because an external mirror outage must not invalidate product behavior; archive transfer is size/hash verified, pacman packages are signature verified and cached across retries, and only exact approved official URLs that passed measurement become active in staged private mirrorlists."
-native_server = "Providers and SSH servers on native Windows are out of scope."
+native_server = "Railmux's display-protocol remote server on native Windows remains out of scope; ordinary OpenSSH login followed by railmux remains a preview path until cross-Terminal-Services field validation passes."
 runtime_bridges = "Clipboard, browser, separate-terminal, self-update, and remote-config bridges still require real Windows validation."
 unicode_profile = "The managed runtime path and provider history must still be exercised with a real non-ASCII Windows profile name."
 
@@ -93,6 +93,13 @@ features = ["W09", "W10", "W11", "W14", "S19"]
 automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_tmux_lifecycle.py", "tests/test_restart_state.py"]
 manual = "Close/reopen the outer terminal, detach, soft restart, resize, interrupt, and verify providers persist and terminal modes recover."
 evidence = "2026-08-03 dev10 candidate: reproduced the MSYS2 3.7b abandoned socket after zero-session soft quit, cleaned it only after exact sole-session/sole-pane proof, and relaunched the same isolated label; live and replaced socket boundaries are automated. Detached-provider soft quit still requires manual validation."
+
+[[scenarios]]
+id = "WW-ENTRY-SURFACES"
+features = ["P01", "P03", "W01", "W09", "W10", "W11", "W14"]
+automation = ["tests/test_cli.py", "tests/test_windows_attach_relay.py", "tests/test_tmux_integration.py"]
+manual = "Create and detach one workspace from Windows Terminal, attach it after an ordinary OpenSSH login to the same Windows account, then reverse the origin; verify both surfaces see the same immutable tmux session, input, output, resize, detach, provider panes, and histories."
+evidence = "dev15 automation covers direct-first gating, exact server/session revalidation, nonce-authenticated private endpoint cleanup, transparent byte/resize/exit framing, and a real isolated tmux PTY attach/detach including the terminal-restore tail. On 2026-08-04 the dedicated Windows 10 19045 host installed the local dev15 wheel on its reused base; ordinary OpenSSH login followed by railmux entered and detached the existing workspace, and a forced real-MSYS2 bridge completed server-origin PTY attach, HMAC handshake, UI transport, C-b d, terminal restoration, and exit 0 while doctor retained the same healthy server. Automatic fallback across distinct Windows Terminal Services sessions remains manual."
 
 [[scenarios]]
 id = "WW-SSH-POSIX"

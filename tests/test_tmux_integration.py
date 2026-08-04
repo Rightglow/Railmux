@@ -8,6 +8,7 @@ import select
 import signal
 import shlex
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -29,6 +30,7 @@ from railmux import (
     tmux_health,
     tmux_server,
     tool_panes,
+    windows_attach_relay,
 )
 from railmux.display_transport import (
     AgentDisplayTransport,
@@ -45,6 +47,7 @@ from railmux.fast_display_protocol import (
     encode_input,
 )
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
+from railmux.tmux_server import TmuxServerTarget
 from railmux.selection_isolation import SelectionIsolationManager
 from railmux.modes import CODEX_MODE
 from railmux.models import Project
@@ -155,6 +158,78 @@ def _require_tmux(minimum: tuple[int, int], feature: str) -> None:
             f"{feature} requires tmux {minimum[0]}.{minimum[1]}+; "
             f"running {version[0]}.{version[1]}"
         )
+
+
+def test_real_transparent_windows_relay_attaches_and_detaches(isolated_tmux):
+    session_name, _pane_id, socket_path = isolated_tmux
+    target = TmuxServerTarget(
+        socket_path,
+        int(subprocess.check_output(
+            ["tmux", "-S", socket_path, "display-message", "-p", "#{pid}"],
+            text=True,
+        ).strip()),
+    )
+    session_id = tmux_server.target_session_id(target, session_name)
+    assert session_id is not None
+    client_socket, relay_socket = socket.socketpair()
+    relay_pid = os.fork()
+    if relay_pid == 0:  # pragma: no cover - exercised by the opt-in real smoke
+        client_socket.close()
+        try:
+            status = windows_attach_relay._relay_server_loop(
+                relay_socket,
+                target=target,
+                session_id=session_id,
+                tmux_path=shutil.which("tmux") or "tmux",
+                width=90,
+                height=28,
+                term="xterm-256color",
+                colorterm="truecolor",
+            )
+        except BaseException:
+            status = 127
+        relay_socket.close()
+        os._exit(status)
+
+    relay_socket.close()
+    client_socket.settimeout(0.1)
+    decoder = windows_attach_relay._FrameDecoder()
+    saw_output = False
+    output = bytearray()
+    detach_at = None
+    exit_status = None
+    try:
+        client_socket.sendall(windows_attach_relay._frame(
+            windows_attach_relay._TYPE_HEARTBEAT))
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and exit_status is None:
+            if detach_at is not None and time.monotonic() >= detach_at:
+                client_socket.sendall(windows_attach_relay._frame(
+                    windows_attach_relay._TYPE_INPUT, b"d"))
+                detach_at = None
+            try:
+                data = client_socket.recv(65536)
+            except socket.timeout:
+                continue
+            for kind, payload in decoder.feed(data):
+                if kind == windows_attach_relay._TYPE_OUTPUT and payload:
+                    output.extend(payload)
+                    if not saw_output:
+                        saw_output = True
+                        client_socket.sendall(windows_attach_relay._frame(
+                            windows_attach_relay._TYPE_INPUT, b"\x02"))
+                        detach_at = time.monotonic() + 0.2
+                elif kind == windows_attach_relay._TYPE_EXIT:
+                    exit_status = struct.unpack(">i", payload)[0]
+    finally:
+        client_socket.close()
+        _waited, raw_status = os.waitpid(relay_pid, 0)
+
+    assert saw_output
+    assert exit_status == 0
+    assert os.waitstatus_to_exitcode(raw_status) == 0
+    assert b"\x1b[?1049l" in output
+    assert tmux_server.target_has_session(target, session_id)
 
 
 def test_exact_view_reset_preserves_live_pane_and_scrollback(isolated_tmux):

@@ -62,6 +62,36 @@ cannot be misreported or queried concurrently by its closing SSH views. These
 sentinels classify lifecycle only; they never authorize session mutation or
 recovery.
 
+On the managed Windows preview, an OpenSSH login and an interactive desktop
+terminal can belong to different Windows Terminal Services sessions. The
+MSYS2 AF_UNIX control socket may remain queryable across that boundary even
+when tmux cannot transfer the later client's terminal handle. The launcher
+therefore tries the ordinary label-selected tmux client first. It may make one
+transparent bridge attempt only when that client rejects the attach within
+five seconds, stdin/stdout are real terminals, and a new identity-pinned query
+proves that the same server PID and immutable Railmux session still exist.
+
+The bridge creates a random, same-owner endpoint in Railmux's private runtime
+directory, then asks the pinned tmux server through `run-shell -b` to start an
+absolute, versioned helper in the server's Windows session. The helper
+revalidates the managed base/application markers, exact socket path, absolute
+tmux executable, server PID, socket label, and immutable session ID before
+attaching. It owns a new PTY and one additional tmux client; the entry process
+forwards only opaque terminal bytes, resize dimensions, heartbeats, and an exit
+status. It does not render through pyte,
+persist an origin choice, create a parallel workspace, detach another client,
+or mutate provider/session files. The endpoint name is independent from the
+random secret; a nonce challenge proves possession without sending that secret
+over the relay. The token remains visible only to processes running as the same
+Windows account through the fixed helper command, so that account is the trust
+boundary even where MSYS2 cannot provide peer credentials. Either side may
+stop only the bridge-owned attach client, and the endpoint creator removes
+only the unchanged endpoint it created. A later launcher may also sweep a
+bounded set of old, same-owner relay endpoints only after they fail a connect
+probe and their age and inode identity remain unchanged. A bridge failure
+leaves the existing tmux workspace running and records only a bounded
+diagnostic category. POSIX launches never enter this fallback.
+
 MSYS2 tmux may leave its AF_UNIX pathname after the last session exits, causing
 the next client to wait on an endpoint without a listener. The Windows wrapper
 may arm one separate cleanup proof only after a server-wide snapshot shows the
@@ -72,6 +102,9 @@ two failed connection probes; a live or replaced endpoint, malformed proof,
 extra pane/session, or incomplete enumeration fails closed. Cleanup removes
 only that abandoned socket pathname and its private proof. It never kills a
 process, opens provider history, or authorizes provider/session mutation.
+Routine proof-authorized cleanup after a normal last-session exit is silent;
+only a pre-launch recovery that affects the next startup is reported to the
+user.
 If an abrupt exit or older build left no such proof, the managed-Windows
 startup discovery alone allows a five-second bound for tmux to classify the
 endpoint as having no live server; the normal `new-session -A` path can then
