@@ -694,6 +694,18 @@ dual layout. Natural provider exit follows the same visible-layout invariant:
 the exited slot becomes the branded empty surface, while the other slot keeps
 its position and Target remains on the same numbered pane.
 
+Confirmed deletion is split at that same ownership boundary. The Urwid thread
+closes the confirmation, paints a durable `Deleting…` status-right message,
+returns any displayed pane, and freezes the revalidated tmux identity plus the
+provider-history targets into one immutable task. One worker performs the
+blocking exact kill, bounded writer-exit wait, and provider/filesystem cleanup;
+it must not touch widgets, Running state, or mutable indexes. A later Urwid
+refresh atomically consumes the result, invalidates the appropriate provider
+views, and replaces progress with the final success, partial-failure, or error
+message. A second delete cannot start while that task or its unpublished result
+exists. Routine status TTL expiry must not replace `Deleting…` before result
+publication, though a fresh warning or error retains its short severity hold.
+
 A real swap-owned pane may temporarily outlive an in-memory `_running` entry.
 Refresh may re-adopt it only when the displayed pane id, pane PID, display
 window, swap owner, provider session name, and persisted binding all agree.

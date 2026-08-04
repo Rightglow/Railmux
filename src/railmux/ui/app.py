@@ -387,6 +387,35 @@ class _Running:
         return None if self.is_placeholder else self.key
 
 
+@dataclass(frozen=True)
+class _DeleteTask:
+    """Immutable destructive work handed from Urwid to one worker thread."""
+
+    session_id: str | None
+    jsonl_path: Path | None
+    tmux_name: str | None
+    label: str
+    session_type: str
+    pane_identity: tmux_ctl.PaneIdentity | None
+    writer_pids: tuple[int, ...]
+    lineage_ids: frozenset[str]
+    claude_home: Path
+
+
+@dataclass(frozen=True)
+class _DeleteResult:
+    """Worker result installed atomically by the next Urwid refresh."""
+
+    task: _DeleteTask
+    status_text: str
+    status_level: str = "info"
+    remove_running: bool = False
+    views_changed: bool = False
+    claude_path_changed: bool = False
+    invalidate_codex: bool = False
+    deleted_codex_ids: frozenset[str] = frozenset()
+
+
 class _CloseOnClickOverlay(urwid.Overlay):
     """An ``urwid.Overlay`` that calls *on_click_outside* when the user
     left-clicks anywhere outside the overlay's area.
@@ -885,6 +914,14 @@ class App:
         self._mode_refresh_result: (
             tuple[list[Project] | None, str | None] | None
         ) = None
+        # Destructive provider cleanup may include a bounded process-exit wait
+        # and several 30-second provider CLI calls. Urwid prepares display/tmux
+        # ownership on its thread, then this single worker performs only the
+        # blocking exact kill and filesystem/provider work. Results are applied
+        # by _refresh, never by the worker.
+        self._delete_lock = threading.Lock()
+        self._delete_thread: threading.Thread | None = None
+        self._delete_result: _DeleteResult | None = None
 
         projects = list_projects(claude_home)
         self._project_snapshot = projects
@@ -8093,6 +8130,10 @@ class App:
 
     def _refresh(self) -> None:
         """Refresh every visible view against one coherent Codex generation."""
+        # Install completed deletion tombstones before pinning the immutable
+        # Codex generation, so the completion frame cannot briefly redraw a
+        # provider row that the worker has already removed.
+        self._consume_delete_result()
         index = getattr(self, "_codex_index", None)
         if isinstance(index, BackgroundCodexIndex):
             index.begin_read()
@@ -9105,13 +9146,22 @@ class App:
                          label: str = "",
                          session_type: str = "claude",
                          identity_token: str | None = None) -> None:
-        """Provider-aware session cleanup: kill tmux → remove backing store →
-        refresh UI.
+        """Prepare an exact cleanup transaction, then run it off the UI thread.
 
-        Claude sessions unlink the JSONL and clean the Claude session-env +
-        history index. Codex sessions are deleted through ``codex delete``
-        against the resolved CODEX_HOME and never touch any Claude path (#1)."""
-        # 1. Kill the detached tmux session first (avoid race conditions).
+        Display ownership and immutable tmux identity are validated here on the
+        Urwid thread. The worker receives only frozen values and never mutates
+        widgets, the Running registry, or provider indexes directly.
+        """
+        if self._delete_pending():
+            self._set_status("A session deletion is already in progress.", "warn")
+            return
+
+        # Paint the closed confirmation and durable progress message before
+        # even the bounded tmux preparation probes run. This makes Enter feel
+        # immediate on slow homes and provider installations.
+        self._set_status("Deleting…", "info", force=True)
+        self._redraw_focus_state_now()
+
         if tmux_name is None and session_id is not None:
             r = self._by_session_id(session_id)
             tmux_name = r.tmux_name if r else None
@@ -9139,125 +9189,102 @@ class App:
             writer_pids = tmux_ctl.session_process_ids(tmux_name)
             if exact_pane is not None:
                 # Returning a swap-displayed pane changes its current session;
-                # refresh and require the recorded home identity before kill.
+                # refresh and require the recorded home identity before the
+                # immutable identity is handed to the worker.
                 exact_pane = self._exact_running_pane(owned)
-                killed = bool(
-                    exact_pane is not None
-                    and orphan_marker.same_live_tmux(owned.orphan, exact_pane)
-                    and tmux_ctl.kill_session_identity(exact_pane)
-                )
             else:
-                killed = tmux_ctl.kill_session(tmux_name)
-            # Never remove a rollout while its writer may still be alive. A
-            # concurrent exit is fine; a session that still exists after the
-            # failed kill is a hard stop for both Claude and Codex deletion.
-            still_alive = (
-                self._exact_running_pane(owned) is not None
-                if owned is not None and owned.orphan is not None
-                else tmux_ctl.session_exists(tmux_name)
-            )
-            if not killed and still_alive:
+                topology = tmux_ctl.session_topology(tmux_name)
+                exact_pane = (
+                    topology.single_live_pane
+                    if topology is not None else None
+                )
+            if (exact_pane is None
+                    or (owned is not None and owned.orphan is not None
+                        and not orphan_marker.same_live_tmux(
+                            owned.orphan, exact_pane))):
                 self._set_status(
-                    f"failed to stop {tmux_name}; nothing was deleted", "error")
-                return
-            if writer_pids and not tmux_ctl.wait_for_processes_exit(writer_pids):
-                self._set_status(
-                    f"{tmux_name} is still shutting down; nothing was deleted",
+                    f"could not confirm the exact tmux identity for "
+                    f"{tmux_name}; nothing was deleted",
                     "error",
                 )
                 return
-
-        if session_type == "codex":
-            self._cleanup_codex_session(session_id, tmux_name, label)
-            return
-
-        # 2. Remove from our running-session registry.
-        self._forget_running(session_id, tmux_name)
-
-        # 3. Delete the JSONL file (conversation history). Do not report a
-        # successful deletion when the filesystem rejected the unlink.
-        if jsonl_path is not None:
-            try:
-                jsonl_path.unlink(missing_ok=True)
-                invalidate_session(jsonl_path)
-            except OSError as exc:
-                self._session_cache.invalidate()
-                self._invalidate_project_snapshot()
-                self._refresh()
-                self._set_status(f"failed to delete {jsonl_path}: {exc}", "error")
-                return
-
-        # 4. Remove Claude's session-env directory (session metadata).
-        if session_id is not None and not session_id.startswith("__new__-"):
-            claude_home = getattr(
-                self, "_claude_home", Path.home() / ".claude")
-            env_dir = claude_home / "session-env" / session_id
-            if env_dir.is_dir():
-                shutil.rmtree(env_dir, ignore_errors=True)
-
-        # 5. Remove from Claude's history index so it doesn't recreate a
-        #    metadata stub (Claude rebuilds missing JSONLs from this index).
-        history_ok = True
-        if session_id is not None and not session_id.startswith("__new__-"):
-            claude_home = getattr(
-                self, "_claude_home", Path.home() / ".claude")
-            history_ok = self._remove_from_history(
-                session_id, claude_home=claude_home) is not False
-
-        # A writer outside the captured tmux process tree could race the first
-        # unlink. Verify once after history cleanup; a surviving file means the
-        # requested delete did not complete and must not be reported as such.
-        if jsonl_path is not None and jsonl_path.exists():
-            try:
-                # Disappearance between exists() and unlink() is already the
-                # desired end state, not a deletion failure.
-                jsonl_path.unlink(missing_ok=True)
-                invalidate_session(jsonl_path)
-            except OSError as exc:
-                self._session_cache.invalidate()
-                self._invalidate_project_snapshot()
-                self._refresh()
-                self._set_status(
-                    f"session was recreated and could not be deleted: {exc}",
-                    "error",
-                )
-                return
-
-        # 6. Invalidate caches and refresh so the UI reflects the deletion
-        #    immediately — no stale rows that point to deleted sessions.
-        self._session_cache.invalidate()
-        self._invalidate_project_snapshot()
-        self._refresh()
-
-        deleted = (session_id is not None
-                   and not session_id.startswith("__new__-")
-                   and jsonl_path is not None)
-        if not history_ok:
-            self._set_status(
-                f"Deleted: {label} (history index cleanup failed)", "warn")
-        else:
-            self._set_status(f"{'Deleted' if deleted else 'Killed'}: {label}")
-
-    def _cleanup_codex_session(self, session_id: str | None,
-                               tmux_name: str | None, label: str) -> None:
-        """Codex arm of ``_cleanup_session`` (tmux already killed).
-
-        A real rollout and its rewind lineage are removed via
-        ``codex delete --force``. A total failure leaves the registry and index
-        untouched; a partial failure refreshes the surviving records and
-        reports exact counts. A placeholder (no resolved UUID yet) has no
-        rollout on disk, so killing the tmux session is the whole operation."""
         is_real = bool(session_id) and not session_id.startswith("__new__-")
-        lineage_ids = (
+        lineage_ids = frozenset(
             self._codex_lineage_ids(session_id)
-            if is_real and session_id is not None else set()
+            if session_type == "codex" and is_real
+            and session_id is not None else ()
         )
+        task = _DeleteTask(
+            session_id=session_id,
+            jsonl_path=jsonl_path,
+            tmux_name=tmux_name,
+            label=label,
+            session_type=session_type,
+            pane_identity=exact_pane,
+            writer_pids=writer_pids,
+            lineage_ids=lineage_ids,
+            claude_home=getattr(
+                self, "_claude_home", Path.home() / ".claude"),
+        )
+        lock = self._delete_lock
+
+        def _worker() -> None:
+            try:
+                result = self._execute_delete_task(task)
+            except Exception as exc:
+                result = _DeleteResult(
+                    task=task,
+                    status_text=f"failed to delete {label}: {exc}",
+                    status_level="error",
+                )
+            with lock:
+                self._delete_result = result
+
+        thread = threading.Thread(
+            target=_worker,
+            name="railmux-session-delete",
+            daemon=True,
+        )
+        self._delete_thread = thread
+        thread.start()
+
+    def _execute_delete_task(self, task: _DeleteTask) -> _DeleteResult:
+        """Perform blocking exact kill and provider cleanup without UI state."""
+        if task.pane_identity is not None:
+            killed = tmux_ctl.kill_session_identity(task.pane_identity)
+            still_alive = tmux_ctl.exact_pane_alive(task.pane_identity)
+            if not killed and still_alive:
+                return _DeleteResult(
+                    task=task,
+                    status_text=(f"failed to stop {task.tmux_name}; "
+                                 "nothing was deleted"),
+                    status_level="error",
+                )
+            if (task.writer_pids
+                    and not tmux_ctl.wait_for_processes_exit(task.writer_pids)):
+                return _DeleteResult(
+                    task=task,
+                    status_text=(f"{task.tmux_name} is still shutting down; "
+                                 "nothing was deleted"),
+                    status_level="error",
+                    views_changed=True,
+                )
+
+        if task.session_type == "codex":
+            return self._execute_codex_delete(task)
+        return self._execute_claude_delete(task)
+
+    def _execute_codex_delete(self, task: _DeleteTask) -> _DeleteResult:
+        """Delete one immutable Codex rewind lineage in the worker."""
+        session_id = task.session_id
+        is_real = bool(session_id) and not session_id.startswith("__new__-")
         deleted_ids: set[str] = set()
         failed_ids: set[str] = set()
-        if is_real:
+        if is_real and session_id is not None:
             # A collapsed row represents the complete rewind lineage. Delete
             # every provider UUID so an older checkpoint cannot immediately
             # reappear as a "new" session after the newest leaf is removed.
+            lineage_ids = set(task.lineage_ids) or {session_id}
             ordered = [session_id] + sorted(lineage_ids - {session_id})
             for candidate in ordered:
                 if self._codex_delete(candidate):
@@ -9265,29 +9292,145 @@ class App:
                 else:
                     failed_ids.add(candidate)
             if failed_ids and not deleted_ids:
-                self._set_status(f"codex delete failed: {label}", "error")
-                return
-        self._forget_running(session_id, tmux_name)
-        if isinstance(self._codex_index, BackgroundCodexIndex):
-            self._codex_index.invalidate(
-                tombstones=deleted_ids)
-        else:
-            self._codex_index.invalidate()
-        self._invalidate_project_snapshot()
-        self._refresh()
+                return _DeleteResult(
+                    task=task,
+                    status_text=f"codex delete failed: {task.label}",
+                    status_level="error",
+                    views_changed=task.pane_identity is not None,
+                )
         if failed_ids:
-            self._set_status(
-                f"Deleted {len(deleted_ids)}/{len(lineage_ids)} rewind "
-                f"records for {label}; {len(failed_ids)} failed",
-                "error",
+            return _DeleteResult(
+                task=task,
+                status_text=(
+                    f"Deleted {len(deleted_ids)}/{len(task.lineage_ids)} "
+                    f"rewind records for {task.label}; "
+                    f"{len(failed_ids)} failed"
+                ),
+                status_level="error",
+                remove_running=True,
+                views_changed=True,
+                invalidate_codex=True,
+                deleted_codex_ids=frozenset(deleted_ids),
             )
-            return
         suffix = (
             f" ({len(deleted_ids)} rewind records)"
             if len(deleted_ids) > 1 else ""
         )
-        self._set_status(
-            f"{'Deleted' if is_real else 'Killed'}: {label}{suffix}")
+        return _DeleteResult(
+            task=task,
+            status_text=(
+                f"{'Deleted' if is_real else 'Killed'}: {task.label}{suffix}"
+            ),
+            remove_running=True,
+            views_changed=True,
+            invalidate_codex=True,
+            deleted_codex_ids=frozenset(deleted_ids),
+        )
+
+    def _execute_claude_delete(self, task: _DeleteTask) -> _DeleteResult:
+        """Delete Claude history and metadata in the worker."""
+        session_id = task.session_id
+        jsonl_path = task.jsonl_path
+        path_changed = False
+        if jsonl_path is not None:
+            try:
+                jsonl_path.unlink(missing_ok=True)
+                path_changed = True
+            except OSError as exc:
+                return _DeleteResult(
+                    task=task,
+                    status_text=f"failed to delete {jsonl_path}: {exc}",
+                    status_level="error",
+                    remove_running=True,
+                    views_changed=True,
+                )
+
+        is_real = bool(session_id) and not session_id.startswith("__new__-")
+        if is_real and session_id is not None:
+            env_dir = task.claude_home / "session-env" / session_id
+            if env_dir.is_dir():
+                shutil.rmtree(env_dir, ignore_errors=True)
+            history_ok = self._remove_from_history(
+                session_id, claude_home=task.claude_home) is not False
+        else:
+            history_ok = True
+
+        # A writer outside the captured tmux process tree could race the first
+        # unlink. Verify once after history cleanup; a surviving file means the
+        # requested delete did not complete and must not be reported as such.
+        if jsonl_path is not None and jsonl_path.exists():
+            try:
+                jsonl_path.unlink(missing_ok=True)
+                path_changed = True
+            except OSError as exc:
+                return _DeleteResult(
+                    task=task,
+                    status_text=("session was recreated and could not be "
+                                 f"deleted: {exc}"),
+                    status_level="error",
+                    remove_running=True,
+                    views_changed=True,
+                    claude_path_changed=path_changed,
+                )
+
+        deleted = is_real and jsonl_path is not None
+        if not history_ok:
+            status_text = (
+                f"Deleted: {task.label} (history index cleanup failed)"
+            )
+            status_level = "warn"
+        else:
+            status_text = f"{'Deleted' if deleted else 'Killed'}: {task.label}"
+            status_level = "info"
+        return _DeleteResult(
+            task=task,
+            status_text=status_text,
+            status_level=status_level,
+            remove_running=True,
+            views_changed=True,
+            claude_path_changed=path_changed,
+        )
+
+    def _delete_pending(self) -> bool:
+        """Whether a cleanup is running or waiting for UI-thread publication."""
+        lock = getattr(self, "_delete_lock", None)
+        if lock is None:
+            return False
+        with lock:
+            thread = getattr(self, "_delete_thread", None)
+            return bool(
+                getattr(self, "_delete_result", None) is not None
+                or thread is not None and thread.is_alive()
+            )
+
+    def _consume_delete_result(self) -> bool:
+        """Publish completed destructive work on the Urwid thread."""
+        lock = getattr(self, "_delete_lock", None)
+        if lock is None:
+            return False
+        with lock:
+            result = getattr(self, "_delete_result", None)
+            if result is None:
+                return False
+            self._delete_result = None
+            self._delete_thread = None
+
+        task = result.task
+        if result.remove_running:
+            self._forget_running(task.session_id, task.tmux_name)
+        if result.claude_path_changed and task.jsonl_path is not None:
+            invalidate_session(task.jsonl_path)
+        if result.invalidate_codex:
+            if isinstance(self._codex_index, BackgroundCodexIndex):
+                self._codex_index.invalidate(
+                    tombstones=set(result.deleted_codex_ids))
+            else:
+                self._codex_index.invalidate()
+        if result.views_changed:
+            self._session_cache.invalidate()
+            self._invalidate_project_snapshot()
+        self._set_status(result.status_text, result.status_level, force=True)
+        return True
 
     def _codex_delete(self, uuid: str) -> bool:
         """Run ``codex delete --force <UUID>`` against the resolved CODEX_HOME.
@@ -10342,6 +10485,15 @@ class App:
         ``set_message`` that clobbered one-shot messages every poll.
         """
         now = time.monotonic()
+        if self._delete_pending():
+            # This is operation state, not a one-shot acknowledgement. Keep it
+            # alive past the ordinary info TTL. A newly raised warning/error
+            # retains its short severity hold, after which progress returns.
+            if self._status_text != "Deleting…":
+                self._set_status("Deleting…", "info")
+            if self._status_text == "Deleting…":
+                self._status_since = now
+            return
         if self._status_text is not None:
             ttl = self._STATUS_TTL.get(self._status_level, 6.0)
             if ttl is None or now - self._status_since < ttl:

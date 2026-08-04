@@ -9,6 +9,7 @@ Codex lookup).
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -18,7 +19,8 @@ import pytest
 from railmux.config import Config
 from railmux.models import Project, SessionMeta
 from railmux.ui import app as app_mod
-from railmux.ui.app import App, _Running
+from railmux.tmux_ctl import PaneIdentity
+from railmux.ui.app import App, _DeleteResult, _DeleteTask, _Running
 from railmux.ui.running_pane import RunningEntry
 
 
@@ -60,11 +62,52 @@ def _cleanup_app(monkeypatch, running):
     app._codex_index = MagicMock()
     app._session_cache = MagicMock()
     app._project_snapshot_at = 123.0
+    app._delete_lock = threading.Lock()
+    app._delete_thread = None
+    app._delete_result = None
     statuses: list[tuple[str, str]] = []
-    app._set_status = lambda text, level="info": statuses.append((text, level))
+    app._set_status = lambda text, level="info", **_kw: statuses.append(
+        (text, level))
     refreshed: list[bool] = []
     app._refresh = lambda: refreshed.append(True)
     return app, statuses, refreshed
+
+
+def _pane(name: str = "cc-abc") -> PaneIdentity:
+    return PaneIdentity(
+        pane_id="%9", pane_pid=123, session_name=name, session_id="$4",
+        window_id="@7", dead=False, width=100, height=30,
+    )
+
+
+def _task(*, session_id: str | None = UUID,
+          jsonl_path: Path | None = None,
+          tmux_name: str | None = None, label: str = "x",
+          session_type: str = "claude",
+          pane_identity: PaneIdentity | None = None,
+          writer_pids: tuple[int, ...] = (),
+          lineage_ids: frozenset[str] | None = None,
+          claude_home: Path = Path("/nonexistent-claude-home")) -> _DeleteTask:
+    return _DeleteTask(
+        session_id=session_id,
+        jsonl_path=jsonl_path,
+        tmux_name=tmux_name,
+        label=label,
+        session_type=session_type,
+        pane_identity=pane_identity,
+        writer_pids=writer_pids,
+        lineage_ids=(lineage_ids if lineage_ids is not None
+                     else frozenset({session_id}) if session_id else frozenset()),
+        claude_home=claude_home,
+    )
+
+
+def _run_delete(app: App, task: _DeleteTask) -> _DeleteResult:
+    result = app._execute_delete_task(task)
+    with app._delete_lock:
+        app._delete_result = result
+    assert app._consume_delete_result() is True
+    return result
 
 
 # ── #1 / #7: codex delete command shape + resolved CODEX_HOME ────────────
@@ -118,10 +161,11 @@ def test_cleanup_codex_success_forgets_and_reports_deleted(monkeypatch):
                               session_type="codex")}
     app, statuses, refreshed = _cleanup_app(monkeypatch, running)
     monkeypatch.setattr(app, "_codex_delete", lambda u: True)
-    app._cleanup_codex_session(UUID, "cx-abc", "p/Chat")
+    _run_delete(app, _task(
+        tmux_name="cx-abc", label="p/Chat", session_type="codex"))
     assert UUID not in app._running
     app._codex_index.invalidate.assert_called_once()
-    assert refreshed == [True]
+    assert refreshed == []
     assert statuses[-1] == ("Deleted: p/Chat", "info")
 
 
@@ -130,7 +174,8 @@ def test_cleanup_codex_failure_keeps_registry_and_index(monkeypatch):
                               session_type="codex")}
     app, statuses, refreshed = _cleanup_app(monkeypatch, running)
     monkeypatch.setattr(app, "_codex_delete", lambda u: False)
-    app._cleanup_codex_session(UUID, "cx-abc", "p/Chat")
+    _run_delete(app, _task(
+        tmux_name="cx-abc", label="p/Chat", session_type="codex"))
     # Delete failed → nothing removed, no false "Deleted", error shown.
     assert UUID in app._running
     app._codex_index.invalidate.assert_not_called()
@@ -152,13 +197,15 @@ def test_cleanup_codex_deletes_complete_rewind_lineage(monkeypatch):
         lambda session_id: deleted.append(session_id) or True,
     )
 
-    app._cleanup_codex_session(UUID, "cx-abc", "p/Chat")
+    _run_delete(app, _task(
+        tmux_name="cx-abc", label="p/Chat", session_type="codex",
+        lineage_ids=frozenset({UUID, "fork-one", "fork-two"})))
 
     assert deleted[0] == UUID
     assert set(deleted) == {UUID, "fork-one", "fork-two"}
     assert UUID not in app._running
     app._codex_index.invalidate.assert_called_once()
-    assert refreshed == [True]
+    assert refreshed == []
     assert statuses[-1] == (
         "Deleted: p/Chat (3 rewind records)", "info")
 
@@ -173,10 +220,12 @@ def test_cleanup_codex_partial_lineage_failure_is_reported(monkeypatch):
     monkeypatch.setattr(
         app, "_codex_delete", lambda session_id: session_id == UUID)
 
-    app._cleanup_codex_session(UUID, "cx-abc", "p/Chat")
+    _run_delete(app, _task(
+        tmux_name="cx-abc", label="p/Chat", session_type="codex",
+        lineage_ids=frozenset({UUID, "fork-one"})))
 
     assert UUID not in app._running
-    assert refreshed == [True]
+    assert refreshed == []
     assert statuses[-1][1] == "error"
     assert "Deleted 1/2" in statuses[-1][0]
 
@@ -188,7 +237,9 @@ def test_cleanup_codex_placeholder_is_killed_not_deleted(monkeypatch):
     # A placeholder has no rollout; _codex_delete must not even be called.
     monkeypatch.setattr(app, "_codex_delete",
                         lambda u: pytest.fail("must not delete a placeholder"))
-    app._cleanup_codex_session("__new__-1", "cx-new", "p/(new)")
+    _run_delete(app, _task(
+        session_id="__new__-1", tmux_name="cx-new", label="p/(new)",
+        session_type="codex", lineage_ids=frozenset()))
     assert "__new__-1" not in app._running
     assert statuses[-1] == ("Killed: p/(new)", "info")
 
@@ -199,19 +250,64 @@ def test_cleanup_session_codex_kills_tmux_then_never_unlinks(monkeypatch, tmp_pa
     running = {UUID: _Running(key=UUID, tmux_name="cx-abc", label="x",
                               session_type="codex")}
     app, statuses, refreshed = _cleanup_app(monkeypatch, running)
-    killed: list[str] = []
-    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda n: True)
-    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session",
-                        lambda n: (killed.append(n) or True))
+    killed: list[PaneIdentity] = []
+    pane = _pane("cx-abc")
+    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session_identity",
+                        lambda identity: (killed.append(identity) or True))
+    monkeypatch.setattr(app_mod.tmux_ctl, "exact_pane_alive", lambda _p: False)
     monkeypatch.setattr(app, "_codex_delete", lambda u: True)
     # A Codex delete must never touch Claude history/session-env.
     monkeypatch.setattr(app, "_remove_from_history",
                         lambda *a, **k: pytest.fail("claude history touched"))
-    app._cleanup_session(session_id=UUID, jsonl_path=rollout,
-                         tmux_name="cx-abc", label="x", session_type="codex")
-    assert killed == ["cx-abc"]
+    _run_delete(app, _task(
+        jsonl_path=rollout, tmux_name="cx-abc", session_type="codex",
+        pane_identity=pane))
+    assert killed == [pane]
     assert rollout.exists()  # codex path leaves the rollout for `codex delete`
     assert UUID not in app._running
+
+
+def test_cleanup_runs_blocking_work_in_background_and_publishes_on_refresh(
+        monkeypatch, tmp_path):
+    jsonl = tmp_path / f"{UUID}.jsonl"
+    jsonl.write_text("conversation\n")
+    app, statuses, _refreshed = _cleanup_app(monkeypatch, {})
+    started = threading.Event()
+    release = threading.Event()
+    redraws: list[bool] = []
+    app._redraw_focus_state_now = lambda: redraws.append(True)
+
+    def block(task):
+        started.set()
+        assert release.wait(1.0)
+        return _DeleteResult(
+            task=task,
+            status_text="Deleted: x",
+            remove_running=True,
+            views_changed=True,
+            claude_path_changed=True,
+        )
+
+    monkeypatch.setattr(app, "_execute_delete_task", block)
+
+    app._cleanup_session(session_id=UUID, jsonl_path=jsonl, label="x")
+
+    assert started.wait(0.5)
+    assert app._delete_thread is not None
+    assert app._delete_thread.is_alive()
+    assert statuses[-1] == ("Deleting…", "info")
+    assert redraws == [True]
+
+    # A second destructive request cannot race the in-flight transaction.
+    app._cleanup_session(session_id="other", label="other")
+    assert statuses[-1] == (
+        "A session deletion is already in progress.", "warn")
+
+    release.set()
+    app._delete_thread.join(timeout=1.0)
+    assert app._consume_delete_result() is True
+    assert statuses[-1] == ("Deleted: x", "info")
+    assert app._delete_pending() is False
 
 
 # ── #1: running-pane delete never builds a Claude path for Codex ─────────
@@ -275,11 +371,9 @@ def test_cleanup_session_claude_still_unlinks(monkeypatch, tmp_path):
     running = {UUID: _Running(key=UUID, tmux_name="cc-abc", label="x",
                               session_type="claude")}
     app, statuses, refreshed = _cleanup_app(monkeypatch, running)
-    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda n: True)
-    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session", lambda n: True)
     monkeypatch.setattr(app, "_remove_from_history", lambda *a, **k: None)
-    app._cleanup_session(session_id=UUID, jsonl_path=jsonl,
-                         tmux_name="cc-abc", label="x", session_type="claude")
+    _run_delete(app, _task(
+        jsonl_path=jsonl, tmux_name="cc-abc", session_type="claude"))
     assert not jsonl.exists()
     assert statuses[-1] == ("Deleted: x", "info")
 
@@ -289,10 +383,11 @@ def test_cleanup_aborts_if_tmux_writer_cannot_be_stopped(monkeypatch, tmp_path):
     jsonl.write_text("{}\n")
     running = {UUID: _Running(key=UUID, tmux_name="cc-abc", label="x")}
     app, statuses, refreshed = _cleanup_app(monkeypatch, running)
-    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _n: True)
-    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session", lambda _n: False)
-    app._cleanup_session(
-        session_id=UUID, jsonl_path=jsonl, tmux_name="cc-abc", label="x")
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "kill_session_identity", lambda _p: False)
+    monkeypatch.setattr(app_mod.tmux_ctl, "exact_pane_alive", lambda _p: True)
+    _run_delete(app, _task(
+        jsonl_path=jsonl, tmux_name="cc-abc", pane_identity=_pane()))
     assert jsonl.exists()
     assert UUID in app._running
     assert refreshed == []
@@ -308,6 +403,7 @@ def test_cleanup_aborts_if_displayed_real_pane_cannot_return_home(
     transport = MagicMock()
     transport.prepare_kill.return_value = False
     app._display_transport_manager = transport
+    app._redraw_focus_state_now = lambda: None
     monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _n: True)
     killed = []
     monkeypatch.setattr(
@@ -328,15 +424,15 @@ def test_cleanup_waits_for_writer_exit_before_deleting(monkeypatch, tmp_path):
     jsonl.write_text("{}\n")
     running = {UUID: _Running(key=UUID, tmux_name="cc-abc", label="x")}
     app, statuses, refreshed = _cleanup_app(monkeypatch, running)
-    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _n: True)
-    monkeypatch.setattr(app_mod.tmux_ctl, "session_process_ids",
-                        lambda _n: (100, 200))
-    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session", lambda _n: True)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "kill_session_identity", lambda _p: True)
+    monkeypatch.setattr(app_mod.tmux_ctl, "exact_pane_alive", lambda _p: False)
     monkeypatch.setattr(app_mod.tmux_ctl, "wait_for_processes_exit",
                         lambda _pids: False)
 
-    app._cleanup_session(
-        session_id=UUID, jsonl_path=jsonl, tmux_name="cc-abc", label="x")
+    _run_delete(app, _task(
+        jsonl_path=jsonl, tmux_name="cc-abc", pane_identity=_pane(),
+        writer_pids=(100, 200)))
 
     assert jsonl.exists()
     assert UUID in app._running
@@ -356,7 +452,7 @@ def test_cleanup_removes_recreated_stub_after_history_cleanup(
         return True
 
     monkeypatch.setattr(app, "_remove_from_history", recreate)
-    app._cleanup_session(session_id=UUID, jsonl_path=jsonl, label="x")
+    _run_delete(app, _task(jsonl_path=jsonl))
 
     assert not jsonl.exists()
     assert statuses[-1] == ("Deleted: x", "info")
@@ -374,7 +470,7 @@ def test_cleanup_reports_first_unlink_failure(monkeypatch, tmp_path):
         return original_unlink(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "unlink", fail_target)
-    app._cleanup_session(session_id=UUID, jsonl_path=jsonl, label="x")
+    _run_delete(app, _task(jsonl_path=jsonl))
 
     assert jsonl.exists()
     assert statuses[-1][1] == "error"
@@ -402,7 +498,7 @@ def test_cleanup_reports_recreated_stub_unlink_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(Path, "unlink", fail_second_target_unlink)
     monkeypatch.setattr(app, "_remove_from_history", recreate)
-    app._cleanup_session(session_id=UUID, jsonl_path=jsonl, label="x")
+    _run_delete(app, _task(jsonl_path=jsonl))
 
     assert jsonl.exists()
     assert statuses[-1][1] == "error"
@@ -423,7 +519,8 @@ def test_cleanup_uses_configured_claude_home(monkeypatch, tmp_path):
     app, statuses, _refreshed = _cleanup_app(monkeypatch, {})
     app._claude_home = claude_home
 
-    app._cleanup_session(session_id=UUID, jsonl_path=jsonl, label="x")
+    _run_delete(app, _task(
+        jsonl_path=jsonl, claude_home=claude_home))
 
     assert not env_dir.exists()
     assert UUID not in history.read_text()
@@ -435,10 +532,8 @@ def test_cleanup_claude_placeholder_reports_killed(monkeypatch):
     key = "__new__-test-1"
     running = {key: _Running(key=key, tmux_name="cc-new", label="p/(new)")}
     app, statuses, _refreshed = _cleanup_app(monkeypatch, running)
-    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _n: False)
-
-    app._cleanup_session(
-        session_id=None, tmux_name="cc-new", label="p/(new)")
+    _run_delete(app, _task(
+        session_id=None, tmux_name="cc-new", label="p/(new)"))
 
     assert key not in app._running
     assert statuses[-1] == ("Killed: p/(new)", "info")

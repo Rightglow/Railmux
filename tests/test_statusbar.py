@@ -114,6 +114,22 @@ def test_info_message_holds_then_falls_back_to_tip(app, clock, shown):
     assert shown[-1] in TIPS
 
 
+def test_deleting_info_does_not_expire_while_worker_is_pending(
+        app, clock, shown):
+    worker = MagicMock()
+    worker.is_alive.return_value = True
+    app._delete_thread = worker
+    app._delete_result = None
+    app._set_status("Deleting…")
+
+    clock["t"] += app._STATUS_TTL["info"] + 100.0
+    app._update_status()
+
+    assert app._status_text == "Deleting…"
+    assert app._status_since == clock["t"]
+    assert shown[-1] == "Deleting…"
+
+
 def test_error_is_sticky(app, clock):
     app._set_status("ERROR: tmux missing")
     clock["t"] += 10_000

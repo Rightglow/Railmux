@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Close the delete confirmation immediately and move tmux shutdown waits plus
+  Claude Code/Codex history cleanup off the UI thread, while keeping a durable
+  bottom-right `Deleting…` status until the background transaction finishes.
+
 ## [0.3.3.dev4] - 2026-08-03
 
 ### Fixed

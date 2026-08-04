@@ -81,7 +81,7 @@ product capability.
 | P06 | Live open on click/Enter; canonical history on wheel-up, Space, or Preview | Supported | Supported | Wheel-up opens a read-only viewer and closing it restores that exact live session; a confirmed Codex rewind resets stale terminal scrollback without changing provider history. |
 | P07 | Session Info, rename, star, and copy title | Supported | Supported | Rename and favorites are Railmux metadata; copy depends on clipboard capability. |
 | P08 | Kill a live provider while retaining history | Supported | Supported | Revalidates immutable tmux/provider identity before mutation. |
-| P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or live identity fails closed. |
+| P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or changed live identity fails closed; confirmed cleanup runs in one background transaction with durable status-right progress. |
 | P10 | Activity, blocked, attention, live, and unresolved status | Supported | Supported | Liveness, activity, and attention remain separate states. |
 | P11 | Per-provider Projects, Sessions, and Running filters | Supported | Supported | Current filters and selection survive soft restart. |
 | P12 | Switch Claude Code/Codex mode without stopping the other provider | Supported | Supported | Each mode keeps independent sidebar view state. |
