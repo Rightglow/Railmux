@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev14] - 2026-08-04
+
+### Fixed
+
+- Apply the managed-MSYS2 abandoned-socket settle allowance to
+  `railmux doctor` as well as the ordinary launcher. Windows diagnostics now
+  report the authoritative `not running` result instead of a false
+  `unresponsive` state;
+  the POSIX doctor retains its existing one-second probe bound.
+
 ## [0.4.0.dev13] - 2026-08-04
 
 ### Fixed

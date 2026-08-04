@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from railmux.diagnostics import (
     TmuxServerDiagnostic,
+    _dedicated_tmux_diagnostic,
     _tool_diagnostic,
     collect_doctor_snapshot,
     run_doctor,
@@ -34,6 +35,30 @@ def test_version_preserves_tmux_letter_suffix(monkeypatch):
     diagnostic = _tool_diagnostic("tmux", "-V")
     assert diagnostic.status == "available"
     assert diagnostic.version == "3.2a"
+
+
+def test_windows_doctor_allows_stale_socket_settle_without_changing_posix(
+    monkeypatch,
+):
+    observed = []
+    monkeypatch.setattr(
+        "railmux.diagnostics.shutil.which", lambda *_args, **_kwargs: "tmux")
+
+    def discover(*, timeout, env):
+        observed.append((timeout, env))
+        return None
+
+    monkeypatch.setattr(
+        "railmux.diagnostics.tmux_server.discover_target", discover)
+    posix_env = {"PATH": "/bin"}
+    windows_env = {
+        "PATH": "/usr/bin",
+        "RAILMUX_WINDOWS_RUNTIME": "msys2",
+    }
+
+    assert _dedicated_tmux_diagnostic(posix_env).status == "not_running"
+    assert _dedicated_tmux_diagnostic(windows_env).status == "not_running"
+    assert observed == [(1.0, posix_env), (None, windows_env)]
 
 
 def test_doctor_report_is_useful_and_redacts_user_values(

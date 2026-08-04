@@ -245,9 +245,13 @@ dedicated socket but no live managed-runtime tmux process. A direct tmux
 identity probe returned the authoritative `no server running` result after
 2.09 seconds, just beyond Railmux's former 2.0-second startup bound; an isolated
 label then proved that `new-session` safely replaced the same endpoint in 4.20
-seconds. The dev13 candidate gives only managed-Windows default startup
-discovery a five-second bound. Explicit health/watchdog probes, the POSIX
-default, and the proof-gated socket unlink authority remain unchanged.
+seconds. The released dev13 launcher gives only managed-Windows default startup
+discovery a five-second bound and successfully entered the real TUI across the
+same field-shaped abandoned endpoint before a normal `C-b d` detach. That
+validation also exposed `doctor`'s separate explicit one-second probe; dev14
+routes only the managed-Windows doctor through the same settle allowance.
+Explicit health/watchdog probes, POSIX launcher and doctor bounds, and the
+proof-gated socket unlink authority remain unchanged.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
