@@ -86,8 +86,8 @@ or support claims for running local Railmux or the local `railmux ssh` client
 from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
 `main` because Railmux runs inside the supported Linux runtime there. Publish
 POSIX/WSL development builds from this branch when a fix needs field testing.
-After the `v0.3.3` final release, the next stable-line preview series is
-`0.3.4.devN`, beginning at `0.3.4.dev1`; never append another `.devN` build to
+After the `v0.3.5` final release, the next stable-line preview series is
+`0.3.6.devN`, beginning at `0.3.6.dev1`; never append another `.devN` build to
 an already published final version.
 
 `archive/windows-conpty-deprecated` is the frozen, read-only archive of the

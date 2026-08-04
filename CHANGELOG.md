@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-04
+
+### Added
+
+- Prevent concurrent writers when Claude Code or Codex history is shared
+  between hosts: resume and confirmed delete use fail-closed provider-session
+  leases, Codex rewind aliases are fenced as one lineage, remote ownership is
+  shown as `running on HOST`, and detached providers retain their lease across
+  Railmux Soft Quit.
+- Revalidate live leases from operating-system lock state and keep an explicit
+  warning on a Running row until lost protection is restored. Both providers,
+  stopped-session deletion, mode-masking shared filesystems, stale holders, and
+  multi-alias conflicts have regression coverage.
+
+### Fixed
+
+- Repaint only rows touched by SSH URL/path hover, drag selection, and click
+  feedback instead of clearing the whole alternate screen, eliminating visible
+  Windows Terminal flashes.
+- Change the SSH client's hardware-cursor mode only when its actual visibility
+  changes, preventing live 20 fps patches from repeatedly restarting terminal
+  cursor animation after focus moves to an agent pane.
+
 ## [0.3.5.dev1] - 2026-08-04
 
 ### Fixed
@@ -1895,7 +1918,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.5.dev1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5
 [0.3.5.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5.dev1
 [0.3.4]: https://github.com/Rightglow/Railmux/compare/v0.3.3...v0.3.4
 [0.3.4.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.3...v0.3.4.dev1
