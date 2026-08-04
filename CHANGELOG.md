@@ -231,6 +231,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pin and hash-verify the official MSYS2 base archive, serialize and stage
   installs before atomic activation, use explicit UTF-8 for runtime state, and
   never modify system PATH, shell profiles, or a user-owned MSYS2 tree.
+## [0.3.3] - 2026-08-04
+
+### Fixed
+
+- Keep a selected project and its Sessions list visible while a new Codex
+  placeholder becomes a real conversation, and update Sessions and Running
+  together with the resolved title, live route, status, and recency ordering.
+- Preserve a swap-displayed agent's terminal geometry when returning it to its
+  detached home, preventing narrow or discontinuous scrollback after the pane
+  is shown again.
+- Show the provider's canonical active history after Codex rewind or
+  running-turn steering and Claude Code branch changes: retained conversation
+  remains visible, abandoned prompt and interruption suffixes stay hidden, and
+  the live tmux scrollback is no longer cleared during a branch transition.
+- Keep single-click and Enter on a running session attached to its live
+  conversation while wheel-up, Space, and context Preview open the canonical
+  read-only history and restore the exact live pane when closed.
+- Close delete confirmation immediately, perform tmux and provider-history
+  cleanup in the background, and keep a durable bounded status such as
+  `Deleting “session name”…` until the transaction finishes.
+- Recognize tmux 3.2's stock `send -M` wheel binding spelling as equivalent to
+  newer tmux's `send-keys -M`, restoring safe sidebar wheel forwarding without
+  accepting custom root bindings.
+
+### Changed
+
+- Keep detailed SSH URL/path opening and pane-bounded clipboard instructions
+  in the README while presenting their user-facing value more concisely on the
+  project website.
+- Harden release validation so POSIX/WSL final and development builds remain
+  rooted in `main` and archived native-Windows preview ancestry cannot be
+  published accidentally.
+
+## [0.3.3.dev6] - 2026-08-04
+
+### Fixed
+
+- Preserve a live Codex pane's retained tmux scrollback across rewind and
+  running-turn steering while resetting only the stale viewport; local preview
+  and full-window SSH history now read the canonical rollout so retained
+  conversation remains visible and the abandoned interruption suffix stays
+  hidden.
+- Name the exact target in the durable background-delete status, with bounded
+  whitespace-normalized text such as `Deleting “session name”…`.
+
+### Changed
+
+- Keep detailed SSH URL/path and clipboard instructions in the README while
+  reducing the website's repeated selection note to a concise overview of
+  local URL/path opening and pane-bounded drag-to-copy.
+
+## [0.3.3.dev5] - 2026-08-04
+
+### Fixed
+
+- Close the delete confirmation immediately and move tmux shutdown waits plus
+  Claude Code/Codex history cleanup off the UI thread, while keeping a durable
+  bottom-right `Deleting…` status until the background transaction finishes.
 
 ## [0.3.3.dev4] - 2026-08-03
 
@@ -2034,6 +2092,9 @@ made after 0.2.21.
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
+[0.3.3]: https://github.com/Rightglow/Railmux/compare/v0.3.2...v0.3.3
+[0.3.3.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev5...v0.3.3.dev6
+[0.3.3.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev4...v0.3.3.dev5
 [0.3.3.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev3...v0.3.3.dev4
 [0.3.3.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev2...v0.3.3.dev3
 [0.3.3.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.3.dev1...v0.3.3.dev2

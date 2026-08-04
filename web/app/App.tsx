@@ -551,10 +551,9 @@ export default function Home() {
                 <li><span>↗</span> Install a matching remote helper with consent</li>
               </ul>
               <p className="ssh-selection-note">
-                Selection stays inside the visible agent pane and writes to
-                your local clipboard—without entering tmux copy-mode. It works
-                the same for Claude Code and Codex from supported macOS,
-                Linux, and WSL terminals.
+                Click URLs to open them locally, or open validated remote paths
+                inside Railmux or in a separate terminal. Drag-to-copy stays
+                pane-bounded and local.
               </p>
               <CopyCommand command="railmux ssh your-server" />
             </div>

@@ -3457,14 +3457,15 @@ def exact_pane_alive(identity: PaneIdentity) -> bool:
     )
 
 
-def reset_pane_history(identity: PaneIdentity) -> bool:
-    """Reset visible bytes and scrollback for the exact observed live pane.
+def reset_pane_view(identity: PaneIdentity) -> bool:
+    """Reset visible terminal state without deleting retained scrollback.
 
     Revalidate the immutable session, pane process, and window before issuing
-    one tmux command queue that resets the terminal model and clears history.
-    Then send the pane's foreground process group an ordinary same-size
-    ``SIGWINCH`` so its TUI repaints and reasserts terminal modes without a
-    geometry change or injected keyboard input.
+    tmux's terminal reset. Then send the pane's foreground process group an
+    ordinary same-size ``SIGWINCH`` so its TUI repaints and reasserts terminal
+    modes without a geometry change or injected keyboard input. The reset can
+    push the old viewport into tmux history, but never destroys the retained
+    prefix; managed history surfaces use the provider's canonical transcript.
     """
     current = pane_identity(identity.pane_id)
     if (current is None or current.dead
@@ -3474,10 +3475,7 @@ def reset_pane_history(identity: PaneIdentity) -> bool:
         return False
     try:
         subprocess.check_call(
-            [
-                "tmux", "send-keys", "-R", "-t", identity.pane_id,
-                ";", "clear-history", "-t", identity.pane_id,
-            ],
+            ["tmux", "send-keys", "-R", "-t", identity.pane_id],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.CalledProcessError):

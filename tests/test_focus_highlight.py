@@ -66,15 +66,31 @@ def test_active_claude_pane_stamps_and_clears_exact_transcript_source(
     )
 
 
-def test_active_codex_pane_stamps_canonical_history_wheel_route(monkeypatch):
+def test_active_codex_pane_stamps_canonical_transcript_and_wheel_route(
+    monkeypatch, tmp_path,
+):
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
     running = _Running(
-        "root-id",
+        session_id,
         "cx-agent",
         "Codex",
         session_type="codex",
     )
+    project = Project(tmp_path, "-tmp", Path(), 1, 1.0)
+    meta = SessionMeta(
+        project=project,
+        session_id=session_id,
+        jsonl_path=tmp_path / (
+            f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"),
+        title="Codex",
+        message_count=1,
+        token_total=0,
+        last_mtime=1.0,
+        session_type="codex",
+    )
     app = App.__new__(App)
     app._by_tmux = lambda name: running if name == "cx-agent" else None
+    app._codex_representative = lambda sid: meta if sid == session_id else None
     slot = AgentSlot("secondary", pane_id="%9")
     observed = []
     monkeypatch.setattr(
@@ -83,8 +99,12 @@ def test_active_codex_pane_stamps_canonical_history_wheel_route(monkeypatch):
         lambda pane, option, value: observed.append((pane, option, value)) or True,
     )
 
-    app._sync_slot_transcript_source(slot, "root-id", "cx-agent")
+    app._sync_slot_transcript_source(slot, session_id, "cx-agent")
 
+    assert observed[0][0:2] == (
+        "%9", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+    )
+    assert session_id in observed[0][2]
     assert observed[-1] == (
         "%9", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, "secondary",
     )

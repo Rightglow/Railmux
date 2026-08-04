@@ -4,10 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from railmux import tmux_ctl
+from railmux import tmux_ctl, tmux_server
 from railmux.favorites import Favorites
 from railmux.models import Project, SessionMeta
 from railmux.ui.app import App, _Running
+from railmux.ui.workspace import AgentWorkspace
 
 
 class _LineageIndex:
@@ -66,7 +67,7 @@ def test_existing_root_favorite_marks_visible_leaf(
     assert app._favorite_ids_for_view() == {"root", "middle", "leaf"}
 
 
-def test_live_rewind_clears_only_exact_new_rollout_scrollback(
+def test_live_rewind_resets_view_and_stamps_canonical_transcript(
     monkeypatch, tmp_path,
 ) -> None:
     root_id = "019fc605-5188-7212-bc48-ea023fe8b73c"
@@ -101,8 +102,8 @@ def test_live_rewind_clears_only_exact_new_rollout_scrollback(
     transport.displayed_real_pane.return_value = "%9"
     app._display_transport = MagicMock(return_value=transport)
     monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: identity)
-    cleared = MagicMock(return_value=True)
-    monkeypatch.setattr(tmux_ctl, "reset_pane_history", cleared)
+    reset = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "reset_pane_view", reset)
     stamped = MagicMock(return_value=True)
     monkeypatch.setattr(tmux_ctl, "set_pane_user_option", stamped)
     probes: dict[str, set[str] | None] = {}
@@ -110,16 +111,22 @@ def test_live_rewind_clears_only_exact_new_rollout_scrollback(
     # An indexed child is not enough: on procfs the exact live writer must
     # first expose that rollout through its open file descriptors.
     app._sync_codex_rewind_scrollback(running, meta, None, probes)
-    cleared.assert_not_called()
+    reset.assert_not_called()
     assert running.codex_canonical_session_id == root_id
 
     probes.clear()
     app._codex_rollout_ids.return_value = {root_id, leaf_id}
     app._sync_codex_rewind_scrollback(running, meta, None, probes)
 
-    cleared.assert_called_once_with(identity)
+    reset.assert_called_once_with(identity)
     assert running.codex_canonical_session_id == leaf_id
-    stamped.assert_called_once_with(
+    assert stamped.call_count == 2
+    transcript_call, generation_call = stamped.call_args_list
+    assert transcript_call.args[:2] == (
+        "%9", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+    )
+    assert leaf_id in transcript_call.args[2]
+    assert generation_call.args == (
         "%9", tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION, leaf_id)
 
 
@@ -147,11 +154,52 @@ def test_first_codex_generation_only_establishes_scrollback_baseline(
         session_type="codex",
     )
     app = App.__new__(App)
-    app._stamp_codex_history_generation = MagicMock()
-    cleared = MagicMock(return_value=True)
-    monkeypatch.setattr(tmux_ctl, "reset_pane_history", cleared)
+    app._stamp_codex_history_state = MagicMock()
+    reset = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "reset_pane_view", reset)
 
     app._sync_codex_rewind_scrollback(running, meta, None, {})
 
     assert running.codex_canonical_session_id == session_id
-    cleared.assert_not_called()
+    reset.assert_not_called()
+    app._stamp_codex_history_state.assert_called_once_with(running, meta)
+
+
+def test_codex_history_state_stamps_nested_wrapper_and_real_pane(
+    monkeypatch, tmp_path,
+) -> None:
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    project = Project(tmp_path, "-project", Path(), 1, 0.0)
+    running = _Running(
+        key=session_id,
+        tmux_name="cx-live",
+        label="project/conversation",
+        project=project,
+        session_type="codex",
+    )
+    meta = SessionMeta(
+        project=project,
+        session_id=session_id,
+        jsonl_path=tmp_path / (
+            f"rollout-2026-08-03T13-13-03-{session_id}.jsonl"),
+        title="current",
+        message_count=2,
+        token_total=0,
+        last_mtime=2.0,
+        session_type="codex",
+    )
+    identity = tmux_ctl.PaneIdentity(
+        "%9", 123, "cx-live", "$4", "@5", False, 80, 24)
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%10"
+    app._workspace.primary.agent_tmux_name = "cx-live"
+    app._codex_real_pane_identity = MagicMock(return_value=identity)
+    stamped = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "set_pane_user_option", stamped)
+
+    app._stamp_codex_history_state(running, meta)
+
+    assert running.codex_history_generation_stamped
+    assert {call.args[0] for call in stamped.call_args_list} == {"%9", "%10"}
+    assert stamped.call_count == 4

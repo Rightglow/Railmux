@@ -157,7 +157,7 @@ def _require_tmux(minimum: tuple[int, int], feature: str) -> None:
         )
 
 
-def test_exact_clear_history_preserves_live_pane(isolated_tmux):
+def test_exact_view_reset_preserves_live_pane_and_scrollback(isolated_tmux):
     session_name, pane_id, _socket_path = isolated_tmux
     subprocess.run(
         [
@@ -179,23 +179,31 @@ def test_exact_clear_history_preserves_live_pane(isolated_tmux):
     identity = tmux_ctl.pane_identity(pane_id)
     assert identity is not None
 
-    assert tmux_ctl.reset_pane_history(identity)
+    before_history = int(subprocess.check_output(
+        ["tmux", "display-message", "-p", "-t", pane_id, "#{history_size}"],
+        text=True,
+    ).strip())
+
+    assert tmux_ctl.reset_pane_view(identity)
 
     current = tmux_ctl.pane_identity(pane_id)
     assert current is not None
     assert current.pane_pid == identity.pane_pid
     assert current.session_id == identity.session_id
-    assert subprocess.check_output(
+    after_history = int(subprocess.check_output(
         [
             "tmux", "display-message", "-p", "-t", pane_id,
             "#{history_size}",
         ],
         text=True,
-    ).strip() == "0"
-    assert "rewind-stale" not in subprocess.check_output(
-        ["tmux", "capture-pane", "-p", "-t", pane_id],
+    ).strip())
+    assert after_history >= before_history
+    retained = subprocess.check_output(
+        ["tmux", "capture-pane", "-p", "-t", pane_id, "-S", "-"],
         text=True,
     )
+    assert "rewind-stale-0" in retained
+    assert "rewind-stale-159" in retained
 
 
 def test_real_railmux_inside_tmux_reaches_first_interactive_frame(tmp_path):

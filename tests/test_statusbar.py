@@ -114,6 +114,31 @@ def test_info_message_holds_then_falls_back_to_tip(app, clock, shown):
     assert shown[-1] in TIPS
 
 
+def test_deleting_info_does_not_expire_while_worker_is_pending(
+        app, clock, shown):
+    worker = MagicMock()
+    worker.is_alive.return_value = True
+    app._delete_thread = worker
+    app._delete_result = None
+    app._delete_progress_text = "Deleting “Windows railmux support”…"
+    app._set_status(app._delete_progress_text)
+
+    clock["t"] += app._STATUS_TTL["info"] + 100.0
+    app._update_status()
+
+    assert app._status_text == "Deleting “Windows railmux support”…"
+    assert app._status_since == clock["t"]
+    assert shown[-1] == "Deleting “Windows railmux support”…"
+
+
+def test_deleting_status_normalizes_and_bounds_session_name():
+    assert app_mod.App._deleting_status("  standard   railmux  ") == (
+        "Deleting “standard railmux”…"
+    )
+    rendered = app_mod.App._deleting_status("x" * 80)
+    assert rendered == f"Deleting “{'x' * 39}…”…"
+
+
 def test_error_is_sticky(app, clock):
     app._set_status("ERROR: tmux missing")
     clock["t"] += 10_000

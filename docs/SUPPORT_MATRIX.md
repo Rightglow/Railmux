@@ -78,10 +78,10 @@ product capability.
 | P03 | Project list, project selection, and new project/directory creation | Supported | Supported | Creation is explicit and never inferred from an arbitrary failed match. |
 | P04 | Read-only history preview with provider-aware formatting | Supported | Supported | Latest 2,000 saved records are projected onto the provider's current branch; rewound suffixes and internal/encrypted reasoning are hidden. |
 | P05 | Start a new session and resume an existing session | Supported | Supported | Starting, resuming, previewing, and switching never rewrite provider history; confirmed P09 deletion is the explicit exception. |
-| P06 | Live open on click/Enter; canonical history on wheel-up, Space, or Preview | Supported | Supported | Wheel-up opens a read-only viewer and closing it restores that exact live session; a confirmed Codex rewind resets stale terminal scrollback without changing provider history. |
+| P06 | Live open on click/Enter; canonical history on wheel-up, Space, or Preview | Supported | Supported | Wheel-up opens a read-only viewer and closing it restores that exact live session; a Codex rewind/steer resets only the live view, preserves tmux scrollback, and projects the canonical rollout without its abandoned suffix. |
 | P07 | Session Info, rename, star, and copy title | Supported | Supported | Rename and favorites are Railmux metadata; copy depends on clipboard capability. |
 | P08 | Kill a live provider while retaining history | Supported | Supported | Revalidates immutable tmux/provider identity before mutation. |
-| P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or live identity fails closed. |
+| P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or changed live identity fails closed; confirmed cleanup runs in one background transaction with durable status-right progress. |
 | P10 | Activity, blocked, attention, live, and unresolved status | Supported | Supported | Liveness, activity, and attention remain separate states. |
 | P11 | Per-provider Projects, Sessions, and Running filters | Supported | Supported | Current filters and selection survive soft restart. |
 | P12 | Switch Claude Code/Codex mode without stopping the other provider | Supported | Supported | Each mode keeps independent sidebar view state. |

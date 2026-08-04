@@ -299,6 +299,28 @@ def test_transcript_source_round_trip_opens_only_exact_same_user_file(tmp_path):
     os.close(opened[1])
 
 
+def test_codex_transcript_source_requires_matching_rollout_file(tmp_path):
+    session_id = "019fcaad-27a1-70c0-8029-8a9c7803fa6b"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    path.write_text('{"type":"response_item"}\n')
+
+    marker = tmux_server.encode_transcript_source("codex", session_id, path)
+
+    assert marker is not None
+    source = tmux_server.decode_transcript_source(marker)
+    assert source is not None
+    assert source.provider == "codex" and source.path == path
+    opened = tmux_server.open_transcript_source(marker)
+    assert opened is not None
+    os.close(opened[1])
+    assert tmux_server.encode_transcript_source(
+        "codex", "019fc572-0cc5-7630-86a7-806fde2d88fc", path
+    ) is None
+    assert tmux_server.encode_transcript_source(
+        "unknown", session_id, path
+    ) is None
+
+
 def test_transcript_source_rejects_final_symlink_and_extra_fields(tmp_path):
     session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
     real = tmp_path / f"{session_id}.jsonl.real"

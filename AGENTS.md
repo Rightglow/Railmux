@@ -58,8 +58,10 @@ Windows development code, native Windows dependencies, native Windows CI jobs,
 or support claims for running local Railmux or the local `railmux ssh` client
 from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
 `main` because Railmux runs inside the supported Linux runtime there. Publish
-POSIX/WSL development builds from this branch when a fix needs field testing;
-the current stable-line preview series is `0.3.x.devN`.
+POSIX/WSL development builds from this branch when a fix needs field testing.
+After the `v0.3.3` final release, the next stable-line preview series is
+`0.3.4.devN`, beginning at `0.3.4.dev1`; never append another `.devN` build to
+an already published final version.
 
 `archive/windows-conpty-deprecated` is the frozen, read-only archive of the
 abandoned native ConPTY compositor experiment. It ends at `v0.4.0.dev2`.

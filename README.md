@@ -162,7 +162,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `r` | Rename the focused session |
 | `s` | Toggle star — starred sessions pinned to top with ⭐ |
 | `k` | Kill the running agent process (keeps session file) |
-| `d` | Delete the focused session (prompts for confirmation) |
+| `d` | Delete the focused session (confirms, then finishes in background) |
 | `t` | Open or return to the managed terminal below the Target agent |
 | `T` | Return to that agent's managed Vim viewer, when open |
 | `m` | Switch agent mode (Claude Code ⇄ Codex) |
@@ -199,6 +199,11 @@ railmux creates the directory before starting the agent.
 The rename popup starts with the current title pre-filled. Press
 `Ctrl-U` to clear the entire input, `Enter` to save a non-empty title, or `Esc`
 to cancel.
+
+After a delete is confirmed, its popup closes immediately. The bottom-right
+status shows **Deleting “session name”…** while Railmux stops the exact
+provider session and removes its history in the background, then reports the
+final result.
 
 Press `/` in Projects, Sessions, or Running to filter that section. Active
 filters are marked with `[filtered]` and survive a soft restart; reopening `/`
@@ -332,8 +337,9 @@ internal context and encrypted reasoning are hidden. Codex rewind lineages and
 Claude Code `parentUuid` branches are projected onto the provider's current
 conversation: the retained prefix and replacement suffix remain visible, while
 the abandoned suffix is hidden. When Railmux observes a running Codex session
-advance to its rewind child, it also removes the abandoned terminal screen and
-tmux scrollback before Codex redraws the live pane.
+advance after rewind or steering, it resets only the current terminal view
+before Codex redraws. Retained tmux scrollback is not erased, and managed
+history continues from the canonical rollout without its abandoned suffix.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between
