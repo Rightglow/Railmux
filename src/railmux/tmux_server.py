@@ -645,3 +645,53 @@ def launcher_argv(
         "--inside-tmux",
         *forwarded_args,
     )
+
+
+def ensure_detached_launcher_session(
+    target: TmuxServerTarget,
+    launch_prefix: Sequence[str],
+    forwarded_args: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    timeout: float = 5.0,
+) -> str | None:
+    """Create the outer UI detached on one already-proven server.
+
+    Managed Windows uses this only when a proven existing server has no outer
+    UI, commonly because Soft Quit left provider sessions alive in another
+    Terminal Services session.  A new tmux client can then reject
+    ``new-session -A`` before the outer session exists, so the server-origin
+    terminal bridge has no immutable session to attach.
+
+    An exact pre/post server-PID check fences the mutation.  A concurrent
+    launcher may win the create race; resolving one exact resulting session is
+    success regardless of this client's ``new-session`` return code.
+    """
+    existing = target_session_id(target, "railmux", timeout=0.5)
+    if existing is not None:
+        return existing
+    if not launch_prefix or not target_is_live(target, timeout=1.0, env=env):
+        return None
+    try:
+        subprocess.run(
+            target_argv(
+                target,
+                "new-session",
+                "-d",
+                "-s",
+                "railmux",
+                *launch_prefix,
+                "--inside-tmux",
+                *forwarded_args,
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            env=None if env is None else dict(env),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if not target_is_live(target, timeout=1.0, env=env):
+        return None
+    return target_session_id(target, "railmux", timeout=1.0)

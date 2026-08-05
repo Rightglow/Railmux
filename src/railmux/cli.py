@@ -593,14 +593,28 @@ def main(argv: list[str] | None = None) -> int:
             if Path(sys.argv[0]).name == "__main__.py"
             else [sys.argv[0]]
         )
-        cmd = tmux_server.launcher_argv(launch_prefix, raw_args)
+        client_env = tmux_server.exec_environment()
         dedicated_session_id = (
             tmux_server.target_session_id(dedicated_target, "railmux")
             if dedicated_target is not None else None
         )
+        if dedicated_target is not None and dedicated_session_id is None:
+            from railmux.provider_paths import (
+                running_in_managed_windows_wrapper,
+            )
+            if running_in_managed_windows_wrapper():
+                dedicated_session_id = (
+                    tmux_server.ensure_detached_launcher_session(
+                        dedicated_target,
+                        launch_prefix,
+                        raw_args,
+                        env=client_env,
+                    )
+                )
+        cmd = tmux_server.launcher_argv(launch_prefix, raw_args)
         return _run_tmux_client_with_watchdog(
             cmd,
-            tmux_server.exec_environment(),
+            client_env,
             expected_target=dedicated_target,
             expected_session_id=dedicated_session_id,
         )

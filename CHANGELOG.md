@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev18] - 2026-08-05
+
+### Fixed
+
+- Restore the managed Windows UI after Soft Quit when detached Codex or Claude
+  sessions keep the dedicated tmux server alive in another Windows Terminal
+  Services session. Railmux now creates the missing outer UI session detached
+  on the same revalidated server before trying direct attach and its existing
+  terminal bridge; provider processes and history files remain untouched.
+
 ## [0.4.0.dev17] - 2026-08-05
 
 ### Fixed
@@ -2232,7 +2242,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev18...HEAD
+[0.4.0.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...v0.4.0.dev18
 [0.4.0.dev17]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...v0.4.0.dev17
 [0.4.0.dev16]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev15...v0.4.0.dev16
 [0.4.0.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev14...v0.4.0.dev15

@@ -163,10 +163,13 @@ shell and runs the ordinary POSIX product there.
 - The ordinary label-selected tmux attach remains the fast path. If Windows
   rejects only that terminal attachment while the same server and immutable
   Railmux session remain healthy, Railmux makes one fail-closed transparent
-  bridge attempt. The helper is spawned by that exact server, owns an
-  additional PTY-backed tmux client in the server's Windows Terminal Services
-  session, and forwards opaque bytes, resize, heartbeat, and exit frames to the
-  entry terminal. It never mirrors the UI, stores an origin preference,
+  bridge attempt. If Soft Quit preserved detached providers but removed the
+  outer UI, Railmux first creates only that missing outer session detached on
+  the revalidated existing server; it then uses the same direct-first and
+  immutable-session bridge checks. The helper is spawned by that exact server,
+  owns an additional PTY-backed tmux client in the server's Windows Terminal
+  Services session, and forwards opaque bytes, resize, heartbeat, and exit
+  frames to the entry terminal. It never mirrors the UI, stores an origin preference,
   detaches existing clients, or opens provider histories. A random same-user
   private endpoint uses an independent random name and nonce challenge and is
   removed by its creator. A later launch may clean a bounded old same-owner
@@ -321,6 +324,15 @@ owned F8/F9, status-control, right-click, and wheel bindings, and detaching left
 the isolated workspace healthy. This measures an empty-session SSH-origin
 terminal on that host; desktop Windows Terminal pointer behavior and
 authenticated provider restore remain manual checks.
+
+The dev18 candidate reproduced the field failure on the same Windows 10 host:
+Soft Quit removed the outer `railmux` session while a detached provider tmux
+session kept the dedicated server alive. The next candidate launch created
+only the missing outer UI detached through that unchanged server, resolved its
+immutable session ID, entered it from OpenSSH, and detached normally. The
+provider tmux session survived both launches and no provider/session file was
+opened for mutation. Automatic bridge selection from the desktop Windows
+Terminal side of the Terminal Services boundary remains a manual check.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

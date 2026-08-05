@@ -472,6 +472,73 @@ def test_prelaunch_recovery_is_scoped_to_the_dedicated_server(monkeypatch):
     assert os.environ["TMUX_PANE"] == "%9"
 
 
+def test_managed_windows_precreates_missing_outer_session_for_bridge(
+    monkeypatch,
+):
+    target = TmuxServerTarget("/tmp/tmux-private/railmux", 789)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda: target)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.is_current_server", lambda _target: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.target_session_id", lambda *_a, **_kw: None)
+    monkeypatch.setattr("railmux.cli.sys.argv", ["/opt/railmux/bin/railmux"])
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    prepared = MagicMock(return_value="$9")
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.ensure_detached_launcher_session", prepared)
+    run_client = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.cli._run_tmux_client_with_watchdog", run_client)
+
+    assert main(["--project", "/work"]) == 0
+
+    client_env = tmux_server.exec_environment()
+    prepared.assert_called_once_with(
+        target,
+        ["/opt/railmux/bin/railmux"],
+        ["--project", "/work"],
+        env=client_env,
+    )
+    assert run_client.call_args.kwargs == {
+        "expected_target": target,
+        "expected_session_id": "$9",
+    }
+
+
+def test_posix_missing_outer_session_keeps_ordinary_new_session_path(
+    monkeypatch,
+):
+    target = TmuxServerTarget("/tmp/tmux-private/railmux", 789)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda: target)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.is_current_server", lambda _target: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.target_session_id", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: False,
+    )
+    prepared = MagicMock()
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.ensure_detached_launcher_session", prepared)
+    run_client = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.cli._run_tmux_client_with_watchdog", run_client)
+
+    assert main([]) == 0
+
+    prepared.assert_not_called()
+    assert run_client.call_args.kwargs == {
+        "expected_target": target,
+        "expected_session_id": None,
+    }
+
+
 def test_local_tmux_watchdog_exits_and_records_after_consecutive_failures(
     monkeypatch, capsys,
 ):
