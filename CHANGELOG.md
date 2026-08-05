@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev24] - 2026-08-05
+
+### Added
+
+- Add fail-closed managed-Windows app-layer transitions. dev24+ UIs save state,
+  return displayed provider panes, and exec an exact content-bound new app;
+  the one-time dev11-dev23 migration is limited to a detached single controller
+  pane and rolls back to the old app if the new ready proof fails.
+- Record the exact private MSYS2 package inventory in a content-identity marker,
+  bind new app layers to it, expose read-only verification through
+  `railmux runtime status --verify`, and add explicit process-aware
+  `railmux runtime prune` cleanup with dry-run and optional cache removal.
+- Support `railmux config --remote` and `railmux doctor --remote` against an
+  already-installed managed Windows preview. Both commands share and pin the
+  POSIX/direct launch-family probe; `--remote-platform windows` skips the POSIX
+  attempt, while remote Windows runtime installation remains deliberately
+  manual.
+- Extend privacy-safe local doctor output with bounded managed runtime, content,
+  installed/running app, and transition status fields.
+
+### Changed
+
+- Make native Windows `doctor` and all noninteractive missing-runtime commands
+  read-only: they report the explicit `runtime install` next step and never
+  create even an app layer implicitly. Managed app venvs also refuse the POSIX
+  self-upgrade path and direct users to the native PowerShell owner.
+- Expand native Windows and real-MSYS2 CI coverage for runtime identity/drift,
+  transition rollback, safe pruning, provider-path projection, config/doctor
+  forwarding, direct Windows remote probing, and privacy contracts.
+
 ## [0.4.0.dev23] - 2026-08-05
 
 ### Added

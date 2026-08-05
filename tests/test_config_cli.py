@@ -199,11 +199,12 @@ def test_remote_context_hides_and_preserves_local_history_limit(
 def test_remote_option_dispatches_without_loading_local_config(monkeypatch):
     observed = {}
 
-    def run(destination, *, ssh_args, raw_argv):
+    def run(destination, *, ssh_args, raw_argv, remote_platform):
         observed.update(
             destination=destination,
             ssh_args=tuple(ssh_args),
             raw_argv=tuple(raw_argv),
+            remote_platform=remote_platform,
         )
         return 7
 
@@ -216,14 +217,16 @@ def test_remote_option_dispatches_without_loading_local_config(monkeypatch):
         "destination": "work",
         "ssh_args": ("-J", "jump"),
         "raw_argv": ("--remote", "work", "--ssh-arg=-J", "--ssh-arg=jump"),
+        "remote_platform": "auto",
     }
 
 
 def test_remote_option_accepts_ordered_grouped_ssh_arguments(monkeypatch):
     observed = {}
 
-    def run(_destination, *, ssh_args, raw_argv):
+    def run(_destination, *, ssh_args, raw_argv, remote_platform):
         observed["ssh_args"] = tuple(ssh_args)
+        observed["remote_platform"] = remote_platform
         return 0
 
     monkeypatch.setattr("railmux.remote_config.run_remote_config", run)
@@ -239,6 +242,22 @@ def test_remote_option_accepts_ordered_grouped_ssh_arguments(monkeypatch):
     assert observed["ssh_args"] == (
         "-F", "config", "-J", "jump", "-p", "2222",
     )
+    assert observed["remote_platform"] == "auto"
+
+
+def test_remote_option_forwards_explicit_windows_platform(monkeypatch):
+    observed = {}
+
+    def run(_destination, **kwargs):
+        observed.update(kwargs)
+        return 0
+
+    monkeypatch.setattr("railmux.remote_config.run_remote_config", run)
+
+    assert main([
+        "--remote", "work", "--remote-platform", "windows",
+    ]) == 0
+    assert observed["remote_platform"] == "windows"
 
 
 def test_remote_only_argument_errors_return_cli_status(capsys):

@@ -13,6 +13,7 @@ from railmux import __version__
 from railmux.fast_display_client import (
     ProbeError,
     RemoteHello,
+    RemoteLaunchMode,
     RemoteStartKind,
     RemoteStartup,
     _remote_server_args,
@@ -23,8 +24,9 @@ from railmux.fast_display_client import (
     build_remote_command_argv,
     build_remote_install_argv,
     build_remote_private_venv_install_argv,
-    build_ssh_argv,
+    probe_remote_launch,
     remote_install_help,
+    remote_windows_install_help,
 )
 from railmux.fast_display_protocol import REMOTE_CONFIG_PROTOCOL
 from railmux.terminal_status import (
@@ -63,7 +65,8 @@ def _start_probe(
     ssh_args: Sequence[str],
     *,
     install: str | None = None,
-) -> tuple[subprocess.Popen, RemoteStartup]:
+    remote_platform: str = "auto",
+) -> tuple[subprocess.Popen, RemoteStartup, RemoteLaunchMode]:
     remote_args = _probe_args()
     if install == "user":
         argv = build_remote_install_argv(
@@ -80,16 +83,15 @@ def _start_probe(
             ssh_args=ssh_args,
         )
     else:
-        argv = build_ssh_argv(
+        probe = probe_remote_launch(
             destination,
-            session="railmux",
-            width=_PROBE_WIDTH,
-            height=_PROBE_HEIGHT,
-            fps=_PROBE_FPS,
+            remote_args=remote_args,
             ssh_args=ssh_args,
+            remote_platform=remote_platform,
         )
+        return probe.process, probe.startup, probe.launch_mode
     process = _spawn_remote(argv)
-    return process, await_remote_startup(process)
+    return process, await_remote_startup(process), RemoteLaunchMode.POSIX
 
 
 def _version_order(remote_version: str) -> int | None:
@@ -172,9 +174,11 @@ def _ensure_remote_config_cli(
     ssh_args: Sequence[str],
     raw_argv: Sequence[str],
     *,
+    remote_platform: str = "auto",
     status: TransientStatusLine | None = None,
-) -> None:
-    process, startup = _start_probe(destination, ssh_args)
+) -> RemoteLaunchMode:
+    process, startup, launch_mode = _start_probe(
+        destination, ssh_args, remote_platform=remote_platform)
     if startup.kind is RemoteStartKind.TIMEOUT:
         _stop_unstarted_remote(process)
         raise ProbeError(
@@ -193,13 +197,22 @@ def _ensure_remote_config_cli(
             status=status,
         )
         if supported:
-            return
+            return launch_mode
         reason = (
             f"Remote Railmux {hello.version} does not support safe remote "
             "configuration."
         )
     else:
         reason = "Railmux is not installed or discoverable remotely."
+
+    windows_remote = bool(
+        launch_mode is RemoteLaunchMode.DIRECT
+        or hello is not None and hello.platform == "windows-msys2"
+    )
+    if windows_remote:
+        raise ProbeError(
+            f"{reason}\n{remote_windows_install_help(destination, __version__)}"
+        )
 
     if status is not None:
         status.clear()
@@ -209,7 +222,8 @@ def _ensure_remote_config_cli(
     ):
         raise ProbeError(remote_install_help(destination, __version__))
 
-    process, startup = _start_probe(destination, ssh_args, install="user")
+    process, startup, _launch_mode = _start_probe(
+        destination, ssh_args, install="user", remote_platform="posix")
     hello = _installed_probe_or_error(process, startup)
     if hello is not None:
         _stop_unstarted_remote(process)
@@ -219,7 +233,7 @@ def _ensure_remote_config_cli(
             status=status,
         )
         if supported:
-            return
+            return RemoteLaunchMode.POSIX
         raise ProbeError(
             "automatic installation completed but did not provide a compatible "
             "remote configuration command"
@@ -237,7 +251,8 @@ def _ensure_remote_config_cli(
             f"{remote_install_help(destination, __version__)}"
         )
 
-    process, startup = _start_probe(destination, ssh_args, install="venv")
+    process, startup, _launch_mode = _start_probe(
+        destination, ssh_args, install="venv", remote_platform="posix")
     hello = _installed_probe_or_error(process, startup)
     if hello is None:
         raise ProbeError(
@@ -255,6 +270,7 @@ def _ensure_remote_config_cli(
             "automatic private-environment installation completed but did not "
             "provide a compatible remote configuration command"
         )
+    return RemoteLaunchMode.POSIX
 
 
 def run_remote_config(
@@ -262,6 +278,7 @@ def run_remote_config(
     *,
     ssh_args: Sequence[str],
     raw_argv: Sequence[str],
+    remote_platform: str = "auto",
 ) -> int:
     """Negotiate safely, then run the target user's cooked config editor."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
@@ -282,10 +299,11 @@ def run_remote_config(
                 stream=sys.stderr,
             )
         )
-        _ensure_remote_config_cli(
+        launch_mode = _ensure_remote_config_cli(
             destination,
             ssh_args,
             raw_argv,
+            remote_platform=remote_platform,
             status=status,
         )
         status.show(
@@ -300,6 +318,7 @@ def run_remote_config(
             remote_args=("config", "--remote-context"),
             ssh_args=ssh_args,
             force_tty=True,
+            launch_mode=launch_mode,
         )
         result = subprocess.run(argv, check=False)
     except KeyboardInterrupt:

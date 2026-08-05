@@ -196,6 +196,7 @@ def test_doctor_remote_dispatches_read_only_remote_preflight(monkeypatch):
         "example",
         ssh_args=["-J", "jump"],
         json_output=True,
+        remote_platform="auto",
     )
     preflight.assert_not_called()
 
@@ -219,6 +220,7 @@ def test_doctor_ssh_accepts_grouped_arguments(monkeypatch):
         "example",
         ssh_args=["-J", "jump", "-p", "2222"],
         json_output=False,
+        remote_platform="auto",
     )
 
 
@@ -236,6 +238,24 @@ def test_doctor_legacy_ssh_alias_remains_compatible(monkeypatch):
         "example",
         ssh_args=[],
         json_output=False,
+        remote_platform="auto",
+    )
+
+
+def test_doctor_remote_forwards_explicit_windows_platform(monkeypatch):
+    remote_doctor = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.ssh_doctor.run_remote_ssh_doctor", remote_doctor)
+
+    assert main([
+        "doctor", "--remote", "example",
+        "--remote-platform", "windows",
+    ]) == 0
+    remote_doctor.assert_called_once_with(
+        "example",
+        ssh_args=[],
+        json_output=False,
+        remote_platform="windows",
     )
 
 

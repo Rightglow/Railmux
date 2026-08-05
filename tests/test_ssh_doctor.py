@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 from railmux import __version__, fast_display_client
 from railmux.fast_display_protocol import PROTOCOL_VERSION
+from railmux.fast_display_client import RemoteLaunchMode, RemoteProbe
 from railmux.ssh_doctor import (
     RemoteSshDoctorSnapshot,
     collect_remote_ssh_snapshot,
@@ -19,28 +20,27 @@ class _TTYBuffer(io.StringIO):
         return True
 
 
+def _patch_probe(monkeypatch, process, startup, *, mode=RemoteLaunchMode.POSIX):
+    probe = MagicMock(return_value=RemoteProbe(process, startup, mode))
+    stopped = MagicMock()
+    monkeypatch.setattr(fast_display_client, "probe_remote_launch", probe)
+    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", stopped)
+    return probe, stopped
+
+
 def test_remote_ssh_doctor_reads_hello_without_attaching_or_leaking_host(
     monkeypatch,
 ):
     destination = "private-user@secret-host"
     process = MagicMock()
-    built = MagicMock(return_value=["ssh", destination])
-    stopped = MagicMock()
     monkeypatch.setattr("railmux.ssh_doctor.shutil.which", lambda _name: "/usr/bin/ssh")
-    monkeypatch.setattr(fast_display_client, "build_ssh_argv", built)
-    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
-    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", stopped)
-    monkeypatch.setattr(
-        fast_display_client,
-        "await_remote_startup",
-        lambda _process, timeout: fast_display_client.RemoteStartup(
+    probe, stopped = _patch_probe(
+        monkeypatch,
+        process,
+        fast_display_client.RemoteStartup(
             fast_display_client.RemoteStartKind.HELLO,
             fast_display_client.RemoteHello(
-                __version__,
-                PROTOCOL_VERSION,
-                True,
-                True,
-            ),
+                __version__, PROTOCOL_VERSION, True, True),
         ),
     )
 
@@ -52,8 +52,8 @@ def test_remote_ssh_doctor_reads_hello_without_attaching_or_leaking_host(
     assert snapshot.read_only
     assert destination not in rendered
     assert "no session was attached, created, resized, or replaced" in rendered
-    assert built.call_args.kwargs["existing_session_only"] is True
-    assert built.call_args.kwargs["ssh_args"] == ("-J", "jump")
+    assert "--existing-session-only" in probe.call_args.kwargs["remote_args"]
+    assert probe.call_args.kwargs["ssh_args"] == ("-J", "jump")
     stopped.assert_called_once_with(process)
 
 
@@ -61,17 +61,10 @@ def test_remote_ssh_doctor_json_failure_is_scriptable_and_private(monkeypatch):
     destination = "secret-host"
     process = MagicMock()
     monkeypatch.setattr("railmux.ssh_doctor.shutil.which", lambda _name: "/usr/bin/ssh")
-    monkeypatch.setattr(
-        fast_display_client,
-        "build_ssh_argv",
-        lambda *_args, **_kwargs: ["ssh", destination],
-    )
-    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
-    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", lambda _p: None)
-    monkeypatch.setattr(
-        fast_display_client,
-        "await_remote_startup",
-        lambda _process, timeout: fast_display_client.RemoteStartup(
+    _patch_probe(
+        monkeypatch,
+        process,
+        fast_display_client.RemoteStartup(
             fast_display_client.RemoteStartKind.FAILED,
             returncode=255,
         ),
@@ -96,17 +89,10 @@ def test_remote_ssh_doctor_treats_same_protocol_version_drift_as_usable(
 ):
     process = MagicMock()
     monkeypatch.setattr("railmux.ssh_doctor.shutil.which", lambda _name: "/usr/bin/ssh")
-    monkeypatch.setattr(
-        fast_display_client,
-        "build_ssh_argv",
-        lambda *_args, **_kwargs: ["ssh", "host"],
-    )
-    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
-    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", lambda _p: None)
-    monkeypatch.setattr(
-        fast_display_client,
-        "await_remote_startup",
-        lambda _process, timeout: fast_display_client.RemoteStartup(
+    _patch_probe(
+        monkeypatch,
+        process,
+        fast_display_client.RemoteStartup(
             fast_display_client.RemoteStartKind.HELLO,
             fast_display_client.RemoteHello(
                 "0.1.0",
@@ -126,17 +112,10 @@ def test_remote_ssh_doctor_treats_same_protocol_version_drift_as_usable(
 def test_remote_ssh_doctor_reports_invalid_remote_config(monkeypatch):
     process = MagicMock()
     monkeypatch.setattr("railmux.ssh_doctor.shutil.which", lambda _name: "/usr/bin/ssh")
-    monkeypatch.setattr(
-        fast_display_client,
-        "build_ssh_argv",
-        lambda *_args, **_kwargs: ["ssh", "host"],
-    )
-    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
-    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", lambda _p: None)
-    monkeypatch.setattr(
-        fast_display_client,
-        "await_remote_startup",
-        lambda _process, timeout: fast_display_client.RemoteStartup(
+    _patch_probe(
+        monkeypatch,
+        process,
+        fast_display_client.RemoteStartup(
             fast_display_client.RemoteStartKind.HELLO,
             fast_display_client.RemoteHello(
                 __version__,
@@ -154,6 +133,35 @@ def test_remote_ssh_doctor_reports_invalid_remote_config(monkeypatch):
     assert snapshot.status == "config_invalid"
     assert not snapshot.compatible
     assert "railmux config" in (snapshot.detail or "")
+
+
+def test_remote_doctor_reports_windows_runtime_and_direct_family(monkeypatch):
+    process = MagicMock()
+    monkeypatch.setattr("railmux.ssh_doctor.shutil.which", lambda _name: "/usr/bin/ssh")
+    _patch_probe(
+        monkeypatch,
+        process,
+        fast_display_client.RemoteStartup(
+            fast_display_client.RemoteStartKind.HELLO,
+            fast_display_client.RemoteHello(
+                __version__,
+                PROTOCOL_VERSION,
+                True,
+                platform="windows-msys2",
+            ),
+        ),
+        mode=RemoteLaunchMode.DIRECT,
+    )
+
+    snapshot = collect_remote_ssh_snapshot(
+        "private-host", remote_platform="windows")
+    rendered = render_remote_ssh_text(snapshot)
+
+    assert snapshot.compatible
+    assert snapshot.remote_runtime == "windows-msys2"
+    assert snapshot.launch_family == "direct"
+    assert "Remote runtime: windows-msys2" in rendered
+    assert "Remote launch family: direct" in rendered
 
 
 def test_remote_doctor_progress_is_transient_and_private(monkeypatch):

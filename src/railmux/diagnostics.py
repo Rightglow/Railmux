@@ -38,7 +38,7 @@ from railmux.terminal_status import (
 _VERSION_RE = re.compile(
     r"(?<![A-Za-z0-9])v?(\d+(?:\.\d+){1,3}(?:[A-Za-z]|[-+][0-9A-Za-z.-]+)?)"
 )
-DOCTOR_SCHEMA_VERSION = 3
+DOCTOR_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,15 @@ class DirectoryDiagnostic:
 
 
 @dataclass(frozen=True)
+class ManagedWindowsDiagnostic:
+    runtime_id: str | None
+    app_version: str | None
+    base_content_id: str | None
+    running_ui_version: str | None
+    transition_status: str | None
+
+
+@dataclass(frozen=True)
 class DoctorSnapshot:
     """Versioned, privacy-safe authority shared by text and JSON output."""
 
@@ -103,6 +112,7 @@ class DoctorSnapshot:
     preferred_agent_display: str
     data_directories: dict[str, DirectoryDiagnostic]
     ssh_display: SshDisplayDiagnostic
+    managed_windows: ManagedWindowsDiagnostic | None = None
 
 
 def is_ssh_session(environ: dict[str, str] | None = None) -> bool:
@@ -350,6 +360,11 @@ def collect_doctor_snapshot(
             else _legacy_tmux_diagnostic()
         )
     )
+    managed_windows = None
+    if running_in_windows_wrapper(env):
+        from railmux.windows_ui_transition import diagnostic_status
+
+        managed_windows = ManagedWindowsDiagnostic(**diagnostic_status())
     return DoctorSnapshot(
         schema_version=DOCTOR_SCHEMA_VERSION,
         railmux_version=__version__,
@@ -376,6 +391,7 @@ def collect_doctor_snapshot(
             ),
         },
         ssh_display=read_ssh_display_diagnostic(),
+        managed_windows=managed_windows,
     )
 
 
@@ -495,7 +511,7 @@ def _ssh_display_text(diagnostic: SshDisplayDiagnostic) -> str:
 
 def render_doctor_text(snapshot: DoctorSnapshot) -> str:
     """Render the stable human report from the structured authority."""
-    lines = (
+    lines = [
         "Railmux diagnostics",
         f"Railmux: {snapshot.railmux_version}",
         f"Python: {snapshot.python_version}",
@@ -525,6 +541,22 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
         f"Config: {_config_text(snapshot.config)}",
         "Settings repair: run 'railmux config' (no tmux required)",
         f"Preferred agent display: {snapshot.preferred_agent_display}",
+    ]
+    if snapshot.managed_windows is not None:
+        managed = snapshot.managed_windows
+        identity = (
+            managed.base_content_id[:12]
+            if managed.base_content_id is not None
+            else "unavailable"
+        )
+        lines.extend((
+            f"Windows managed runtime: {managed.runtime_id or 'unavailable'}; "
+            f"content={identity}",
+            f"Windows app layer: installed={managed.app_version or 'unavailable'}, "
+            f"running={managed.running_ui_version or 'not running'}, "
+            f"transition={managed.transition_status or 'none'}",
+        ))
+    lines.extend((
         (
             "Most recent railmux ssh (host not recorded): "
             f"{_ssh_display_text(snapshot.ssh_display)}"
@@ -535,7 +567,7 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
             "Privacy: session IDs, transcript content, credentials, hostnames, "
             "and raw custom paths are omitted; review before sharing."
         ),
-    )
+    ))
     return "\n".join(lines)
 
 

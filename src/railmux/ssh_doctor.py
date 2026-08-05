@@ -25,7 +25,7 @@ from railmux.terminal_status import (
 )
 
 
-SSH_DOCTOR_SCHEMA_VERSION = 2
+SSH_DOCTOR_SCHEMA_VERSION = 3
 _PROBE_TIMEOUT = 15.0
 
 
@@ -43,6 +43,8 @@ class RemoteSshDoctorSnapshot:
     remote_tmux: bool | None = None
     remote_config_status: str | None = None
     remote_tmux_configured: bool | None = None
+    remote_runtime: str | None = None
+    launch_family: str | None = None
     compatible: bool = False
     detail: str | None = None
     read_only: bool = True
@@ -53,6 +55,7 @@ def collect_remote_ssh_snapshot(
     destination: str,
     *,
     ssh_args: Sequence[str] = (),
+    remote_platform: str = "auto",
 ) -> RemoteSshDoctorSnapshot:
     """Probe only the pre-attach hello; never send the mutation token."""
     if shutil.which("ssh") is None:
@@ -67,44 +70,57 @@ def collect_remote_ssh_snapshot(
     # Import lazily so ordinary local diagnostics do not load the interactive
     # display client or create a dependency cycle.
     from railmux.fast_display_client import (
+        ProbeError,
         RemoteStartKind,
-        _spawn_remote,
         _stop_unstarted_remote,
-        await_remote_startup,
-        build_ssh_argv,
+        _remote_server_args,
+        probe_remote_launch,
     )
 
-    argv = build_ssh_argv(
-        destination,
+    remote_args = _remote_server_args(
         session="railmux",
         width=80,
         height=24,
         fps=20.0,
-        ssh_args=ssh_args,
         existing_session_only=True,
     )
     try:
-        process = _spawn_remote(argv)
-    except RuntimeError as exc:
+        probe = probe_remote_launch(
+            destination,
+            remote_args=remote_args,
+            ssh_args=ssh_args,
+            remote_platform=remote_platform,
+            timeout=_PROBE_TIMEOUT,
+        )
+    except (ProbeError, RuntimeError) as exc:
         return RemoteSshDoctorSnapshot(
             SSH_DOCTOR_SCHEMA_VERSION,
-            "ssh_unavailable",
+            "platform_mismatch" if isinstance(exc, ProbeError) else "ssh_unavailable",
             __version__,
             PROTOCOL_VERSION,
             detail=str(exc),
         )
-    try:
-        startup = await_remote_startup(process, timeout=_PROBE_TIMEOUT)
-    finally:
-        _stop_unstarted_remote(process)
+    process = probe.process
+    startup = probe.startup
+    _stop_unstarted_remote(process)
 
     if startup.kind is RemoteStartKind.MISSING:
         return RemoteSshDoctorSnapshot(
             SSH_DOCTOR_SCHEMA_VERSION,
-            "railmux_missing",
+            (
+                "windows_railmux_missing"
+                if probe.launch_mode.value == "direct"
+                else "railmux_missing"
+            ),
             __version__,
             PROTOCOL_VERSION,
-            detail="remote Railmux is not installed or discoverable",
+            launch_family=probe.launch_mode.value,
+            detail=(
+                "install matching Railmux from PowerShell and run 'railmux "
+                "runtime install --yes' on the remote Windows account"
+                if probe.launch_mode.value == "direct"
+                else "remote Railmux is not installed or discoverable"
+            ),
         )
     if startup.kind is RemoteStartKind.TIMEOUT:
         return RemoteSshDoctorSnapshot(
@@ -112,6 +128,7 @@ def collect_remote_ssh_snapshot(
             "timeout",
             __version__,
             PROTOCOL_VERSION,
+            launch_family=probe.launch_mode.value,
             detail="timed out waiting for the remote compatibility hello",
         )
     if startup.kind is not RemoteStartKind.HELLO or startup.hello is None:
@@ -125,6 +142,7 @@ def collect_remote_ssh_snapshot(
             "connection_failed",
             __version__,
             PROTOCOL_VERSION,
+            launch_family=probe.launch_mode.value,
             detail=detail,
         )
 
@@ -141,6 +159,8 @@ def collect_remote_ssh_snapshot(
             remote_tmux=hello.tmux,
             remote_config_status=hello.config_status,
             remote_tmux_configured=hello.tmux_configured,
+            remote_runtime=hello.platform,
+            launch_family=probe.launch_mode.value,
             detail="run 'railmux config' on the remote host to repair or reset it",
         )
     facts = CompatibilityFacts(
@@ -182,12 +202,19 @@ def collect_remote_ssh_snapshot(
         remote_tmux=hello.tmux,
         remote_config_status=hello.config_status,
         remote_tmux_configured=hello.tmux_configured,
+        remote_runtime=hello.platform,
+        launch_family=probe.launch_mode.value,
         compatible=compatible,
         detail=(
             "run 'railmux config' on the remote host to correct or reset the "
             "tmux executable"
             if status == "configured_tmux_missing"
-            else decision.reason or decision.warning
+            else (
+                "update the remote Windows user package and managed runtime "
+                "from PowerShell"
+                if hello.platform == "windows-msys2" and not compatible
+                else decision.reason or decision.warning
+            )
         ),
     )
 
@@ -218,6 +245,10 @@ def render_remote_ssh_text(snapshot: RemoteSshDoctorSnapshot) -> str:
         lines.append(f"Remote config: {snapshot.remote_config_status}")
     if snapshot.remote_tmux_configured:
         lines.append("Remote tmux source: configured executable")
+    if snapshot.remote_runtime is not None:
+        lines.append(f"Remote runtime: {snapshot.remote_runtime}")
+    if snapshot.launch_family is not None:
+        lines.append(f"Remote launch family: {snapshot.launch_family}")
     lines.append("Compatible now: " + ("yes" if snapshot.compatible else "no"))
     if snapshot.detail:
         lines.append(f"Detail: {snapshot.detail}")
@@ -291,6 +322,7 @@ def run_remote_ssh_doctor(
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
     json_output: bool = False,
+    remote_platform: str = "auto",
 ) -> int:
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
@@ -306,7 +338,11 @@ def run_remote_ssh_doctor(
         )
     )
     try:
-        snapshot = collect_remote_ssh_snapshot(destination, ssh_args=ssh_args)
+        snapshot = collect_remote_ssh_snapshot(
+            destination,
+            ssh_args=ssh_args,
+            remote_platform=remote_platform,
+        )
     finally:
         status.clear()
     if json_output:

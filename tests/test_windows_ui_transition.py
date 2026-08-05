@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+import urwid
+
+from railmux import tmux_server, windows_ui_transition as transition
+from railmux.ui import app as app_module
+from railmux.ui.app import App
+
+
+RUNTIME = "msys2-2026-03-22"
+CONTENT = "a" * 64
+TARGET_APP = "railmux-0.4.0.dev24"
+TARGET_VERSION = "0.4.0.dev24"
+TARGET = tmux_server.TmuxServerTarget("/tmp/private-railmux.sock", 123)
+
+
+def _identity(version: str = "0.4.0.dev23") -> transition.UiAppIdentity:
+    return transition.UiAppIdentity(
+        RUNTIME,
+        f"railmux-{version}",
+        version,
+        CONTENT,
+        "$1",
+        "%2",
+        456,
+    )
+
+
+def _validated_tree(monkeypatch, tmp_path: Path) -> Path:
+    base_marker = tmp_path / "railmux-base.json"
+    content_marker = tmp_path / "railmux-base-content-v1.json"
+    applications = tmp_path / "opt" / "railmux" / "apps"
+    application = applications / TARGET_APP
+    executable = application / "venv" / "bin" / "railmux"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    base_marker.write_text(
+        json.dumps({"schema": 1, "runtime": RUNTIME}), encoding="utf-8")
+    content_marker.write_text(
+        json.dumps({
+            "schema": 1,
+            "runtime": RUNTIME,
+            "content_id": CONTENT,
+        }),
+        encoding="utf-8",
+    )
+    (application / "railmux-app.json").write_text(
+        json.dumps({
+            "schema": 2,
+            "runtime": RUNTIME,
+            "railmux": TARGET_VERSION,
+            "base_content_id": CONTENT,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(transition, "_BASE_MARKER", base_marker)
+    monkeypatch.setattr(transition, "_BASE_CONTENT_MARKER", content_marker)
+    monkeypatch.setattr(transition, "_APP_ROOT", applications)
+    return executable
+
+
+def test_upgrade_exec_requires_exact_content_bound_app(monkeypatch, tmp_path):
+    executable = _validated_tree(monkeypatch, tmp_path)
+    request = transition.UpgradeRequest(
+        RUNTIME, TARGET_APP, TARGET_VERSION, CONTENT, "%2", "b" * 32)
+
+    assert transition.upgrade_exec_argv(
+        request,
+        ["old-railmux", "--inside-tmux", "--recover-ui-upgrade"],
+    ) == [str(executable), "--inside-tmux"]
+
+    (tmp_path / "railmux-base-content-v1.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "runtime": RUNTIME,
+            "content_id": "c" * 64,
+        }),
+        encoding="utf-8",
+    )
+    assert transition.upgrade_exec_argv(request, ["old-railmux"]) is None
+
+
+def test_attached_cooperative_ui_is_never_mutated(monkeypatch, tmp_path):
+    _validated_tree(monkeypatch, tmp_path)
+    monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
+    monkeypatch.setattr(transition, "_transition_lock", _always_locked)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: _identity())
+    monkeypatch.setattr(
+        transition, "_session_shape", lambda *_args: (1, (("%2", 456, False),), "%2"))
+    requested = []
+    monkeypatch.setattr(
+        transition, "_request_cooperative", lambda *_args, **_kwargs: requested.append(1))
+
+    result = transition.ensure_current_ui(
+        TARGET,
+        "$1",
+        runtime=RUNTIME,
+        target_app=TARGET_APP,
+        target_version=TARGET_VERSION,
+        forwarded_args=(),
+    )
+
+    assert result.status == "pending"
+    assert requested == []
+
+
+class _always_locked:
+    def __init__(self, *_args):
+        pass
+
+    def __enter__(self):
+        return True
+
+    def __exit__(self, *_args):
+        return False
+
+
+def test_detached_cooperative_ui_requests_exact_upgrade(monkeypatch, tmp_path):
+    _validated_tree(monkeypatch, tmp_path)
+    monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
+    monkeypatch.setattr(transition, "_transition_lock", _always_locked)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: _identity())
+    monkeypatch.setattr(
+        transition, "_session_shape", lambda *_args: (0, (("%2", 456, False),), "%2"))
+    requested = []
+    monkeypatch.setattr(
+        transition,
+        "_request_cooperative",
+        lambda *_args, **kwargs: requested.append(kwargs) or True,
+    )
+    monkeypatch.setattr(transition, "_wait_for_app", lambda *_args, **_kwargs: True)
+
+    result = transition.ensure_current_ui(
+        TARGET,
+        "$1",
+        runtime=RUNTIME,
+        target_app=TARGET_APP,
+        target_version=TARGET_VERSION,
+        forwarded_args=("--project", "/work"),
+    )
+
+    assert result.status == "updated"
+    assert requested == [{
+        "target_app": TARGET_APP,
+        "target_version": TARGET_VERSION,
+        "base_content_id": CONTENT,
+    }]
+
+
+def test_legacy_failure_rolls_back_without_new_hidden_argument(
+    monkeypatch, tmp_path,
+):
+    _validated_tree(monkeypatch, tmp_path)
+    old_app = "railmux-0.4.0.dev23"
+    old_root = tmp_path / "opt" / "railmux" / "apps" / old_app
+    old_executable = old_root / "venv" / "bin" / "railmux"
+    old_executable.parent.mkdir(parents=True)
+    old_executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    (old_root / "railmux-app.json").write_text(
+        json.dumps({
+            "schema": 1,
+            "runtime": RUNTIME,
+            "railmux": "0.4.0.dev23",
+        }),
+        encoding="utf-8",
+    )
+    shape = (0, (("%2", 456, False),), "%2")
+    monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
+    monkeypatch.setattr(transition, "_transition_lock", _always_locked)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: None)
+    monkeypatch.setattr(transition, "_session_shape", lambda *_args: shape)
+    monkeypatch.setattr(
+        transition, "_legacy_app_from_pane",
+        lambda *_args: (old_app, "0.4.0.dev23"),
+    )
+    monkeypatch.setattr(transition, "_set_target_option", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(transition, "_set_status", lambda *_args: None)
+    monkeypatch.setattr(
+        transition.windows_tmux_lifecycle,
+        "clear_empty_server_exit",
+        lambda: None,
+    )
+    calls = []
+    monkeypatch.setattr(
+        transition,
+        "_respawn",
+        lambda *_args, **kwargs: calls.append(kwargs) or True,
+    )
+    monkeypatch.setattr(transition, "_wait_for_app", lambda *_args, **_kwargs: False)
+
+    result = transition.ensure_current_ui(
+        TARGET,
+        "$1",
+        runtime=RUNTIME,
+        target_app=TARGET_APP,
+        target_version=TARGET_VERSION,
+        forwarded_args=("--project", "/work"),
+    )
+
+    assert result.status == "pending"
+    assert [call["recovery_entry"] for call in calls] == [True, False]
+    assert calls[1]["app"] == old_app
+
+
+def test_legacy_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
+    _validated_tree(monkeypatch, tmp_path)
+    monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
+    monkeypatch.setattr(transition, "_transition_lock", _always_locked)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: None)
+    monkeypatch.setattr(
+        transition,
+        "_session_shape",
+        lambda *_args: (0, (("%2", 456, False), ("%3", 789, False)), "%2"),
+    )
+    respawn = []
+    monkeypatch.setattr(
+        transition, "_respawn", lambda *_args, **_kwargs: respawn.append(1))
+
+    result = transition.ensure_current_ui(
+        TARGET,
+        "$1",
+        runtime=RUNTIME,
+        target_app=TARGET_APP,
+        target_version=TARGET_VERSION,
+        forwarded_args=(),
+    )
+
+    assert result.status == "pending"
+    assert respawn == []
+
+
+def test_cooperative_wake_saves_state_and_returns_provider_panes(monkeypatch):
+    request = transition.UpgradeRequest(
+        RUNTIME, TARGET_APP, TARGET_VERSION, CONTENT, "%2", "b" * 32)
+    monkeypatch.setattr(app_module, "running_in_windows_wrapper", lambda: True)
+    monkeypatch.setattr(
+        transition, "consume_upgrade_request", lambda: request)
+    app = App.__new__(App)
+    observed = []
+    app._save_state = lambda **kwargs: observed.append(("save", kwargs))
+    app._publish_managed_restart_handoff = lambda: observed.append(("handoff", {}))
+    app._teardown_tmux = lambda **kwargs: observed.append(("teardown", kwargs))
+    app._soft_quit_flag = False
+    app._ui_upgrade_request = None
+
+    with pytest.raises(urwid.ExitMainLoop):
+        app._on_input("f19")
+
+    assert app._soft_quit_flag is True
+    assert app._ui_upgrade_request == request
+    assert observed == [
+        ("save", {"portable_right": True}),
+        ("handoff", {}),
+        ("teardown", {"defer_outer": True}),
+    ]

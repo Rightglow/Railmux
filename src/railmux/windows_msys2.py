@@ -74,6 +74,7 @@ RUNTIME_SCHEMA = 1
 _RUNTIME_OVERRIDE = "RAILMUX_MSYS2_ROOT"
 _RUNTIME_MARKER = "railmux-runtime.json"
 _BASE_MARKER = "railmux-base.json"
+_BASE_CONTENT_MARKER = "railmux-base-content-v1.json"
 _APP_MARKER = "railmux-app.json"
 _APP_ROOT = "/opt/railmux/apps"
 _LEGACY_RAILMUX_EXECUTABLE = "/opt/railmux/venv/bin/railmux"
@@ -103,6 +104,13 @@ _PACKAGE_URL_COMMAND = (
     f"pacman --config {_PACMAN_CONFIG} -Sp --print-format '%l' "
     f"--needed {_PACMAN_PACKAGES} 2>/dev/null"
 )
+_PACKAGE_INVENTORY_COMMAND = "set -o pipefail; pacman -Q | LC_ALL=C sort"
+_PACKAGE_INVENTORY_LIMIT = 1024 * 1024
+_CORE_RUNTIME_PACKAGES = ("tmux", "python", "python-pip")
+_IN_USE_APPS_COMMAND = (
+    "for f in /proc/[0-9]*/cmdline; do "
+    "[ -r \"$f\" ] || continue; tr '\\0' '\\n' <\"$f\"; done"
+)
 _VENV_COMMAND = 'python -m venv "$1/venv"'
 _PACKAGE_COMMAND = (
     'cache=$(cygpath -u "$3") && mkdir -p "$cache" && '
@@ -118,6 +126,39 @@ class RuntimeErrorBase(RuntimeError):
 
 class RuntimeInstallError(RuntimeErrorBase):
     """A managed runtime could not be installed transactionally."""
+
+
+@dataclass(frozen=True)
+class BaseContentIdentity:
+    """Exact package content bound to one otherwise immutable shared base."""
+
+    content_id: str
+    package_count: int
+    core_packages: Mapping[str, str]
+
+    def marker(self) -> dict[str, object]:
+        return {
+            "schema": 1,
+            "runtime": MSYS2_RUNTIME_ID,
+            "archive_sha256": MSYS2_ARCHIVE_SHA256,
+            "content_id": self.content_id,
+            "package_count": self.package_count,
+            "core_packages": dict(self.core_packages),
+        }
+
+
+@dataclass(frozen=True)
+class RuntimePrunePlan:
+    """Bounded, marker-validated managed files eligible for explicit removal."""
+
+    root: Path
+    remove_apps: tuple[Path, ...]
+    retained_apps: tuple[str, ...]
+    pip_cache: Path | None = None
+
+    @property
+    def empty(self) -> bool:
+        return not self.remove_apps and self.pip_cache is None
 
 
 Probe = Callable[..., subprocess.CompletedProcess[bytes]]
@@ -519,6 +560,61 @@ def managed_root(environ: Mapping[str, str]) -> Path | None:
     return shared if shared is not None else base / "shared" / MSYS2_RUNTIME_ID
 
 
+def managed_runtime_status(
+    *,
+    version: str,
+    environ: Mapping[str, str],
+    verify: bool = False,
+    probe: Probe | None = None,
+) -> dict[str, object]:
+    """Return bounded native-bootstrap state without installing anything."""
+    root = managed_root(environ)
+    if root is None or not root.exists():
+        return {
+            "schema": 1,
+            "runtime": MSYS2_RUNTIME_ID,
+            "status": "not_installed",
+            "current_app": False,
+            "layers": [],
+        }
+    base_valid = _base_marker_matches(root)
+    identity = _decode_base_content_marker(root) if base_valid else None
+    layers = _marked_app_versions(root) if base_valid else None
+    status = "ready" if base_valid and identity is not None else "incomplete"
+    result: dict[str, object] = {
+        "schema": 1,
+        "runtime": MSYS2_RUNTIME_ID,
+        "status": status,
+        "base_marker": "valid" if base_valid else "invalid",
+        "content_identity": (
+            identity.content_id if identity is not None else None
+        ),
+        "package_count": (
+            identity.package_count if identity is not None else None
+        ),
+        "core_packages": (
+            dict(identity.core_packages) if identity is not None else None
+        ),
+        "current_app": bool(
+            layers is not None and version in layers
+        ),
+        "layers": sorted(layers or (), key=_version_key, reverse=True),
+    }
+    if verify and identity is not None:
+        try:
+            observed = _collect_base_content_identity(
+                root, environ=environ, probe=_probe if probe is None else probe)
+        except RuntimeInstallError:
+            result["content_verification"] = "unavailable"
+        else:
+            result["content_verification"] = (
+                "match"
+                if observed.content_id == identity.content_id
+                else "drift"
+            )
+    return result
+
+
 def _app_name(version: str) -> str:
     return f"railmux-{version}"
 
@@ -579,21 +675,297 @@ def _base_marker_matches(root: Path) -> bool:
     }
 
 
+def _decode_base_content_marker(root: Path) -> BaseContentIdentity | None:
+    payload = _read_json_marker(root / _BASE_CONTENT_MARKER)
+    if not isinstance(payload, dict):
+        return None
+    content_id = payload.get("content_id")
+    package_count = payload.get("package_count")
+    core = payload.get("core_packages")
+    if (
+        payload.get("schema") != 1
+        or payload.get("runtime") != MSYS2_RUNTIME_ID
+        or payload.get("archive_sha256") != MSYS2_ARCHIVE_SHA256
+        or not isinstance(content_id, str)
+        or re.fullmatch(r"[0-9a-f]{64}", content_id) is None
+        or not isinstance(package_count, int)
+        or isinstance(package_count, bool)
+        or not 1 <= package_count <= 4096
+        or not isinstance(core, dict)
+        or set(core) != set(_CORE_RUNTIME_PACKAGES)
+        or any(
+            not isinstance(value, str)
+            or not value
+            or len(value) > 128
+            or any(ord(char) < 0x20 or ord(char) > 0x7e for char in value)
+            for value in core.values()
+        )
+    ):
+        return None
+    return BaseContentIdentity(content_id, package_count, dict(core))
+
+
+def _collect_base_content_identity(
+    root: Path,
+    *,
+    environ: Mapping[str, str],
+    probe: Probe = _probe,
+) -> BaseContentIdentity:
+    """Read the signed pacman database view without changing the base."""
+    runtime = Msys2Runtime(root, managed=False)
+    try:
+        result = probe(
+            _bash_command(root, _PACKAGE_INVENTORY_COMMAND),
+            env=runtime.environment(environ),
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeInstallError(
+            "could not inventory the private MSYS2 package set"
+        ) from exc
+    raw = result.stdout
+    if result.returncode or not isinstance(raw, bytes) or not raw:
+        raise RuntimeInstallError(
+            "the private MSYS2 package inventory was unavailable"
+        )
+    if len(raw) > _PACKAGE_INVENTORY_LIMIT:
+        raise RuntimeInstallError(
+            "the private MSYS2 package inventory exceeded its safety bound"
+        )
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeInstallError(
+            "the private MSYS2 package inventory was not UTF-8"
+        ) from exc
+    rows = text.splitlines()
+    if not rows or rows != sorted(rows) or len(rows) > 4096:
+        raise RuntimeInstallError(
+            "the private MSYS2 package inventory was invalid"
+        )
+    packages: dict[str, str] = {}
+    normalized: list[str] = []
+    for row in rows:
+        fields = row.split(" ", 1)
+        if (
+            len(fields) != 2
+            or not fields[0]
+            or not fields[1]
+            or fields[0] in packages
+            or any(ord(char) < 0x20 or ord(char) > 0x7e for char in row)
+        ):
+            raise RuntimeInstallError(
+                "the private MSYS2 package inventory was invalid"
+            )
+        packages[fields[0]] = fields[1]
+        normalized.append(row)
+    if any(name not in packages for name in _CORE_RUNTIME_PACKAGES):
+        raise RuntimeInstallError(
+            "the private MSYS2 package inventory omitted a required package"
+        )
+    encoded = ("\n".join(normalized) + "\n").encode("ascii")
+    return BaseContentIdentity(
+        hashlib.sha256(encoded).hexdigest(),
+        len(packages),
+        {name: packages[name] for name in _CORE_RUNTIME_PACKAGES},
+    )
+
+
+def _ensure_base_content_identity(
+    root: Path,
+    *,
+    environ: Mapping[str, str],
+    probe: Probe,
+) -> BaseContentIdentity:
+    existing = _decode_base_content_marker(root)
+    if existing is not None:
+        return existing
+    identity = _collect_base_content_identity(
+        root, environ=environ, probe=probe)
+    _write_json_marker(root / _BASE_CONTENT_MARKER, identity.marker())
+    return identity
+
+
 def _app_marker_matches(root: Path, *, app_name: str, version: str) -> bool:
     application = _app_root(root, app_name=app_name)
     if application.is_symlink() or not application.is_dir():
         return False
-    return _read_json_marker(application / _APP_MARKER) == {
+    payload = _read_json_marker(application / _APP_MARKER)
+    if payload == {
         "schema": RUNTIME_SCHEMA,
         "runtime": MSYS2_RUNTIME_ID,
         "railmux": version,
-    }
+    }:
+        return True
+    identity = _decode_base_content_marker(root)
+    return bool(
+        identity is not None
+        and payload == {
+            "schema": 2,
+            "runtime": MSYS2_RUNTIME_ID,
+            "railmux": version,
+            "base_content_id": identity.content_id,
+        }
+    )
 
 
 def _version_key(version: str) -> tuple[tuple[int, ...], int]:
     base, separator, dev = version.partition(".dev")
     numbers = tuple(int(part) for part in base.split("."))
     return numbers, int(dev) if separator else sys.maxsize
+
+
+def _marked_app_versions(root: Path) -> dict[str, Path] | None:
+    applications = root / "opt" / "railmux" / "apps"
+    try:
+        candidates = list(applications.iterdir())
+    except FileNotFoundError:
+        return {}
+    except OSError:
+        return None
+    result: dict[str, Path] = {}
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_dir():
+            continue
+        prefix = "railmux-"
+        if not candidate.name.startswith(prefix):
+            continue
+        version = candidate.name[len(prefix):]
+        if (
+            _VERSION_RE.fullmatch(version)
+            and _app_marker_matches(
+                root, app_name=candidate.name, version=version)
+        ):
+            result[version] = candidate
+    return result
+
+
+def _in_use_app_names(
+    root: Path,
+    *,
+    environ: Mapping[str, str],
+    probe: Probe = _probe,
+) -> frozenset[str] | None:
+    """Inventory every process argv; ambiguity denies destructive pruning."""
+    runtime = Msys2Runtime(root, managed=False)
+    try:
+        result = probe(
+            _bash_command(root, _IN_USE_APPS_COMMAND),
+            env=runtime.environment(environ),
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode or len(result.stdout) > _PACKAGE_INVENTORY_LIMIT:
+        return None
+    try:
+        text = result.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    pattern = re.compile(
+        r"(?:^|/)opt/railmux/apps/"
+        r"(railmux-[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)(?:/|$)"
+    )
+    return frozenset(match.group(1) for match in pattern.finditer(text))
+
+
+def plan_managed_runtime_prune(
+    *,
+    version: str,
+    environ: Mapping[str, str],
+    include_caches: bool = False,
+    probe: Probe = _probe,
+) -> RuntimePrunePlan:
+    """Build a fail-closed plan without deleting any file."""
+    if not _VERSION_RE.fullmatch(version):
+        raise RuntimeInstallError("the Railmux package version is invalid")
+    if environ.get(_RUNTIME_OVERRIDE, "").strip():
+        raise RuntimeInstallError(
+            "RAILMUX_MSYS2_ROOT selects a user-owned runtime; Railmux will "
+            "not prune it"
+        )
+    root = managed_root(environ)
+    cache = _managed_cache(environ)
+    if root is None or cache is None or not _base_marker_matches(root):
+        raise RuntimeInstallError("a complete Railmux-managed runtime was not found")
+    layers = _marked_app_versions(root)
+    in_use = _in_use_app_names(root, environ=environ, probe=probe)
+    if layers is None or in_use is None:
+        raise RuntimeInstallError(
+            "could not prove which Railmux app layers are inactive; nothing "
+            "was removed"
+        )
+    current_name = _app_name(version)
+    ordered = sorted(layers, key=_version_key, reverse=True)
+    retained = {current_name, *in_use}
+    for candidate in ordered:
+        if candidate != version:
+            retained.add(_app_name(candidate))
+            break
+    remove = tuple(
+        layers[candidate]
+        for candidate in ordered
+        if _app_name(candidate) not in retained
+    )
+    pip_cache = cache / _PIP_CACHE_NAME if include_caches else None
+    if pip_cache is not None:
+        _validate_pip_cache_path(pip_cache)
+        if not pip_cache.exists():
+            pip_cache = None
+    return RuntimePrunePlan(
+        root,
+        remove,
+        tuple(sorted(retained)),
+        pip_cache,
+    )
+
+
+def apply_managed_runtime_prune(
+    plan: RuntimePrunePlan,
+    *,
+    version: str,
+    environ: Mapping[str, str],
+    probe: Probe = _probe,
+    lock_factory: Callable[[Path], object] | None = None,
+) -> RuntimePrunePlan:
+    """Re-plan under the install lock, then remove only unchanged candidates."""
+    base = _managed_base(environ)
+    if base is None:
+        raise RuntimeInstallError("LOCALAPPDATA is unavailable")
+    effective_lock = install_lock if lock_factory is None else lock_factory
+    with effective_lock(base):
+        current = plan_managed_runtime_prune(
+            version=version,
+            environ=environ,
+            include_caches=plan.pip_cache is not None,
+            probe=probe,
+        )
+        if current.root != plan.root or current.remove_apps != plan.remove_apps:
+            raise RuntimeInstallError(
+                "the managed runtime changed while pruning; nothing was removed"
+            )
+        for application in current.remove_apps:
+            app_name = application.name
+            candidate_version = app_name.removeprefix("railmux-")
+            if (
+                application.is_symlink()
+                or not application.is_dir()
+                or not _app_marker_matches(
+                    current.root,
+                    app_name=app_name,
+                    version=candidate_version,
+                )
+            ):
+                raise RuntimeInstallError(
+                    "an app layer changed while pruning; remaining files were "
+                    "left untouched"
+                )
+            shutil.rmtree(application)
+        if current.pip_cache is not None:
+            _validate_pip_cache_path(current.pip_cache)
+            if current.pip_cache.exists():
+                shutil.rmtree(current.pip_cache)
+        return current
 
 
 def _find_shared_root(base: Path) -> Path | None:
@@ -1273,12 +1645,20 @@ def _write_base_marker(root: Path) -> None:
 
 
 def _write_app_marker(app_root: Path, *, version: str) -> None:
+    identity = _decode_base_content_marker(
+        app_root.parents[3]
+    )
+    if identity is None:
+        raise RuntimeInstallError(
+            "the shared MSYS2 content identity was not published"
+        )
     _write_json_marker(
         app_root / _APP_MARKER,
         {
-            "schema": RUNTIME_SCHEMA,
+            "schema": 2,
             "runtime": MSYS2_RUNTIME_ID,
             "railmux": version,
+            "base_content_id": identity.content_id,
         },
     )
 
@@ -1621,6 +2001,18 @@ def install_managed_runtime(
                             level="muted",
                         )
 
+                    identity = _ensure_base_content_identity(
+                        shared_root,
+                        environ=environ,
+                        probe=probe,
+                    )
+                    reporter.note(
+                        "Verified private base identity "
+                        f"{identity.content_id[:12]} · "
+                        f"{identity.package_count} packages.",
+                        level="muted",
+                    )
+
                     reporter.phase(2, 3, f"Installing Railmux {version} app layer")
                     _install_application(
                         shared_root,
@@ -1777,6 +2169,18 @@ def install_managed_runtime(
                         mirror_optimizer=mirror_optimizer,
                     )
                     reporter.done()
+
+                    identity = _ensure_base_content_identity(
+                        root,
+                        environ=environ,
+                        probe=probe,
+                    )
+                    reporter.note(
+                        "Recorded private base identity "
+                        f"{identity.content_id[:12]} · "
+                        f"{identity.package_count} packages.",
+                        level="muted",
+                    )
 
                     reporter.phase(6, 7, f"Installing Railmux {version}")
                     _install_application(

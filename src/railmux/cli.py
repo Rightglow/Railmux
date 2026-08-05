@@ -442,9 +442,20 @@ def main(argv: list[str] | None = None) -> int:
             metavar="ARGS",
             help="a quoted group of ssh arguments for --remote",
         )
+        doctor_parser.add_argument(
+            "--remote-platform",
+            choices=("auto", "posix", "windows"),
+            default="auto",
+            help=(
+                "remote shell family for --remote: auto, posix, or windows "
+                "(default: auto)"
+            ),
+        )
         doctor_args = doctor_parser.parse_args(raw_args[1:])
         if doctor_args.ssh_arg and not doctor_args.remote:
             doctor_parser.error("--ssh-args requires --remote")
+        if doctor_args.remote_platform != "auto" and not doctor_args.remote:
+            doctor_parser.error("--remote-platform requires --remote")
         if doctor_args.remote:
             from railmux.ssh_doctor import run_remote_ssh_doctor
 
@@ -452,6 +463,7 @@ def main(argv: list[str] | None = None) -> int:
                 doctor_args.remote,
                 ssh_args=doctor_args.ssh_arg,
                 json_output=doctor_args.json,
+                remote_platform=doctor_args.remote_platform,
             )
         return run_doctor(
             claude_home=Path(doctor_args.claude_home),
@@ -496,6 +508,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=argparse.SUPPRESS,
     )
+    parser.add_argument(
+        "--recover-ui-upgrade",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     scroll_group = parser.add_mutually_exclusive_group()
     scroll_group.add_argument(
         "--scroll-coalescing",
@@ -511,6 +528,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Force-disable tmux copy-mode wheel event coalescing",
     )
     args = parser.parse_args(raw_args)
+    if args.recover_ui_upgrade and not args.inside_tmux:
+        parser.error("--recover-ui-upgrade is reserved for managed recovery")
 
     try:
         config = load_config()
@@ -644,6 +663,30 @@ def main(argv: list[str] | None = None) -> int:
                         initial_size=_interactive_terminal_size(),
                     )
                 )
+        if dedicated_target is not None and dedicated_session_id is not None:
+            from railmux.provider_paths import running_in_managed_windows_wrapper
+
+            if running_in_managed_windows_wrapper():
+                from railmux.windows_ui_transition import ensure_current_ui
+
+                runtime_id = os.environ.get("RAILMUX_MSYS2_RUNTIME_ID", "")
+                app_id = os.environ.get("RAILMUX_MSYS2_APP_ID", "")
+                transition = ensure_current_ui(
+                    dedicated_target,
+                    dedicated_session_id,
+                    runtime=runtime_id,
+                    target_app=app_id,
+                    target_version=__version__,
+                    forwarded_args=raw_args,
+                )
+                if transition.status in {"pending", "blocked"}:
+                    detail = transition.detail or "the running UI was unchanged"
+                    print(
+                        "info: the Windows app-layer update is pending; "
+                        f"{detail}. Soft Quit the existing UI, then run "
+                        "'railmux' again to finish it.",
+                        file=sys.stderr,
+                    )
         cmd = tmux_server.launcher_argv(launch_prefix, raw_args)
         return _run_tmux_client_with_watchdog(
             cmd,
@@ -676,6 +719,27 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     app.run()
+    request = getattr(app, "_ui_upgrade_request", None)
+    if request is not None:
+        from railmux.windows_ui_transition import UpgradeRequest, upgrade_exec_argv
+
+        # Mocked or partially constructed App objects must not manufacture an
+        # upgrade merely by dynamically answering arbitrary attributes.
+        if not isinstance(request, UpgradeRequest):
+            return 0
+
+        upgrade_argv = upgrade_exec_argv(request, [sys.argv[0], *raw_args])
+        if upgrade_argv is None:
+            print(
+                "error: the requested Windows app layer no longer validates; "
+                "run 'railmux runtime status --verify'",
+                file=sys.stderr,
+            )
+            return 2
+        upgrade_env = os.environ.copy()
+        upgrade_env["RAILMUX_MSYS2_RUNTIME_ID"] = request.runtime
+        upgrade_env["RAILMUX_MSYS2_APP_ID"] = request.app
+        os.execve(upgrade_argv[0], upgrade_argv, upgrade_env)
     return 0
 
 

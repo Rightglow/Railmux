@@ -129,6 +129,30 @@ endpoint as having no live server; the normal `new-session -A` path can then
 replace it. This fallback neither unlinks the socket itself nor changes the
 shorter explicit bounds used to monitor a server already believed to be live.
 
+Managed Windows app layers have a second identity boundary above the tmux
+server. The shared base marker remains compatible with released dev11-dev23
+apps, while a separate immutable content marker hashes the complete sorted
+pacman package inventory and records the required tmux/Python package versions.
+Every dev24+ app marker binds to that exact content identity. Startup trusts an
+app only when the runtime ID, versioned directory, app marker, executable, and
+base content identity all agree; `runtime status --verify` may compare the live
+package database read-only and report drift without rewriting the marker.
+
+An existing outer UI is never assumed to have changed merely because native
+pip installed a newer app layer. dev24+ controllers publish their exact app
+identity only after reaching the usable MainLoop boundary. A detached older
+controller receives a pane-local nonce request and private F19 wakeup, saves
+portable state, returns displayed provider panes to their owning sessions,
+releases UI-only tmux state, then `exec`s the validated absolute new app. The
+one released legacy boundary, dev11-dev23, can migrate only a detached outer
+session whose sole live pane is the exactly proven controller; only that pane
+is respawned, `remain-on-exit` protects the gap, and a failed new ready proof
+respawns the old absolute app without new-only arguments. Attached clients,
+multiple/displayed panes, ambiguous identity, races, or failed validation leave
+the old UI running and report a pending Soft Quit. No transition kills the
+tmux server, a provider session, or a provider process, and the transition lock
+is scoped to the exact server label and immutable outer-session ID.
+
 Independent tmux mutations that form one startup or status-bar transaction are
 sent through one tmux client, and an identical complete bar frame is not
 rewritten. This is a performance invariant on runtimes where spawning each tmux
@@ -144,6 +168,10 @@ versions and counts, booleans, coarse incident age, home-relative paths, or the
 literal `<custom>`. Neither renderer may expose hostnames, usernames, session
 or pane IDs, transcripts, environment values, configured commands, socket
 paths, credentials, or raw custom paths.
+On the managed Windows wrapper the same snapshot adds only bounded runtime ID,
+installed/running app versions, content-identity digest, and transition status.
+It still omits the runtime path, server/socket identity, process IDs, session
+IDs, provider data, and environment values.
 The same snapshot includes one optional, local `railmux ssh` record from the
 private runtime directory. A stable lock file protects atomic replacement;
 the newest attach owns an opaque internal token, so an older client's final
@@ -319,6 +347,10 @@ The local upgrade uses its current Python environment and re-execs the original
 `railmux ssh` invocation only after pip succeeds and a fresh process using that
 same interpreter imports the requested exact version. Failure or an import
 mismatch leaves tmux untouched and prints a reproducible manual command.
+The managed Windows app venv is immutable application state owned by the native
+bootstrap, so this local-pip upgrade path is forbidden there. A newer remote
+instead produces native PowerShell pip plus `runtime install` instructions;
+the running versioned app never upgrades itself in place.
 
 Remote command discovery is shell-family aware without executing a local
 shell. The default path keeps the POSIX executable/private-venv/Python ladder;
@@ -484,6 +516,15 @@ path policies. Public SSH-facing commands use grouped `--ssh-args` values with
 one ordered argv authority across both phases. Group parsing uses bounded
 POSIX quoting locally and never invokes a shell. The released singular
 `--ssh-arg` remains a hidden exact-argv compatibility input.
+Both config phases pin the same shell family returned by the common pre-attach
+probe. A direct hello must identify `windows-msys2`; managed Windows remotes
+use the shell-neutral command in both phases and never receive POSIX installer
+commands. `doctor --remote` uses that same probe with
+`--existing-session-only`, stops before the attach token, and reports the
+bounded remote runtime plus selected launch family. `--remote-platform` is
+shared by config and doctor so explicit Windows mode avoids the incompatible
+POSIX probe. A missing or incompatible Windows runtime remains a native,
+user-level repair; remote automatic Windows installation is out of scope.
 
 The tmux executable is a process-wide authority. An absolute override must keep
 the conventional `tmux` basename; Railmux prepends only its directory for

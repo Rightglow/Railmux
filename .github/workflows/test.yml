@@ -152,11 +152,69 @@ jobs:
       - name: Install the checkout in the runtime-owned venv
         shell: msys2 {0}
         run: |
-          python -m venv /opt/railmux/venv
-          /opt/railmux/venv/bin/python -m pip install --upgrade pip
-          /opt/railmux/venv/bin/python -m pip install ".[ssh]"
+          version=$(PYTHONPATH=src python -c 'import railmux; print(railmux.__version__)')
+          app="/opt/railmux/apps/railmux-$version"
+          python -m venv "$app/venv"
+          "$app/venv/bin/python" -m pip install --upgrade pip
+          "$app/venv/bin/python" -m pip install ".[dev,ssh]"
           tmux -V
-          /opt/railmux/venv/bin/railmux --version
+          "$app/venv/bin/railmux" --version
+          printf '%s' "$version" > /tmp/railmux-version
+      - name: Seed exact managed markers and exercise Windows-only suites
+        shell: msys2 {0}
+        run: |
+          version=$(cat /tmp/railmux-version)
+          app="/opt/railmux/apps/railmux-$version"
+          LC_ALL=C pacman -Q | sort > /tmp/railmux-packages
+          content=$(sha256sum /tmp/railmux-packages | awk '{print $1}')
+          count=$(wc -l < /tmp/railmux-packages)
+          archive_sha=$("$app/venv/bin/python" -c \
+            'from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256; print(MSYS2_ARCHIVE_SHA256)')
+          RUNTIME_ID=msys2-2026-03-22 VERSION="$version" \
+            CONTENT="$content" PACKAGE_COUNT="$count" ARCHIVE_SHA="$archive_sha" \
+            "$app/venv/bin/python" - <<'PY'
+          import json, os
+          from pathlib import Path
+          runtime = os.environ["RUNTIME_ID"]
+          version = os.environ["VERSION"]
+          content = os.environ["CONTENT"]
+          inventory = {}
+          for row in Path("/tmp/railmux-packages").read_text(encoding="utf-8").splitlines():
+              name, package_version = row.split(" ", 1)
+              inventory[name] = package_version
+          Path("/railmux-base.json").write_text(
+              json.dumps({"schema": 1, "runtime": runtime}), encoding="utf-8")
+          Path("/railmux-base-content-v1.json").write_text(json.dumps({
+              "schema": 1,
+              "runtime": runtime,
+              "archive_sha256": os.environ["ARCHIVE_SHA"],
+              "content_id": content,
+              "package_count": int(os.environ["PACKAGE_COUNT"]),
+              "core_packages": {
+                  name: inventory[name]
+                  for name in ("tmux", "python", "python-pip")
+              },
+          }), encoding="utf-8")
+          marker = Path(f"/opt/railmux/apps/railmux-{version}/railmux-app.json")
+          marker.write_text(json.dumps({
+              "schema": 2,
+              "runtime": runtime,
+              "railmux": version,
+              "base_content_id": content,
+          }), encoding="utf-8")
+          PY
+          "$app/venv/bin/python" -m pytest -q \
+            tests/test_windows_ui_transition.py \
+            tests/test_remote_config.py \
+            tests/test_ssh_doctor.py \
+            tests/test_diagnostics.py \
+            tests/test_provider_paths.py
+          RAILMUX_WINDOWS_RUNTIME=msys2 \
+            RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22 \
+            RAILMUX_MSYS2_APP_ID="railmux-$version" \
+            "$app/venv/bin/railmux" doctor --json > /tmp/managed-doctor.json
+          grep -q '"managed_windows"' /tmp/managed-doctor.json
+          grep -q '"base_content_id"' /tmp/managed-doctor.json
       - name: Install the thin native Windows package
         shell: pwsh
         run: python -m pip install --no-deps .

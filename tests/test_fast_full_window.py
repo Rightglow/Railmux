@@ -5402,7 +5402,7 @@ def test_compatible_remote_is_confirmed_before_attach(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True),
         ),
@@ -5455,7 +5455,7 @@ def test_auto_remote_launch_falls_back_to_windows_and_pins_reconnect_mode(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: next(startups),
+        lambda _process, timeout=None: next(startups),
     )
     args = parse_client_args(["server"])
 
@@ -5476,7 +5476,8 @@ def test_explicit_windows_remote_failure_never_runs_posix_installer(monkeypatch)
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(RemoteStartKind.FAILED, returncode=1),
+        lambda _process, timeout=None: RemoteStartup(
+            RemoteStartKind.FAILED, returncode=1),
     )
     install = MagicMock()
     monkeypatch.setattr(fast_display_client, "_install_remote_and_start", install)
@@ -5539,7 +5540,7 @@ def test_busy_legacy_attach_can_be_replaced_once_with_consent(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True),
         ),
@@ -5574,7 +5575,7 @@ def test_transient_current_attach_contention_retries_without_takeover(monkeypatc
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True),
         ),
@@ -5609,7 +5610,7 @@ def test_busy_attach_decline_leaves_remote_session_untouched(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True),
         ),
@@ -5638,7 +5639,8 @@ def test_missing_remote_prompts_then_installs_and_starts(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(RemoteStartKind.MISSING, returncode=127),
+        lambda _process, timeout=None: RemoteStartup(
+            RemoteStartKind.MISSING, returncode=127),
     )
     monkeypatch.setattr(fast_display_client, "_confirm", lambda _question: True)
     monkeypatch.setattr(
@@ -5669,7 +5671,8 @@ def test_missing_remote_decline_returns_copyable_install_help(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(RemoteStartKind.MISSING, returncode=127),
+        lambda _process, timeout=None: RemoteStartup(
+            RemoteStartKind.MISSING, returncode=127),
     )
     monkeypatch.setattr(fast_display_client, "_confirm", lambda _question: False)
 
@@ -5687,7 +5690,7 @@ def test_remote_without_tmux_gives_system_package_guidance(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION, True, False),
         ),
@@ -5710,7 +5713,7 @@ def test_newer_compatible_remote_prompts_for_local_upgrade_but_can_continue(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("999.0", PROTOCOL_VERSION, True),
         ),
@@ -5738,7 +5741,7 @@ def test_newer_remote_protocol_can_upgrade_and_restart_local_client(monkeypatch)
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("999.0", PROTOCOL_VERSION + 1, True),
         ),
@@ -5771,7 +5774,7 @@ def test_local_upgrade_reveals_prompt_then_restores_primary_before_exec(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("999.0", PROTOCOL_VERSION + 1, True),
         ),
@@ -5812,7 +5815,7 @@ def test_released_021_client_can_offer_upgrade_to_remote_022(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("0.2.2", 7, True),
         ),
@@ -5852,7 +5855,7 @@ def test_newer_protocol_with_non_newer_package_cannot_downgrade_local(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(fast_display_client.__version__, PROTOCOL_VERSION + 1, True),
         ),
@@ -5925,7 +5928,7 @@ def test_older_remote_protocol_prompts_for_matching_remote_upgrade(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("0.1.0", PROTOCOL_VERSION - 1, True),
         ),
@@ -5963,7 +5966,7 @@ def test_windows_remote_upgrade_fails_closed_with_windows_guidance(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello(
                 "0.1.0",
@@ -5997,7 +6000,7 @@ def test_older_compatible_remote_can_be_upgraded_to_local_version(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("0.2.4", PROTOCOL_VERSION, True),
         ),
@@ -6043,7 +6046,7 @@ def test_older_compatible_remote_can_continue_when_upgrade_declined(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("0.2.4", PROTOCOL_VERSION, True),
         ),
@@ -6069,7 +6072,7 @@ def test_higher_remote_version_is_offered_to_local_before_protocol_direction(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("999.0", PROTOCOL_VERSION - 1, True),
         ),
@@ -6100,7 +6103,7 @@ def test_declining_local_upgrade_does_not_downgrade_remote_dependency_repair(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(
+        lambda _process, timeout=None: RemoteStartup(
             RemoteStartKind.HELLO,
             RemoteHello("999.0", PROTOCOL_VERSION, False),
         ),
@@ -6139,7 +6142,8 @@ def test_failed_remote_auto_install_returns_manual_recovery(monkeypatch):
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(RemoteStartKind.MISSING, returncode=127),
+        lambda _process, timeout=None: RemoteStartup(
+            RemoteStartKind.MISSING, returncode=127),
     )
     answers = iter((True, False))
     questions = []
@@ -6181,7 +6185,8 @@ def test_failed_user_site_install_can_fall_back_to_private_venv(
     monkeypatch.setattr(
         fast_display_client,
         "await_remote_startup",
-        lambda _process: RemoteStartup(RemoteStartKind.MISSING, returncode=127),
+        lambda _process, timeout=None: RemoteStartup(
+            RemoteStartKind.MISSING, returncode=127),
     )
     questions = []
     monkeypatch.setattr(
