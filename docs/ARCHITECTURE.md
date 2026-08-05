@@ -117,6 +117,11 @@ deep response replaces its pane cache as one capture rather than merging two
 style generations. Additional wheel-up ticks received during an initial
 bounded request accumulate into its eventual offset. An existing frozen
 viewport retains its immutable snapshot while that mutable cache changes.
+Once routing identifies an agent-history gesture, every wheel tick delivered
+in one local stdin read contributes to the viewport distance, but the client
+paints only the final viewport from that read. The per-read one-direction bound
+applies only to wheel input still forwarded to sidebar/modal or another remote
+owner; it must never discard locally owned agent-history distance.
 Native Claude, local transcript, and
 undecided history are separate sources and are never merged. Protocol v15 also
 carries the opaque pane-local Codex history

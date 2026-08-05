@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quit choice to open the final warning by mouse. The final destructive action
   remains keyboard-only, and all existing keyboard shortcuts are unchanged.
 
+### Fixed
+
+- Preserve the complete `railmux ssh` agent-history wheel distance when a
+  terminal or RDP client batches several SGR reports into one input read, while
+  painting only the final local viewport once. Forwarded sidebar/modal wheel
+  bursts retain their existing bound.
+
 ## [0.3.6.dev4] - 2026-08-05
 
 ### Fixed

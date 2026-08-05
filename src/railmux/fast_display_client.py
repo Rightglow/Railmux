@@ -39,7 +39,7 @@ from railmux.fast_display_history import (
     HistoryAction,
     LocalHistoryView,
     PeriodicPrefetchGate,
-    claim_batched_wheel,
+    claim_batched_forwarded_wheel,
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
@@ -1423,6 +1423,73 @@ class TerminalSurface:
         self.interaction_active = False
 
 
+@dataclass
+class _DeferredHistoryPaint:
+    """Collapse one local-input batch into its final history viewport paint."""
+
+    render_history: bool = False
+    restore_live: bool = False
+
+    def defer(self, action: HistoryAction) -> None:
+        self.render_history = self.render_history or action.render_history
+        self.restore_live = self.restore_live or action.restore_live
+
+    def flush(
+        self,
+        surface: TerminalSurface,
+        screen: AppliedScreen | None,
+        overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
+        selection: tuple[SelectionSegment, ...],
+    ) -> None:
+        if screen is not None:
+            if self.restore_live:
+                # A viewport may have reached the live bottom and another may
+                # still be frozen. Restore the authoritative frame and compose
+                # only the final overlays in one terminal write.
+                surface.paint(full_repaint(screen), overlays, selection)
+            elif self.render_history:
+                surface.paint_overlays(screen, overlays, selection)
+        self.render_history = False
+        self.restore_live = False
+
+
+class _LocalInputBatch:
+    """Preserve local wheel distance while bounding forwarded wheel bursts."""
+
+    def __init__(self) -> None:
+        self._forwarded_wheel_directions: set[int] = set()
+        self._history_paint = _DeferredHistoryPaint()
+
+    def prepare(
+        self,
+        event: SgrMouseEvent,
+        action: HistoryAction,
+    ) -> tuple[HistoryAction | None, _DeferredHistoryPaint | None]:
+        if event.wheel_direction == 0:
+            return action, None
+        if action.forwarded_input:
+            if not claim_batched_forwarded_wheel(
+                event,
+                self._forwarded_wheel_directions,
+            ):
+                return None, None
+            return action, None
+        # Every locally owned history tick has already advanced the viewport.
+        # Defer only its terminal paint so a Windows/RDP read containing
+        # several SGR packets preserves the complete distance without issuing
+        # one synchronous pane repaint per packet.
+        return action, self._history_paint
+
+    def flush(
+        self,
+        surface: TerminalSurface,
+        screen: AppliedScreen | None,
+        overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
+        selection: tuple[SelectionSegment, ...],
+    ) -> None:
+        self._history_paint.flush(surface, screen, overlays, selection)
+
+
 def _remote_server_args(
     *,
     session: str,
@@ -2605,22 +2672,28 @@ def run(args: argparse.Namespace) -> int:
         if frame is not None:
             send_protocol_frame(frame)
 
-    def apply_history_action(action: HistoryAction) -> None:
+    def apply_history_action(
+        action: HistoryAction,
+        deferred_paint: _DeferredHistoryPaint | None = None,
+    ) -> None:
         nonlocal route_refresh_needed
         nonlocal history_info_until, claude_history_prompt_input
         overlays = history.overlays()
-        if action.restore_live and latest_screen is not None:
-            surface.paint(
-                full_repaint(latest_screen),
-                overlays,
-                selection.segments(),
-            )
-        elif action.render_history and latest_screen is not None:
-            surface.paint_overlays(
-                latest_screen,
-                overlays,
-                selection.segments(),
-            )
+        if deferred_paint is not None:
+            deferred_paint.defer(action)
+        else:
+            if action.restore_live and latest_screen is not None:
+                surface.paint(
+                    full_repaint(latest_screen),
+                    overlays,
+                    selection.segments(),
+                )
+            elif action.render_history and latest_screen is not None:
+                surface.paint_overlays(
+                    latest_screen,
+                    overlays,
+                    selection.segments(),
+                )
         if action.protocol_frame:
             send_protocol_frame(action.protocol_frame)
         if action.forwarded_input:
@@ -2637,7 +2710,7 @@ def run(args: argparse.Namespace) -> int:
 
     def handle_terminal_part(
         part: bytes | SgrMouseEvent,
-        handled_wheels: set[int],
+        input_batch: _LocalInputBatch,
     ) -> None:
         nonlocal route_refresh_needed
         nonlocal claude_history_prompt_input, claude_history_pending_choice
@@ -2900,15 +2973,18 @@ def run(args: argparse.Namespace) -> int:
                     selection_changed_rows(selection_before, selection_after),
                 )
             for replay_event in selection_action.replay_events:
-                if not claim_batched_wheel(replay_event, handled_wheels):
-                    continue
                 replay_action = history.pointer_event(
                     replay_event,
                     focused_pane_id,
                     status_row=status_row,
                     now=time.monotonic(),
                 )
-                apply_history_action(replay_action)
+                replay_action, deferred_paint = input_batch.prepare(
+                    replay_event,
+                    replay_action,
+                )
+                if replay_action is not None:
+                    apply_history_action(replay_action, deferred_paint)
             if selection_action.copy_data is not None:
                 surface.copy_to_clipboard(selection_action.copy_data)
                 character_count = len(
@@ -2944,15 +3020,15 @@ def run(args: argparse.Namespace) -> int:
                     begin_path_open(target)
             if selection_action.handled:
                 return
-            if not claim_batched_wheel(part, handled_wheels):
-                return
             action = history.pointer_event(
                 part,
                 focused_pane_id,
                 status_row=status_row,
                 now=time.monotonic(),
             )
-            apply_history_action(action)
+            action, deferred_paint = input_batch.prepare(part, action)
+            if action is not None:
+                apply_history_action(action, deferred_paint)
             return
         if not part:
             return
@@ -3327,19 +3403,32 @@ def run(args: argparse.Namespace) -> int:
                         data, emergency_exit = split_local_escape(data)
                         if emergency_exit:
                             local_exit = True
-                        handled_wheels: set[int] = set()
+                        input_batch = _LocalInputBatch()
                         for part in terminal_input.feed(data):
                             if isinstance(part, bytes):
                                 for key_part in split_page_key_input(part):
-                                    handle_terminal_part(key_part, handled_wheels)
+                                    handle_terminal_part(key_part, input_batch)
                             else:
-                                handle_terminal_part(part, handled_wheels)
+                                handle_terminal_part(part, input_batch)
+                        input_batch.flush(
+                            surface,
+                            latest_screen,
+                            history.overlays(),
+                            selection.segments(),
+                        )
                         if local_exit:
                             break
                 if not local_exit:
                     for part in terminal_input.flush_pending():
+                        input_batch = _LocalInputBatch()
                         for key_part in split_page_key_input(part):
-                            handle_terminal_part(key_part, set())
+                            handle_terminal_part(key_part, input_batch)
+                        input_batch.flush(
+                            surface,
+                            latest_screen,
+                            history.overlays(),
+                            selection.segments(),
+                        )
                 now = time.monotonic()
                 keyboard_projected = touch_keyboard.keyboard_projected
                 if touch_keyboard.expire(now):

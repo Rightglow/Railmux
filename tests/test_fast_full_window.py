@@ -95,7 +95,6 @@ from railmux.fast_display_history import (
     HistoryAction,
     LocalHistoryView,
     PeriodicPrefetchGate,
-    claim_batched_wheel,
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
@@ -4197,7 +4196,7 @@ def test_history_content_cache_keeps_only_recent_pane_lifetimes():
     assert tuple(view.content_cache) == tuple(pane_ids[-8:])
 
 
-def test_local_history_wheel_burst_is_bounded_before_it_moves_viewport():
+def test_local_history_wheel_batch_preserves_distance_with_one_paint():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
     request_id, _limit = decode_history_prefetch(prefetch.data)
@@ -4208,26 +4207,100 @@ def test_local_history_wheel_burst_is_bounded_before_it_moves_viewport():
         0,
         30,
         3,
-        tuple(f"line-{index}".encode() for index in range(10)),
+        tuple(f"line-{index}".encode() for index in range(20)),
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+    batch = fast_display_client._LocalInputBatch()
+    events = TerminalInputDecoder().feed(b"\x1b[<64;5;2M" * 8)
+    assert len(events) == 8
+    for event in events:
+        assert isinstance(event, SgrMouseEvent)
+        action, deferred_paint = batch.prepare(event, view.pointer_event(event))
+        assert action is not None
+        assert deferred_paint is not None
+        deferred_paint.defer(action)
+
+    assert view.viewports["%8"].offset == 8
+    surface = MagicMock(spec=TerminalSurface)
+    screen = MagicMock(spec=AppliedScreen)
+    overlays = view.overlays()
+
+    batch.flush(surface, screen, overlays, ())
+
+    surface.paint_overlays.assert_called_once_with(screen, overlays, ())
+    surface.paint.assert_not_called()
+
+
+def test_local_history_wheel_batch_restores_live_once_at_bottom():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        0,
+        0,
+        30,
+        3,
+        tuple(f"line-{index}".encode() for index in range(20)),
     )
     view.accept_prefetch(HistoryBatch(request_id, (route,)))
     up = SgrMouseEvent(b"up", 64, 5, 2, True)
+    for _ in range(3):
+        view.pointer_event(up)
+    assert view.viewports["%8"].offset == 3
+
+    batch = fast_display_client._LocalInputBatch()
     down = SgrMouseEvent(b"down", 65, 5, 2, True)
     for _ in range(5):
-        view.wheel(up)
-    assert view.viewports["%8"].offset == 5
+        action, deferred_paint = batch.prepare(down, view.pointer_event(down))
+        assert action is not None
+        assert deferred_paint is not None
+        deferred_paint.defer(action)
+    assert not view.active
 
-    handled: set[int] = set()
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=30, height=3))
+        )[0],
+        os.terminal_size((30, 3)),
+    )
+    assert screen is not None
+    surface = MagicMock(spec=TerminalSurface)
+    batch.flush(surface, screen, view.overlays(), ())
+
+    surface.paint.assert_called_once()
+    surface.paint_overlays.assert_not_called()
+
+
+def test_forwarded_wheel_batch_remains_bounded_without_local_paint():
+    batch = fast_display_client._LocalInputBatch()
+    down = SgrMouseEvent(b"down", 65, 5, 2, True)
+    up = SgrMouseEvent(b"up", 64, 5, 2, True)
+    admitted = []
+
     for _ in range(8):
-        if claim_batched_wheel(down, handled):
-            view.wheel(down)
+        action, deferred_paint = batch.prepare(
+            down,
+            HistoryAction(forwarded_input=down.raw),
+        )
+        if action is not None:
+            admitted.append(action.forwarded_input)
+        assert deferred_paint is None
+    action, deferred_paint = batch.prepare(
+        up,
+        HistoryAction(forwarded_input=up.raw),
+    )
+    assert action is not None
+    admitted.append(action.forwarded_input)
+    assert deferred_paint is None
 
-    # Eight packets accumulated in one read still move only one row.
-    assert view.viewports["%8"].offset == 4
-    # The opposite direction remains responsive in the same terminal read.
-    assert claim_batched_wheel(up, handled) is True
-    # A new os.read() owns a fresh set and therefore admits the next tick.
-    assert claim_batched_wheel(down, set()) is True
+    surface = MagicMock(spec=TerminalSurface)
+    batch.flush(surface, MagicMock(spec=AppliedScreen), (), ())
+
+    assert admitted == [b"down", b"up"]
+    surface.paint.assert_not_called()
+    surface.paint_overlays.assert_not_called()
 
 
 def test_only_bounded_layout_and_modal_keys_invalidate_live_routes():
