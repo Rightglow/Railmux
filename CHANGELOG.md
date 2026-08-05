@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Require a second warning before hard quit can stop all live agent sessions;
+  both confirmation steps retain `y`/Enter, while `n`/`Esc` returns from the
+  final warning to the original Soft Quit choice.
+
 ## [0.3.6.dev1] - 2026-08-05
 
 ### Fixed

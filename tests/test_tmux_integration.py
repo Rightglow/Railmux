@@ -1843,6 +1843,18 @@ def test_real_remote_display_soft_quit_keeps_tmux_responsive(
         process.stdin.flush()
         assert _wait_until(
             lambda: "Quit railmux?" in captured_railmux(), timeout=3.0)
+        process.stdin.write(encode_input(b"\r"))
+        process.stdin.flush()
+        assert _wait_until(
+            lambda: "Confirm hard quit" in captured_railmux(), timeout=3.0)
+        assert process.poll() is None
+        assert tmux(
+            "has-session", "-t", "integration-agent", check=False
+        ).returncode == 0
+        process.stdin.write(encode_input(b"\x1b"))
+        process.stdin.flush()
+        assert _wait_until(
+            lambda: "Quit railmux?" in captured_railmux(), timeout=3.0)
         process.stdin.write(encode_input(b"s"))
         process.stdin.flush()
 

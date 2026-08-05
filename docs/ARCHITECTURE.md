@@ -808,8 +808,10 @@ of returning or displaying a real pane.
 
 Soft quit may release UI-only resources and return displayed panes home, but it
 must branch before the detached-session kill loop. Hard-quit destruction must
-remain below that explicit decision so adding teardown work cannot silently
-turn a soft restart into loss of live agents.
+remain below that explicit decision and behind two confirmation boundaries, so
+one accidental Enter cannot kill live agents and adding teardown work cannot
+silently turn a soft restart into loss of live agents. The second boundary
+retains `y`/Enter as confirmation and returns `n`/`Esc` to the first choice.
 
 User-requested exit paints a non-interactive progress surface before any
 synchronous pane/session cleanup. Core cleanup runs while Urwid still owns the

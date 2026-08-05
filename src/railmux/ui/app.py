@@ -69,6 +69,7 @@ from railmux.ui.modals import (
     ContextMenu,
     DeleteConfirmModal,
     ExitProgressModal,
+    HardQuitConfirmModal,
     HelpModal,
     LayoutSaveModal,
     OptionsModal,
@@ -1555,8 +1556,8 @@ class App:
 
         Pasting into the sidebar is dangerous: each pasted character is dispatched
         as a command key, so a clipboard containing ``k`` (kill), ``d``+``y``
-        (delete-confirm) or ``q``+Enter (quit-all) can destroy sessions.  Two
-        layers guard against it:
+        (delete-confirm) or ``q``+Enter+Enter (twice-confirmed quit-all) can
+        destroy sessions.  Two layers guard against it:
 
         * **Bracketed paste** (primary, precise): with the mode enabled the
           terminal frames the paste in ``begin paste``/``end paste`` markers, so
@@ -5544,7 +5545,16 @@ class App:
         _sp.run(["tmux", "detach-client"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
     def _confirm_quit(self) -> None:
-        """Request a hard quit, optionally recording pane proportions."""
+        """Require a second explicit confirmation before a hard quit."""
+        modal = HardQuitConfirmModal(
+            on_confirm=self._commit_hard_quit,
+            on_cancel=self._open_quit_confirm,
+            running_count=len(self._running),
+        )
+        self._show_hard_quit_confirm(modal)
+
+    def _commit_hard_quit(self) -> None:
+        """Request an already twice-confirmed hard quit."""
         self._request_exit(soft=False)
 
     def _soft_quit(self) -> None:
@@ -7529,6 +7539,10 @@ class App:
 
     def _show_quit_confirm(self, modal: QuitConfirmModal) -> None:
         """Show the quit choices at a height derived from their wrapped text."""
+        self._show_preferred_height_modal(modal, width=50)
+
+    def _show_hard_quit_confirm(self, modal: HardQuitConfirmModal) -> None:
+        """Show the final destructive warning without changing Enter semantics."""
         self._show_preferred_height_modal(modal, width=50)
 
     def _show_rename_modal(self, modal: RenameModal) -> None:

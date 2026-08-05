@@ -98,7 +98,7 @@ product capability.
 | W06 | Keyboard, button bar, context menus, Help, and persistent Options | Supported | Supported | Mouse alternatives exist for every required workflow. |
 | W07 | Safety-restricted Ask Railmux help agent | Supported | Supported | Read-only support workspace; no normal provider-history pollution. |
 | W08 | One reusable managed shell and Vim viewer per agent slot | Conditional | Conditional | Requires tmux 3.0+; tools park safely across layout changes. |
-| W09 | Detach one view, Soft Quit shared UI, and confirmed hard quit | Supported | Supported | Soft Quit leaves provider sessions alive; views of one UI are not independent workspaces. |
+| W09 | Detach one view, Soft Quit shared UI, and confirmed hard quit | Supported | Supported | Soft Quit leaves provider sessions alive; views of one UI are not independent workspaces. Hard quit requires two confirmations while retaining `y`/Enter semantics. |
 | W10 | Soft restart and exact workspace/session recovery | Supported | Supported | Ambiguous identity becomes visible unresolved state rather than a guessed binding. |
 | W11 | Multiple attached terminals | Conditional | Conditional | Shared focus/layout and tmux `smallest` geometry; simultaneous input can interfere. |
 | W12 | Shared config file, standalone editor, and in-product persistent Options | Supported | Supported | `railmux config` works without tmux, uses a temporary interactive screen, validates program/locale overrides, and edits the same remote or local TOML authority; one-time confirmations stay action-local. |

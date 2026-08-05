@@ -17,7 +17,11 @@ from railmux import orphan_marker, restart_state, tmux_ctl, tmux_server
 from railmux.modes import CLAUDE_MODE, CODEX_MODE
 from railmux.restart_state import OuterTmuxIdentity
 from railmux.ui.app import App, _Running
-from railmux.ui.modals import ExitProgressModal, QuitConfirmModal
+from railmux.ui.modals import (
+    ExitProgressModal,
+    HardQuitConfirmModal,
+    QuitConfirmModal,
+)
 from railmux.ui.workspace import (
     AgentWorkspace,
     SlotRestoreState,
@@ -2763,6 +2767,39 @@ def test_quit_modal_enter_confirms():
     )
     modal.keypress((20,), "enter")
     assert called == ["hard"]
+
+
+def test_first_hard_quit_choice_opens_final_warning_before_exit():
+    app = _minimal_app()
+    app._running = {"one": MagicMock(), "two": MagicMock()}
+    app._request_exit = MagicMock()
+    app._open_quit_confirm = MagicMock()
+    app._show_hard_quit_confirm = MagicMock()
+
+    app._confirm_quit()
+
+    app._request_exit.assert_not_called()
+    modal = app._show_hard_quit_confirm.call_args.args[0]
+    assert isinstance(modal, HardQuitConfirmModal)
+    assert "stop 2 running agent sessions" in _render_text(modal)
+
+    modal.keypress((60,), "enter")
+
+    app._request_exit.assert_called_once_with(soft=False)
+
+
+def test_final_hard_quit_cancel_returns_to_the_quit_choices():
+    app = _minimal_app()
+    app._request_exit = MagicMock()
+    app._open_quit_confirm = MagicMock()
+    app._show_hard_quit_confirm = MagicMock()
+
+    app._confirm_quit()
+    modal = app._show_hard_quit_confirm.call_args.args[0]
+    modal.keypress((60,), "esc")
+
+    app._open_quit_confirm.assert_called_once_with()
+    app._request_exit.assert_not_called()
 
 
 def test_quit_modal_esc_cancels():
