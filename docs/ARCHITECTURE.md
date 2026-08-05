@@ -106,14 +106,16 @@ stale; route changes, reconnect, and bounded policy-recovery refreshes remain
 immediate. For a stable pane, geometry, and history source, uniquely
 aligned snapshots are merged into one newest-bounded timeline. Unaligned hot
 captures are never spliced: the cache switches to the newest internally
-contiguous suffix and the first wheel-up requests a cumulative deep page to
-recover older rows. When that hot suffix reports older rows available, the
-first wheel-up keeps the live pane visible until the cumulative response
-arrives, then enters history atomically at the requested offset. It never
-paints the short suffix and later replaces it through a moving-live anchor;
-that transition could otherwise expose a gap or two style generations until
-the user returned to the bottom. Additional wheel-up ticks received during the
-bounded request accumulate into its initial offset. An existing frozen
+contiguous suffix, then recovers older rows from a cumulative deep page. The
+periodic routing capture retains 300 rows, enough to
+enter history immediately and defer the 2,000-row cumulative request until the
+viewport approaches the top of that coherent suffix. If byte budgeting or an
+older peer supplies fewer than 300 rows while reporting older content, the
+first wheel-up keeps the live pane visible until one cumulative response
+arrives, then enters history atomically at the requested offset. A validated
+deep response replaces its pane cache as one capture rather than merging two
+style generations. Additional wheel-up ticks received during an initial
+bounded request accumulate into its eventual offset. An existing frozen
 viewport retains its immutable snapshot while that mutable cache changes.
 Native Claude, local transcript, and
 undecided history are separate sources and are never merged. Protocol v15 also

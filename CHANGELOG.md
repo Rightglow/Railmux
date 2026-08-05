@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Enter `railmux ssh` history immediately from its coherent 300-line routing
+  cache, then fetch cumulative deep pages asynchronously near the cached top;
+  validated pages replace the cache atomically to preserve continuity and
+  terminal styling.
+
 ## [0.3.6.dev2] - 2026-08-05
 
 ### Changed

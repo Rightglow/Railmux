@@ -2707,7 +2707,7 @@ def test_forced_policy_prefetch_preserves_other_pane_history_position():
     assert view.viewports["%7"].offset == 1
 
 
-def test_local_history_requests_deep_page_when_hot_viewport_fills_prefetch():
+def test_local_history_enters_warm_cache_immediately_then_prefetches_near_top():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
     request_id, _limit = decode_history_prefetch(prefetch.data)
@@ -2717,17 +2717,26 @@ def test_local_history_requests_deep_page_when_hot_viewport_fills_prefetch():
         0,
         0,
         80,
-        300,
-        (b"live",) * 300,
+        30,
+        tuple(f"line-{index}".encode() for index in range(300)),
         more_available=True,
     )
     view.accept_prefetch(HistoryBatch(request_id, (route,)))
 
-    action = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
-    request = InputFrameDecoder().feed(action.protocol_frame)[0]
+    wheel = SgrMouseEvent(b"up", 64, 40, 2, True)
+    action = view.wheel(wheel)
 
+    assert action.render_history is True
+    assert action.protocol_frame == b""
+    assert view.overlays()[0][1][-1] == b"line-298"
+
+    request_action = HistoryAction()
+    for _ in range(200):
+        request_action = view.wheel(wheel)
+        if request_action.protocol_frame:
+            break
+    request = InputFrameDecoder().feed(request_action.protocol_frame)[0]
     assert decode_history_request(request.data)[3] == 2000
-    assert action.forwarded_input == b""
 
 
 def test_local_history_keeps_empty_plain_agent_wheel_from_tmux_copy_mode():
@@ -3594,7 +3603,7 @@ def test_unaligned_hot_prefetch_never_creates_a_discontinuous_history_seam():
         0,
         30,
         3,
-        tuple(f"old-{index}".encode() for index in range(300)),
+        tuple(f"old-{index}".encode() for index in range(200)),
         more_available=True,
     )
     view.accept_prefetch(HistoryBatch(first_id, (old,)))
@@ -3608,14 +3617,14 @@ def test_unaligned_hot_prefetch_never_creates_a_discontinuous_history_seam():
         0,
         30,
         3,
-        tuple(f"new-{index}".encode() for index in range(300)),
+        tuple(f"new-{index}".encode() for index in range(200)),
         more_available=True,
     )
     view.accept_prefetch(HistoryBatch(second_id, (current,)))
 
     wheel = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
 
-    # Do not briefly expose the 300-line hot suffix. It has no anchor to the
+    # Do not expose a short/incomplete hot suffix. It has no anchor to the
     # previous capture and an active provider may repaint again before the deep
     # response, which used to leave a visible gap until returning to bottom.
     assert not wheel.render_history
@@ -3635,14 +3644,14 @@ def test_unaligned_hot_prefetch_never_creates_a_discontinuous_history_seam():
         0,
         30,
         3,
-        tuple(f"deep-{index}".encode() for index in range(1700)) + current.lines,
+        tuple(f"deep-{index}".encode() for index in range(1800)) + current.lines,
     )
     accepted = view.accept(deep)
 
     assert accepted.render_history
     assert view.viewports["%8"].snapshot.lines == deep.lines
-    assert view.overlays()[0][1] == (b"new-295", b"new-296", b"new-297")
-    assert b"old-296" not in view.viewports["%8"].snapshot.lines
+    assert view.overlays()[0][1] == (b"new-195", b"new-196", b"new-197")
+    assert b"old-196" not in view.viewports["%8"].snapshot.lines
 
 
 def test_initial_deep_history_retry_and_wheel_down_are_bounded():
@@ -3654,7 +3663,7 @@ def test_initial_deep_history_retry_and_wheel_down_are_bounded():
         0,
         30,
         3,
-        tuple(f"line-{index}".encode() for index in range(300)),
+        tuple(f"line-{index}".encode() for index in range(200)),
         more_available=True,
     )
     view.visible_routes = (route,)
@@ -3740,6 +3749,12 @@ def test_periodic_hot_prefetch_does_not_shrink_a_reusable_deep_snapshot():
     view.accept_prefetch(HistoryBatch(first_id, (hot,)))
     wheel = SgrMouseEvent(b"up", 64, 40, 2, True)
     deep_action = view.wheel(wheel)
+    assert deep_action.render_history is True
+    assert deep_action.protocol_frame == b""
+    for _ in range(300):
+        deep_action = view.wheel(wheel)
+        if deep_action.protocol_frame:
+            break
     deep_id = decode_history_request(
         InputFrameDecoder().feed(deep_action.protocol_frame)[0].data
     )[0]
@@ -3788,10 +3803,11 @@ def test_validated_deep_capture_recovers_unanchored_rewind_output():
     first_id, _limit = decode_history_prefetch(first.data)
     repeated = b"\033[48;2;33;58;43mrewind-row"
     hot_lines = (
-        *(f"old-{index}".encode() for index in range(296)),
+        *(f"old-{index}".encode() for index in range(120)),
         repeated,
         repeated,
         repeated,
+        *(f"new-{index}".encode() for index in range(176)),
         b"live-bottom",
     )
     hot = HistorySnapshot(
@@ -3805,7 +3821,14 @@ def test_validated_deep_capture_recovers_unanchored_rewind_output():
         more_available=True,
     )
     view.accept_prefetch(HistoryBatch(first_id, (hot,)))
-    wheel = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+    wheel_up = SgrMouseEvent(b"up", 64, 40, 2, True)
+    wheel = view.wheel(wheel_up)
+    assert wheel.render_history is True
+    assert wheel.protocol_frame == b""
+    for _ in range(300):
+        wheel = view.wheel(wheel_up)
+        if wheel.protocol_frame:
+            break
     request_id = decode_history_request(
         InputFrameDecoder().feed(wheel.protocol_frame)[0].data
     )[0]
