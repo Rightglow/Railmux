@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6.dev5] - 2026-08-05
+
 ### Changed
 
 - Render the first quit chooser as visible terminal buttons and allow its hard
@@ -1985,7 +1987,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...HEAD
+[0.3.6.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...v0.3.6.dev5
 [0.3.6.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev3...v0.3.6.dev4
 [0.3.6.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev2...v0.3.6.dev3
 [0.3.6.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev1...v0.3.6.dev2
