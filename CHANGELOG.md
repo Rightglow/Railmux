@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Batch independent startup/status-bar tmux commands, suppress identical bar
+  rewrites, and skip compact-page geometry probes when only the sidebar exists.
+  This removes Windows/MSYS2 process-spawn amplification without changing the
+  provider/session discovery path.
 - Flush cross-host session-lease owner metadata before returning a claim, so a
   second NFS client that already observes the lock can immediately identify the
   owning host instead of showing the conservative `another host` fallback.
