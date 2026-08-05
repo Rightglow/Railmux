@@ -783,6 +783,15 @@ def main(
         help="edit the configuration owned by an SSH destination",
     )
     parser.add_argument(
+        "--remote-platform",
+        choices=("auto", "posix", "windows"),
+        default="auto",
+        help=(
+            "remote shell family for --remote: auto, posix, or windows "
+            "(default: auto)"
+        ),
+    )
+    parser.add_argument(
         "--ssh-arg",
         action=AppendSshArgument,
         dest="ssh_arg",
@@ -810,6 +819,8 @@ def main(
             parser.error("--remote and --remote-context cannot be combined")
         if args.ssh_arg and not args.remote:
             parser.error("--ssh-args requires --remote")
+        if args.remote_platform != "auto" and not args.remote:
+            parser.error("--remote-platform requires --remote")
     except SystemExit as exc:
         return int(exc.code)
     if args.remote:
@@ -819,6 +830,7 @@ def main(
             args.remote,
             ssh_args=args.ssh_arg,
             raw_argv=tuple([] if argv is None else argv),
+            remote_platform=args.remote_platform,
         )
     remote_context = bool(args.remote_context)
     stdin = sys.stdin if stdin is None else stdin

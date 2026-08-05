@@ -30,7 +30,8 @@ def test_windows_help_describes_shared_native_provider_data(capsys):
     output = capsys.readouterr().out
     assert "managed MSYS2/tmux" in output
     assert "Windows-native" in output
-    assert "runtime {status,install}" in output
+    assert "runtime status" in output
+    assert "runtime prune" in output
     assert "--verbose" in output
     finder.assert_not_called()
 
@@ -64,10 +65,10 @@ def test_noninteractive_missing_runtime_is_actionable_and_never_installs(capsys)
         version_info=(3, 10),
     ) == 2
 
-    error = capsys.readouterr().err
-    assert "private MSYS2/tmux runtime" in error
-    assert "railmux runtime install --yes" in error
-    assert "existing session directories remain shared" in error
+    output = capsys.readouterr().out
+    assert "managed runtime was not entered" in output
+    assert "Managed Windows runtime: not ready" in output
+    assert "railmux runtime install" in output
 
 
 def test_runtime_status_reports_missing_without_installing(capsys):
@@ -195,7 +196,7 @@ def test_matching_private_base_installs_app_layer_without_prompt(
     assert "only the Railmux" in capsys.readouterr().out
 
 
-def test_noninteractive_launch_may_only_auto_install_from_reusable_base(
+def test_noninteractive_doctor_never_installs_from_reusable_base(
     tmp_path, monkeypatch
 ):
     runtime = Msys2Runtime(
@@ -223,9 +224,37 @@ def test_noninteractive_launch_may_only_auto_install_from_reusable_base(
         ),
         stdin_isatty=lambda: False,
         version_info=(3, 10),
-    ) == 0
+    ) == 2
 
-    assert install.call_args.kwargs["reuse_only"] is True
+    install.assert_not_called()
+
+
+def test_missing_runtime_remote_doctor_reports_that_probe_was_not_run(capsys):
+    assert main(
+        ["doctor", "--remote", "private-host"],
+        environ={"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
+        runtime_finder=lambda **_kwargs: None,
+        version_info=(3, 10),
+    ) == 2
+
+    output = capsys.readouterr().out
+    assert "Remote preflight: not run" in output
+    assert "private-host" not in output
+
+
+def test_missing_runtime_doctor_json_keeps_doctor_schema(capsys):
+    assert main(
+        ["doctor", "--json"],
+        environ={"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
+        runtime_finder=lambda **_kwargs: None,
+        version_info=(3, 10),
+    ) == 2
+
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot["schema_version"] == 4
+    assert snapshot["status"] == "runtime_not_installed"
+    assert snapshot["managed_windows"]["schema"] == 1
+    assert "schema" not in snapshot
 
 
 def test_ready_runtime_receives_exact_argv_and_child_environment(tmp_path):
@@ -250,6 +279,37 @@ def test_ready_runtime_receives_exact_argv_and_child_environment(tmp_path):
     assert result == 17
     assert popen.call_args.args[0][-len(arguments) :] == arguments
     assert popen.call_args.kwargs["env"]["HOME"] == r"C:\Users\用户"
+
+
+def test_ready_runtime_forwards_local_and_remote_config_doctor_exactly(tmp_path):
+    root = tmp_path / "msys"
+    bash = root / "usr" / "bin" / "bash.exe"
+    bash.parent.mkdir(parents=True)
+    bash.write_bytes(b"fixture")
+    runtime = Msys2Runtime(root, managed=True, app_name=f"railmux-{__version__}")
+    commands = (
+        ["config"],
+        ["config", "--remote", "user@host", "--remote-platform", "windows"],
+        ["doctor", "--json"],
+        ["doctor", "--remote", "user@host", "--remote-platform", "windows"],
+    )
+
+    for arguments in commands:
+        process = MagicMock()
+        process.wait.return_value = 0
+        popen = MagicMock(return_value=process)
+
+        assert main(
+            arguments,
+            environ={"USERPROFILE": r"C:\Users\用户"},
+            runtime_finder=lambda **_kwargs: runtime,
+            popen=popen,
+            version_info=(3, 10),
+        ) == 0
+        assert popen.call_args.args[0][-len(arguments):] == arguments
+        child = popen.call_args.kwargs["env"]
+        assert child["RAILMUX_WINDOWS_RUNTIME"] == "msys2"
+        assert child["RAILMUX_MSYS2_APP_ID"] == f"railmux-{__version__}"
 
 
 def test_ctrl_c_does_not_kill_the_msys_handoff(tmp_path):

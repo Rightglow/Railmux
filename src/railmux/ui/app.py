@@ -586,6 +586,7 @@ class App:
     _tip_index: int = 0
     _tip_since: float = 0.0
     _managed_tool_panes: ToolPaneManager | None = None
+    _ui_upgrade_request: object | None = None
     # railmux's status line is rendered into the OUTER tmux status bar (full
     # terminal width) — there is no in-pane status widget. Off until run() wires
     # it up; session-scoped so it never touches the user's global tmux config.
@@ -7843,6 +7844,23 @@ class App:
     # --- key handling ---
 
     def _on_input(self, key: str) -> None:
+        # F19 is private to the managed Windows app-layer handoff.  The
+        # launcher places a signed-by-local-state request in this exact pane's
+        # tmux option before sending the key; arbitrary F19 input is a no-op.
+        if key == "f19" and running_in_windows_wrapper():
+            from railmux.windows_ui_transition import consume_upgrade_request
+
+            request = consume_upgrade_request()
+            if request is None:
+                return
+            self._save_state(portable_right=True)
+            self._publish_managed_restart_handoff()
+            self._soft_quit_flag = True
+            self._ui_upgrade_request = request
+            # Return every displayed provider pane to its owning session and
+            # release UI-owned tmux state before the process image changes.
+            self._teardown_tmux(defer_outer=True)
+            raise urwid.ExitMainLoop()
         # F20 is private to the SSH display helper. It reaches the controller
         # pane before that helper applies a compact-size TIOCSWINSZ, giving us
         # a bounded opportunity to park hidden real agent panes first.
@@ -8452,6 +8470,7 @@ class App:
             self._auto_launched
             and identity is not None
             and running_in_windows_wrapper()
+            and self._ui_upgrade_request is None
             and tmux_ctl.current_session_name() == "railmux"
             and tmux_ctl.current_session_id() == identity.session_id
         ):
@@ -11517,6 +11536,11 @@ class App:
                 if self._windows_tmux_setup_thread is not None:
                     self._loop.set_alarm_in(
                         0.1, self._finish_windows_tmux_setup)
+                # This is the cooperative upgrade readiness boundary.  The
+                # outer launcher trusts only an exact app identity published
+                # by a controller that reached a usable MainLoop.
+                from railmux.windows_ui_transition import publish_current_app_ready
+                publish_current_app_ready()
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.

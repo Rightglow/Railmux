@@ -17,6 +17,14 @@ the identifier remains unchanged. That one POSIX application remains the owner
 of layout, mouse routing, previews, dialogs, restore state, SSH display, and
 provider lifecycle.
 
+Because MSYS2 repositories roll independently of that archive identifier, the
+base also owns a separate exact package-content identity: a SHA-256 of the
+bounded sorted pacman inventory plus the recorded tmux, Python, and pip package
+versions. dev24+ app markers bind to that identity. The released dev11-dev23
+base/app markers remain readable for safe attachment and explicit Soft Quit;
+`runtime status --verify` can report live package drift without silently
+changing either authority.
+
 The footprint is about 700 MB or more because Windows needs a complete,
 internally consistent private MSYS2 compatibility base plus tmux and Python;
 it is not the size of the Railmux Python code. This is a one-base cost rather
@@ -61,7 +69,7 @@ opens a WSL shell and runs the ordinary POSIX product there.
   3.9 for POSIX because Python package metadata cannot express an OS-specific
   interpreter floor; the native entrypoint enforces the Windows floor before
   runtime discovery.
-- `railmux --version`, `--help`, and `runtime status` do not install or enter a
+- `railmux --version`, `--help`, `runtime status`, and `doctor` do not install a
   runtime. When an exact private base candidate already exists, ordinary launch
   and `runtime install` state that only the versioned app layer is changing and
   continue without redundant confirmation. That automatic path passes a
@@ -151,11 +159,14 @@ opens a WSL shell and runs the ordinary POSIX product there.
   silently removed. User-selected `RAILMUX_MSYS2_ROOT` runtimes are probed
   read-only and never provisioned, adopted, or updated.
 - Versioned app layers are deliberately retained for preview rollback and are
-  not automatically pruned in dev12. Their growth is the application-layer
-  size (22.4 MiB in the measured dev11 environment), not another MSYS2 base;
-  a future bounded-retention command must preserve the active and immediately
-  previous versions, remain limited to exact marked app directories, and also
-  bound the separate pip cache without removing files from a live install.
+  never pruned during install or launch. Their growth is the application-layer
+  size (22.4 MiB in the measured dev11 environment), not another MSYS2 base.
+  `runtime prune` is the only cleanup authority: it inventories process argv,
+  fails closed on ambiguity, retains the installed version, immediately
+  previous version, and every process-proven in-use layer, and removes only
+  exact content-bound marked app directories after replanning under the install
+  lock. `--dry-run` is read-only; cache removal requires `--caches`; provider
+  roots are outside every candidate and are never inspected or removed.
 - No system `PATH`, shell profile, Windows package manager, user-owned MSYS2,
   or provider history is modified. All captured text and marker files use an
   explicit UTF-8 codec; CP936/GBK is never an implicit file encoding.
@@ -164,6 +175,15 @@ opens a WSL shell and runs the ordinary POSIX product there.
   disabled at the Windows boundary then restored before native providers run.
 - The parent waits through Ctrl-C instead of killing the child. tmux owns
   persistence after detach or outer-window closure.
+- Installing a new wheel never makes an already-running outer UI appear
+  upgraded. dev24+ controllers publish their exact content-bound app identity
+  only after MainLoop is usable. A detached older dev24+ UI cooperatively saves
+  state, returns displayed provider panes, releases UI-only leases, and execs
+  the validated new absolute app after a nonce-bound pane-local request.
+  Released dev11-dev23 controllers remain untouched until the user chooses
+  Soft Quit; the next launch creates the dev24 UI. Attached, ambiguous, or
+  racing state is likewise left untouched. Neither path kills the tmux
+  server, a provider session/process, or Codex/Claude history.
 - The ordinary label-selected tmux attach remains the fast path. If Windows
   rejects only that terminal attachment while the same server and immutable
   Railmux session remain healthy, Railmux makes one fail-closed transparent
@@ -245,6 +265,11 @@ every approved package candidate. It intentionally does not use ICMP ping and
 does not block product tests when an external mirror has a transient outage;
 runtime integrity remains the SHA-256 and pacman package-signature checks, not
 the CI capability probe.
+The blocking Windows jobs separately exercise the native 3.10/3.13 bootstrap
+and a real MSYS2/tmux/Python runtime. The MSYS2 job records an exact package
+identity, writes content-bound managed markers, and runs the Windows UI
+transition, provider-path, local/remote config, local/remote doctor, and
+privacy-safe diagnostics suites from the runtime-owned app venv.
 
 On 2026-08-03 a Windows 10 19045 / PowerShell 5.1 / Python 3.12.10 spike proved
 that MSYS2 maps `HOME` to the same Windows profile, finds native Codex 0.146.0
@@ -362,6 +387,17 @@ acknowledgement. The provider survived repeated outer recreation and the final
 view detached normally. Automated tests cover raw direct-error suppression,
 terminal-aware bridge status, and the unavailable-bridge error; desktop-side
 Windows Terminal clipboard receipt remains manual.
+
+dev24 automation adds fail-closed cooperative app-layer transition tests,
+exact package identity/drift tests, process-aware prune tests, native forwarding
+of every local/remote config and doctor form, and POSIX/direct remote probe
+coverage. A real Windows 10 candidate then verified the exact 96-package base
+identity, schema-4 local doctor, local config, a 2.9-second empty-workspace
+restore, detach/reattach, Linux-to-Windows SSH/config/doctor, and native
+Windows-to-Windows SSH/config/doctor through OpenSSH. These checks do not
+promote the preview to stable support: the exact dev23-to-dev24 Soft Quit
+boundary, Windows Terminal visual/input checklist, Windows-to-POSIX endpoints,
+and macOS-origin remote paths remain release-specific manual checks.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

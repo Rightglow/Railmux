@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev24] - 2026-08-05
+
+### Added
+
+- Add fail-closed managed-Windows app-layer transitions. dev24+ UIs save state,
+  return displayed provider panes, and exec an exact content-bound new app;
+  released dev11-dev23 UIs are never killed for migration and instead remain
+  available until the user chooses Soft Quit before the next launch.
+- Record the exact private MSYS2 package inventory in a content-identity marker,
+  bind new app layers to it, expose read-only verification through
+  `railmux runtime status --verify`, and add explicit process-aware
+  `railmux runtime prune` cleanup with dry-run and optional cache removal.
+- Support `railmux config --remote` and `railmux doctor --remote` against an
+  already-installed managed Windows preview. Both commands share and pin the
+  POSIX/direct launch-family probe; `--remote-platform windows` skips the POSIX
+  attempt, while remote Windows runtime installation remains deliberately
+  manual.
+- Extend privacy-safe local doctor output with bounded managed runtime, content,
+  installed/running app, and transition status fields.
+
+### Changed
+
+- Include the complete POSIX/WSL `0.3.6` maintenance baseline.
+- Make native Windows `doctor` and all noninteractive missing-runtime commands
+  read-only: they report the explicit `runtime install` next step and never
+  create even an app layer implicitly. Managed app venvs also refuse the POSIX
+  self-upgrade path and direct users to the native PowerShell owner.
+- Expand native Windows and real-MSYS2 CI coverage for runtime identity/drift,
+  cooperative transitions, safe pruning, provider-path projection, config/doctor
+  forwarding, direct Windows remote probing, and privacy contracts.
+
 ## [0.4.0.dev23] - 2026-08-05
 
 ### Added
@@ -2319,7 +2350,9 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev24...HEAD
+[0.4.0.dev24]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev24
+[0.4.0.dev23]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...v0.4.0.dev23
 [0.4.0.dev22]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev21...v0.4.0.dev22
 [0.4.0.dev21]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev20...v0.4.0.dev21
 [0.4.0.dev20]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...v0.4.0.dev20
@@ -2339,6 +2372,12 @@ made after 0.2.21.
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
+[0.3.6]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6
+[0.3.6.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...v0.3.6.dev6
+[0.3.6.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...v0.3.6.dev5
+[0.3.6.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev3...v0.3.6.dev4
+[0.3.6.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev2...v0.3.6.dev3
+[0.3.6.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev1...v0.3.6.dev2
 [0.3.6.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6.dev1
 [0.3.5]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5
 [0.3.5.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5.dev1
