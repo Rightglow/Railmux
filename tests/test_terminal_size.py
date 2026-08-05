@@ -40,6 +40,18 @@ def test_critical_and_recommended_size_transitions_report_once():
     assert app._set_status.call_count == 3
 
 
+def test_sidebar_only_compact_startup_skips_tmux_page_geometry():
+    app = _app()
+    app._apply_tmux_bar = MagicMock()
+
+    app._check_terminal_size((79, 19))
+
+    workspace = app._agent_workspace()
+    assert workspace.presentation is WorkspacePresentation.COMPACT
+    assert workspace.compact_page is WorkspacePage.SIDEBAR
+    app._window_is_zoomed.assert_not_called()
+
+
 def test_grass_green_is_the_high_colour_focus_accent():
     pane_focus = next(entry for entry in PALETTE if entry[0] == "pane_focus")
 
