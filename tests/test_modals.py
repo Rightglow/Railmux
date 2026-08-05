@@ -148,7 +148,9 @@ def test_modal_action_legends_use_high_contrast_attribute(tmp_path):
     ]
 
     for modal in modals:
-        assert "modal_key" in _rendered_attrs(modal), type(modal).__name__
+        assert {"modal_key", "btn_key"} & _rendered_attrs(modal), (
+            type(modal).__name__
+        )
 
 
 def test_quit_confirm_wraps_all_choices_in_narrow_sidebar():
@@ -163,9 +165,25 @@ def test_quit_confirm_wraps_all_choices_in_narrow_sidebar():
     text = " ".join(
         _rendered_text(modal, size=(22, height)).replace("│", " ").split())
 
-    assert "quit and kill all sessions" in text
+    assert "hard quit (requires final confirmation)" in text
     assert "soft quit (keep sessions alive)" in text
     assert "n / Esc = cancel" in text
+
+
+def test_quit_confirm_choices_have_filled_button_styling():
+    modal = QuitConfirmModal(
+        on_confirm=lambda: None,
+        on_soft_quit=lambda: None,
+        on_cancel=lambda: None,
+        running_count=2,
+    )
+
+    attrs = _rendered_attrs(
+        modal, size=(48, modal.preferred_height(48))
+    )
+
+    assert "btn_key" in attrs
+    assert "btn_label" in attrs
 
 
 def test_quit_confirm_warns_when_ui_is_shared_by_multiple_clients():
@@ -185,7 +203,7 @@ def test_quit_confirm_warns_when_ui_is_shared_by_multiple_clients():
     assert "quitting closes this UI in all of them" in text
 
 
-def test_quit_confirm_mouse_clicks_soft_quit_and_cancel_but_not_hard_quit():
+def test_quit_confirm_mouse_clicks_hard_soft_quit_and_cancel():
     called: list[str] = []
     modal = QuitConfirmModal(
         on_confirm=lambda: called.append("hard"),
@@ -206,17 +224,11 @@ def test_quit_confirm_mouse_clicks_soft_quit_and_cancel_but_not_hard_quit():
             size, "mouse press", 1, size[0] // 2, row, True
         )
 
+    click_row("hard quit")
     click_row("soft quit")
     click_row("cancel")
-    hard_canvas = modal.render(size, focus=True)
-    hard_row = next(
-        index
-        for index, line in enumerate(hard_canvas.text)
-        if b"quit and kill all sessions" in line
-    )
-    modal.mouse_event(size, "mouse press", 1, size[0] // 2, hard_row, True)
 
-    assert called == ["soft", "cancel"]
+    assert called == ["hard", "soft", "cancel"]
 
 
 def test_hard_quit_confirm_preserves_enter_and_requires_a_second_action():

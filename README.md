@@ -403,7 +403,9 @@ not interrupt it. To leave agents running when you quit Railmux, press `s` for
 soft quit in the confirmation popup; restarting the same Railmux instance then
 restores the usable workspace when those sessions are still available. A normal
 quit ends all running sessions instead and therefore requires a second
-confirmation; `y` and Enter keep their existing confirm meaning in both steps.
+confirmation. The first chooser has visible mouse buttons, but the final
+destructive confirmation remains keyboard-only; `y` and Enter keep their
+existing confirm meaning in both steps.
 
 All terminals attached to one managed Railmux window view the same UI process.
 Soft Quit therefore closes that shared UI for every attached view, although it

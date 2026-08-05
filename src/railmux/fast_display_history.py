@@ -1021,18 +1021,15 @@ class LocalHistoryView:
         return was_active
 
 
-def claim_batched_wheel(
+def claim_batched_forwarded_wheel(
     event: SgrMouseEvent,
     handled_directions: set[int],
 ) -> bool:
-    """Admit at most one wheel tick per direction from one terminal read.
+    """Admit at most one forwarded wheel tick per direction in one read.
 
-    Trackpads commonly report several identical SGR wheel packets together.
-    If painting is briefly busy with fresh agent output, those packets can
-    accumulate in stdin and then move a frozen local-history viewport many
-    lines at once.  Bounding each read preserves the established one-line
-    local scroll feel without using a timing heuristic; a later read remains
-    immediately eligible.
+    Remote sidebar/modal owners need one bounded event rather than a stale
+    backlog. Locally owned agent history must not use this helper: it retains
+    the complete reported distance and coalesces only its terminal paint.
     """
     direction = event.wheel_direction
     if direction == 0:

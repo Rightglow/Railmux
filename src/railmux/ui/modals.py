@@ -44,6 +44,29 @@ def _action_legend(
     return urwid.Text(markup, align=align, wrap=wrap)
 
 
+def _action_button(
+    keys: str,
+    description: str,
+    *,
+    on_click: Callable[[], None],
+    click_key: str,
+) -> ClickableRow:
+    """Render a terminal-safe filled action button with a mouse target."""
+    label = urwid.Text(
+        [
+            ("btn_key", keys),
+            ("btn_label", f" = {description}"),
+        ],
+        align="center",
+        wrap="space",
+    )
+    return ClickableRow(
+        urwid.AttrMap(label, "btn_label"),
+        on_click=on_click,
+        click_key=click_key,
+    )
+
+
 def _attention_lines(attention: AttentionState | None) -> list:
     """Compact, generic rendering for known and future attention categories."""
     if attention is None:
@@ -141,38 +164,37 @@ class QuitConfirmModal(urwid.WidgetWrap):
             summary = "No running sessions."
 
         action_rows: list[urwid.Widget] = [
-            _action_legend(
-                [("y / ↵", "quit and kill all sessions")],
-                align="center",
-                wrap="space",
+            _action_button(
+                "y / ↵",
+                "hard quit (requires final confirmation)",
+                on_click=on_confirm,
+                click_key="quit:hard",
             ),
         ]
         if on_soft_quit is not None:
-            action_rows.append(
-                ClickableRow(
-                    _action_legend(
-                        [("s", "soft quit (keep sessions alive)")],
-                        align="center",
-                        wrap="space",
-                    ),
+            action_rows.extend([
+                urwid.Divider(),
+                _action_button(
+                    "s",
+                    "soft quit (keep sessions alive)",
                     on_click=on_soft_quit,
                     click_key="quit:soft",
-                )
-            )
-        cancel_row = _action_legend(
-            [("n / Esc", "cancel")],
-            align="center",
-            wrap="space",
-        )
-        action_rows.append(
-            ClickableRow(
-                cancel_row,
+                ),
+            ])
+        action_rows.append(urwid.Divider())
+        if on_cancel is not None:
+            action_rows.append(_action_button(
+                "n / Esc",
+                "cancel",
                 on_click=on_cancel,
                 click_key="quit:cancel",
-            )
-            if on_cancel is not None
-            else cancel_row
-        )
+            ))
+        else:
+            action_rows.append(_action_legend(
+                [("n / Esc", "cancel")],
+                align="center",
+                wrap="space",
+            ))
         self._title = urwid.Text("Quit railmux?", align="center")
         self._summary = urwid.Text(("live", summary), align="center")
         self._shared_notice = (
