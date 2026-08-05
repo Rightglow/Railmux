@@ -156,7 +156,10 @@ jobs:
           app="/opt/railmux/apps/railmux-$version"
           python -m venv "$app/venv"
           "$app/venv/bin/python" -m pip install --upgrade pip
-          "$app/venv/bin/python" -m pip install ".[dev,ssh]"
+          # The MSYS2 Python environment has no native ruff wheel.  This job
+          # exercises runtime behavior, so install only its test runner and
+          # runtime extras; the separate quality job owns ruff/build/twine.
+          "$app/venv/bin/python" -m pip install ".[ssh]" "pytest>=8.0"
           tmux -V
           "$app/venv/bin/railmux" --version
           printf '%s' "$version" > /tmp/railmux-version

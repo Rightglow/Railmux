@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.0.dev24] - 2026-08-05
+## [0.4.0.dev25] - 2026-08-05
 
 ### Added
 
@@ -37,6 +37,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Expand native Windows and real-MSYS2 CI coverage for runtime identity/drift,
   cooperative transitions, safe pruning, provider-path projection, config/doctor
   forwarding, direct Windows remote probing, and privacy contracts.
+
+## [0.4.0.dev24] - 2026-08-05
+
+### Fixed
+
+- Mark the unpublished dev24 candidate whose release gate correctly stopped
+  before packaging when the real-MSYS2 job tried to build the unrelated Ruff
+  developer tool from source. Dev25 keeps the candidate code unchanged and
+  narrows that runtime job to its actual SSH and pytest dependencies.
 
 ## [0.4.0.dev23] - 2026-08-05
 
@@ -2350,7 +2359,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev24...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...HEAD
+[0.4.0.dev25]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev25
 [0.4.0.dev24]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev24
 [0.4.0.dev23]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...v0.4.0.dev23
 [0.4.0.dev22]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev21...v0.4.0.dev22
