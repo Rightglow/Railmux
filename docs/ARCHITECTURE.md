@@ -136,6 +136,11 @@ keyboard cursor resolves to a verified agent route; sidebar and modal
 navigation remains remote. The server retains the newest suffix if styled
 history reaches the protocol byte
 budget; a byte-bound truncation is an effective end, never a helper failure.
+Styled raw capture is decoded as one chronological terminal stream because
+tmux may carry SGR foreground, background, and text attributes across physical
+row boundaries. Each decoded row is then reset and re-encoded as an
+independently paintable overlay row; parsing rows from a default style must not
+drop inherited diff gutters or let a prior style leak past an explicit reset.
 Input or bottom restores only the routed pane; layout uncertainty, resize,
 sidebar input, and `Esc` fail closed by removing every incompatible overlay.
 When the display helper creates the default Railmux session, it explicitly

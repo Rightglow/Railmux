@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve tmux's cross-row SGR state while encoding `railmux ssh` history, so
+  inherited code-diff backgrounds continue through the line-number gutter and
+  explicit resets still return ordinary output to the terminal default.
+
 ## [0.3.6.dev3] - 2026-08-05
 
 ### Changed

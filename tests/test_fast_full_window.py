@@ -6977,8 +6977,8 @@ def test_server_history_capture_honours_limits_above_the_old_4096_cap(
     )
     monkeypatch.setattr(
         fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
     )
 
     snapshot = fast_display_server._capture_pane_history(object(), pane, 7, 5000)
@@ -7019,16 +7019,31 @@ def test_server_raw_styled_hot_and_deep_history_keep_codex_foreground(
         b"\033[38;2;205;214;244mvalue = 1\033[39m"
     )
     monochrome = (
-        b"\033[48;5;22m 3 \033[0m\033[38;5;2m\033[48;5;22m"
+        # tmux omits the leading background because this physical row inherits
+        # it from ``highlighted``. History parsing must keep that stream state
+        # while still returning an independently paintable row.
+        b" 3 \033[0m\033[38;5;2m\033[48;5;22m"
         b"+#!/bin/bash\033[39m"
     )
+    removed = (
+        b"\033[48;5;52m 4 \033[0m\033[38;5;1m\033[48;5;52m"
+        b"-removed = True\033[39m"
+    )
+    removed_inherited = (
+        b" 5 \033[0m\033[38;5;1m\033[48;5;52m"
+        b"-removed = False\033[39m"
+    )
+    ordinary = b"\033[0m ordinary output"
     raw = b"\n".join((
         *(f"old-{index}".encode() for index in range(99)),
         wrap_head,
         wrap_continuation,
-        *(f"line-{index}".encode() for index in range(297)),
+        *(f"line-{index}".encode() for index in range(294)),
         highlighted,
         monochrome,
+        removed,
+        removed_inherited,
+        ordinary,
     )) + b"\n"
     monkeypatch.setattr(
         subprocess, "check_output", lambda *_args, **_kwargs: raw)
@@ -7054,19 +7069,32 @@ def test_server_raw_styled_hot_and_deep_history_keep_codex_foreground(
         terminal.ByteStream(screen).feed(row)
         return screen
 
-    highlighted_screen = styled_row(deep.lines[-2])
-    monochrome_screen = styled_row(deep.lines[-1])
+    highlighted_screen = styled_row(deep.lines[-5])
+    monochrome_screen = styled_row(deep.lines[-4])
+    removed_screen = styled_row(deep.lines[-3])
+    removed_inherited_screen = styled_row(deep.lines[-2])
+    ordinary_screen = styled_row(deep.lines[-1])
     highlighted_start = highlighted_screen.display[0].index("value")
     monochrome_start = monochrome_screen.display[0].index("#!/bin/bash")
     assert highlighted_screen.buffer[0][highlighted_start].fg == "cdd6f4"
     assert monochrome_screen.buffer[0][monochrome_start].fg == "00cd00"
+    assert highlighted_screen.buffer[0][0].bg == "005f00"
+    assert monochrome_screen.buffer[0][0].bg == "005f00"
+    assert removed_screen.buffer[0][0].bg == "5f0000"
+    assert removed_inherited_screen.buffer[0][0].bg == "5f0000"
+    assert ordinary_screen.buffer[0][0].bg == "default"
     coloured_backgrounds = {
         char.bg
-        for screen in (highlighted_screen, monochrome_screen)
+        for screen in (
+            highlighted_screen,
+            monochrome_screen,
+            removed_screen,
+            removed_inherited_screen,
+        )
         for char in screen.buffer[0].values()
         if char.bg != "default"
     }
-    assert coloured_backgrounds == {"005f00"}
+    assert coloured_backgrounds == {"005f00", "5f0000"}
 
 
 def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
@@ -7097,8 +7125,8 @@ def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
     )
     monkeypatch.setattr(
         fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
     )
 
     hot = fast_display_server._capture_pane_history(object(), pane, 1, 300)
@@ -7140,8 +7168,8 @@ def test_server_waits_for_local_choice_before_rendering_claude_transcript(
     )
     monkeypatch.setattr(
         fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
     )
 
     snapshot = fast_display_server._capture_pane_history(object(), pane, 1, 300)
@@ -7188,8 +7216,8 @@ def test_server_codex_history_uses_canonical_transcript_after_rewind(
     )
     monkeypatch.setattr(
         fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
     )
 
     snapshot = fast_display_server._capture_pane_history(
@@ -7230,8 +7258,8 @@ def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
     )
     monkeypatch.setattr(
         fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
     )
 
     snapshot = fast_display_server._capture_pane_history(object(), pane, 1, 300)
@@ -7314,8 +7342,10 @@ def test_server_history_capture_truncates_to_newest_styled_byte_budget(
     line_bytes = fast_display_server._HISTORY_SNAPSHOT_RAW_BUDGET // 3 + 100
     monkeypatch.setattr(
         fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line + b"x" * line_bytes,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(
+            line + b"x" * line_bytes for line in lines
+        ),
     )
 
     snapshot = fast_display_server._capture_pane_history(object(), pane, 7, 20000)
