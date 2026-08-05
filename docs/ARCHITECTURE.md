@@ -70,11 +70,15 @@ therefore tries the ordinary label-selected tmux client first. Soft Quit can
 leave detached provider sessions on that server after the outer `railmux`
 session exits. When managed Windows proves an existing server but no outer UI,
 the launcher creates only that missing session detached through the
-revalidated server. It passes only the bounded managed-runtime kind, runtime
-ID, and app-layer ID into that pane with tmux `-e`; no provider credential or
-general caller environment is persisted, and the child still has to verify
-the matching same-owner on-disk markers. It then retains the ordinary
-direct-first order. It may make
+revalidated server. When stdin and stdout are real TTYs, the launcher reads
+their exact bounded dimensions and supplies them to that one `new-session`
+operation, before the child can paint its first frame. It never manufactures a
+fallback dimension or pre-resizes an existing session, which might belong to
+another attached view. It passes only the bounded managed-runtime kind,
+runtime ID, and app-layer ID into that pane with tmux `-e`; no provider
+credential or general caller environment is persisted, and the child still
+has to verify the matching same-owner on-disk markers. It then retains the
+ordinary direct-first order. It may make
 one transparent bridge attempt only when that client rejects the attach within
 five seconds, stdin/stdout are real terminals, and a new identity-pinned query
 proves that the same server PID and immutable Railmux session still exist.

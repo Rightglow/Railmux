@@ -680,12 +680,32 @@ def _managed_windows_session_environment_args(
     return result
 
 
+def _initial_session_size_args(
+    initial_size: tuple[int, int] | None,
+) -> list[str]:
+    """Return bounded tmux dimensions for a newly created detached window."""
+    if not isinstance(initial_size, tuple) or len(initial_size) != 2:
+        return []
+    width, height = initial_size
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or not 0 < width <= 65535
+        or not 0 < height <= 65535
+    ):
+        return []
+    return ["-x", str(width), "-y", str(height)]
+
+
 def ensure_detached_launcher_session(
     target: TmuxServerTarget,
     launch_prefix: Sequence[str],
     forwarded_args: Sequence[str],
     *,
     env: Mapping[str, str] | None = None,
+    initial_size: tuple[int, int] | None = None,
     timeout: float = 5.0,
 ) -> str | None:
     """Create the outer UI detached on one already-proven server.
@@ -713,6 +733,7 @@ def ensure_detached_launcher_session(
                 "-d",
                 "-s",
                 "railmux",
+                *_initial_session_size_args(initial_size),
                 *_managed_windows_session_environment_args(env),
                 *launch_prefix,
                 "--inside-tmux",

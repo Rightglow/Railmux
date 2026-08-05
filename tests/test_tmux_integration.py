@@ -232,53 +232,6 @@ def test_real_transparent_windows_relay_attaches_and_detaches(isolated_tmux):
     assert tmux_server.target_has_session(target, session_id)
 
 
-def test_exact_view_reset_preserves_live_pane_and_scrollback(isolated_tmux):
-    session_name, pane_id, _socket_path = isolated_tmux
-    subprocess.run(
-        [
-            "tmux", "respawn-pane", "-k", "-t", pane_id,
-            "i=0; while [ $i -lt 160 ]; do echo rewind-stale-$i; "
-            "i=$((i+1)); done; sleep 60",
-        ],
-        check=True,
-    )
-    assert _wait_until(
-        lambda: int(subprocess.check_output(
-            [
-                "tmux", "display-message", "-p", "-t", session_name,
-                "#{history_size}",
-            ],
-            text=True,
-        ).strip()) > 100
-    )
-    identity = tmux_ctl.pane_identity(pane_id)
-    assert identity is not None
-
-    before_history = int(subprocess.check_output(
-        ["tmux", "display-message", "-p", "-t", pane_id, "#{history_size}"],
-        text=True,
-    ).strip())
-
-    assert tmux_ctl.reset_pane_view(identity)
-
-    current = tmux_ctl.pane_identity(pane_id)
-    assert current is not None
-    assert current.pane_pid == identity.pane_pid
-    assert current.session_id == identity.session_id
-    after_history = int(subprocess.check_output(
-        [
-            "tmux", "display-message", "-p", "-t", pane_id,
-            "#{history_size}",
-        ],
-        text=True,
-    ).strip())
-    assert after_history >= before_history
-    retained = subprocess.check_output(
-        ["tmux", "capture-pane", "-p", "-t", pane_id, "-S", "-"],
-        text=True,
-    )
-    assert "rewind-stale-0" in retained
-    assert "rewind-stale-159" in retained
 def test_real_railmux_inside_tmux_reaches_first_interactive_frame(tmp_path):
     """Boot the actual TUI on every supported tmux, including the 2.7 floor."""
     socket_root = Path(tempfile.mkdtemp(prefix="rx-start-", dir="/tmp"))

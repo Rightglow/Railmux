@@ -1,11 +1,13 @@
 import os
 import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from railmux import tmux_server
 from railmux.cli import (
+    _interactive_terminal_size,
     _reset_terminal_modes,
     _run_tmux_client_with_watchdog,
     _show_startup_message,
@@ -14,6 +16,27 @@ from railmux.cli import (
 )
 from railmux.config import Config, ConfigError
 from railmux.tmux_server import TmuxServerTarget
+
+
+def test_interactive_terminal_size_uses_real_tty_dimensions(monkeypatch):
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    get_size = MagicMock(return_value=os.terminal_size((164, 46)))
+    monkeypatch.setattr("railmux.cli.os.get_terminal_size", get_size)
+
+    assert _interactive_terminal_size() == (164, 46)
+    get_size.assert_called_once_with(sys.stdout.fileno())
+
+
+def test_interactive_terminal_size_does_not_invent_non_tty_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: False)
+    get_size = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.get_terminal_size", get_size)
+
+    assert _interactive_terminal_size() is None
+    get_size.assert_not_called()
 
 
 @pytest.fixture(autouse=True)
@@ -488,6 +511,8 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
         "railmux.provider_paths.running_in_managed_windows_wrapper",
         lambda: True,
     )
+    monkeypatch.setattr(
+        "railmux.cli._interactive_terminal_size", lambda: (164, 46))
     prepared = MagicMock(return_value="$9")
     monkeypatch.setattr(
         "railmux.cli.tmux_server.ensure_detached_launcher_session", prepared)
@@ -503,6 +528,7 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
         ["/opt/railmux/bin/railmux"],
         ["--project", "/work"],
         env=client_env,
+        initial_size=(164, 46),
     )
     assert run_client.call_args.kwargs == {
         "expected_target": target,
