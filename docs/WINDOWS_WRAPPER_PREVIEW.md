@@ -391,10 +391,13 @@ Windows Terminal clipboard receipt remains manual.
 dev24 automation adds fail-closed cooperative app-layer transition tests,
 exact package identity/drift tests, process-aware prune tests, native forwarding
 of every local/remote config and doctor form, and POSIX/direct remote probe
-coverage. These tests do not promote the preview to stable support: the exact
-dev23-to-dev24 transition, Windows Terminal visual/input checklist, and both
-directions of authenticated remote config/doctor remain release-specific
-manual checks.
+coverage. A real Windows 10 candidate then verified the exact 96-package base
+identity, schema-4 local doctor, local config, a 2.9-second empty-workspace
+restore, detach/reattach, Linux-to-Windows SSH/config/doctor, and native
+Windows-to-Windows SSH/config/doctor through OpenSSH. These checks do not
+promote the preview to stable support: the exact dev23-to-dev24 Soft Quit
+boundary, Windows Terminal visual/input checklist, Windows-to-POSIX endpoints,
+and macOS-origin remote paths remain release-specific manual checks.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
