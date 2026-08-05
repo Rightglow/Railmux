@@ -184,6 +184,11 @@ deep response replaces its pane cache as one capture rather than merging two
 style generations. Additional wheel-up ticks received during an initial
 bounded request accumulate into its eventual offset. An existing frozen
 viewport retains its immutable snapshot while that mutable cache changes.
+Once routing identifies an agent-history gesture, every wheel tick delivered
+in one local stdin read contributes to the viewport distance, but the client
+paints only the final viewport from that read. The per-read one-direction bound
+applies only to wheel input still forwarded to sidebar/modal or another remote
+owner; it must never discard locally owned agent-history distance.
 Native Claude, local transcript, and
 undecided history are separate sources and are never merged. Protocol v15 also
 carries the opaque pane-local Codex history
@@ -1252,6 +1257,10 @@ Every attached terminal views the same Railmux UI process, so Soft Quit ends
 that UI for all views while preserving detached agent sessions. Native
 `detach-client -a`, issued by the client to retain, is the non-destructive
 exclusive-view operation; it is not part of Soft Quit teardown.
+The first quit chooser exposes filled mouse targets for hard quit, Soft Quit,
+and cancel on both direct and SSH displays. Its hard-quit target only opens the
+second warning; the final destructive action remains keyboard-only and still
+requires `y` or Enter.
 Modern tmux receives a small bounded retry budget before failure to set this
 policy aborts the new attach; an unverified shared-size policy must not silently
 degrade to activity-sensitive geometry.

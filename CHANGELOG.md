@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev21] - 2026-08-05
+
+### Changed
+
+- Include the POSIX/WSL changes released in Railmux 0.3.6.dev5: the first quit
+  chooser now exposes visible mouse buttons, while the final destructive
+  confirmation remains keyboard-only and existing keyboard shortcuts are
+  unchanged.
+
+### Fixed
+
+- Preserve the complete `railmux ssh` agent-history wheel distance when a
+  terminal or RDP client batches several SGR reports into one input read, while
+  painting only the final local viewport once. Forwarded sidebar/modal wheel
+  bursts retain their existing bound.
+
 ## [0.4.0.dev20] - 2026-08-05
 
 ### Changed
@@ -2275,7 +2291,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev20...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev21...HEAD
+[0.4.0.dev21]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev20...v0.4.0.dev21
 [0.4.0.dev20]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...v0.4.0.dev20
 [0.4.0.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev18...v0.4.0.dev19
 [0.4.0.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...v0.4.0.dev18

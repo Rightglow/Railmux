@@ -341,7 +341,10 @@ moving any existing history viewport; a sidebar press restores all overlays
 before forwarding. A wheel over another agent starts or moves that pane's
 independent viewport without changing the old pane's offset. Short
 same-direction vertical-wheel bursts destined for the sidebar or a modal are
-bounded once per local stdin read; locally handled agent history is not.
+bounded once per local stdin read. Locally handled agent history instead
+retains every reported tick, advances to the cumulative final offset, and
+paints that final viewport once per read. This preserves Windows/RDP wheel
+distance without multiplying synchronous terminal redraws.
 A terminal-native selection override can still bypass mouse reporting before
 the client sees it, but that behavior is terminal-dependent; `--no-mouse` is
 the reliable ordinary-selection option.
