@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Render the first quit chooser as visible terminal buttons and allow its hard
+  quit choice to open the final warning by mouse. The final destructive action
+  remains keyboard-only, and all existing keyboard shortcuts are unchanged.
+
 ## [0.3.6.dev4] - 2026-08-05
 
 ### Fixed
