@@ -288,6 +288,19 @@ Terminal session to an SSH-origin server (and the reverse origin) remains a
 manual dev15 check because SSH access alone cannot create the desktop Terminal
 Services side of that boundary.
 
+The dev16 candidate reused that base and installed only its versioned app
+layer. Both the native bootstrap and managed-MSYS2 executable reported dev16;
+the real MSYS process-birth probe, advisory-lock holder transfer, owner lookup,
+and automatic release after provider-process exit all passed. An ordinary
+OpenSSH login entered the existing dedicated workspace through the dev15 bridge
+and detached normally, after which `doctor` still reported the same healthy
+tmux server. A separate two-host test on the shared scratch filesystem held the
+lease on `ipp2-1773`, identified that host immediately from `computelab-304`,
+and rejected the second claim. This proves the tested filesystem's cross-host
+`flock` behavior and the owner-record flush, not arbitrary NFS/CIFS mount
+semantics. End-to-end Windows-origin `railmux ssh` mouse motion and authenticated
+provider resume remain manual dev16 checks.
+
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
 website remain unchanged until the manual checklist is complete.
