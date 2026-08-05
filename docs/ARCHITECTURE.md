@@ -66,8 +66,12 @@ On the managed Windows preview, an OpenSSH login and an interactive desktop
 terminal can belong to different Windows Terminal Services sessions. The
 MSYS2 AF_UNIX control socket may remain queryable across that boundary even
 when tmux cannot transfer the later client's terminal handle. The launcher
-therefore tries the ordinary label-selected tmux client first. It may make one
-transparent bridge attempt only when that client rejects the attach within
+therefore tries the ordinary label-selected tmux client first. Soft Quit can
+leave detached provider sessions on that server after the outer `railmux`
+session exits. When managed Windows proves an existing server but no outer UI,
+the launcher creates only that missing session detached through the
+revalidated server, then retains the ordinary direct-first order. It may make
+one transparent bridge attempt only when that client rejects the attach within
 five seconds, stdin/stdout are real terminals, and a new identity-pinned query
 proves that the same server PID and immutable Railmux session still exist.
 

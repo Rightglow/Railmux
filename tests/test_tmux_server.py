@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -35,6 +36,68 @@ def test_launcher_argv_preserves_multi_argument_python_module_prefix():
         "/usr/bin/python3", "-m", "railmux", "--inside-tmux",
         "--mode", "codex",
     ]
+
+
+def test_detached_launcher_session_is_pinned_before_and_after_create(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    live = []
+    session_ids = iter((None, "$7"))
+    # Another launcher can win after our initial absence check. tmux then
+    # rejects this duplicate create, while the exact resulting session is the
+    # safe shared outcome.
+    run = SimpleNamespace(returncode=1)
+    launched = []
+
+    def target_is_live(candidate, **kwargs):
+        live.append((candidate, kwargs))
+        return True
+
+    monkeypatch.setattr(tmux_server, "target_is_live", target_is_live)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: launched.append((argv, kwargs)) or run,
+    )
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target,
+        ["/opt/railmux/bin/python", "-m", "railmux"],
+        ["--mode", "codex"],
+        env={"PATH": "/usr/bin"},
+    ) == "$7"
+
+    assert len(live) == 2
+    assert launched[0][0] == [
+        "tmux", "-S", "/tmp/private",
+        "new-session", "-d", "-s", "railmux",
+        "/opt/railmux/bin/python", "-m", "railmux", "--inside-tmux",
+        "--mode", "codex",
+    ]
+    assert launched[0][1]["env"] == {"PATH": "/usr/bin"}
+
+
+def test_detached_launcher_session_refuses_changed_server_identity(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_id = MagicMock(return_value=None)
+    monkeypatch.setattr(tmux_server, "target_session_id", session_id)
+    monkeypatch.setattr(
+        tmux_server, "target_is_live", MagicMock(side_effect=(True, False)))
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=SimpleNamespace(returncode=0)))
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target, ["railmux"], [],
+    ) is None
+    session_id.assert_called_once_with(target, "railmux", timeout=0.5)
 
 
 def test_current_socket_parser_allows_commas_in_the_path():
