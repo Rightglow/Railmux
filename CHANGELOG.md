@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev23] - 2026-08-05
+
+### Added
+
+- Allow a Linux or macOS `railmux ssh` client to enter a Windows preview host
+  whose user-level managed MSYS2 runtime is already installed. Automatic mode
+  retains the POSIX discovery ladder first and retries a shell-neutral direct
+  launch; `--remote-platform windows` skips the incompatible POSIX probe and
+  avoids a second password prompt on password-authenticated hosts.
+
+### Changed
+
+- Pin the detected remote launch family across attach retries and automatic
+  reconnects. Windows preview servers identify their managed runtime in the
+  bounded compatibility hello, and incompatible Windows versions now fail
+  closed with PowerShell app-layer/runtime update commands instead of ever
+  running the POSIX user-site or private-venv installers.
+
 ## [0.4.0.dev22] - 2026-08-05
 
 ### Fixed

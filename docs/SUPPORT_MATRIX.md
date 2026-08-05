@@ -42,6 +42,7 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux` or `railmux ssh HOST` | Native Windows bootstrap using managed MSYS2/tmux | — or Linux | **Planned** | The wrapper is developed only on `windows-preview`; the current `main` package does not install a runtime or claim native launch support. Railmux runs under MSYS2 while Windows-native providers retain the user's existing session/config directories. |
 | Ordinary `ssh USER@WINDOWS`, then `railmux` | Managed MSYS2/tmux on native Windows | — | **Planned** | The Windows preview shares the same private runtime, provider histories, and dedicated workspace with desktop launch. A one-attempt server-origin PTY bridge handles Windows Terminal Services boundaries; this is distinct from Railmux's display protocol. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
+| `railmux ssh --remote-platform windows HOST` | Linux or macOS | Native Windows managed MSYS2 preview | **Field-validated** | Dev23 completed a real Linux-to-Windows protocol handshake, attach, frame stream, and clean local escape against Windows 10/OpenSSH. The matching Windows preview runtime must already be installed; updates are explicit user-level PowerShell operations, and `auto` can detect the same path at the cost of a second password prompt when public-key authentication is unavailable. Arbitrary Windows Python/MSYS2 installations are not adopted. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
 The ordinary `ssh HOST` followed by remote `railmux` path depends primarily on
@@ -112,8 +113,8 @@ product capability.
 
 | ID | Capability | Status | Important boundary |
 |---|---|---|---|
-| S01 | Pre-attach package/protocol/config/tmux compatibility handshake | Supported | Runs before tmux lookup, creation, lock, PTY allocation, or attach; invalid remote config and configured-tmux failures remain distinct. |
-| S02 | Consent-based remote user install or private venv repair | Supported | Exact compatible package; never `sudo`, system package installation, or shell-profile edits. |
+| S01 | Pre-attach package/protocol/config/tmux compatibility handshake | Supported | Runs before tmux lookup, creation, lock, PTY allocation, or attach; invalid remote config and configured-tmux failures remain distinct. POSIX discovery remains the default; an explicit or detected Windows preview host uses a shell-neutral direct command. |
+| S02 | Consent-based remote user install or private venv repair | Supported | Exact compatible package; never `sudo`, system package installation, or shell-profile edits. Managed Windows remotes deliberately fail closed with manual user-level pip/runtime commands rather than receiving the POSIX installer. |
 | S03 | Consent-based local upgrade when remote is newer | Supported on POSIX local runtimes | Re-execs only after the same interpreter imports the requested version. |
 | S04 | Immediate restoring surface and bounded startup stages | Supported | First validated keyframe replaces it; setup prompts remain cooked-mode. |
 | S05 | Coalesced latest-state keyframes and row patches | Supported | Slow display output must not flow-control the real provider pane. |
@@ -222,8 +223,10 @@ is labelled supported.
 9. Prove local session restore, `railmux ssh` to Linux/macOS/Unix hosts, and
    ordinary OpenSSH login to the same Windows account followed by `railmux`.
    Desktop and SSH entry surfaces must attach the same workspace even when
-   Windows assigns different Terminal Services sessions. Running Railmux's
-   display-protocol remote server on native Windows remains out of scope.
+   Windows assigns different Terminal Services sessions. A Linux/macOS
+   display client may run the remote server only through a preinstalled,
+   version-compatible managed Windows preview runtime; automatic Windows
+   install, remote config, and arbitrary native runtimes remain out of scope.
 10. Add unconditional native Windows bootstrap/import/package CI plus a real
     managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
     record a named and dated real Windows Terminal pass here for every release

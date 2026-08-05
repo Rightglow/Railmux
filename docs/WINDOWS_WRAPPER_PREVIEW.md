@@ -46,10 +46,14 @@ same Windows account followed by `railmux`. A desktop terminal and that SSH
 login must converge on the same dedicated tmux workspace rather than create
 per-terminal runtimes or session namespaces. Native Codex and Claude provider
 processes remain in scope in all of those entry surfaces and retain the same
-Windows-owned histories. Running Railmux's display-protocol remote server on
-Windows—meaning `railmux ssh user@windows` from another Railmux client—remains
-out of scope. WSL remains usable only when the user independently opens a WSL
-shell and runs the ordinary POSIX product there.
+Windows-owned histories. A Linux or macOS preview client can also run
+`railmux ssh --remote-platform windows user@windows` when that account already
+has a compatible managed runtime. The option skips a POSIX-shell probe that
+PowerShell cannot parse; `auto` can fall back to the same direct command but
+may require authentication twice on password-only hosts. Windows runtime
+installation and repair remain explicit native user operations, never remote
+POSIX installer commands. WSL remains usable only when the user independently
+opens a WSL shell and runs the ordinary POSIX product there.
 
 ## Bootstrap contract
 

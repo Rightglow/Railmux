@@ -320,6 +320,19 @@ The local upgrade uses its current Python environment and re-execs the original
 same interpreter imports the requested exact version. Failure or an import
 mismatch leaves tmux untouched and prints a reproducible manual command.
 
+Remote command discovery is shell-family aware without executing a local
+shell. The default path keeps the POSIX executable/private-venv/Python ladder;
+if that bounded handshake fails before attach, `auto` may retry the same argv
+as a shell-neutral direct `railmux remote-server` command accepted by Windows
+OpenSSH's PowerShell default shell. `--remote-platform windows` selects that
+direct form immediately, which also avoids a second authentication prompt on
+password-only hosts. Once either path returns a valid hello, its launch family
+is pinned for attach contention retries and automatic reconnect. A managed
+Windows server names `windows-msys2` in that hello. Railmux never sends the
+POSIX pip/private-venv installer to a direct or identified Windows server;
+version or runtime repair fails closed with native user-level pip plus managed
+runtime instructions, and provider session files remain outside that repair.
+
 Before that cooked-mode handshake begins, the local client paints the same
 terminal-native workspace-restoration surface as a direct launch. It is local
 feedback only: it grants no protocol authority and is replaced by the first

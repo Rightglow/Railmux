@@ -55,7 +55,7 @@ S20 = "runtime-bridge"
 [limitations]
 rolling_repository = "The base archive is hash-pinned and pacman signatures are checked, but repository package versions are not yet snapshot-pinned."
 mirror_health = "CI archive Range and package-database checks are advisory because an external mirror outage must not invalidate product behavior; archive transfer is size/hash verified, pacman packages are signature verified and cached across retries, and only exact approved official URLs that passed measurement become active in staged private mirrorlists."
-native_server = "Railmux's display-protocol remote server on native Windows remains out of scope; ordinary OpenSSH login followed by railmux remains a preview path until cross-Terminal-Services field validation passes."
+native_server = "A Linux/macOS client may launch the display-protocol server through an already-installed, compatible managed Windows preview runtime. Remote runtime installation, remote config, arbitrary native runtimes, and hosted cross-platform CI remain out of scope."
 runtime_bridges = "Clipboard, browser, separate-terminal, self-update, and remote-config bridges still require real Windows validation."
 unicode_profile = "The managed runtime path and provider history must still be exercised with a real non-ASCII Windows profile name."
 
@@ -107,6 +107,13 @@ features = ["S01", "S04", "S06", "S08", "S09", "S11", "S12", "S17"]
 automation = ["tests/test_fast_full_window.py", "tests/test_session_lease.py"]
 manual = "Run railmux ssh from Windows to Linux and macOS/Unix; verify restore, reconnect, history, mouse, paste, resize, and Ctrl-]."
 evidence = "Dev16 automation covers row-local hover/selection repaint and provider-session lease conflicts. The candidate also entered its Windows workspace from an ordinary OpenSSH client and detached cleanly. Dev21 automation delivers eight SGR wheel reports in one local input batch, preserves all eight agent-history rows with one final overlay paint, restores live once when a downward batch reaches the bottom, and retains the existing one-per-direction bound for wheel input forwarded to remote sidebar/modal owners. Dev22 parses provider-emitted rollback evidence, requires its count to advance before canonical transcript fallback, and downgrades released heuristic markers to raw pane history; ordinary Codex continuation and compaction children remain styled raw SSH history. Windows-origin railmux ssh to a Linux/macOS target remains an end-to-end manual check."
+
+[[scenarios]]
+id = "WW-SSH-WINDOWS"
+features = ["S01", "S02", "S04", "S05", "S06", "S07", "S19"]
+automation = ["tests/test_fast_full_window.py"]
+manual = "From Linux and macOS run railmux ssh --remote-platform windows to an OpenSSH-enabled Windows account with the matching managed preview runtime; verify attach, frames, input, resize, reconnect, Ctrl-], and unchanged provider histories."
+evidence = "2026-08-05 dev23 candidate: the unmodified Linux client reached the real managed MSYS2 server on Windows 10 19045 with --remote-platform windows, negotiated protocol v15, attached, streamed 33 coalesced updates/98 rows over 9.3 seconds, and exited cleanly with Ctrl-]. An earlier direct-command probe streamed 277 updates/3253 rows over 17.4 seconds. Automation covers launch-family fallback/pinning, platform hello validation, reconnect argv reuse, and fail-closed Windows update guidance. Provider input, resize, reconnect interruption, and macOS origin remain manual."
 
 [[scenarios]]
 id = "WW-RUNTIME-BRIDGES"

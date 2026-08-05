@@ -248,6 +248,11 @@ def _emit_remote_hello(
             "config_status": config_status,
             "tmux_configured": tmux_configured,
             "config_protocol": REMOTE_CONFIG_PROTOCOL,
+            "platform": (
+                "windows-msys2"
+                if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2"
+                else "posix"
+            ),
             "version": __version__,
         },
         separators=(",", ":"),
