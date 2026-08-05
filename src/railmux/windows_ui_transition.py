@@ -23,12 +23,12 @@ from typing import Iterator, Sequence
 from packaging.version import InvalidVersion, Version
 
 from railmux import restart_state, tmux_server, windows_tmux_lifecycle
+from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256
 
 
 CURRENT_APP_OPTION = "@railmux_current_app_v1"
 REQUESTED_APP_OPTION = "@railmux_requested_app_v1"
 TRANSITION_STATUS_OPTION = "@railmux_app_transition_status_v1"
-UPGRADE_WAKE_KEY = "F19"
 UPGRADE_WAKE_SEQUENCE = "\x1b[33~"
 _APP_RE = re.compile(
     r"railmux-([0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)\Z"
@@ -125,13 +125,28 @@ def _base_identity(runtime: str) -> str | None:
     base = _read_json(_BASE_MARKER)
     content = _read_json(_BASE_CONTENT_MARKER)
     content_id = content.get("content_id") if isinstance(content, dict) else None
+    core = content.get("core_packages") if isinstance(content, dict) else None
+    package_count = content.get("package_count") if isinstance(content, dict) else None
     if (
         base != {"schema": 1, "runtime": runtime}
         or not isinstance(content, dict)
         or content.get("schema") != 1
         or content.get("runtime") != runtime
+        or content.get("archive_sha256") != MSYS2_ARCHIVE_SHA256
         or not isinstance(content_id, str)
         or _CONTENT_RE.fullmatch(content_id) is None
+        or not isinstance(package_count, int)
+        or isinstance(package_count, bool)
+        or not 3 <= package_count <= 4096
+        or not isinstance(core, dict)
+        or set(core) != {"tmux", "python", "python-pip"}
+        or any(
+            not isinstance(value, str)
+            or not value
+            or len(value) > 128
+            or any(ord(char) < 0x20 or ord(char) > 0x7e for char in value)
+            for value in core.values()
+        )
     ):
         return None
     return content_id
@@ -163,7 +178,11 @@ def _validated_app(
     ):
         return None
     try:
-        if application.is_symlink() or not executable.is_file():
+        if (
+            application.is_symlink()
+            or executable.is_symlink()
+            or not executable.is_file()
+        ):
             return None
     except OSError:
         return None
@@ -300,7 +319,8 @@ def _current_managed_identity() -> UiAppIdentity | None:
         return None
     try:
         raw_pid = subprocess.check_output(
-            ["tmux", "display-message", "-p", "-t", pane_id, "#{pane_pid}"],
+            tmux_server.target_argv(
+                target, "display-message", "-p", "-t", pane_id, "#{pane_pid}"),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=1.0,
@@ -332,7 +352,9 @@ def publish_current_app_ready() -> bool:
     _set_status(target, identity.session_id, "ready")
     try:
         subprocess.run(
-            ["tmux", "set-option", "-pu", "-t", identity.pane_id, "remain-on-exit"],
+            tmux_server.target_argv(
+                target, "set-option", "-pu", "-t", identity.pane_id,
+                "remain-on-exit"),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=1.0,
@@ -346,19 +368,22 @@ def publish_current_app_ready() -> bool:
 def consume_upgrade_request() -> UpgradeRequest | None:
     """Consume and validate one cooperative request in the exact controller."""
     identity = _current_managed_identity()
-    if identity is None:
+    target = tmux_server.current_target()
+    if identity is None or target is None:
         return None
     try:
         raw = subprocess.check_output(
-            ["tmux", "show-options", "-pqv", "-t", identity.pane_id,
-             REQUESTED_APP_OPTION],
+            tmux_server.target_argv(
+                target, "show-options", "-pqv", "-t", identity.pane_id,
+                REQUESTED_APP_OPTION),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=1.0,
         ).strip()
         subprocess.run(
-            ["tmux", "set-option", "-pu", "-t", identity.pane_id,
-             REQUESTED_APP_OPTION],
+            tmux_server.target_argv(
+                target, "set-option", "-pu", "-t", identity.pane_id,
+                REQUESTED_APP_OPTION),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=1.0,
@@ -414,7 +439,11 @@ def upgrade_exec_argv(request: UpgradeRequest, argv: Sequence[str]) -> list[str]
 
 @contextmanager
 def _transition_lock(label: str, session_id: str) -> Iterator[bool]:
-    root = restart_state.runtime_state_dir()
+    try:
+        root = restart_state.runtime_state_dir()
+    except (OSError, RuntimeError):
+        yield False
+        return
     safe_session = session_id.removeprefix("$")
     path = root / f"windows-ui-transition-{label}-{safe_session}.lock"
     try:
