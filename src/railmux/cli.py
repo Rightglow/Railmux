@@ -45,6 +45,20 @@ _LOCAL_WATCHDOG_INTERVAL = 5.0
 _LOCAL_WATCHDOG_FAILURES = 3
 
 
+def _interactive_terminal_size() -> tuple[int, int] | None:
+    """Return an exact entry TTY size without manufacturing a fallback."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return None
+    for stream in (sys.stdout, sys.stdin):
+        try:
+            size = os.get_terminal_size(stream.fileno())
+        except (AttributeError, OSError):
+            continue
+        if 0 < size.columns <= 65535 and 0 < size.lines <= 65535:
+            return size.columns, size.lines
+    return None
+
+
 def _restore_terminal(attributes: list | None) -> None:
     if attributes is None:
         return
@@ -627,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
                         launch_prefix,
                         raw_args,
                         env=client_env,
+                        initial_size=_interactive_terminal_size(),
                     )
                 )
         cmd = tmux_server.launcher_argv(launch_prefix, raw_args)

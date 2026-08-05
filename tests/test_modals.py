@@ -19,6 +19,7 @@ from railmux.ui.app import App, _context_menu_label
 from railmux.ui.modals import (
     ContextMenu,
     DeleteConfirmModal,
+    HardQuitConfirmModal,
     HelpModal,
     LayoutSaveModal,
     OptionsModal,
@@ -129,6 +130,11 @@ def test_modal_action_legends_use_high_contrast_attribute(tmp_path):
             on_cancel=lambda: None,
             running_count=1,
         ),
+        HardQuitConfirmModal(
+            on_confirm=lambda: None,
+            on_cancel=lambda: None,
+            running_count=1,
+        ),
         RenameModal("old title", lambda _title: None, lambda: None),
         YoloConfirmModal(
             lambda: None, lambda: None, lambda: None, lambda: None),
@@ -211,6 +217,47 @@ def test_quit_confirm_mouse_clicks_soft_quit_and_cancel_but_not_hard_quit():
     modal.mouse_event(size, "mouse press", 1, size[0] // 2, hard_row, True)
 
     assert called == ["soft", "cancel"]
+
+
+def test_hard_quit_confirm_preserves_enter_and_requires_a_second_action():
+    called: list[str] = []
+    modal = HardQuitConfirmModal(
+        on_confirm=lambda: called.append("hard"),
+        on_cancel=lambda: called.append("back"),
+        running_count=2,
+    )
+    height = modal.preferred_height(24)
+    text = " ".join(
+        _rendered_text(modal, size=(24, height)).replace("│", " ").split()
+    )
+
+    assert "Confirm hard quit" in text
+    assert "stop 2 running agent sessions" in text
+    assert "Saved conversation history remains" in text
+    assert "y / ↵ = quit and stop all sessions" in text
+    assert "n / Esc = back" in text
+    assert called == []
+
+    canvas = modal.render((24, height), focus=True)
+    hard_row = next(
+        index
+        for index, line in enumerate(canvas.text)
+        if b"quit and stop" in line
+    )
+    modal.mouse_event((24, height), "mouse press", 1, 12, hard_row, True)
+    assert called == []
+
+    back_row = next(
+        index
+        for index, line in enumerate(canvas.text)
+        if b"back" in line
+    )
+    assert modal.mouse_event(
+        (24, height), "mouse press", 1, 12, back_row, True
+    )
+    modal.keypress((24, height), "enter")
+
+    assert called == ["back", "hard"]
 
 
 def test_layout_save_height_tracks_wrapped_description_and_actions():
@@ -464,6 +511,27 @@ def test_app_sizes_quit_confirm_for_wrapped_choices():
     )
 
     app._show_quit_confirm(modal)
+
+    assert app._show_overlay.call_args.kwargs == {
+        "width": 50,
+        "height": modal.preferred_height(24),
+        "fixed_height": True,
+    }
+
+
+def test_app_sizes_final_hard_quit_warning_for_wrapped_content():
+    app = App.__new__(App)
+    app._loop = MagicMock()
+    app._loop.screen.get_cols_rows.return_value = (30, 24)
+    app._right_pane_open = MagicMock(return_value=True)
+    app._show_overlay = MagicMock()
+    modal = HardQuitConfirmModal(
+        on_confirm=lambda: None,
+        on_cancel=lambda: None,
+        running_count=12,
+    )
+
+    app._show_hard_quit_confirm(modal)
 
     assert app._show_overlay.call_args.kwargs == {
         "width": 50,

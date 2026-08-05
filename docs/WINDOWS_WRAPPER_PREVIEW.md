@@ -166,7 +166,10 @@ shell and runs the ordinary POSIX product there.
   bridge attempt. If Soft Quit preserved detached providers but removed the
   outer UI, Railmux first creates only that missing outer session detached on
   the revalidated existing server; it then uses the same direct-first and
-  immutable-session bridge checks. That new outer session receives only the
+  immutable-session bridge checks. If both entry streams are real TTYs, the
+  new session is created at their exact bounded dimensions before its first
+  frame; Railmux does not invent dimensions or pre-resize an existing session.
+  That new outer session receives only the
   current bounded runtime kind, runtime ID, and Railmux app-layer ID through
   tmux `-e`; credentials, provider variables, and the rest of the launcher
   environment are excluded. The on-disk base/app markers remain independent

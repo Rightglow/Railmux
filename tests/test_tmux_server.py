@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from railmux import tmux_server
+from railmux import __version__, tmux_server
 
 
 @pytest.mark.parametrize(
@@ -104,24 +104,60 @@ def test_detached_managed_windows_session_receives_only_runtime_identity(
     env = {
         "RAILMUX_WINDOWS_RUNTIME": "msys2",
         "RAILMUX_MSYS2_RUNTIME_ID": "msys2-2026-03-22",
-        "RAILMUX_MSYS2_APP_ID": "railmux-0.4.0.dev19",
+        "RAILMUX_MSYS2_APP_ID": f"railmux-{__version__}",
         "CODEX_API_KEY": "must-not-enter-tmux",
     }
 
     assert tmux_server.ensure_detached_launcher_session(
-        target, ["/opt/railmux/bin/railmux"], [], env=env,
+        target,
+        ["/opt/railmux/bin/railmux"],
+        [],
+        env=env,
+        initial_size=(164, 46),
     ) == "$7"
 
     argv = launched[0][0]
     assert argv == [
         "tmux", "-S", "/tmp/private", "new-session", "-d", "-s",
         "railmux",
+        "-x", "164", "-y", "46",
         "-e", "RAILMUX_WINDOWS_RUNTIME=msys2",
         "-e", "RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22",
-        "-e", "RAILMUX_MSYS2_APP_ID=railmux-0.4.0.dev19",
+        "-e", f"RAILMUX_MSYS2_APP_ID=railmux-{__version__}",
         "/opt/railmux/bin/railmux", "--inside-tmux",
     ]
     assert all("CODEX_API_KEY" not in value for value in argv)
+
+
+@pytest.mark.parametrize(
+    "initial_size",
+    [None, (0, 24), (80, 0), (-1, 24), (80, 65536), (True, 24)],
+)
+def test_detached_session_does_not_invent_or_forward_invalid_size(
+    monkeypatch, initial_size,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_ids = iter((None, "$7"))
+    launched = []
+    monkeypatch.setattr(tmux_server, "target_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **_kwargs: launched.append(argv)
+        or SimpleNamespace(returncode=0),
+    )
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target, ["railmux"], [], initial_size=initial_size,
+    ) == "$7"
+
+    assert "-x" not in launched[0]
+    assert "-y" not in launched[0]
 
 
 def test_detached_session_rejects_unbounded_runtime_identity(monkeypatch):

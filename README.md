@@ -341,10 +341,9 @@ Scrolling a live agent does not enter Preview. Direct `railmux` uses the
 terminal/tmux scrolling behavior; `railmux ssh` keeps its own bounded,
 per-pane history and normally preserves the live terminal's captured styling.
 When Railmux confirms that a running Codex session advanced after rewind or
-steering, it resets only the current terminal view before Codex redraws and
-invalidates that pane's SSH history generation. Retained tmux scrollback is not
-erased; the SSH history for that branched generation uses the canonical
-rollout so its abandoned suffix stays hidden.
+steering, it leaves the live terminal untouched and advances only that pane's
+SSH history generation. The SSH history for that branched generation uses the
+canonical rollout so its abandoned suffix stays hidden.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between
@@ -403,7 +402,8 @@ Each opened agent runs in a detached tmux session, so switching sessions does
 not interrupt it. To leave agents running when you quit Railmux, press `s` for
 soft quit in the confirmation popup; restarting the same Railmux instance then
 restores the usable workspace when those sessions are still available. A normal
-quit confirmation ends all running sessions instead.
+quit ends all running sessions instead and therefore requires a second
+confirmation; `y` and Enter keep their existing confirm meaning in both steps.
 
 All terminals attached to one managed Railmux window view the same UI process.
 Soft Quit therefore closes that shared UI for every attached view, although it

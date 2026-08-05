@@ -109,6 +109,10 @@ class _PendingHistory:
     pane_id: str
     target_lines: int
     requested_at: float
+    # A first wheel-up waits for one cumulative snapshot before freezing the
+    # viewport. This avoids exposing a short hot suffix whose later deep page
+    # may not share a stable anchor while the provider is actively repainting.
+    initial_offset: int | None = None
 
 
 class LocalHistoryView:
@@ -266,8 +270,6 @@ class LocalHistoryView:
         self,
         previous: HistorySnapshot,
         incoming: HistorySnapshot,
-        *,
-        prefer_deeper: bool = False,
     ) -> HistorySnapshot:
         """Retain already-fetched history when a later hot capture shrinks."""
         if not self._same_geometry(
@@ -276,28 +278,13 @@ class LocalHistoryView:
             return incoming
         delta = self._timeline_delta(previous.lines, incoming.lines)
         if delta is None:
-            if prefer_deeper and len(incoming.lines) > len(previous.lines):
-                # A deep response reaches here only after accept() proved that
-                # the user's immutable frozen viewport still exists in it.
-                # Rewind/full-screen diff output can make every individual
-                # line in that viewport non-unique, leaving the generic
-                # timeline voter without two anchors.  The larger cumulative
-                # capture is nevertheless stronger than the 300-line hot
-                # cache; keeping only its live tail would silently discard all
-                # intermediate output above the current screen.
-                lines = incoming.lines
-            else:
-                # Never splice two captures whose timelines cannot be aligned.
-                # Retaining old history and replacing only the live viewport
-                # looked conservative, but it silently omitted every row
-                # produced between those two pieces. That false seam appeared
-                # as discontinuous SSH history until returning to the bottom
-                # forced a fresh deep capture. Keep the newest internally
-                # contiguous hot capture instead; the first wheel-up requests
-                # a cumulative deep page and can recover older rows safely.
-                # An already-frozen viewport owns its immutable snapshot and
-                # therefore remains undisturbed by this cache replacement.
-                lines = incoming.lines
+            # Never splice two captures whose timelines cannot be aligned.
+            # Retaining old history and replacing only the live viewport
+            # looked conservative, but it silently omitted every row produced
+            # between those two pieces. Keep the newest internally contiguous
+            # capture instead. An already-frozen viewport owns its immutable
+            # snapshot and therefore remains undisturbed by cache replacement.
+            lines = incoming.lines
         else:
             start = min(0, delta)
             incoming_end = delta + len(incoming.lines)
@@ -325,8 +312,6 @@ class LocalHistoryView:
     def _remember_content(
         self,
         snapshot: HistorySnapshot,
-        *,
-        prefer_deeper: bool = False,
     ) -> HistorySnapshot:
         assert snapshot.pane_id is not None
         previous = self.content_cache.get(snapshot.pane_id)
@@ -344,14 +329,22 @@ class LocalHistoryView:
             stored = self._merge_content(previous, snapshot) if anchored else snapshot
             self._unverified_after_reconnect.discard(snapshot.pane_id)
         else:
-            stored = self._merge_content(
-                previous, snapshot, prefer_deeper=prefer_deeper)
+            stored = self._merge_content(previous, snapshot)
         # Reinsert an existing pane to keep insertion order as recency order.
         self.content_cache.pop(snapshot.pane_id, None)
         self.content_cache[snapshot.pane_id] = stored
         while len(self.content_cache) > _HISTORY_CONTENT_PANES:
             del self.content_cache[next(iter(self.content_cache))]
         return stored
+
+    def _replace_content(self, snapshot: HistorySnapshot) -> HistorySnapshot:
+        """Install one verified contiguous capture without timeline merging."""
+        assert snapshot.pane_id is not None
+        self.content_cache.pop(snapshot.pane_id, None)
+        self.content_cache[snapshot.pane_id] = snapshot
+        while len(self.content_cache) > _HISTORY_CONTENT_PANES:
+            del self.content_cache[next(iter(self.content_cache))]
+        return snapshot
 
     def invalidate_routes(self) -> bool:
         """Drop pointer authority without discarding bounded pane content."""
@@ -470,29 +463,32 @@ class LocalHistoryView:
         cached = self.content_cache.get(route.pane_id, route)
         if not self._same_geometry(cached, route):
             cached = route
+        loaded_limit = min(len(cached.lines), self.history_limit)
+        target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
+        if (
+            cached.more_available
+            and loaded_limit < min(target_lines, _HISTORY_PREFETCH_LINES)
+        ):
+            self.cancel_pane(route.pane_id)
+            request_id = self._allocate_request_id()
+            self._deep_pending[request_id] = _PendingHistory(
+                self.route_epoch,
+                route.pane_id,
+                target_lines,
+                time.monotonic() if now is None else now,
+                max(1, initial_offset),
+            )
+            self._deep_requests += 1
+            # A byte-budgeted or older peer may return less than the normal
+            # coherent routing capture. Keep the live pane intact until one
+            # cumulative response arrives rather than expose a short suffix.
+            return HistoryAction(
+                protocol_frame=encode_history_request(
+                    request_id, event.x, event.y, target_lines
+                )
+            )
         maximum = max(0, len(cached.lines) - cached.height)
         if maximum == 0:
-            if cached.more_available:
-                self.cancel_pane(route.pane_id)
-                target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
-                self.viewports[route.pane_id] = _HistoryViewport(
-                    cached,
-                    0,
-                    min(len(cached.lines), self.history_limit),
-                )
-                request_id = self._allocate_request_id()
-                self._deep_pending[request_id] = _PendingHistory(
-                    self.route_epoch,
-                    route.pane_id,
-                    target_lines,
-                    time.monotonic() if now is None else now,
-                )
-                self._deep_requests += 1
-                return HistoryAction(
-                    protocol_frame=encode_history_request(
-                        request_id, event.x, event.y, target_lines
-                    )
-                )
             if cached.transcript_backed:
                 # Claude may not have written its first transcript record yet.
                 # This is a normal transient state, not a Railmux status event:
@@ -503,7 +499,6 @@ class LocalHistoryView:
                 forwarded_input=event.raw if cached.mouse_forwardable else b""
             )
         self.cancel_pane(route.pane_id)
-        loaded_limit = min(len(cached.lines), self.history_limit)
         viewport = _HistoryViewport(
             cached,
             min(maximum, max(1, initial_offset)),
@@ -513,23 +508,15 @@ class LocalHistoryView:
             ),
         )
         self.viewports[route.pane_id] = viewport
-        target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
-        if loaded_limit >= target_lines:
-            return HistoryAction(
-                protocol_frame=self._extend_history(viewport, now=now),
-                render_history=True,
-            )
-        request_id = self._allocate_request_id()
-        self._deep_pending[request_id] = _PendingHistory(
-            self.route_epoch,
-            route.pane_id,
-            target_lines,
-            time.monotonic() if now is None else now,
-        )
-        self._deep_requests += 1
+        # A complete 300-row routing capture is already one coherent history
+        # source. Paint it synchronously, then fetch a cumulative page only as
+        # the viewport approaches its top. This removes an SSH round trip from
+        # the first wheel tick without reintroducing a hot/deep splice.
         return HistoryAction(
-            protocol_frame=encode_history_request(
-                request_id, event.x, event.y, target_lines
+            protocol_frame=self._extend_history(
+                viewport,
+                now=now,
+                request_position=(event.x, event.y),
             ),
             render_history=True,
         )
@@ -539,6 +526,7 @@ class LocalHistoryView:
         viewport: _HistoryViewport,
         *,
         now: float | None = None,
+        request_position: tuple[int, int] | None = None,
     ) -> bytes:
         """Request the next cumulative page when a viewport nears its top."""
         snapshot = viewport.snapshot
@@ -572,7 +560,9 @@ class LocalHistoryView:
             return b""
         target_lines = min(
             self.history_limit,
-            max(_HISTORY_INITIAL_LINES, viewport.loaded_limit) + _HISTORY_PAGE_LINES,
+            _HISTORY_INITIAL_LINES
+            if viewport.loaded_limit < _HISTORY_INITIAL_LINES
+            else viewport.loaded_limit + _HISTORY_PAGE_LINES,
         )
         request_id = self._allocate_request_id()
         self._deep_pending[request_id] = _PendingHistory(
@@ -582,10 +572,14 @@ class LocalHistoryView:
             requested_at,
         )
         self._deep_requests += 1
-        return encode_history_request(
-            request_id,
+        request_x, request_y = request_position or (
             snapshot.x + 1,
             snapshot.y + 1,
+        )
+        return encode_history_request(
+            request_id,
+            request_x,
+            request_y,
             target_lines,
         )
 
@@ -602,6 +596,45 @@ class LocalHistoryView:
         if direction > 0 and route.history_choice_required:
             return HistoryAction(claude_history_prompt=event.raw)
         viewport = self.viewports.get(route.pane_id)
+        initial_request = next(
+            (
+                (request_id, pending)
+                for request_id, pending in self._deep_pending.items()
+                if pending.pane_id == route.pane_id
+                and pending.initial_offset is not None
+            ),
+            None,
+        )
+        if initial_request is not None:
+            request_id, pending = initial_request
+            requested_at = time.monotonic() if now is None else now
+            if requested_at - pending.requested_at >= _HISTORY_DEEP_TIMEOUT:
+                self._deep_pending.pop(request_id, None)
+                self._timeouts += 1
+                if direction < 0:
+                    return HistoryAction()
+                assert pending.initial_offset is not None
+                distance = min(
+                    self.history_limit,
+                    pending.initial_offset + max(1, distance),
+                )
+                initial_request = None
+        if viewport is None and initial_request is not None:
+            if direction < 0:
+                # The live pane never left the screen, so reversing direction
+                # simply cancels the pending entry. A late response is ignored.
+                self.cancel_pane(route.pane_id)
+                return HistoryAction()
+            request_id, pending = initial_request
+            assert pending.initial_offset is not None
+            self._deep_pending[request_id] = replace(
+                pending,
+                initial_offset=min(
+                    self.history_limit,
+                    pending.initial_offset + max(1, distance),
+                ),
+            )
+            return HistoryAction()
         if viewport is not None:
             maximum = max(0, len(viewport.snapshot.lines) - viewport.snapshot.height)
             viewport.offset = max(
@@ -828,8 +861,26 @@ class LocalHistoryView:
             return HistoryAction()
         viewport = self.viewports.get(pending.pane_id)
         if viewport is None:
-            self._remember_content(snapshot)
-            return HistoryAction()
+            if pending.initial_offset is None:
+                self._remember_content(snapshot)
+                return HistoryAction()
+            maximum = max(0, len(snapshot.lines) - snapshot.height)
+            if maximum == 0:
+                self._remember_content(snapshot)
+                return HistoryAction()
+            stored = self._replace_content(snapshot)
+            maximum = max(0, len(stored.lines) - stored.height)
+            viewport = _HistoryViewport(
+                stored,
+                min(maximum, pending.initial_offset),
+                min(self.history_limit, max(pending.target_lines, len(stored.lines))),
+                exhausted=not snapshot.more_available,
+            )
+            self.viewports[pending.pane_id] = viewport
+            return HistoryAction(
+                protocol_frame=self._extend_history(viewport),
+                render_history=True,
+            )
         maximum = max(0, len(snapshot.lines) - snapshot.height)
         if maximum == 0:
             self._remember_content(snapshot)
@@ -843,7 +894,11 @@ class LocalHistoryView:
             # snapshot instead of jumping to newer or unrelated text.
             self._anchor_rejects += 1
             return HistoryAction()
-        stored = self._remember_content(snapshot, prefer_deeper=True)
+        # The response is one cumulative capture and its exact visible anchor
+        # was just proved above. Replace the cached timeline as a whole instead
+        # of merging it with the older hot generation; this keeps every row's
+        # text and background styling from one server render.
+        stored = self._replace_content(snapshot)
         stored_offset = self._aligned_offset(stored, anchor)
         if stored_offset is None:
             # The raw response was valid, so this can only be an ambiguous
@@ -892,7 +947,7 @@ class LocalHistoryView:
             return matched_offset
 
         # Agent status rows (for example a Codex spinner) can change between
-        # the 300-line hot snapshot and the first deep response. Requiring the
+        # the hot snapshot and a deep response. Requiring the
         # entire visible viewport to remain byte-identical then strands the
         # user at the hot-cache boundary. Align on a majority of stable,
         # non-blank lines instead, but only when each evidence line occurs

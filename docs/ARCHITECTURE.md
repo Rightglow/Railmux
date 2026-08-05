@@ -70,11 +70,15 @@ therefore tries the ordinary label-selected tmux client first. Soft Quit can
 leave detached provider sessions on that server after the outer `railmux`
 session exits. When managed Windows proves an existing server but no outer UI,
 the launcher creates only that missing session detached through the
-revalidated server. It passes only the bounded managed-runtime kind, runtime
-ID, and app-layer ID into that pane with tmux `-e`; no provider credential or
-general caller environment is persisted, and the child still has to verify
-the matching same-owner on-disk markers. It then retains the ordinary
-direct-first order. It may make
+revalidated server. When stdin and stdout are real TTYs, the launcher reads
+their exact bounded dimensions and supplies them to that one `new-session`
+operation, before the child can paint its first frame. It never manufactures a
+fallback dimension or pre-resizes an existing session, which might belong to
+another attached view. It passes only the bounded managed-runtime kind,
+runtime ID, and app-layer ID into that pane with tmux `-e`; no provider
+credential or general caller environment is persisted, and the child still
+has to verify the matching same-owner on-disk markers. It then retains the
+ordinary direct-first order. It may make
 one transparent bridge attempt only when that client rejects the attach within
 five seconds, stdin/stdout are real terminals, and a new identity-pinned query
 proves that the same server PID and immutable Railmux session still exist.
@@ -169,9 +173,18 @@ stale; route changes, reconnect, and bounded policy-recovery refreshes remain
 immediate. For a stable pane, geometry, and history source, uniquely
 aligned snapshots are merged into one newest-bounded timeline. Unaligned hot
 captures are never spliced: the cache switches to the newest internally
-contiguous suffix and the first wheel-up requests a cumulative deep page to
-recover older rows. An existing frozen viewport retains its immutable snapshot
-while that mutable cache changes. Native Claude, local transcript, and
+contiguous suffix, then recovers older rows from a cumulative deep page. The
+periodic routing capture retains 300 rows, enough to
+enter history immediately and defer the 2,000-row cumulative request until the
+viewport approaches the top of that coherent suffix. If byte budgeting or an
+older peer supplies fewer than 300 rows while reporting older content, the
+first wheel-up keeps the live pane visible until one cumulative response
+arrives, then enters history atomically at the requested offset. A validated
+deep response replaces its pane cache as one capture rather than merging two
+style generations. Additional wheel-up ticks received during an initial
+bounded request accumulate into its eventual offset. An existing frozen
+viewport retains its immutable snapshot while that mutable cache changes.
+Native Claude, local transcript, and
 undecided history are separate sources and are never merged. Protocol v15 also
 carries the opaque pane-local Codex history
 generation; a changed non-content generation replaces that pane's cached
@@ -190,6 +203,11 @@ keyboard cursor resolves to a verified agent route; sidebar and modal
 navigation remains remote. The server retains the newest suffix if styled
 history reaches the protocol byte
 budget; a byte-bound truncation is an effective end, never a helper failure.
+Styled raw capture is decoded as one chronological terminal stream because
+tmux may carry SGR foreground, background, and text attributes across physical
+row boundaries. Each decoded row is then reset and re-encoded as an
+independently paintable overlay row; parsing rows from a default style must not
+drop inherited diff gutters or let a prior style leak past an explicit reset.
 Input or bottom restores only the routed pane; layout uncertainty, resize,
 sidebar input, and `Esc` fail closed by removing every incompatible overlay.
 When the display helper creates the default Railmux session, it explicitly
@@ -669,24 +687,31 @@ default history view.
 
 A live Codex rewind or running-turn steering also advances the canonical
 rollout while retaining the same provider pane. Railmux baselines the first
-indexed rollout for each live entry and treats only a direct canonical child as
-a branch transition. Where
-procfs is available, that child rollout must be open in the exact pane process
-tree; a negative probe waits, while platforms without procfs use the explicit
-provider parent link. After revalidating the real pane identity across either
-its detached home or swap display location, Railmux resets only tmux's visible
-terminal state, preserving its retained scrollback, then sends the unchanged
-foreground process group `SIGWINCH` so the provider redraws at the same geometry
-and reasserts its terminal modes. A pane-local generation marker is normally a
-plain rollout UUID, meaning the full-window SSH history manager must use styled
-raw pane capture. Only this confirmed branch transition may prefix that exact
-UUID as canonical and permit a transcript projection that excludes the
+indexed rollout for each live entry, but a direct canonical child alone is not
+branch evidence: Codex may create the same parent/child shape while
+bootstrapping an ordinary resume. An explicit-resume generation is initially
+unproved. Its first exact open child is adopted as a raw-history bootstrap
+generation unless the parent was already born/adopted in this pane generation
+or its indexed real-message count advanced after the baseline. Once adopted,
+that child is proved for later direct transitions. This conversation cursor,
+not rollout mtime or size, prevents startup/config writes from authorizing a
+false rewind. Where procfs is available, every candidate child must additionally
+be open in the exact pane process tree; a negative probe waits, while platforms
+without procfs retain the same provider-link plus generation-evidence rule.
+After revalidating the real pane identity across either its detached home or
+swap display location, Railmux leaves the live terminal and retained tmux
+scrollback untouched. A pane-local generation marker is normally a plain
+rollout UUID, meaning the full-window SSH history manager must use styled raw
+pane capture. Only this confirmed branch transition may write the evidence-gated
+`canonical-v2:` prefix and permit a transcript projection that excludes the
 abandoned suffix; the prefix and transcript locator must name the same rollout.
+Released `canonical:` markers fail back to plain raw history on upgrade because
+they were produced by the older, insufficient direct-child test.
 The transcript locator alone is never authority to change scrolling format.
 Direct local wheel input remains native tmux/provider scrolling, while Space or
 context Preview remains the explicit formatted provider projection. This sends
-no provider input, never resizes the pane, never deletes tmux history, never
-touches provider history, and never mutates a legacy-server session.
+no provider input, never resets or resizes the pane, never deletes tmux history,
+never touches provider history, and never mutates a legacy-server session.
 
 While that first generation is pending, Codex Projects and Sessions display an
 explicit `Indexing…` state with indeterminate section counts. Generation zero
@@ -880,8 +905,10 @@ of returning or displaying a real pane.
 
 Soft quit may release UI-only resources and return displayed panes home, but it
 must branch before the detached-session kill loop. Hard-quit destruction must
-remain below that explicit decision so adding teardown work cannot silently
-turn a soft restart into loss of live agents.
+remain below that explicit decision and behind two confirmation boundaries, so
+one accidental Enter cannot kill live agents and adding teardown work cannot
+silently turn a soft restart into loss of live agents. The second boundary
+retains `y`/Enter as confirmation and returns `n`/`Esc` to the first choice.
 
 User-requested exit paints a non-interactive progress surface before any
 synchronous pane/session cleanup. Core cleanup runs while Urwid still owns the

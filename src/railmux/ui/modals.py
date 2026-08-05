@@ -226,6 +226,87 @@ class QuitConfirmModal(urwid.WidgetWrap):
         return key
 
 
+class HardQuitConfirmModal(urwid.WidgetWrap):
+    """Final hard-quit warning. y/Y/Enter confirms; n/N/Esc goes back."""
+
+    def __init__(
+        self,
+        on_confirm: Callable[[], None],
+        on_cancel: Callable[[], None],
+        running_count: int,
+    ) -> None:
+        self._on_confirm = on_confirm
+        self._on_cancel = on_cancel
+        if running_count > 0:
+            session_word = "session" if running_count == 1 else "sessions"
+            consequence = (
+                f"This will stop {running_count} running agent {session_word}."
+            )
+        else:
+            consequence = "No agent sessions are currently running."
+        self._title = urwid.Text(
+            ("warn", "Confirm hard quit"), align="center"
+        )
+        self._consequence = urwid.Text(consequence, align="center")
+        self._history_notice = urwid.Text(
+            "Saved conversation history remains, but live agent processes "
+            "will exit.",
+            align="center",
+        )
+        hard_action = _action_legend(
+            [("y / ↵", "quit and stop all sessions")],
+            align="center",
+            wrap="space",
+        )
+        back_action = ClickableRow(
+            _action_legend(
+                [("n / Esc", "back")],
+                align="center",
+                wrap="space",
+            ),
+            on_click=on_cancel,
+            click_key="quit:hard-back",
+        )
+        self._actions = urwid.Pile([hard_action, back_action])
+        body = urwid.Pile([
+            self._title,
+            urwid.Divider(),
+            self._consequence,
+            self._history_notice,
+            urwid.Divider(),
+            self._actions,
+        ])
+        super().__init__(urwid.LineBox(
+            urwid.Filler(body, valign="middle"),
+            title="Final confirmation",
+        ))
+
+    def preferred_height(self, maxcol: int) -> int:
+        """Fit the warning and both actions at narrow sidebar widths."""
+        inner = max(1, maxcol - 2)
+        body_rows = (
+            self._title.rows((inner,))
+            + 1
+            + self._consequence.rows((inner,))
+            + self._history_notice.rows((inner,))
+            + 1
+            + self._actions.rows((inner,))
+        )
+        return max(9, body_rows + 2)
+
+    def selectable(self) -> bool:
+        return True
+
+    def keypress(self, size, key):
+        if key in ("y", "Y", "enter"):
+            self._on_confirm()
+            return None
+        if key in ("n", "N", "esc"):
+            self._on_cancel()
+            return None
+        return key
+
+
 class ExitProgressModal(urwid.WidgetWrap):
     """Non-interactive status shown while synchronous teardown completes."""
 

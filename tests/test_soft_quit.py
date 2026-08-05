@@ -17,7 +17,11 @@ from railmux import orphan_marker, restart_state, tmux_ctl, tmux_server
 from railmux.modes import CLAUDE_MODE, CODEX_MODE
 from railmux.restart_state import OuterTmuxIdentity
 from railmux.ui.app import App, _Running
-from railmux.ui.modals import ExitProgressModal, QuitConfirmModal
+from railmux.ui.modals import (
+    ExitProgressModal,
+    HardQuitConfirmModal,
+    QuitConfirmModal,
+)
 from railmux.ui.workspace import (
     AgentWorkspace,
     SlotRestoreState,
@@ -1515,6 +1519,66 @@ def test_soft_restart_accepts_open_rewind_descendant_as_same_writer(
     exact_arg.assert_not_called()
 
 
+def test_only_live_tmux_binding_restores_codex_history_proof(monkeypatch):
+    cwd = Path("/tmp/codex-only")
+    project = _project("codex-only")
+    root_id = "12345678-1234-1234-1234-1234567890ab"
+    current_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    root = _codex_meta(project, root_id)
+    current = replace(
+        root,
+        session_id=current_id,
+        title="Current",
+        last_mtime=2000.0,
+        forked_from_id=root_id,
+    )
+    tmux_name = "cx-new---abcdef-1"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.get.side_effect = (
+        lambda candidate, refresh=False: (
+            root if candidate == root_id
+            else current if candidate == current_id
+            else None
+        )
+    )
+    app._codex_index.lineage_ids.return_value = frozenset(
+        {root_id, current_id})
+    app._codex_index.representative_for.return_value = current
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    monkeypatch.setattr(
+        tmux_ctl, "session_rollout_ids", lambda *_args: {current_id})
+    binding = {
+        "key": root_id,
+        "tmux_name": tmux_name,
+        "session_type": "codex",
+        "cwd": str(cwd),
+        "codex_canonical_session_id": current_id,
+        "codex_rollout_proven_in_pane": True,
+        "codex_baseline_message_count": 12,
+    }
+
+    trusted = app._valid_running_binding(
+        binding,
+        {tmux_name: (cwd, 100)},
+        {app._path_key(cwd): project},
+        trust_codex_history_state=True,
+    )
+    cached_only = app._valid_running_binding(
+        binding,
+        {tmux_name: (cwd, 100)},
+        {app._path_key(cwd): project},
+    )
+
+    assert trusted is not None and cached_only is not None
+    assert trusted.codex_canonical_session_id == current_id
+    assert trusted.codex_rollout_proven_in_pane
+    assert trusted.codex_baseline_message_count == 12
+    assert cached_only.codex_canonical_session_id is None
+    assert not cached_only.codex_rollout_proven_in_pane
+    assert cached_only.codex_baseline_message_count == 0
+
+
 @pytest.mark.parametrize("probe_result", [False, None, OSError("denied")])
 def test_soft_restart_rejects_other_writer_without_exact_resume_arg(
     monkeypatch, probe_result,
@@ -1722,6 +1786,9 @@ def test_generation_zero_keeps_resolved_rewind_marker_resolved(monkeypatch):
     assert running.status == "busy"
     assert not running.is_placeholder
     assert running.orphan == marker
+    assert running.codex_canonical_session_id == root_id
+    assert running.codex_rollout_proven_in_pane
+    assert running.codex_baseline_message_count == 0
     rollout_probe.assert_not_called()
     exact_arg_probe.assert_not_called()
 
@@ -2769,6 +2836,39 @@ def test_quit_modal_enter_confirms():
     )
     modal.keypress((20,), "enter")
     assert called == ["hard"]
+
+
+def test_first_hard_quit_choice_opens_final_warning_before_exit():
+    app = _minimal_app()
+    app._running = {"one": MagicMock(), "two": MagicMock()}
+    app._request_exit = MagicMock()
+    app._open_quit_confirm = MagicMock()
+    app._show_hard_quit_confirm = MagicMock()
+
+    app._confirm_quit()
+
+    app._request_exit.assert_not_called()
+    modal = app._show_hard_quit_confirm.call_args.args[0]
+    assert isinstance(modal, HardQuitConfirmModal)
+    assert "stop 2 running agent sessions" in _render_text(modal)
+
+    modal.keypress((60,), "enter")
+
+    app._request_exit.assert_called_once_with(soft=False)
+
+
+def test_final_hard_quit_cancel_returns_to_the_quit_choices():
+    app = _minimal_app()
+    app._request_exit = MagicMock()
+    app._open_quit_confirm = MagicMock()
+    app._show_hard_quit_confirm = MagicMock()
+
+    app._confirm_quit()
+    modal = app._show_hard_quit_confirm.call_args.args[0]
+    modal.keypress((60,), "esc")
+
+    app._open_quit_confirm.assert_called_once_with()
+    app._request_exit.assert_not_called()
 
 
 def test_quit_modal_esc_cancels():

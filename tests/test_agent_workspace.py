@@ -452,6 +452,7 @@ def test_exact_displayed_swap_binding_recovers_missing_running_entry(
     assert app._valid_running_binding.call_args.kwargs == {
         "allow_missing_codex_metadata": True,
         "probe_live_writer": False,
+        "trust_codex_history_state": True,
     }
 
 

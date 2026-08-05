@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev20] - 2026-08-05
+
+### Changed
+
+- Include the POSIX/WSL fixes released through Railmux 0.3.6.dev4: a second
+  hard-quit confirmation, coherent warm/deep SSH history transitions, and
+  preserved cross-row terminal styles.
+
+### Fixed
+
+- Create a missing managed-Windows outer UI at the exact interactive entry
+  terminal size, so the first frame no longer starts in tmux's detached
+  80x24 default and visibly expands after direct or bridged attachment. A
+  missing/non-TTY/invalid size retains the safe default, and existing sessions
+  are never pre-resized.
+
 ## [0.4.0.dev19] - 2026-08-05
 
 ### Fixed
@@ -2259,7 +2275,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev20...HEAD
+[0.4.0.dev20]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...v0.4.0.dev20
 [0.4.0.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev18...v0.4.0.dev19
 [0.4.0.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...v0.4.0.dev18
 [0.4.0.dev17]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...v0.4.0.dev17
