@@ -56,17 +56,12 @@ def test_active_claude_pane_stamps_and_clears_exact_transcript_source(
     )
     assert f"{session_id}.jsonl" in observed[0][2]
     assert observed[1] == (
-        "%8", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, "primary",
-    )
-    assert observed[2] == (
         "%8", tmux_server.TRANSCRIPT_SOURCE_OPTION, None,
     )
-    assert observed[3] == (
-        "%8", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, None,
-    )
+    assert len(observed) == 2
 
 
-def test_active_codex_pane_stamps_canonical_transcript_and_wheel_route(
+def test_active_codex_pane_stamps_explicit_preview_transcript_source(
     monkeypatch, tmp_path,
 ):
     session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
@@ -105,9 +100,7 @@ def test_active_codex_pane_stamps_canonical_transcript_and_wheel_route(
         "%9", tmux_server.TRANSCRIPT_SOURCE_OPTION,
     )
     assert session_id in observed[0][2]
-    assert observed[-1] == (
-        "%9", tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION, "secondary",
-    )
+    assert len(observed) == 1
 
 
 def _canvas_attrs(canvas) -> list[str | None]:
@@ -1229,6 +1222,9 @@ def test_resume_status_omits_running_count(monkeypatch):
     app._set_status = MagicMock()
     monkeypatch.setattr(
         "railmux.ui.app.build_resume_command", lambda **kw: ["claude"])
+    claim = MagicMock(session_ids=("id1",))
+    monkeypatch.setattr(
+        "railmux.ui.app.session_lease.acquire", lambda *_args: claim)
 
     session = MagicMock()
     session.session_type = "claude"
@@ -1242,6 +1238,7 @@ def test_resume_status_omits_running_count(monkeypatch):
     msg = app._set_status.call_args.args[0]
     assert msg == "→ sess-x"
     assert "running" not in msg
+    assert app._launch.call_args.kwargs["lease_claim"] is claim
 
 
 def test_preview_reports_info_status():
@@ -1332,16 +1329,13 @@ def test_codex_preview_resolves_newest_rewind_representative():
         "current-id", None, mode_key="codex", project_key="project")
 
 
-def test_private_history_keys_route_preview_and_restore_before_modal_checks():
+def test_private_history_restore_key_routes_exact_slot_before_modal_checks():
     app = App.__new__(App)
     app._workspace = AgentWorkspace()
-    app._preview_slot_history = MagicMock()
     app._restore_history_slot = MagicMock()
 
-    app._on_input("f21")
     app._on_input("f24")
 
-    app._preview_slot_history.assert_called_once_with(app._workspace.primary)
     app._restore_history_slot.assert_called_once_with(app._workspace.secondary)
 
 

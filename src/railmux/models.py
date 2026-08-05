@@ -75,6 +75,9 @@ class SessionMeta:
     # conversation without changing the provider-owned UUID used for resume.
     # Always None for Claude sessions and older Codex rollouts.
     forked_from_id: str | None = None
+    # A Railmux lease observed in the same shared provider history root. This
+    # is a read-time UI overlay, never provider transcript metadata.
+    remote_owner: str | None = None
 
     @property
     def display_title(self) -> str:

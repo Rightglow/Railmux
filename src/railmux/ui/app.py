@@ -22,6 +22,7 @@ import urwid
 from railmux import (
     legacy_sessions,
     orphan_marker,
+    session_lease,
     tmux_ctl,
     tmux_health,
     tmux_server,
@@ -121,6 +122,7 @@ _STATUS_YELLOW = "#ffd700"
 _STATUS_RED = "#ff5f5f"
 _TERMINAL_COLORS = 2**24
 _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
+_SESSION_LEASE_PROBE_TTL_S = 2.0
 
 
 PALETTE = [
@@ -373,6 +375,10 @@ class _Running:
     # presentation cache when the exact live writer advances to its child.
     codex_canonical_session_id: str | None = None
     codex_history_generation_stamped: bool = False
+    lease_session_ids: frozenset[str] = frozenset()
+    lease_warning: str | None = None
+    lease_recheck_at: float = 0.0
+    lease_repair_thread: threading.Thread | None = None
 
     @property
     def is_placeholder(self) -> bool:
@@ -402,6 +408,7 @@ class _DeleteTask:
     writer_pids: tuple[int, ...]
     lineage_ids: frozenset[str]
     claude_home: Path
+    lease_claim: session_lease.LeaseClaim | None = None
 
 
 @dataclass(frozen=True)
@@ -810,6 +817,15 @@ class App:
         self._codex_rollout_probe_cache: dict[
             tuple[str, str], tuple[float, set[str] | None]
         ] = {}
+        # Shared homes may sit on network storage.  Session rows need remote
+        # ownership promptly, but probing every visible lock on every Urwid
+        # tick is unnecessary I/O.  Resume still acquires a fresh lock and
+        # never trusts this display-only cache.
+        self._session_lease_probe_cache: dict[
+            tuple[str, str, tuple[str, ...]],
+            tuple[float, session_lease.LeaseOwner | None],
+        ] = {}
+        self._session_lease_warnings: dict[str, str] = {}
         # Wall-clock of the last Running-pane re-sort; throttles reordering to
         # once per _RUNNING_SORT_INTERVAL so rows don't jump under the cursor.
         self._running_sort_ts: float = 0.0
@@ -1159,7 +1175,7 @@ class App:
         session_id: str | None,
         tmux_name: str | None,
     ) -> None:
-        """Stamp transcript/history routing for the displayed live agent."""
+        """Stamp the explicit transcript Preview source for a live agent."""
         pane_id = slot.pane_id
         if pane_id is None or not pane_id.startswith("%"):
             return
@@ -1197,19 +1213,6 @@ class App:
             pane_id,
             tmux_server.TRANSCRIPT_SOURCE_OPTION,
             marker,
-        )
-        history_slot = None
-        if (
-            running is not None
-            and running.session_type in ("claude", "codex")
-            and logical_id is not None
-            and not running.is_placeholder
-        ):
-            history_slot = slot.key
-        tmux_ctl.set_pane_user_option(
-            pane_id,
-            tmux_ctl.RAILMUX_HISTORY_PREVIEW_OPTION,
-            history_slot,
         )
 
     def _paint_slot_active_target(
@@ -2015,9 +2018,9 @@ class App:
     def _on_session_preview(self, session: SessionMeta) -> None:
         """Show the provider's canonical current-branch history.
 
-        Stopped-row clicks, Space, context Preview, and live-pane wheel-up use
-        this read-only projection. A Codex rewind lineage is represented by its
-        newest rollout; Claude branches are projected by ``transcript``.
+        Stopped-row clicks, Space, and context Preview use this read-only
+        projection. A Codex rewind lineage is represented by its newest
+        rollout; Claude branches are projected by ``transcript``.
         """
         if session.session_type == "codex":
             representative = self._codex_representative(session.session_id)
@@ -2079,20 +2082,6 @@ class App:
                 or self._agent_workspace().target)
         self._set_workspace_target(slot.key)
         self._on_session_preview(session)
-
-    def _preview_slot_history(self, slot: AgentSlot) -> None:
-        """Handle a pane-local wheel-up routed through the controller."""
-        tmux_name = slot.agent_tmux_name
-        if tmux_name is None:
-            return
-        running = self._by_tmux(tmux_name)
-        if running is None:
-            return
-        self._preview_running_history(RunningEntry(
-            tmux_name=tmux_name,
-            label=running.label,
-            status=running.status,
-        ))
 
     def _restore_history_slot(self, slot: AgentSlot) -> None:
         """Return a closed live-history viewer to the exact saved agent."""
@@ -4610,7 +4599,8 @@ class App:
                 slot: AgentSlot | None = None,
                 env: dict[str, str] | None = None,
                 login_shell: bool = False,
-                session_type: str = "claude") -> bool:
+                session_type: str = "claude",
+                lease_claim: session_lease.LeaseClaim | None = None) -> bool:
         """Create (or reuse) the detached agent tmux session for `key`,
         register it, and attach it in the right pane. Returns success.
 
@@ -4626,6 +4616,8 @@ class App:
         slot = slot or self._primary_slot
         existing = self._running.get(key)
         if existing is not None and existing.is_legacy:
+            if lease_claim is not None:
+                lease_claim.close()
             self._set_status(
                 "Launch refused: the legacy session could not be revalidated; "
                 "no duplicate was started",
@@ -4638,6 +4630,8 @@ class App:
         # register it first; otherwise stamping/reusing it here could hijack an
         # unrelated or duplicate writer in the click-to-launch race window.
         if existing is None and tmux_ctl.session_exists(tmux_name):
+            if lease_claim is not None:
+                lease_claim.close()
             msg = (
                 f"Launch refused: untracked live tmux session '{tmux_name}'"
             )
@@ -4694,9 +4688,44 @@ class App:
         else:
             ok, err = self._ensure_detached_agent(tmux_name, shell_cmd, env=env)
         if not ok:
+            if lease_claim is not None:
+                lease_claim.close()
             msg = f"Launch failed: {err or 'could not create agent session'}"
             self._set_status(msg, "error")
             return False
+        if lease_claim is not None:
+            topology = None
+            # tmux creation is synchronous, but a just-started holder can take
+            # a few milliseconds to become visible through a second client.
+            # Keep the lease while retrying that bounded publication window.
+            for attempt in range(3):
+                topology = tmux_ctl.session_topology(tmux_name)
+                if topology is not None:
+                    break
+                if attempt < 2:
+                    time.sleep(0.05)
+            pane = topology.single_live_pane if topology is not None else None
+            if pane is None or not session_lease.start_holder(
+                    lease_claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid):
+                # ``start_holder`` closes the claim on its own failure.  A
+                # missing topology never called it, so close explicitly.
+                lease_claim.close()
+                if pane is not None:
+                    tmux_ctl.kill_session_identity(pane)
+                elif topology is not None:
+                    tmux_ctl.kill_session(topology.session_id)
+                else:
+                    # This name was proved absent immediately before Railmux
+                    # created it in this launch transaction.  It is the only
+                    # available cleanup identity when topology publication
+                    # itself failed throughout the bounded retry.
+                    tmux_ctl.kill_session(tmux_name)
+                self._set_status(
+                    "Launch refused: the cross-host session lease could not "
+                    "be kept alive",
+                    "error",
+                )
+                return False
         self._running[key] = _Running(
             key=key, tmux_name=tmux_name, label=label, project=project,
             placeholder_path=placeholder_path,
@@ -4706,6 +4735,10 @@ class App:
             pre_launch_ids=pre_launch_ids,
             orphan=launch_marker,
             allow_heuristic_resolution=pre_launch_complete,
+            lease_session_ids=(
+                frozenset(lease_claim.session_ids)
+                if lease_claim is not None else frozenset()
+            ),
         )
         self._stamp_running(self._running[key])
         attached = (
@@ -4807,11 +4840,38 @@ class App:
                 cwd=cwd,
             )
         label = f"{session_meta.project.display_name}/{session_meta.display_title}"
-        if self._launch(session_meta.session_id, cmd, cwd,
-                        label, session_meta.project, steal_focus=steal_focus,
-                        slot=slot,
-                        env=env, login_shell=session_meta.session_type == "codex",
-                        session_type=session_meta.session_type):
+        try:
+            lease_claim = session_lease.acquire(
+                self._session_lease_root(session_meta.session_type),
+                session_meta.session_type,
+                self._session_lease_ids(session_meta),
+            )
+        except session_lease.LeaseConflict as exc:
+            self._set_status(
+                f"Resume refused: {exc}",
+                "error",
+            )
+            return False
+        except session_lease.LeaseError as exc:
+            self._set_status(
+                f"Resume refused: {exc}",
+                "error",
+            )
+            return False
+        try:
+            launched = self._launch(
+                session_meta.session_id, cmd, cwd, label,
+                session_meta.project, steal_focus=steal_focus, slot=slot,
+                env=env, login_shell=session_meta.session_type == "codex",
+                session_type=session_meta.session_type,
+                lease_claim=lease_claim,
+            )
+        finally:
+            # A successful holder transfer makes this a no-op.  Every mocked,
+            # exceptional, or early-return launch path still releases the
+            # reservation here.
+            lease_claim.close()
+        if launched:
             self._set_status(f"→ {session_meta.display_title}")
             return True
         return False
@@ -7508,18 +7568,6 @@ class App:
         if key == COMPACT_RESIZE_KEY.lower():
             self._handle_remote_compact_prepare()
             return
-        for slot_key, (preview_key, _sequence) in (
-                tmux_ctl.RAILMUX_HISTORY_PREVIEW_KEYS.items()):
-            if key == preview_key.lower():
-                if (getattr(self, "_loop", None) is not None
-                        and self._loop.widget is not self._frame):
-                    return
-                workspace = self._agent_workspace()
-                self._preview_slot_history(
-                    workspace.primary
-                    if slot_key == AgentWorkspace.PRIMARY
-                    else workspace.secondary)
-                return
         for slot_key, (restore_key, _sequence) in (
                 tmux_ctl.RAILMUX_HISTORY_RESTORE_KEYS.items()):
             if key == restore_key.lower():
@@ -8632,11 +8680,189 @@ class App:
             raw = []
         else:
             raw = self._session_cache.list_sessions(project)
-        return [
-            self._refine_status(
-                s, child_probes, server, codex_rollout_probes)
-            for s in raw
-        ]
+        sessions: list[SessionMeta] = []
+        for session in raw:
+            refined = self._refine_status(
+                session, child_probes, server, codex_rollout_probes)
+            sessions.append(self._with_remote_lease(refined, server))
+        return sessions
+
+    def _session_lease_root(self, session_type: str) -> Path:
+        if session_type != "codex":
+            return getattr(self, "_claude_home", Path.home() / ".claude")
+        config = getattr(self, "_config", None)
+        return (
+            config.resolved_codex_home()
+            if config is not None
+            else Path.home() / ".codex"
+        )
+
+    def _session_lease_ids(self, session: SessionMeta) -> frozenset[str]:
+        if session.session_type != "codex":
+            return frozenset({session.session_id})
+        aliases = self._codex_lineage_ids(session.session_id)
+        return frozenset(aliases or {session.session_id})
+
+    def _with_remote_lease(
+        self,
+        session: SessionMeta,
+        server: tmux_ctl.ServerSnapshot | None = None,
+    ) -> SessionMeta:
+        """Overlay a shared-host owner without pretending it is attachable."""
+        running = self._by_session_id(session.session_id)
+        if (running is not None
+                and self._agent_session_alive(running.tmux_name, server)):
+            return replace(session, remote_owner=None)
+        root = self._session_lease_root(session.session_type)
+        ids = tuple(sorted(self._session_lease_ids(session)))
+        cache_key = (session.session_type, str(root), ids)
+        now = time.monotonic()
+        cache = getattr(self, "_session_lease_probe_cache", {})
+        cached = cache.get(cache_key)
+        if cached is not None and now - cached[0] < _SESSION_LEASE_PROBE_TTL_S:
+            owner = cached[1]
+        else:
+            try:
+                owner = session_lease.active_owner(
+                    root, session.session_type, ids)
+            except session_lease.LeaseError:
+                # This probe is display-only.  Never invent a remote owner
+                # when the shared lock service is unavailable; resume and
+                # deletion perform fresh fail-closed checks at action time.
+                owner = None
+            cache[cache_key] = (now, owner)
+            self._session_lease_probe_cache = {
+                key: value for key, value in cache.items()
+                if now - value[0] < _SESSION_LEASE_PROBE_TTL_S
+            }
+        return replace(
+            session,
+            remote_owner=(owner.display_host if owner is not None else None),
+        )
+
+    def _record_session_lease_result(
+        self,
+        running: _Running,
+        protected: bool,
+    ) -> None:
+        """Report each changed warning once; the row keeps it until repaired."""
+        warnings = getattr(self, "_session_lease_warnings", {})
+        if not isinstance(warnings, dict):
+            warnings = {}
+        if protected:
+            warnings.pop(running.tmux_name, None)
+        elif (running.lease_warning is not None
+              and warnings.get(running.tmux_name) != running.lease_warning):
+            warnings[running.tmux_name] = running.lease_warning
+            self._set_status(
+                f"Cross-host lease warning for {running.label}: "
+                f"{running.lease_warning}",
+                "error",
+            )
+        self._session_lease_warnings = warnings
+
+    def _ensure_running_session_lease(
+        self,
+        running: _Running,
+        session: SessionMeta,
+    ) -> bool:
+        """Ensure every current provider alias is locked by this exact pane."""
+        if running.is_legacy:
+            running.lease_warning = None
+            return True
+        now = time.monotonic()
+        observed = self._session_lease_ids(session)
+        # Every rewind lineage the Codex index can link shares an ancestor with
+        # the aliases held when this pane started. Keeping that stable anchor
+        # set fences a later resume over the same known lineage and avoids
+        # spawning one resident holder per rewind generation.
+        desired = (
+            running.lease_session_ids
+            if session.session_type == "codex" and running.lease_session_ids
+            else observed
+        )
+        if (desired.issubset(running.lease_session_ids)
+                and running.lease_warning is None
+                and now < running.lease_recheck_at):
+            return True
+
+        def finish(warning: str | None) -> bool:
+            running.lease_warning = warning
+            running.lease_recheck_at = now + (
+                _SESSION_LEASE_PROBE_TTL_S if warning is None else 1.0)
+            return warning is None
+
+        identity = self._codex_real_pane_identity(running)
+        if identity is None:
+            return finish("exact provider pane identity is unavailable")
+        repair = running.lease_repair_thread
+        if repair is not None and repair.is_alive():
+            # The claim is already exclusively locked while the holder starts.
+            running.lease_recheck_at = now + 0.25
+            running.lease_warning = None
+            return True
+        running.lease_repair_thread = None
+        root = self._session_lease_root(session.session_type)
+        # ``lease_session_ids`` is descriptive state, never lock authority.
+        # Revalidate the OS locks so an unexpectedly dead holder is repaired
+        # while its exact provider pane is still alive.
+        held: set[str] = set()
+        missing: list[str] = []
+        process_start = session_lease.process_start_token(identity.pane_pid)
+        for session_id in sorted(desired):
+            try:
+                owner = session_lease.active_owner(
+                    root, session.session_type, (session_id,))
+            except session_lease.LeaseError:
+                return finish("shared locking is unavailable")
+            if owner is None:
+                missing.append(session_id)
+            elif session_lease.owner_matches_pane(
+                    owner, identity.pane_id, identity.pane_pid,
+                    process_start=process_start):
+                held.add(session_id)
+            else:
+                return finish(f"lease is held on {owner.display_host}")
+        if missing:
+            try:
+                claim = session_lease.acquire(
+                    root, session.session_type, missing)
+            except session_lease.LeaseConflict as exc:
+                return finish(
+                    f"lease is held on "
+                    f"{exc.owner.display_host if exc.owner else 'another host'}"
+                )
+            except session_lease.LeaseError:
+                return finish("shared locking is unavailable")
+            def _start_holder() -> None:
+                session_lease.start_holder(
+                    claim,
+                    pane_id=identity.pane_id,
+                    pane_pid=identity.pane_pid,
+                )
+
+            repair = threading.Thread(
+                target=_start_holder,
+                name="railmux-session-lease",
+                daemon=True,
+            )
+            running.lease_repair_thread = repair
+            try:
+                repair.start()
+            except RuntimeError:
+                claim.close()
+                running.lease_repair_thread = None
+                return finish("lease holder could not be started")
+            held.update(missing)
+        running.lease_session_ids = frozenset(held)
+        if running.lease_repair_thread is not None:
+            running.lease_recheck_at = now + 0.25
+            running.lease_warning = None
+            return True
+        return finish(
+            None if desired.issubset(running.lease_session_ids)
+            else "not all provider aliases are protected"
+        )
 
     def _update_running_pane(
         self,
@@ -8658,6 +8884,8 @@ class App:
                 meta = self._session_cache.get(
                     r.project, r.logical_session_id or r.key)
             if meta is not None:
+                self._record_session_lease_result(
+                    r, self._ensure_running_session_lease(r, meta))
                 if session_type == "codex":
                     self._sync_codex_rewind_scrollback(
                         r, meta, server, codex_rollout_probes)
@@ -8693,11 +8921,13 @@ class App:
         therefore survive in raw tmux scrollback even though the canonical
         JSONL is already correct. Baseline the first observed rollout, then
         reset only the live terminal view when the next canonical rollout names
-        that baseline as its parent. Managed local/SSH history reads the stamped
-        canonical transcript instead of the abandoned raw suffix. On procfs
-        systems the new rollout must also be open in this exact pane's process
-        tree; an unavailable probe degrades to the provider lineage link, while
-        a negative probe waits for a later refresh.
+        that baseline as its parent. Local wheel scrolling remains terminal-
+        native. The SSH display keeps owning wheel history and normally reads
+        raw pane capture; only this confirmed transition marks that history as
+        canonical-transcript-backed so the abandoned suffix stays hidden. On
+        procfs systems the new rollout must also be open in this exact pane's
+        process tree; an unavailable probe degrades to the provider lineage
+        link, while a negative probe waits for a later refresh.
         """
         current_id = meta.session_id
         previous_id = running.codex_canonical_session_id
@@ -8729,7 +8959,7 @@ class App:
         if identity is None or not tmux_ctl.reset_pane_view(identity):
             return
         running.codex_canonical_session_id = current_id
-        self._stamp_codex_history_state(running, meta)
+        self._stamp_codex_history_state(running, meta, canonical=True)
 
     def _codex_real_pane_identity(
         self, running: _Running,
@@ -8743,9 +8973,18 @@ class App:
         return topology.single_live_pane if topology is not None else None
 
     def _stamp_codex_history_state(
-        self, running: _Running, meta: SessionMeta,
+        self,
+        running: _Running,
+        meta: SessionMeta,
+        *,
+        canonical: bool = False,
     ) -> None:
-        """Publish the canonical transcript and its content-free cache epoch."""
+        """Publish Preview source plus the SSH history-source cache epoch.
+
+        A plain UUID keeps managed SSH history on raw pane capture. Only a
+        confirmed rewind transition writes ``canonical:<uuid>`` and permits a
+        transcript projection. Preserve that exact marker across app restarts.
+        """
         if running.is_legacy:
             return
         identity = self._codex_real_pane_identity(running)
@@ -8770,14 +9009,21 @@ class App:
             ) for pane_id in sorted(pane_ids)]
             if marker is not None else []
         )
-        generation_results = [
-            tmux_ctl.set_pane_user_option(
+        canonical_generation = (
+            f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{meta.session_id}"
+        )
+        generation_results = []
+        for pane_id in sorted(pane_ids):
+            existing = tmux_ctl.pane_user_option(
+                pane_id, tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION)
+            if not canonical and existing == canonical_generation:
+                generation_results.append(True)
+                continue
+            generation_results.append(tmux_ctl.set_pane_user_option(
                 pane_id,
                 tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
-                meta.session_id,
-            )
-            for pane_id in sorted(pane_ids)
-        ]
+                canonical_generation if canonical else meta.session_id,
+            ))
         transcript_stamped = marker is not None and all(transcript_results)
         generation_stamped = all(generation_results)
         running.codex_history_generation_stamped = bool(
@@ -8832,6 +9078,7 @@ class App:
                 identity_token=(r.orphan.creation_token
                                 if r.orphan is not None else None),
                 legacy=r.is_legacy,
+                lease_warning=r.lease_warning,
             )
             for r in self._running.values()
             if r.tmux_name.startswith(prefix)
@@ -8976,6 +9223,11 @@ class App:
             r.attention = candidate.attention
             self._running[candidate.session_id] = r
             self._stamp_running(r)
+            # A new provider session has no UUID to reserve before launch.
+            # Acquire it in the same promotion turn that publishes the UUID,
+            # rather than leaving a refresh-sized duplicate-writer window.
+            self._record_session_lease_result(
+                r, self._ensure_running_session_lease(r, candidate))
             claimed.add(candidate.session_id)
             resolved_any = True
             displayed_slot = self._agent_workspace().slot_for_agent(r.tmux_name)
@@ -9320,6 +9572,90 @@ class App:
             if session_type == "codex" and is_real
             and session_id is not None else ()
         )
+        delete_lease: session_lease.LeaseClaim | None = None
+        if is_real and session_id is not None:
+            lease_ids = (
+                (lineage_ids or frozenset({session_id}))
+                if session_type == "codex" else frozenset({session_id})
+            )
+            lease_root = self._session_lease_root(session_type)
+            try:
+                delete_lease = session_lease.acquire(
+                    lease_root,
+                    session_type,
+                    tuple(sorted(lease_ids)),
+                )
+            except session_lease.LeaseConflict as exc:
+                owner = exc.owner
+                process_start = (
+                    session_lease.process_start_token(exact_pane.pane_pid)
+                    if exact_pane is not None else None
+                )
+                local_owner = bool(
+                    exact_pane is not None
+                    and owner is not None
+                    and session_lease.owner_matches_pane(
+                        owner, exact_pane.pane_id, exact_pane.pane_pid,
+                        process_start=process_start)
+                )
+                if not local_owner:
+                    host = owner.display_host if owner is not None else "another host"
+                    self._delete_progress_text = None
+                    self._set_status(
+                        f"Delete refused: session is running on {host}",
+                        "error",
+                        force=True,
+                    )
+                    return
+                # The exact local provider pane owns this lease.  Its holder
+                # remains authoritative while the worker stops that pane. Do
+                # not let that one match authorize an entire Codex lineage:
+                # verify every alias and reserve any currently unlocked ones.
+                missing: list[str] = []
+                try:
+                    for alias in sorted(lease_ids):
+                        alias_owner = session_lease.active_owner(
+                            lease_root, session_type, (alias,))
+                        if alias_owner is None:
+                            missing.append(alias)
+                        elif not session_lease.owner_matches_pane(
+                                alias_owner,
+                                exact_pane.pane_id,
+                                exact_pane.pane_pid,
+                                process_start=process_start):
+                            self._delete_progress_text = None
+                            self._set_status(
+                                "Delete refused: session is running on "
+                                f"{alias_owner.display_host}",
+                                "error",
+                                force=True,
+                            )
+                            return
+                    if missing:
+                        delete_lease = session_lease.acquire(
+                            lease_root, session_type, tuple(missing))
+                except session_lease.LeaseConflict as other:
+                    host = (
+                        other.owner.display_host
+                        if other.owner is not None else "another host"
+                    )
+                    self._delete_progress_text = None
+                    self._set_status(
+                        f"Delete refused: session is running on {host}",
+                        "error",
+                        force=True,
+                    )
+                    return
+                except session_lease.LeaseError as other:
+                    self._delete_progress_text = None
+                    self._set_status(
+                        f"Delete refused: {other}", "error", force=True)
+                    return
+            except session_lease.LeaseError as exc:
+                self._delete_progress_text = None
+                self._set_status(
+                    f"Delete refused: {exc}", "error", force=True)
+                return
         task = _DeleteTask(
             session_id=session_id,
             jsonl_path=jsonl_path,
@@ -9331,6 +9667,7 @@ class App:
             lineage_ids=lineage_ids,
             claude_home=getattr(
                 self, "_claude_home", Path.home() / ".claude"),
+            lease_claim=delete_lease,
         )
         lock = self._delete_lock
 
@@ -9343,6 +9680,9 @@ class App:
                     status_text=f"failed to delete {label}: {exc}",
                     status_level="error",
                 )
+            finally:
+                if task.lease_claim is not None:
+                    task.lease_claim.close()
             with lock:
                 self._delete_result = result
 
@@ -9352,7 +9692,15 @@ class App:
             daemon=True,
         )
         self._delete_thread = thread
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError:
+            if delete_lease is not None:
+                delete_lease.close()
+            self._delete_thread = None
+            self._delete_progress_text = None
+            self._set_status(
+                f"failed to start deletion for {label}", "error", force=True)
 
     @staticmethod
     def _deleting_status(label: str) -> str:
@@ -10685,10 +11033,9 @@ class App:
         # - set-clipboard on: text selection in either pane is copied to the
         #   system clipboard.
         import subprocess as _sp
-        # Wrap the whole setup (not just loop.run) so `finally` reverts our tmux
-        # status-bar overrides even if Screen()/MainLoop() construction raises
-        # after we've mutated the outer session — otherwise the user's bar would
-        # keep railmux's `status on`, style, brand and blanked window-list.
+        # Wrap the whole setup (not just loop.run) so `finally` reverts any tmux
+        # state acquired before the UI loop exits or initialization fails.
+        sess: str | None = None
         try:
             if tmux_ctl.in_tmux():
                 sess = tmux_ctl.current_session_name() or "railmux"
@@ -10715,25 +11062,6 @@ class App:
                         "custom root wheel bindings.",
                         "warn",
                     )
-                # Shared binding ownership below scopes right-click forwarding
-                # to Railmux windows and preserves the user's original command
-                # everywhere else. Left-click keeps tmux's stock
-                # select-pane-and-forward behavior.
-                # The outer tmux status bar is now railmux's only status surface (the
-                # in-pane StatusBar was removed). Apply the static options (window
-                # list blanked, bar forced on, length cap) here; the bar background
-                # + brand are set by _apply_tmux_bar (green now, dark red on error).
-                # All session-scoped + reverted on teardown, so the user's global
-                # tmux config is untouched.
-                for opt, val in self._TMUX_BAR_OPTIONS:
-                    _sp.run(
-                        ["tmux", "set-option", "-t", sess, opt, val],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
-                self._tmux_status_session = sess
-                self._tmux_status_enabled = True
-                self._apply_tmux_bar(error=False)  # initial green bar
-
             self._railmux_pane_id = tmux_ctl.current_pane_id()
             if (self._railmux_pane_id is not None
                     and tmux_ctl.current_session_name() == "railmux"
@@ -10775,6 +11103,22 @@ class App:
                 self._loop.screen.set_terminal_properties(colors=_TERMINAL_COLORS)
             except Exception:
                 pass
+            if sess is not None:
+                # The dedicated server inherits ``status off`` while the
+                # terminal-native Restoring surface is visible.  Claim and
+                # reveal Railmux's sole status surface only after Screen and
+                # MainLoop are ready; an earlier initialization failure stays
+                # visually clean.  These overrides remain session-scoped and
+                # teardown reverts them to the dedicated server's hidden
+                # baseline.
+                for opt, val in self._TMUX_BAR_OPTIONS:
+                    _sp.run(
+                        ["tmux", "set-option", "-t", sess, opt, val],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                    )
+                self._tmux_status_session = sess
+                self._tmux_status_enabled = True
+                self._apply_tmux_bar(error=False)  # initial green bar
             self._check_terminal_size()
             # If a saved agent workspace is valid, establish its final empty
             # tmux boundaries before Urwid emits the first sidebar frame. The

@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from railmux import __version__
 from railmux import windows_msys2
 from railmux.windows_install_log import InstallReporter
 from railmux.windows_msys2 import (
@@ -33,7 +34,7 @@ from railmux.windows_msys2 import (
 from railmux.windows_pacman import PacmanMirrorDecision
 
 
-VERSION = "0.4.0.dev15"
+VERSION = __version__
 LEGACY_VERSION = "0.4.0.dev10"
 _ANSI_STYLE_RE = re.compile(r"\x1b\[[0-9;]*m")
 

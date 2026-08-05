@@ -621,8 +621,22 @@ def launcher_argv(
     launch_prefix: Sequence[str],
     forwarded_args: Sequence[str],
 ) -> list[str]:
-    """Build the only supported entry into the dedicated Railmux workspace."""
+    """Build the only supported entry into the dedicated Railmux workspace.
+
+    The dedicated server's inherited status line stays off.  ``App.run`` turns
+    it on at session scope only after the managed UI is ready, so tmux cannot
+    expose its stock status line underneath the startup/restoration surface.
+    Keeping the baseline global also makes early failures and soft-quit shells
+    clean without requiring a child process to repair partially-started UI.
+    """
     return tmux_argv(
+        "start-server",
+        ";",
+        "set-option",
+        "-g",
+        "status",
+        "off",
+        ";",
         "new-session",
         "-A",
         "-s",

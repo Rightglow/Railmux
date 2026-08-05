@@ -70,6 +70,10 @@ def _cleanup_app(monkeypatch, running):
         (text, level))
     refreshed: list[bool] = []
     app._refresh = lambda: refreshed.append(True)
+    # Cleanup behavior tests use a synthetic non-existent provider home.  The
+    # cross-host lease itself is covered in test_session_lease.py.
+    monkeypatch.setattr(
+        app_mod.session_lease, "acquire", MagicMock(return_value=MagicMock()))
     return app, statuses, refreshed
 
 

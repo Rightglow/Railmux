@@ -396,7 +396,9 @@ def test_foreign_tmux_launches_dedicated_server_with_clean_environment(
         "expected_session_id": None,
     }
     assert argv == [
-        "tmux", "-L", "railmux", "new-session", "-A", "-s", "railmux",
+        "tmux", "-L", "railmux",
+        "start-server", ";", "set-option", "-g", "status", "off", ";",
+        "new-session", "-A", "-s", "railmux",
         "/bin/railmux", "--inside-tmux", "--project", "/work",
     ]
     assert "TMUX" not in env
