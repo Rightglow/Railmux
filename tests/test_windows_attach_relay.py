@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from railmux import windows_attach_relay
+from railmux import __version__, windows_attach_relay
 from railmux.tmux_server import TmuxServerTarget
 
 
@@ -148,7 +148,7 @@ def test_relay_server_rejects_non_managed_runtime(monkeypatch):
         "--token", "00" * windows_attach_relay._TOKEN_BYTES,
         "--label", "railmux",
         "--runtime-id", "msys2-test",
-        "--app-id", "railmux-0.4.0.dev15",
+        "--app-id", f"railmux-{__version__}",
         "--socket-path", "/tmp/tmux-1/railmux",
         "--tmux-path", "/usr/bin/tmux",
         "--server-pid", "123",

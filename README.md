@@ -127,7 +127,7 @@ for focus and layout limits.
 |--------|--------|
 | Left-click (non-running) | Preview session history in the Target pane |
 | Left-click (running) | Switch the Target pane to that session |
-| Wheel up over a live agent | Open its canonical current-branch history |
+| Wheel over a live agent | Scroll its live terminal history (native locally, Railmux-managed over `railmux ssh`) |
 | Double-click | Open/attach in the Target pane and move focus there |
 | Right-click | Context menu (Open, Preview, Info, Rename, Star, Copy title, Kill, Term, Delete) |
 
@@ -330,16 +330,21 @@ sessions move ahead of the other results.
 
 For a stopped session, left-click or press `␣` to view conversation history in
 the Target pane without starting or resuming the agent. For a running session,
-press `␣`, choose **Preview**, or wheel up over its live pane. Preview is
-read-only: it cannot send a message or change the session. User and assistant
-messages, tool calls, and abbreviated tool output are colour-coded, while
-internal context and encrypted reasoning are hidden. Codex rewind lineages and
-Claude Code `parentUuid` branches are projected onto the provider's current
-conversation: the retained prefix and replacement suffix remain visible, while
-the abandoned suffix is hidden. When Railmux observes a running Codex session
-advance after rewind or steering, it resets only the current terminal view
-before Codex redraws. Retained tmux scrollback is not erased, and managed
-history continues from the canonical rollout without its abandoned suffix.
+press `␣` or choose **Preview**. Preview is read-only: it cannot send a message
+or change the session. User and assistant messages, tool calls, and abbreviated
+tool output are colour-coded, while internal context and encrypted reasoning
+are hidden. Codex rewind lineages and Claude Code `parentUuid` branches are
+projected onto the provider's current conversation: the retained prefix and
+replacement suffix remain visible, while the abandoned suffix is hidden.
+
+Scrolling a live agent does not enter Preview. Direct `railmux` uses the
+terminal/tmux scrolling behavior; `railmux ssh` keeps its own bounded,
+per-pane history and normally preserves the live terminal's captured styling.
+When Railmux confirms that a running Codex session advanced after rewind or
+steering, it resets only the current terminal view before Codex redraws and
+invalidates that pane's SSH history generation. Retained tmux scrollback is not
+erased; the SSH history for that branched generation uses the canonical
+rollout so its abandoned suffix stays hidden.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between
@@ -379,6 +384,18 @@ new agent immediately belongs to Railmux's running workspace and Target pane.
 Railmux also indexes resumable Claude Code and Codex sessions started outside
 Railmux, so existing conversations appear in the sidebar and resume the same
 way. Non-resumable one-off runs such as `codex exec` are filtered out.
+
+If the same Claude Code or Codex history root is shared across hosts, Railmux
+uses a provider-session lease to prevent two machines from resuming the same
+conversation concurrently. A remotely owned conversation remains in Sessions
+as **running on HOST**, but is not presented as a locally attachable Running
+entry; resume fails safely until that host's exact provider pane exits. The
+lease follows detached agents across Soft Quit and covers every known Codex
+rewind-lineage ID at resume; later rewinds retain a stable locked lineage
+anchor. Delete also checks the shared lease immediately before
+starting and refuses remotely owned history. The shared filesystem must provide
+cross-host POSIX advisory-lock semantics; mounts configured with local-only or
+disabled locking cannot provide this guarantee.
 
 ### Restarts and quitting
 

@@ -2667,7 +2667,7 @@ def test_teardown_reverts_every_bar_option(monkeypatch):
 
 def test_run_defers_saved_agent_focus_and_reverts_bar_if_setup_raises(
         monkeypatch):
-    """Startup hides a saved agent focus before drawing and always tears down."""
+    """A pre-loop failure leaves the startup status hidden and tears down."""
     import railmux.ui.app as app_mod
 
     app = _minimal_app()
@@ -2687,8 +2687,9 @@ def test_run_defers_saved_agent_focus_and_reverts_bar_if_setup_raises(
     monkeypatch.setattr(app_mod.tmux_ctl, "current_pane_id", lambda: "%0")
     monkeypatch.setattr(
         app_mod.tmux_ctl, "use_smallest_window_size", lambda _pane: True)
-    monkeypatch.setattr("subprocess.run", MagicMock())
-    # Screen construction blows up AFTER the status bar has been set up.
+    run = MagicMock()
+    monkeypatch.setattr("subprocess.run", run)
+    # Screen construction blows up before the managed status bar is revealed.
     monkeypatch.setattr("urwid.raw_display.Screen",
                         MagicMock(side_effect=RuntimeError("boom")))
 
@@ -2696,8 +2697,12 @@ def test_run_defers_saved_agent_focus_and_reverts_bar_if_setup_raises(
         app.run()
 
     app._frame.set_window_active.assert_called_once_with(False)
-    assert app._tmux_status_enabled is True  # setup ran (bar was mutated)...
-    teardown.assert_called_once_with()       # ...and teardown reverted it
+    assert app._tmux_status_enabled is False
+    assert not any(
+        call.args[0][-2:] == ["status", "on"]
+        for call in run.call_args_list
+    )
+    teardown.assert_called_once_with()
 
 
 # ── QuitConfirmModal ─────────────────────────────────────────────────────

@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from railmux import orphan_marker, restart_state, tmux_ctl
+from railmux import orphan_marker, restart_state, session_lease, tmux_ctl
 from railmux.models import Project, SessionMeta
 from railmux.ui.app import App, _Running
 from railmux.ui.running_pane import RunningEntry
@@ -135,6 +135,42 @@ def test_marker_failure_kills_only_holder_and_never_starts_provider(monkeypatch)
     )
     assert killed == [holder]
     started.assert_not_called()
+
+
+def test_resume_launch_transfers_cross_host_claim_to_exact_provider_pane(
+    monkeypatch,
+):
+    app = _app()
+    app._session_name = lambda key: "cc-session-a"
+    app._shellify = lambda *a, **k: "provider-command"
+    app._ensure_detached_agent = lambda *a, **k: (True, None)
+    app._attach_in_right_pane = lambda *a, **k: True
+    app._stamp_running = lambda running: True
+    pane = _pane("cc-session-a")
+    monkeypatch.setattr(tmux_ctl, "session_exists", lambda _name: False)
+    monkeypatch.setattr(
+        tmux_ctl,
+        "session_topology",
+        lambda _name: tmux_ctl.SessionTopology(
+            "cc-session-a", "$9", 0, ("@9",), (pane,)),
+    )
+    transferred = MagicMock(return_value=True)
+    monkeypatch.setattr(session_lease, "start_holder", transferred)
+    claim = MagicMock(session_ids=("session-a",))
+
+    assert app._launch(
+        "session-a",
+        ["claude"],
+        Path("/work/project"),
+        "p/session",
+        None,
+        session_type="claude",
+        lease_claim=claim,
+    )
+
+    transferred.assert_called_once_with(
+        claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid)
+    assert app._running["session-a"].lease_session_ids == frozenset({"session-a"})
 
 
 def test_discovery_readopts_unresolved_without_provider_directory(monkeypatch):
@@ -412,6 +448,7 @@ def test_resolution_commits_marker_before_registry(monkeypatch):
     app._codex_index.sessions_for_cwd.return_value = [meta]
     app._correlate_codex_rollout = lambda running: {session_id}
     app._stamp_running = lambda running: True
+    app._ensure_running_session_lease = MagicMock(return_value=True)
     writes: list[orphan_marker.Marker] = []
     app._write_orphan_marker = lambda value: writes.append(value) or False
 
@@ -423,6 +460,8 @@ def test_resolution_commits_marker_before_registry(monkeypatch):
     assert session_id in app._running
     assert marker.placeholder_key not in app._running
     assert app._running[session_id].orphan.session_id == session_id
+    app._ensure_running_session_lease.assert_called_once_with(
+        app._running[session_id], meta)
 
 
 def test_stale_running_row_cannot_attach_reused_name(monkeypatch):

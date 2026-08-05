@@ -33,6 +33,33 @@ Do not promote a mocked OS branch or compatible terminal protocol into a new
 platform-support claim without the real-platform evidence required by the
 support matrix.
 
+## Preserve established interaction semantics
+
+Treat an existing mouse, keyboard, click, focus, preview, and scrolling
+behavior as a product contract even when a nearby bug can be solved more
+easily by repurposing it. Do not infer authorization to remap that behavior
+from a discussion about an adjacent workflow. State the exact before/after
+interaction and obtain explicit product agreement before implementing such a
+change.
+
+Keep live terminal interaction, explicit provider-history Preview, and
+transport-managed history as separate concepts. In particular, direct live
+scrolling remains tmux/provider-native, while `railmux ssh` retains its own
+bounded per-pane scrolling manager and explicit Preview remains a deliberate
+Space/menu action. A transcript locator advertises availability; its presence
+alone is never authority to change ordinary live-history format. Any fallback
+that changes the source or representation of history must be gated by the
+smallest exact validated state that requires it, such as a confirmed branch
+generation matching the same rollout.
+
+Every regression fix must protect both sides of its boundary: add a positive
+test for the broken case and a negative behavior-preservation test for the
+ordinary unaffected case. When fidelity is the user-visible contract, cover a
+representative composition of that path (for example, an unrewound live Codex
+pane with a transcript locator, styled output, and deep history), rather than
+relying only on isolated helper tests. A new test that merely codifies a
+changed implementation is not evidence that established behavior survived.
+
 Before declaring a change ready to commit or merge, perform a closure review
 of the complete diff, not only a correctness pass:
 
@@ -59,8 +86,8 @@ or support claims for running local Railmux or the local `railmux ssh` client
 from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
 `main` because Railmux runs inside the supported Linux runtime there. Publish
 POSIX/WSL development builds from this branch when a fix needs field testing.
-After the `v0.3.3` final release, the next stable-line preview series is
-`0.3.4.devN`, beginning at `0.3.4.dev1`; never append another `.devN` build to
+After the `v0.3.5` final release, the next stable-line preview series is
+`0.3.6.devN`, beginning at `0.3.6.dev1`; never append another `.devN` build to
 an already published final version.
 
 `archive/windows-conpty-deprecated` is the frozen, read-only archive of the

@@ -569,6 +569,41 @@ NUL-delimited process argv element equal to the stamped resume UUID preserves
 the binding. A substring, rendered shell command, cwd match, or sibling rollout
 without that exact argv evidence must retain the stale-writer veto.
 
+Provider history roots are also the cross-host single-writer authority. When
+`CODEX_HOME` or the Claude Code configuration/history root is shared, Railmux
+stores rendezvous files under that same root and takes non-blocking advisory
+locks before resume. They request private POSIX modes where the filesystem
+supports them; type, ownership, and no-symlink checks remain authoritative on
+mode-masking DrvFs/CIFS-style mounts. A Claude lease names its session UUID; a
+Codex resume atomically covers every alias known at launch, while later rewinds
+that the index can link retain that stable lineage anchor instead of
+accumulating holder processes. The lock is authority and its bounded JSON owner
+record is diagnostic only: an unlocked stale file is inactive, while an
+unavailable lock service fails resume closed.
+
+The acquired descriptors transfer to a small independent holder tied to the
+exact provider pane PID and process-birth token. They therefore survive UI
+Soft Quit, but are released by the operating system when that pane exits or the
+holder dies. New sessions acquire their UUID immediately when placeholder
+resolution proves it. A live UI periodically revalidates the advisory locks
+rather than trusting its in-memory lease list, so it can replace an
+unexpectedly dead holder while the exact provider pane remains alive; a sticky
+Running-row warning remains visible until protection is restored. Confirmed
+deletion also takes a fresh lease (or verifies the exact locally owned provider
+pane) and refuses to touch history owned on another host. A remote owner may
+annotate a Sessions row as `running on HOST`, but cannot enter the node-local
+Running registry or authorize attach, kill, delete, or process adoption.
+Node-local immutable tmux identity remains the authority for all of those
+actions.
+
+Lease files are deliberately persistent rendezvous points. An unlocked stale
+record is inactive and consumes only one small file per provider UUID; unlinking
+a locked pathname would permit two hosts to lock different inodes. The shared
+provider root must therefore provide real cross-host POSIX `flock` semantics.
+Mount options or filesystems that silently make locks node-local cannot be
+detected reliably by Railmux and are outside this guarantee; an explicit lock
+error always fails resume and delete closed.
+
 ## Session indexes publish immutable generations
 
 The Codex history tree is owned by one `BackgroundCodexIndex` worker. Urwid
@@ -615,10 +650,15 @@ provider parent link. After revalidating the real pane identity across either
 its detached home or swap display location, Railmux resets only tmux's visible
 terminal state, preserving its retained scrollback, then sends the unchanged
 foreground process group `SIGWINCH` so the provider redraws at the same geometry
-and reasserts its terminal modes. The canonical Codex rollout is stamped as the
-managed history source; local preview and full-window SSH history therefore
-retain the current branch while excluding the abandoned suffix. This sends no
-provider input, never resizes the pane, never deletes tmux history, never
+and reasserts its terminal modes. A pane-local generation marker is normally a
+plain rollout UUID, meaning the full-window SSH history manager must use styled
+raw pane capture. Only this confirmed branch transition may prefix that exact
+UUID as canonical and permit a transcript projection that excludes the
+abandoned suffix; the prefix and transcript locator must name the same rollout.
+The transcript locator alone is never authority to change scrolling format.
+Direct local wheel input remains native tmux/provider scrolling, while Space or
+context Preview remains the explicit formatted provider projection. This sends
+no provider input, never resizes the pane, never deletes tmux history, never
 touches provider history, and never mutates a legacy-server session.
 
 While that first generation is pending, Codex Projects and Sessions display an
@@ -868,13 +908,14 @@ routing with focus, selection, or history.
   reports the size limit.
 - Single-click and Enter on a running row attach its real provider pane;
   stopped-row click still opens history. `␣` and context Preview always open
-  read-only canonical history, including for a running row. Wheel-up over a
-  displayed live agent uses a pane-local primary/secondary marker and a
-  private controller key to enter the same viewer. The swap transport first
-  returns the real pane home, and normal viewer exit signals the controller to
-  restore that exact live agent. Every path uses the Target pane remembered
-  from tmux focus. A confirmed live Codex rewind discards the same pane's stale
-  pre-rewind terminal cache before its child rollout continues drawing.
+  read-only canonical history, including for a running row. Wheel input over a
+  displayed live agent never enters that viewer: direct Railmux preserves
+  tmux/provider-native scrolling, while `railmux ssh` keeps exclusive ownership
+  through its bounded per-pane history layer. Explicit Preview returns the real
+  pane home first and normal viewer exit signals the controller to restore that
+  exact live agent. Every action path uses the Target pane remembered from tmux
+  focus. A confirmed live Codex rewind invalidates the same pane's SSH cache
+  generation before its child rollout continues drawing.
 - Cycling back to single removes only the outer secondary pane, remembers its
   exact instance-local tmux target, and never kills the detached agent session.
 - The same background tmux session should not be attached in both slots.

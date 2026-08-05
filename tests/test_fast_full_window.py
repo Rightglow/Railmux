@@ -62,7 +62,7 @@ from railmux.fast_display_protocol import (
 from railmux.fast_display_server import parse_args as parse_server_args
 from railmux.fast_display_server import render_rows
 from railmux.fast_display_server import terminal_modes_for_screen
-from railmux import fast_display_client, fast_display_server
+from railmux import fast_display_client, fast_display_server, tmux_ctl
 from railmux.fast_display_client import (
     AppliedScreen,
     LOCAL_ESCAPE,
@@ -1718,7 +1718,9 @@ def test_terminal_surface_hides_cursor_covered_by_a_frozen_pane():
 
     TerminalSurface(stream).paint(screen, ((covering, (b"a", b"b")),))
 
-    assert stream.getvalue().endswith(b"\033[?25l")
+    rendered = stream.getvalue()
+    assert rendered.endswith(b"\033[1;2H")
+    assert rendered.count(b"\033[?25l") == 1
 
 
 def test_terminal_surface_reasserts_cached_cursor_without_repainting():
@@ -1739,6 +1741,55 @@ def test_terminal_surface_reasserts_cached_cursor_without_repainting():
     surface.reassert_cursor()
 
     assert stream.getvalue() == b"\033[0m\033[?7h\033[2;5H\033[?25h"
+
+
+def test_terminal_surface_local_highlight_repaints_only_changed_rows():
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=20, height=4))
+        )[0],
+        os.terminal_size((20, 4)),
+    )
+    assert screen is not None
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+    surface.paint(screen)
+    stream.seek(0)
+    stream.truncate()
+
+    surface.paint_changed_rows(
+        screen,
+        (),
+        ((1, 4, b"https://example"),),
+        {1},
+    )
+
+    rendered = stream.getvalue()
+    assert b"\033[2J" not in rendered
+    assert b"\033[2;1H\033[2Krow-1" in rendered
+    assert b"\033[2;5H\033[0;7mhttps://example" in rendered
+
+
+def test_terminal_surface_stable_cursor_visibility_is_not_reasserted_per_patch():
+    screen = ScreenModel().apply(
+        ClientScreenUpdateDecoder().feed(
+            encode_update(_keyframe(width=12, height=3))
+        )[0],
+        os.terminal_size((12, 3)),
+    )
+    assert screen is not None
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream, mouse_hover=False)
+    surface.paint(screen)
+    stream.seek(0)
+    stream.truncate()
+
+    surface.paint(replace(screen, changed_rows=(1,), clear=False))
+
+    rendered = stream.getvalue()
+    assert b"\033[?25h" not in rendered
+    assert b"\033[?25l" not in rendered
+    assert rendered.endswith(b"\033[1;2H")
     assert b"\033[2J" not in stream.getvalue()
 
 
@@ -1798,7 +1849,8 @@ def test_terminal_surface_clips_projected_patches_overlays_and_cursor():
     assert b"\033[4;1H\033[2Krow-14" in rendered
     assert b"hidden" not in rendered
     assert b"\033[1;4H\033[6Xone" in rendered
-    assert rendered.endswith(b"\033[1;1H\033[?25l")
+    assert rendered.endswith(b"\033[1;1H")
+    assert rendered.count(b"\033[?25l") == 1
 
 
 def test_terminal_surface_maps_projected_mouse_rows_to_logical_screen():
@@ -4869,6 +4921,8 @@ def test_local_status_preserves_painted_status_left_and_background():
     assert b"\033[4;21H" in painted
     assert b"\033[48;2;95;175;0m\033[1;38;5;17m\033[K" in painted
     assert b"Copied 12 chars." in painted
+    assert b"\033[?25h" not in painted
+    assert b"\033[?25l" not in painted
 
 
 def test_reconnect_status_uses_retained_status_right_without_stale_cursor():
@@ -6528,6 +6582,50 @@ def test_server_projects_bounded_codex_history_generation(monkeypatch):
     assert panes[0].history_generation == fast_display_server._history_generation(
         marker)
     assert panes[0].history_generation != 0
+    assert not panes[0].canonical_history
+
+
+def test_server_accepts_canonical_history_only_for_matching_transcript(
+    monkeypatch, tmp_path,
+):
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    path.write_text('{"type":"response_item"}\n')
+    transcript = fast_display_server.tmux_server.encode_transcript_source(
+        "codex", session_id, path)
+    assert transcript is not None
+    generation = (
+        f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{session_id}"
+    )
+    monkeypatch.setattr(
+        fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 10 0 1  "
+            f"{transcript} {generation} \n"
+        ),
+    )
+
+    panes = fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask")
+
+    assert len(panes) == 1
+    assert panes[0].canonical_history
+    assert panes[0].history_generation != fast_display_server._history_generation(
+        session_id)
+
+    generation = (
+        f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}"
+        "019fc605-5188-7212-bc48-ea023fe8b73c"
+    )
+    mismatched = fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask")
+
+    assert len(mismatched) == 1
+    assert not mismatched[0].canonical_history
 
 
 def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
@@ -6843,6 +6941,7 @@ def test_server_codex_history_uses_canonical_transcript_after_rewind(
         transcript_backed=True,
         transcript_provider="codex",
         history_generation=19,
+        canonical_history=True,
     )
     canonical = (b"retained prompt", b"replacement answer")
     monkeypatch.setattr(
@@ -6876,6 +6975,45 @@ def test_server_codex_history_uses_canonical_transcript_after_rewind(
     assert snapshot.lines[-2:] == (b"live-a", b"live-b")
     assert all(b"abandoned red interruption" not in line
                for line in snapshot.lines)
+
+
+def test_server_codex_history_uses_raw_capture_without_confirmed_rewind(
+    monkeypatch,
+):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        40,
+        2,
+        mouse_forwardable=True,
+        history_size=500,
+        transcript_source="codex-marker",
+        transcript_backed=True,
+        transcript_provider="codex",
+        history_generation=17,
+    )
+    transcript_rows = MagicMock()
+    monkeypatch.setattr(fast_display_server, "_transcript_rows", transcript_rows)
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"raw terminal history\nlive-a\nlive-b\n",
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_line",
+        lambda _pyte, line, _width: line,
+    )
+
+    snapshot = fast_display_server._capture_pane_history(
+        object(), pane, 8, 100)
+
+    assert snapshot is not None
+    assert not snapshot.transcript_backed
+    assert snapshot.transcript_available
+    assert b"raw terminal history" in snapshot.lines
+    transcript_rows.assert_not_called()
 
 
 def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(

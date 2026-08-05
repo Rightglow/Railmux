@@ -106,6 +106,7 @@ def test_live_rewind_resets_view_and_stamps_canonical_transcript(
     monkeypatch.setattr(tmux_ctl, "reset_pane_view", reset)
     stamped = MagicMock(return_value=True)
     monkeypatch.setattr(tmux_ctl, "set_pane_user_option", stamped)
+    monkeypatch.setattr(tmux_ctl, "pane_user_option", lambda *_args: None)
     probes: dict[str, set[str] | None] = {}
 
     # An indexed child is not enough: on procfs the exact live writer must
@@ -127,7 +128,10 @@ def test_live_rewind_resets_view_and_stamps_canonical_transcript(
     )
     assert leaf_id in transcript_call.args[2]
     assert generation_call.args == (
-        "%9", tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION, leaf_id)
+        "%9",
+        tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
+        f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{leaf_id}",
+    )
 
 
 def test_first_codex_generation_only_establishes_scrollback_baseline(
@@ -197,9 +201,53 @@ def test_codex_history_state_stamps_nested_wrapper_and_real_pane(
     app._codex_real_pane_identity = MagicMock(return_value=identity)
     stamped = MagicMock(return_value=True)
     monkeypatch.setattr(tmux_ctl, "set_pane_user_option", stamped)
+    monkeypatch.setattr(tmux_ctl, "pane_user_option", lambda *_args: None)
 
     app._stamp_codex_history_state(running, meta)
 
     assert running.codex_history_generation_stamped
     assert {call.args[0] for call in stamped.call_args_list} == {"%9", "%10"}
     assert stamped.call_count == 4
+
+
+def test_codex_history_state_preserves_confirmed_canonical_marker_on_restart(
+    monkeypatch, tmp_path,
+) -> None:
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    project = Project(tmp_path, "-project", Path(), 1, 0.0)
+    running = _Running(
+        key=session_id,
+        tmux_name="cx-live",
+        label="project/conversation",
+        project=project,
+        session_type="codex",
+    )
+    meta = SessionMeta(
+        project=project,
+        session_id=session_id,
+        jsonl_path=tmp_path / (
+            f"rollout-2026-08-03T13-13-03-{session_id}.jsonl"),
+        title="current",
+        message_count=2,
+        token_total=0,
+        last_mtime=2.0,
+        session_type="codex",
+    )
+    identity = tmux_ctl.PaneIdentity(
+        "%9", 123, "cx-live", "$4", "@5", False, 80, 24)
+    app = App.__new__(App)
+    app._codex_real_pane_identity = MagicMock(return_value=identity)
+    stamped = MagicMock(return_value=True)
+    monkeypatch.setattr(tmux_ctl, "set_pane_user_option", stamped)
+    canonical_marker = (
+        f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{session_id}"
+    )
+    monkeypatch.setattr(
+        tmux_ctl, "pane_user_option", lambda *_args: canonical_marker)
+
+    app._stamp_codex_history_state(running, meta)
+
+    assert running.codex_history_generation_stamped
+    assert stamped.call_count == 1
+    assert stamped.call_args.args[:2] == (
+        "%9", tmux_server.TRANSCRIPT_SOURCE_OPTION)

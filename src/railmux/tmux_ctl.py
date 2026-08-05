@@ -1434,6 +1434,18 @@ def set_pane_user_option(target_pane: str, name: str,
         return False
 
 
+def pane_user_option(target_pane: str, name: str) -> str | None:
+    """Read one pane-local user option, returning ``None`` when unavailable."""
+    try:
+        value = subprocess.check_output(
+            ["tmux", "show-options", "-pv", "-t", target_pane, name],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return None
+    return value or None
+
+
 def unset_pane_user_option_if_value(target_pane: str, name: str,
                                     expected: str) -> bool:
     """Unset a pane option only when Railmux still owns its exact value."""
@@ -1833,15 +1845,14 @@ _PREFIX_TARGET_KEY = "Tab"
 _PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
 RAILMUX_CONTROLLER_OPTION = "@railmux_controller_pane"
 RAILMUX_TARGET_OPTION = "@railmux_target_pane"
-RAILMUX_HISTORY_PREVIEW_OPTION = "@railmux_history_preview_v1"
 RAILMUX_HISTORY_GENERATION_OPTION = "@railmux_history_generation_v1"
-# tmux names function keys only through F12. Private controller routes use
+# A confirmed branch transition prefixes the opaque SSH history cache epoch.
+# Plain generations use native pane history; only this explicit marker permits
+# the canonical transcript fallback that removes an abandoned rewind suffix.
+RAILMUX_CANONICAL_HISTORY_PREFIX = "canonical:"
+# tmux names function keys only through F12. Private restore routes use
 # canonical xterm sequences in literal mode, so they cannot be confused with
 # user input forwarded to an agent pane.
-RAILMUX_HISTORY_PREVIEW_KEYS = {
-    "primary": ("F21", "\x1b[35~"),
-    "secondary": ("F22", "\x1b[36~"),
-}
 RAILMUX_HISTORY_RESTORE_KEYS = {
     "primary": ("F23", "\x1b[42~"),
     "secondary": ("F24", "\x1b[43~"),
@@ -2182,69 +2193,30 @@ def set_root_wheel_forwarding(
     backup: RootWheelBindingBackup,
     token: str,
 ) -> bool:
-    """Open canonical live history on wheel-up, otherwise preserve tmux input.
+    """Preserve terminal-native wheel behavior under shared ownership.
 
     The literal marker makes crash recovery able to distinguish Railmux's
     wrapper from a binding the user installed while Railmux was running.
-    A pane-local primary/secondary marker routes the first live-agent wheel-up
-    to Railmux's controller; the transcript viewer clears that marker, so its
-    subsequent wheel events are forwarded normally.
-    Non-mouse-aware panes retain the exact stock fallback; WheelDownPane was
-    unbound by default and therefore has no false branch.
+    Mouse-aware panes receive the original report, while non-mouse-aware panes
+    retain the exact stock fallback (including native copy-mode on wheel-up).
+    A live wheel must never be converted into Railmux's transcript Preview.
     """
     marker = f"{_ROOT_WHEEL_MARKER}-{token}"
     mouse_condition = (
         "#{&&:#{mouse_any_flag},"
         f"#{{==:{marker},{marker}}}}}"
     )
-    controller_present = f"#{{!=:#{{{RAILMUX_CONTROLLER_OPTION}}},}}"
-
-    def _preview_condition(slot_key: str) -> str:
-        return (
-            "#{&&:"
-            f"#{{==:#{{{RAILMUX_HISTORY_PREVIEW_OPTION}}},{slot_key}}},"
-            f"{controller_present}}}"
-        )
-
-    def _send_preview(slot_key: str) -> str:
-        _key, sequence = RAILMUX_HISTORY_PREVIEW_KEYS[slot_key]
-        return (
-            f"send-keys -l -t '#{{{RAILMUX_CONTROLLER_OPTION}}}' -- "
-            f"'{sequence}'"
-        )
-
     try:
         for key in _ROOT_WHEEL_KEYS:
             binding = backup.get(key)
             fallback = _binding_command(binding) if binding is not None else ""
-            mouse_fallback = (
-                f"if-shell -F -t = '{mouse_condition}' 'send-keys -M'"
-            )
-            if fallback:
-                mouse_fallback += f" '{fallback}'"
             args = [
                 "tmux", "bind-key", "-T", "root", key,
+                "if-shell", "-F", "-t", "=", mouse_condition,
+                "send-keys -M",
             ]
-            if key == "WheelUpPane":
-                secondary_fallback = (
-                    "if-shell -F -t = "
-                    f"'{_preview_condition('secondary')}' "
-                    f"\"{_send_preview('secondary')}\" "
-                    f"\"{mouse_fallback}\""
-                )
-                args.extend([
-                    "if-shell", "-F", "-t", "=",
-                    _preview_condition("primary"),
-                    _send_preview("primary"),
-                    secondary_fallback,
-                ])
-            else:
-                args.extend([
-                    "if-shell", "-F", "-t", "=", mouse_condition,
-                    "send-keys -M",
-                ])
-                if fallback:
-                    args.append(fallback)
+            if fallback:
+                args.append(fallback)
             subprocess.check_call(
                 args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except (ValueError, subprocess.CalledProcessError, FileNotFoundError):
@@ -2265,7 +2237,7 @@ def root_wheel_bindings_owned_by(token: str) -> bool:
 
 
 def root_wheel_bindings_are_current(token: str) -> bool:
-    """Whether the owned wrapper includes canonical-history routing."""
+    """Whether the owned wrapper preserves native live-pane scrolling."""
     bindings = read_root_wheel_bindings()
     up = bindings.get("WheelUpPane")
     marker = f"{_ROOT_WHEEL_MARKER}-{token}"
@@ -2278,11 +2250,14 @@ def root_wheel_bindings_are_current(token: str) -> bool:
             for binding in bindings.values()
         )
         and up is not None
-        and RAILMUX_HISTORY_PREVIEW_OPTION in up
-        and all(
-            sequence in up or sequence.replace("\x1b", r"\033") in up
-            for _key, sequence in RAILMUX_HISTORY_PREVIEW_KEYS.values()
-        )
+        and "copy-mode -e" in up
+        # Reject the 0.3.3 wrapper during a soft upgrade. It routed live wheel
+        # input through private F21/F22 keys into transcript Preview.
+        and "@railmux_history_preview_v1" not in up
+        and r"\033[35~" not in up
+        and r"\033[36~" not in up
+        and "\x1b[35~" not in up
+        and "\x1b[36~" not in up
     )
 
 

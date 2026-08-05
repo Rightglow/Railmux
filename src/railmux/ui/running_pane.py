@@ -37,6 +37,7 @@ class RunningEntry:
     # a different tmux session that later reused the same human-readable name.
     identity_token: str | None = None
     legacy: bool = False
+    lease_warning: str | None = None
 
 
 class _RunningRow(ClickableRow):
@@ -53,6 +54,9 @@ class _RunningRow(ClickableRow):
         markup.append(entry.label)
         if entry.legacy:
             markup.extend([("legacy", "  legacy · restart recommended")])
+        if entry.lease_warning:
+            markup.extend([("status_blocked", "  ⚠ "),
+                           ("legacy", entry.lease_warning)])
         text = urwid.Text(markup, wrap="clip")
         # Use the dict map when selected so the coloured dot picks up the
         # selected background (a bare "selected" string would leave the dot's
