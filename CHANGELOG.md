@@ -7,11 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6.dev2] - 2026-08-05
+
 ### Changed
 
 - Require a second warning before hard quit can stop all live agent sessions;
   both confirmation steps retain `y`/Enter, while `n`/`Esc` returns from the
   final warning to the original Soft Quit choice.
+
+### Fixed
+
+- Enter `railmux ssh` history atomically from one cumulative deep capture when
+  the routing cache is incomplete, preventing occasional gaps and mixed text
+  or diff-background styling that previously disappeared only after returning
+  to the bottom and scrolling up again.
+- Keep ordinary Codex resumes in styled raw `railmux ssh` history when a newer
+  Codex creates a child rollout during startup. Only a child whose parent is
+  proved active in the same pane generation can enable canonical transcript
+  history; older over-broad markers safely downgrade to raw history. Branch
+  detection no longer resets the live terminal, avoiding an all-blank Codex
+  pane when an idle TUI ignores a same-size redraw signal.
 
 ## [0.3.6.dev1] - 2026-08-05
 
@@ -1940,7 +1955,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev2...HEAD
+[0.3.6.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev1...v0.3.6.dev2
 [0.3.6.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6.dev1
 [0.3.5]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5
 [0.3.5.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5.dev1
