@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6.dev6] - 2026-08-05
+
+### Fixed
+
+- Keep ordinary Codex continuation and context-compaction children in styled
+  raw `railmux ssh` history instead of misclassifying them as a rewind and
+  showing Preview-formatted transcript text on wheel-up. Canonical transcript
+  fallback now requires an explicit provider `thread_rolled_back` increment;
+  released heuristic markers safely downgrade without changing provider data.
+
 ## [0.3.6.dev5] - 2026-08-05
 
 ### Changed
@@ -1987,7 +1997,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev6...HEAD
+[0.3.6.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...v0.3.6.dev6
 [0.3.6.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...v0.3.6.dev5
 [0.3.6.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev3...v0.3.6.dev4
 [0.3.6.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev2...v0.3.6.dev3

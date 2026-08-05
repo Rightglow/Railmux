@@ -36,7 +36,7 @@ _TOOL_BLOCK_AGE_S = 120
 
 
 FileSignature = tuple[int, int]  # (mtime_ns, size)
-_PERSISTENT_CACHE_SCHEMA = 1
+_PERSISTENT_CACHE_SCHEMA = 2
 _PERSISTENT_CACHE_MAX_BYTES = 16 * 1024 * 1024
 _PERSISTENT_CACHE_MAX_RECORDS = 100_000
 
@@ -175,6 +175,7 @@ def _cache_session(meta: SessionMeta) -> dict:
         "pending_tool": meta.pending_tool,
         "attention": _cache_attention(meta.attention),
         "forked_from_id": meta.forked_from_id,
+        "codex_rollback_count": meta.codex_rollback_count,
     }
 
 
@@ -183,6 +184,7 @@ def _decode_cache_session(path: Path, raw: object) -> SessionMeta:
         "session_id", "cwd", "project_key", "title", "message_count", "token_total",
         "last_mtime", "size_bytes", "git_branch", "last_user_message",
         "status", "pending_tool", "attention", "forked_from_id",
+        "codex_rollback_count",
     })
     if not isinstance(raw, dict) or frozenset(raw) != keys:
         raise ValueError("invalid cached session")
@@ -211,7 +213,12 @@ def _decode_cache_session(path: Path, raw: object) -> SessionMeta:
         for value, limit, nullable in strings
     ):
         raise ValueError("invalid cached session string")
-    counts = (raw["message_count"], raw["token_total"], raw["size_bytes"])
+    counts = (
+        raw["message_count"],
+        raw["token_total"],
+        raw["size_bytes"],
+        raw["codex_rollback_count"],
+    )
     if any(
         not isinstance(value, int)
         or isinstance(value, bool)
@@ -260,6 +267,7 @@ def _decode_cache_session(path: Path, raw: object) -> SessionMeta:
         session_type="codex",
         attention=_decode_cache_attention(raw["attention"]),
         forked_from_id=forked_from_id,
+        codex_rollback_count=raw["codex_rollback_count"],
     )
 
 
@@ -1047,6 +1055,7 @@ def _parse_codex_session(
     # -- scan remaining lines for messages, events -------------------
     title: str | None = None
     message_count = 0
+    rollback_count = 0
     token_total = 0
     first_user_message: str | None = None
     last_user_message: str | None = None
@@ -1164,6 +1173,7 @@ def _parse_codex_session(
                     attention = _codex_abort_attention(rec, event_order)
                     current_turn_had_error = True
             elif et == "thread_rolled_back":
+                rollback_count += 1
                 # task_complete / turn_aborted / thread_rolled_back: the turn is
                 # over and any dangling tool calls are dead — clear them so an
                 # aborted/rolled-back session never reads as busy/blocked.
@@ -1241,6 +1251,7 @@ def _parse_codex_session(
         session_type="codex",
         attention=attention,
         forked_from_id=forked_from_id,
+        codex_rollback_count=rollback_count,
     )
     if hidden_subagent:
         return HiddenCodexStatus(
