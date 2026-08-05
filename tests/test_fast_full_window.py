@@ -6818,8 +6818,11 @@ def test_server_accepts_canonical_history_only_for_matching_transcript(
     assert not mismatched[0].canonical_history
 
 
-def test_server_released_v1_canonical_marker_fails_back_to_raw(
-    monkeypatch, tmp_path,
+@pytest.mark.parametrize(
+    "legacy_prefix", tmux_ctl.RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIXES
+)
+def test_server_released_canonical_marker_fails_back_to_raw(
+    monkeypatch, tmp_path, legacy_prefix,
 ):
     session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
     path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
@@ -6827,9 +6830,7 @@ def test_server_released_v1_canonical_marker_fails_back_to_raw(
     transcript = fast_display_server.tmux_server.encode_transcript_source(
         "codex", session_id, path)
     assert transcript is not None
-    generation = (
-        f"{tmux_ctl.RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIX}{session_id}"
-    )
+    generation = f"{legacy_prefix}{session_id}"
     monkeypatch.setattr(
         fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(

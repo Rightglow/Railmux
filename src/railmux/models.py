@@ -70,11 +70,17 @@ class SessionMeta:
     # intentionally independent from ``status`` (conversation activity) and
     # from tmux/process liveness, which is owned by App's running registry.
     attention: AttentionState | None = None
-    # Codex creates a new rollout UUID when a conversation is rewound/forked.
-    # The parent link lets the Codex index present that chain as one logical
-    # conversation without changing the provider-owned UUID used for resume.
+    # Codex creates a new rollout UUID when a conversation is rewound/forked,
+    # resumed, continued, or compacted. The parent link lets the Codex index
+    # present that chain as one logical conversation without treating the link
+    # itself as proof of why the provider created it.
     # Always None for Claude sessions and older Codex rollouts.
     forked_from_id: str | None = None
+    # Number of provider-emitted ``thread_rolled_back`` lifecycle records in
+    # this Codex rollout.  Child rollouts can be ordinary continuation or
+    # compaction checkpoints, so the parent link alone is not rewind evidence.
+    # Always zero for Claude sessions and Codex versions without this signal.
+    codex_rollback_count: int = 0
     # A Railmux lease observed in the same shared provider history root. This
     # is a read-time UI overlay, never provider transcript metadata.
     remote_owner: str | None = None

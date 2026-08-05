@@ -1848,13 +1848,16 @@ RAILMUX_HISTORY_GENERATION_OPTION = "@railmux_history_generation_v1"
 # A confirmed branch transition prefixes the opaque SSH history cache epoch.
 # Plain generations use native pane history; only this explicit marker permits
 # the canonical transcript fallback that removes an abandoned rewind suffix.
-# Only the evidence-gated v2 marker authorizes transcript-backed Codex
-# scrolling.  The released v1 marker treated every live direct child rollout
-# as a rewind, but Codex can also create that shape while bootstrapping an
-# ordinary resume.  Keeping the prefix versioned makes existing over-broad
-# markers fail back to raw pane history on upgrade.
-RAILMUX_CANONICAL_HISTORY_PREFIX = "canonical-v2:"
-RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIX = "canonical:"
+# Only the provider-rollback-gated v3 marker authorizes transcript-backed Codex
+# scrolling.  Released v1/v2 markers used rollout-shape heuristics, but Codex
+# also creates identical parent/child rollouts for ordinary continuation and
+# compaction.  Versioning makes both over-broad markers fail back to raw pane
+# history on upgrade without touching provider files.
+RAILMUX_CANONICAL_HISTORY_PREFIX = "canonical-v3:"
+RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIXES = (
+    "canonical:",
+    "canonical-v2:",
+)
 # tmux names function keys only through F12. Private restore routes use
 # canonical xterm sequences in literal mode, so they cannot be confused with
 # user input forwarded to an agent pane.

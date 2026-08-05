@@ -1056,6 +1056,7 @@ def test_scan_codex_thread_rolled_back_not_busy(tmp_path):
     assert meta is not None
     assert meta.status == "idle"
     assert meta.attention is None
+    assert meta.codex_rollback_count == 1
 
 
 def test_scan_codex_task_started_without_complete_is_busy(tmp_path):

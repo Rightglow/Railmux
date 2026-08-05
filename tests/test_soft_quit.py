@@ -1519,7 +1519,7 @@ def test_soft_restart_accepts_open_rewind_descendant_as_same_writer(
     exact_arg.assert_not_called()
 
 
-def test_only_live_tmux_binding_restores_codex_history_proof(monkeypatch):
+def test_only_live_tmux_binding_migrates_codex_rollback_baseline(monkeypatch):
     cwd = Path("/tmp/codex-only")
     project = _project("codex-only")
     root_id = "12345678-1234-1234-1234-1234567890ab"
@@ -1531,6 +1531,7 @@ def test_only_live_tmux_binding_restores_codex_history_proof(monkeypatch):
         title="Current",
         last_mtime=2000.0,
         forked_from_id=root_id,
+        codex_rollback_count=12,
     )
     tmux_name = "cx-new---abcdef-1"
     app = _minimal_app()
@@ -1554,8 +1555,6 @@ def test_only_live_tmux_binding_restores_codex_history_proof(monkeypatch):
         "session_type": "codex",
         "cwd": str(cwd),
         "codex_canonical_session_id": current_id,
-        "codex_rollout_proven_in_pane": True,
-        "codex_baseline_message_count": 12,
     }
 
     trusted = app._valid_running_binding(
@@ -1572,11 +1571,9 @@ def test_only_live_tmux_binding_restores_codex_history_proof(monkeypatch):
 
     assert trusted is not None and cached_only is not None
     assert trusted.codex_canonical_session_id == current_id
-    assert trusted.codex_rollout_proven_in_pane
-    assert trusted.codex_baseline_message_count == 12
+    assert trusted.codex_baseline_rollback_count == 12
     assert cached_only.codex_canonical_session_id is None
-    assert not cached_only.codex_rollout_proven_in_pane
-    assert cached_only.codex_baseline_message_count == 0
+    assert cached_only.codex_baseline_rollback_count == 0
 
 
 @pytest.mark.parametrize("probe_result", [False, None, OSError("denied")])
@@ -1787,8 +1784,7 @@ def test_generation_zero_keeps_resolved_rewind_marker_resolved(monkeypatch):
     assert not running.is_placeholder
     assert running.orphan == marker
     assert running.codex_canonical_session_id == root_id
-    assert running.codex_rollout_proven_in_pane
-    assert running.codex_baseline_message_count == 0
+    assert running.codex_baseline_rollback_count == 0
     rollout_probe.assert_not_called()
     exact_arg_probe.assert_not_called()
 

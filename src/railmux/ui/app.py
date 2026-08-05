@@ -389,11 +389,10 @@ class _Running:
     # provider generation lets the refresh path discard only that stale
     # presentation cache when the exact live writer advances to its child.
     codex_canonical_session_id: str | None = None
-    # A direct rollout child is a rewind only after its parent was proved to
-    # belong to this provider process generation.  An explicit Codex resume
-    # may create a child rollout during bootstrap without rewinding anything.
-    codex_rollout_proven_in_pane: bool = False
-    codex_baseline_message_count: int = 0
+    # Provider-emitted rollback count when the current rollout was adopted.
+    # Parent/child rollout shape is not sufficient: Codex also forks ordinary
+    # continuation and compaction checkpoints without a user rewind.
+    codex_baseline_rollback_count: int = 0
     codex_history_generation_stamped: bool = False
     lease_session_ids: frozenset[str] = frozenset()
     lease_warning: str | None = None
@@ -6855,8 +6854,7 @@ class App:
             )
 
         canonical_id = None
-        rollout_proven = False
-        baseline_count = 0
+        baseline_rollback_count = 0
         if session_type == "codex":
             canonical_id = (
                 raw.get("codex_canonical_session_id")
@@ -6875,24 +6873,19 @@ class App:
                     canonical_uuid = None
                 if canonical_uuid != canonical_id.lower():
                     canonical_id = None
-            rollout_proven = (
-                raw.get("codex_rollout_proven_in_pane", False)
-                if trust_codex_history_state else False
+            raw_rollback_count = (
+                raw.get("codex_baseline_rollback_count")
+                if trust_codex_history_state else None
             )
-            baseline_count = (
-                raw.get("codex_baseline_message_count", 0)
-                if trust_codex_history_state else 0
-            )
-            if (
-                not isinstance(rollout_proven, bool)
-                or not isinstance(baseline_count, int)
-                or isinstance(baseline_count, bool)
-                or baseline_count < 0
+            if raw_rollback_count is not None and (
+                not isinstance(raw_rollback_count, int)
+                or isinstance(raw_rollback_count, bool)
+                or raw_rollback_count < 0
             ):
                 return None
+            baseline_rollback_count = raw_rollback_count or 0
             if canonical_id is None:
-                rollout_proven = False
-                baseline_count = 0
+                baseline_rollback_count = 0
             meta = self._codex_index.get(key, refresh=False)
             if (
                 canonical_id is not None
@@ -6900,8 +6893,16 @@ class App:
                 and canonical_id not in self._codex_lineage_ids(key)
             ):
                 canonical_id = None
-                rollout_proven = False
-                baseline_count = 0
+                baseline_rollback_count = 0
+            if canonical_id is not None and raw_rollback_count is None:
+                # Released bindings predate the explicit rollback baseline.
+                # Seed it from that exact indexed generation so inherited old
+                # rollback records cannot authorize a later ordinary child.
+                canonical_meta = self._codex_index.get(
+                    canonical_id, refresh=False)
+                if canonical_meta is not None:
+                    baseline_rollback_count = (
+                        canonical_meta.codex_rollback_count)
             if (meta is not None
                     and self._path_key(meta.project.real_path)
                     != self._path_key(cwd)):
@@ -6958,8 +6959,7 @@ class App:
                     status="busy",
                     session_type=session_type,
                     codex_canonical_session_id=canonical_id,
-                    codex_rollout_proven_in_pane=rollout_proven,
-                    codex_baseline_message_count=baseline_count,
+                    codex_baseline_rollback_count=baseline_rollback_count,
                 )
             meta = self._codex_representative(key) or meta
         else:
@@ -6976,10 +6976,8 @@ class App:
             session_type=session_type,
             codex_canonical_session_id=(
                 canonical_id if session_type == "codex" else None),
-            codex_rollout_proven_in_pane=(
-                rollout_proven if session_type == "codex" else False),
-            codex_baseline_message_count=(
-                baseline_count if session_type == "codex" else 0),
+            codex_baseline_rollback_count=(
+                baseline_rollback_count if session_type == "codex" else 0),
         )
 
     def _running_binding_data(
@@ -7020,10 +7018,8 @@ class App:
             if running.codex_canonical_session_id is not None:
                 data["codex_canonical_session_id"] = (
                     running.codex_canonical_session_id)
-                data["codex_rollout_proven_in_pane"] = (
-                    running.codex_rollout_proven_in_pane)
-                data["codex_baseline_message_count"] = (
-                    running.codex_baseline_message_count)
+                data["codex_baseline_rollback_count"] = (
+                    running.codex_baseline_rollback_count)
         return data
 
     def _stamp_running(self, running: _Running) -> bool:
@@ -7502,9 +7498,8 @@ class App:
                 ):
                     exact = self._codex_exact_meta(marker.session_id)
                     running.codex_canonical_session_id = marker.session_id
-                    running.codex_rollout_proven_in_pane = True
-                    running.codex_baseline_message_count = (
-                        exact.message_count if exact is not None else 0)
+                    running.codex_baseline_rollback_count = (
+                        exact.codex_rollback_count if exact is not None else 0)
             if running is None:
                 pre_launch_ids: frozenset[str] = frozenset()
                 pre_launch_complete = False
@@ -9207,14 +9202,11 @@ class App:
         the same terminal pane after a rewind. Its abandoned suffix can remain
         in raw tmux scrollback even though the canonical JSONL is correct.
 
-        A direct child is not sufficient evidence: Codex may also create one
-        while bootstrapping an ordinary ``resume``. Explicit-resume generations
-        therefore begin unproved. A child becomes a confirmed rewind only when
-        its parent was born/adopted in this pane generation or gained real
-        conversation messages after Railmux baselined it. An unproved first
-        child is adopted as the resume bootstrap generation without resetting
-        the pane or changing raw history format; descendants of that exact open
-        child can subsequently be confirmed normally.
+        Parent/child shape is not rewind evidence: Codex uses the same shape
+        for ordinary continuation, context compaction, and resume bootstrap.
+        A child becomes canonical only when the provider's explicit
+        ``thread_rolled_back`` count advanced after Railmux baselined its
+        parent.  Missing or ambiguous evidence keeps raw pane history.
         """
         current_id = meta.session_id
         previous_id = running.codex_canonical_session_id
@@ -9227,25 +9219,17 @@ class App:
             ):
                 # The first coherent index generation may arrive after Codex
                 # has already published its ordinary resume-bootstrap child.
-                # Adopt that exact descendant directly; it is now the proved
-                # generation for any later branch transition.
+                # Adopt only that exact open descendant as a raw baseline.
                 if not self._codex_rollout_is_exact_open(
                     running, meta, server, codex_rollout_probes
                 ):
                     return
-                running.codex_rollout_proven_in_pane = True
             running.codex_canonical_session_id = current_id
-            running.codex_baseline_message_count = meta.message_count
+            running.codex_baseline_rollback_count = meta.codex_rollback_count
             self._stamp_codex_history_state(running, meta)
             self._stamp_running(running)
             return
         if current_id == previous_id:
-            if (
-                not running.codex_rollout_proven_in_pane
-                and meta.message_count > running.codex_baseline_message_count
-            ):
-                running.codex_rollout_proven_in_pane = True
-                self._stamp_running(running)
             if not running.codex_history_generation_stamped:
                 self._stamp_codex_history_state(running, meta)
             return
@@ -9259,22 +9243,19 @@ class App:
             return
 
         previous_meta = self._codex_exact_meta(previous_id)
-        parent_gained_conversation = bool(
-            previous_meta is not None
-            and previous_meta.message_count
-            > running.codex_baseline_message_count
+        rollback_count = max(
+            meta.codex_rollback_count,
+            (
+                previous_meta.codex_rollback_count
+                if previous_meta is not None else 0
+            ),
         )
-        if not (
-            running.codex_rollout_proven_in_pane
-            or parent_gained_conversation
-        ):
-            # Ordinary Codex resume bootstrap: the direct child is exact and
-            # open in this pane, but the dormant parent never participated in
-            # this process generation. Adopt it as the new raw-history baseline
-            # and deliberately overwrite any released v1 canonical marker.
+        if rollback_count <= running.codex_baseline_rollback_count:
+            # Ordinary continuation/compaction/resume: adopt the exact open
+            # child as a new raw-history baseline. This also overwrites any
+            # released v1/v2 marker that could have misclassified the pane.
             running.codex_canonical_session_id = current_id
-            running.codex_baseline_message_count = meta.message_count
-            running.codex_rollout_proven_in_pane = True
+            running.codex_baseline_rollback_count = rollback_count
             self._stamp_codex_history_state(running, meta)
             self._stamp_running(running)
             return
@@ -9287,8 +9268,7 @@ class App:
         if self._codex_real_pane_identity(running) is None:
             return
         running.codex_canonical_session_id = current_id
-        running.codex_baseline_message_count = meta.message_count
-        running.codex_rollout_proven_in_pane = True
+        running.codex_baseline_rollback_count = rollback_count
         self._stamp_codex_history_state(running, meta, canonical=True)
         self._stamp_running(running)
 
@@ -9332,10 +9312,10 @@ class App:
         """Publish Preview source plus the SSH history-source cache epoch.
 
         A plain UUID keeps managed SSH history on raw pane capture. Only a
-        confirmed rewind transition writes ``canonical-v2:<uuid>`` and permits
-        a transcript projection. Preserve that exact v2 marker across app
-        restarts; the released over-broad ``canonical:<uuid>`` marker is
-        intentionally replaced with a plain UUID.
+        provider-confirmed rewind writes ``canonical-v3:<uuid>`` and permits a
+        transcript projection. Preserve only that v3 marker across app
+        restarts; released heuristic v1/v2 markers are intentionally replaced
+        with a plain UUID.
         """
         if running.is_legacy:
             return
@@ -9373,8 +9353,6 @@ class App:
             marker == canonical_generation
             for marker in existing_generations.values()
         )
-        if effective_canonical:
-            running.codex_rollout_proven_in_pane = True
         desired_generation = (
             canonical_generation if effective_canonical else meta.session_id)
         generation_results = [
@@ -9588,8 +9566,7 @@ class App:
                 # Placeholder exclusion plus exact rollout correlation proves
                 # this generation was born in the pane we launched.
                 r.codex_canonical_session_id = candidate.session_id
-                r.codex_rollout_proven_in_pane = True
-                r.codex_baseline_message_count = candidate.message_count
+                r.codex_baseline_rollback_count = candidate.codex_rollback_count
             self._running[candidate.session_id] = r
             self._stamp_running(r)
             # A new provider session has no UUID to reserve before launch.

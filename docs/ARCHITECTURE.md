@@ -692,26 +692,26 @@ default history view.
 
 A live Codex rewind or running-turn steering also advances the canonical
 rollout while retaining the same provider pane. Railmux baselines the first
-indexed rollout for each live entry, but a direct canonical child alone is not
-branch evidence: Codex may create the same parent/child shape while
-bootstrapping an ordinary resume. An explicit-resume generation is initially
-unproved. Its first exact open child is adopted as a raw-history bootstrap
-generation unless the parent was already born/adopted in this pane generation
-or its indexed real-message count advanced after the baseline. Once adopted,
-that child is proved for later direct transitions. This conversation cursor,
-not rollout mtime or size, prevents startup/config writes from authorizing a
-false rewind. Where procfs is available, every candidate child must additionally
-be open in the exact pane process tree; a negative probe waits, while platforms
-without procfs retain the same provider-link plus generation-evidence rule.
+indexed rollout and its provider-emitted `thread_rolled_back` count for each
+live entry. A direct canonical child, an open rollout file, or additional real
+messages alone are never branch evidence: Codex creates the same parent/child
+shape for ordinary resume, continuation, and context compaction. Only an exact
+open child whose parent/current rollback count advanced after that baseline may
+select canonical transcript history. Missing or ambiguous lifecycle evidence
+fails back to raw pane history. Where procfs is available, every candidate
+child must additionally be open in the exact pane process tree; a negative
+probe waits, while platforms without procfs retain the same provider-link plus
+explicit lifecycle-evidence rule.
 After revalidating the real pane identity across either its detached home or
 swap display location, Railmux leaves the live terminal and retained tmux
 scrollback untouched. A pane-local generation marker is normally a plain
 rollout UUID, meaning the full-window SSH history manager must use styled raw
-pane capture. Only this confirmed branch transition may write the evidence-gated
-`canonical-v2:` prefix and permit a transcript projection that excludes the
-abandoned suffix; the prefix and transcript locator must name the same rollout.
-Released `canonical:` markers fail back to plain raw history on upgrade because
-they were produced by the older, insufficient direct-child test.
+pane capture. Only this provider-confirmed branch transition may write the
+evidence-gated `canonical-v3:` prefix and permit a transcript projection that
+excludes the abandoned suffix; the prefix and transcript locator must name the
+same rollout. Released `canonical:` and `canonical-v2:` markers fail back to
+plain raw history on upgrade because rollout-shape heuristics could misclassify
+ordinary Codex continuation or compaction.
 The transcript locator alone is never authority to change scrolling format.
 Direct local wheel input remains native tmux/provider scrolling, while Space or
 context Preview remains the explicit formatted provider projection. This sends

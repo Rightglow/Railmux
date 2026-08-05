@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from railmux import tmux_ctl, tmux_server
 from railmux.favorites import Favorites
 from railmux.models import Project, SessionMeta
@@ -80,8 +82,7 @@ def test_live_rewind_preserves_view_and_stamps_canonical_transcript(
         project=project,
         session_type="codex",
         codex_canonical_session_id=root_id,
-        codex_rollout_proven_in_pane=True,
-        codex_baseline_message_count=1,
+        codex_baseline_rollback_count=0,
     )
     meta = SessionMeta(
         project=project,
@@ -94,6 +95,7 @@ def test_live_rewind_preserves_view_and_stamps_canonical_transcript(
         last_mtime=2.0,
         session_type="codex",
         forked_from_id=root_id,
+        codex_rollback_count=1,
     )
     identity = tmux_ctl.PaneIdentity(
         "%9", 123, "railmux", "$4", "@5", False, 80, 24)
@@ -168,7 +170,7 @@ def test_first_codex_generation_only_establishes_scrollback_baseline(
     app._stamp_running.assert_called_once_with(running)
 
 
-def test_codex_conversation_proof_is_persisted_only_once(tmp_path) -> None:
+def test_same_codex_generation_does_not_manufacture_rollback(tmp_path) -> None:
     session_id = "019fc605-5188-7212-bc48-ea023fe8b73c"
     project = Project(tmp_path, "-project", Path(), 1, 0.0)
     running = _Running(
@@ -178,7 +180,7 @@ def test_codex_conversation_proof_is_persisted_only_once(tmp_path) -> None:
         project=project,
         session_type="codex",
         codex_canonical_session_id=session_id,
-        codex_baseline_message_count=1,
+        codex_baseline_rollback_count=3,
         codex_history_generation_stamped=True,
     )
     meta = SessionMeta(
@@ -190,6 +192,7 @@ def test_codex_conversation_proof_is_persisted_only_once(tmp_path) -> None:
         token_total=0,
         last_mtime=2.0,
         session_type="codex",
+        codex_rollback_count=3,
     )
     app = App.__new__(App)
     app._stamp_running = MagicMock()
@@ -197,8 +200,8 @@ def test_codex_conversation_proof_is_persisted_only_once(tmp_path) -> None:
     app._sync_codex_rewind_scrollback(running, meta, None, {})
     app._sync_codex_rewind_scrollback(running, meta, None, {})
 
-    assert running.codex_rollout_proven_in_pane
-    app._stamp_running.assert_called_once_with(running)
+    assert running.codex_baseline_rollback_count == 3
+    app._stamp_running.assert_not_called()
 
 
 def test_codex_resume_bootstrap_child_keeps_raw_history(
@@ -214,7 +217,7 @@ def test_codex_resume_bootstrap_child_keeps_raw_history(
         project=project,
         session_type="codex",
         codex_canonical_session_id=parent_id,
-        codex_baseline_message_count=8,
+        codex_baseline_rollback_count=4,
     )
     parent = SessionMeta(
         project=project,
@@ -225,6 +228,7 @@ def test_codex_resume_bootstrap_child_keeps_raw_history(
         token_total=0,
         last_mtime=1.0,
         session_type="codex",
+        codex_rollback_count=4,
     )
     child = SessionMeta(
         project=project,
@@ -236,6 +240,7 @@ def test_codex_resume_bootstrap_child_keeps_raw_history(
         last_mtime=2.0,
         session_type="codex",
         forked_from_id=parent_id,
+        codex_rollback_count=4,
     )
     app = App.__new__(App)
     app._codex_lineage_ids = MagicMock(return_value={parent_id, child_id})
@@ -247,13 +252,12 @@ def test_codex_resume_bootstrap_child_keeps_raw_history(
     app._sync_codex_rewind_scrollback(running, child, None, {})
 
     assert running.codex_canonical_session_id == child_id
-    assert running.codex_rollout_proven_in_pane
-    assert running.codex_baseline_message_count == child.message_count
+    assert running.codex_baseline_rollback_count == 4
     app._stamp_codex_history_state.assert_called_once_with(running, child)
     app._stamp_running.assert_called_once_with(running)
 
 
-def test_first_observed_resume_child_is_adopted_as_proven_raw_generation(
+def test_first_observed_resume_child_is_adopted_as_raw_generation(
     tmp_path,
 ) -> None:
     parent_id = "019fc605-5188-7212-bc48-ea023fe8b73c"
@@ -286,8 +290,7 @@ def test_first_observed_resume_child_is_adopted_as_proven_raw_generation(
     app._sync_codex_rewind_scrollback(running, child, None, {})
 
     assert running.codex_canonical_session_id == child_id
-    assert running.codex_rollout_proven_in_pane
-    assert running.codex_baseline_message_count == child.message_count
+    assert running.codex_baseline_rollback_count == 0
     app._stamp_codex_history_state.assert_called_once_with(running, child)
 
 
@@ -324,12 +327,12 @@ def test_first_observed_resume_child_waits_for_exact_live_writer(
     app._sync_codex_rewind_scrollback(running, child, None, {})
 
     assert running.codex_canonical_session_id is None
-    assert not running.codex_rollout_proven_in_pane
+    assert running.codex_baseline_rollback_count == 0
     app._stamp_codex_history_state.assert_not_called()
     app._stamp_running.assert_not_called()
 
 
-def test_codex_parent_activity_confirms_same_poll_rewind(
+def test_codex_provider_rollback_confirms_same_poll_rewind(
     monkeypatch, tmp_path,
 ) -> None:
     parent_id = "019fc605-5188-7212-bc48-ea023fe8b73c"
@@ -342,7 +345,7 @@ def test_codex_parent_activity_confirms_same_poll_rewind(
         project=project,
         session_type="codex",
         codex_canonical_session_id=parent_id,
-        codex_baseline_message_count=8,
+        codex_baseline_rollback_count=7,
     )
     parent = SessionMeta(
         project=project,
@@ -353,6 +356,7 @@ def test_codex_parent_activity_confirms_same_poll_rewind(
         token_total=0,
         last_mtime=2.0,
         session_type="codex",
+        codex_rollback_count=8,
     )
     child = SessionMeta(
         project=project,
@@ -364,6 +368,7 @@ def test_codex_parent_activity_confirms_same_poll_rewind(
         last_mtime=3.0,
         session_type="codex",
         forked_from_id=parent_id,
+        codex_rollback_count=8,
     )
     identity = tmux_ctl.PaneIdentity(
         "%9", 123, "railmux", "$4", "@5", False, 80, 24)
@@ -466,8 +471,11 @@ def test_codex_history_state_preserves_confirmed_canonical_marker_on_restart(
         "%9", tmux_server.TRANSCRIPT_SOURCE_OPTION)
 
 
-def test_codex_history_state_downgrades_released_v1_marker_to_raw(
-    monkeypatch, tmp_path,
+@pytest.mark.parametrize(
+    "legacy_prefix", tmux_ctl.RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIXES
+)
+def test_codex_history_state_downgrades_released_marker_to_raw(
+    monkeypatch, tmp_path, legacy_prefix,
 ) -> None:
     session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
     project = Project(tmp_path, "-project", Path(), 1, 0.0)
@@ -497,9 +505,7 @@ def test_codex_history_state_downgrades_released_v1_marker_to_raw(
     monkeypatch.setattr(
         tmux_ctl,
         "pane_user_option",
-        lambda *_args: (
-            f"{tmux_ctl.RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIX}{session_id}"
-        ),
+        lambda *_args: f"{legacy_prefix}{session_id}",
     )
 
     app._stamp_codex_history_state(running, meta)
@@ -507,7 +513,6 @@ def test_codex_history_state_downgrades_released_v1_marker_to_raw(
     assert stamped.call_count == 2
     assert stamped.call_args_list[-1].args == (
         "%9", tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION, session_id)
-    assert not running.codex_rollout_proven_in_pane
 
 
 def test_codex_history_state_unifies_wrapper_with_existing_canonical_real_pane(
@@ -557,5 +562,4 @@ def test_codex_history_state_unifies_wrapper_with_existing_canonical_real_pane(
     ]
     assert [call.args for call in generation_calls] == [(
         "%10", tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION, canonical)]
-    assert running.codex_rollout_proven_in_pane
     assert running.codex_history_generation_stamped
