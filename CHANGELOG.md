@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Change the SSH client's hardware-cursor mode only when its actual visibility
   changes, preventing live 20 fps patches from repeatedly restarting terminal
   cursor animation after focus moves to an agent pane.
+- Flush cross-host session-lease owner metadata before returning a claim, so a
+  second NFS client that already observes the lock can immediately identify the
+  owning host instead of showing the conservative `another host` fallback.
 - Include the POSIX/WSL fixes released through Railmux 0.3.5 while preserving
   the managed-Windows runtime, native provider paths, and preview-only support
   boundary.

@@ -578,8 +578,10 @@ mode-masking DrvFs/CIFS-style mounts. A Claude lease names its session UUID; a
 Codex resume atomically covers every alias known at launch, while later rewinds
 that the index can link retain that stable lineage anchor instead of
 accumulating holder processes. The lock is authority and its bounded JSON owner
-record is diagnostic only: an unlocked stale file is inactive, while an
-unavailable lock service fails resume closed.
+record is diagnostic only. It is flushed before the claim becomes usable so a
+second NFS client that observes the lock can name its owner without waiting for
+the provider-lifetime descriptor to close. An unlocked stale file is inactive,
+while an unavailable lock service fails resume closed.
 
 The acquired descriptors transfer to a small independent holder tied to the
 exact provider pane PID and process-birth token. They therefore survive UI
