@@ -90,9 +90,9 @@ evidence = "2026-08-03 dev9 candidate: a real isolated official tmux 3.7b server
 [[scenarios]]
 id = "WW-LIFECYCLE"
 features = ["W09", "W10", "W11", "W14", "S19"]
-automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_tmux_lifecycle.py", "tests/test_restart_state.py"]
+automation = ["tests/test_windows_bootstrap.py", "tests/test_windows_tmux_lifecycle.py", "tests/test_restart_state.py", "tests/test_fullscreen_binding.py"]
 manual = "Close/reopen the outer terminal, detach, soft restart, resize, interrupt, and verify providers persist and terminal modes recover."
-evidence = "2026-08-03 dev10 candidate: reproduced the MSYS2 3.7b abandoned socket after zero-session soft quit, cleaned it only after exact sole-session/sole-pane proof, and relaunched the same isolated label; live and replaced socket boundaries are automated. Detached-provider soft quit still requires manual validation."
+evidence = "2026-08-03 dev10 candidate: reproduced the MSYS2 3.7b abandoned socket after zero-session soft quit, cleaned it only after exact sole-session/sole-pane proof, and relaunched the same isolated label; live and replaced socket boundaries are automated. Dev17 automation cancels background lease acquisition before the next lease begins, joins the non-daemon worker, and restores wheel/function bindings only from the main teardown owner. Detached-provider soft quit still requires manual validation."
 
 [[scenarios]]
 id = "WW-ENTRY-SURFACES"

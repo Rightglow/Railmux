@@ -244,6 +244,71 @@ def test_windows_tmux_setup_cancelled_before_worker_does_not_install(
     manager.open.assert_not_called()
 
 
+def test_windows_tmux_setup_without_worker_falls_back_once():
+    app = _bare_app(
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+    )
+    app._install_tmux_bindings = MagicMock()
+    loop = MagicMock()
+
+    app._finish_windows_tmux_setup(loop, None)
+
+    app._install_tmux_bindings.assert_called_once_with()
+    loop.set_alarm_in.assert_not_called()
+
+
+def test_windows_tmux_setup_publishes_done_after_base_exception(
+        monkeypatch):
+    class SynchronousThread:
+        def __init__(self, *, target, name, daemon):
+            self._target = target
+            self.name = name
+            self.daemon = daemon
+            self._alive = False
+            self.error = None
+
+        def start(self):
+            self._alive = True
+            try:
+                self._target()
+            except BaseException as exc:
+                self.error = exc
+            finally:
+                self._alive = False
+
+        def is_alive(self):
+            return self._alive
+
+        def join(self, timeout=None):
+            return None
+
+    wheel = MagicMock()
+    wheel.open.return_value = True
+    manager = MagicMock()
+    manager.open.side_effect = KeyboardInterrupt
+    app = _bare_app(
+        _root_wheel_manager=wheel,
+        _tmux_binding_manager=manager,
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+        _windows_tmux_setup_cancelled=False,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+    monkeypatch.setattr("railmux.ui.app.threading.Thread", SynchronousThread)
+
+    app._start_windows_tmux_setup()
+
+    assert isinstance(app._windows_tmux_setup_thread.error, KeyboardInterrupt)
+    assert app._windows_tmux_setup_done
+    assert app._windows_tmux_setup_result is None
+
+
 def test_f8_dispatches_rotate_without_sidebar_action_lookup():
     app = _bare_app()
     app._rotate_split = MagicMock()

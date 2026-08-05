@@ -2553,31 +2553,32 @@ class App:
                 return self._windows_tmux_setup_cancelled
 
         def prepare() -> None:
-            if cancelled():
+            try:
+                if cancelled():
+                    return
+                try:
+                    wheel_ok = wheel is None or wheel.open()
+                except Exception:
+                    # These leases improve mouse/status routing but are not
+                    # authority for provider discovery or history. Degrade to
+                    # the existing keyboard paths if an unexpected adapter
+                    # error escapes a fail-closed manager.
+                    wheel_ok = False
+                if cancelled():
+                    return
+                try:
+                    bindings_opened = manager is not None and manager.open()
+                except Exception:
+                    bindings_opened = False
+                with self._windows_tmux_setup_lock:
+                    if not self._windows_tmux_setup_cancelled:
+                        self._windows_tmux_setup_result = (
+                            wheel_ok, bindings_opened)
+            finally:
+                # Publish terminal completion even for a BaseException so the
+                # Urwid callback cannot poll a dead worker forever.
                 with self._windows_tmux_setup_lock:
                     self._windows_tmux_setup_done = True
-                return
-            try:
-                wheel_ok = wheel is None or wheel.open()
-            except Exception:
-                # These leases improve mouse/status routing but are not
-                # authority for provider discovery or history.  Degrade to
-                # the existing keyboard paths if an unexpected adapter error
-                # escapes a fail-closed manager.
-                wheel_ok = False
-            if cancelled():
-                with self._windows_tmux_setup_lock:
-                    self._windows_tmux_setup_done = True
-                return
-            try:
-                bindings_opened = manager is not None and manager.open()
-            except Exception:
-                bindings_opened = False
-            with self._windows_tmux_setup_lock:
-                if not self._windows_tmux_setup_cancelled:
-                    self._windows_tmux_setup_result = (
-                        wheel_ok, bindings_opened)
-                self._windows_tmux_setup_done = True
 
         worker = threading.Thread(
             target=prepare,
@@ -2595,8 +2596,14 @@ class App:
             if result is not None:
                 self._windows_tmux_setup_result = None
         if result is None:
-            if not done:
+            worker = getattr(self, "_windows_tmux_setup_thread", None)
+            if not done and worker is not None and worker.is_alive():
                 loop.set_alarm_in(0.05, self._finish_windows_tmux_setup)
+            elif not done:
+                # No worker was created, or it died before publishing its
+                # terminal state. Preserve the pre-deferral one-shot setup
+                # without leaving a 20 Hz alarm behind.
+                self._install_tmux_bindings()
             return
         wheel_ok, bindings_opened = result
         if not wheel_ok:
@@ -2614,11 +2621,11 @@ class App:
             return
         with self._windows_tmux_setup_lock:
             self._windows_tmux_setup_cancelled = True
-        # The managers use non-blocking locks and bounded tmux probes. Waiting
-        # here gives teardown sole cleanup ownership and prevents a late
-        # worker write from reinstalling bindings after their originals were
-        # restored. A non-daemon worker also makes this guarantee survive an
-        # exception raised later in teardown.
+        # Waiting here gives teardown sole cleanup ownership and prevents a
+        # late worker write from reinstalling bindings after their originals
+        # were restored. These same manager operations ran synchronously before
+        # deferral; a non-daemon worker keeps that cleanup guarantee if a later
+        # teardown phase raises.
         worker.join()
 
     def _set_workspace_target(self, slot_key: str) -> AgentSlot:
@@ -11228,7 +11235,7 @@ class App:
                 # a saved agent-focused workspace will replace that temporary
                 # topology shortly. Do not expose its misleading row focus.
                 self._frame.set_window_active(False)
-            if not running_in_windows_wrapper():
+            if getattr(self, "_windows_tmux_setup_thread", None) is None:
                 self._install_tmux_bindings()
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
@@ -11301,8 +11308,9 @@ class App:
                 # Leave one bounded initial-paint interval before consuming
                 # the lease result. Even if the worker completed immediately,
                 # its status/bar projection cannot delay the first frame.
-                self._loop.set_alarm_in(
-                    0.1, self._finish_windows_tmux_setup)
+                if self._windows_tmux_setup_thread is not None:
+                    self._loop.set_alarm_in(
+                        0.1, self._finish_windows_tmux_setup)
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.
