@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewrites, and skip compact-page geometry probes when only the sidebar exists.
   This removes Windows/MSYS2 process-spawn amplification without changing the
   provider/session discovery path.
+- On the managed Windows runtime, prepare crash-safe wheel and shared
+  function/status binding leases after the first interactive frame. Provider
+  indexing and pane restoration remain synchronous and read-only; keyboard
+  Mode/Layout controls remain available while mouse/status ownership finishes
+  in the background.
 
 ## [0.4.0.dev16] - 2026-08-05
 

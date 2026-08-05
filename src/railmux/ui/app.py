@@ -876,6 +876,16 @@ class App:
                 identity.server_digest, identity.pane_id)
             if identity is not None else None
         )
+        # MSYS2 pays tens of milliseconds for every tmux client process. The
+        # crash-safe global wheel/function leases are independent from provider
+        # discovery and the first sidebar frame, so Windows prepares them on a
+        # background worker while the UI becomes interactive. Teardown joins
+        # that worker before restoring any lease.
+        self._windows_tmux_setup_lock = threading.Lock()
+        self._windows_tmux_setup_thread: threading.Thread | None = None
+        self._windows_tmux_setup_result: tuple[bool, bool] | None = None
+        self._windows_tmux_setup_done = False
+        self._windows_tmux_setup_cancelled = False
         self._termux_local_touch = bool(
             identity is not None
             and is_termux_environment()
@@ -2486,8 +2496,16 @@ class App:
 
     def _install_tmux_bindings(self) -> None:
         """Ensure global forwarding and the current Target projection exist."""
+        worker = getattr(self, "_windows_tmux_setup_thread", None)
+        if worker is not None and worker.is_alive():
+            return
         manager = getattr(self, "_tmux_binding_manager", None)
         opened = manager is not None and manager.open()
+        self._finish_tmux_bindings(opened)
+
+    def _finish_tmux_bindings(self, opened: bool) -> None:
+        """Project pane-local state after the shared lease is prepared."""
+        manager = getattr(self, "_tmux_binding_manager", None)
         selection = getattr(self, "_selection_isolation_manager", None)
         if selection is not None:
             selection.sync(
@@ -2519,6 +2537,89 @@ class App:
                     "warn",
                 )
             self._sync_termux_tap_route()
+
+    def _start_windows_tmux_setup(self) -> None:
+        """Prepare expensive shared tmux leases without delaying first paint."""
+        if not running_in_windows_wrapper():
+            return
+        current = getattr(self, "_windows_tmux_setup_thread", None)
+        if current is not None:
+            return
+        wheel = getattr(self, "_root_wheel_manager", None)
+        manager = getattr(self, "_tmux_binding_manager", None)
+
+        def cancelled() -> bool:
+            with self._windows_tmux_setup_lock:
+                return self._windows_tmux_setup_cancelled
+
+        def prepare() -> None:
+            if cancelled():
+                with self._windows_tmux_setup_lock:
+                    self._windows_tmux_setup_done = True
+                return
+            try:
+                wheel_ok = wheel is None or wheel.open()
+            except Exception:
+                # These leases improve mouse/status routing but are not
+                # authority for provider discovery or history.  Degrade to
+                # the existing keyboard paths if an unexpected adapter error
+                # escapes a fail-closed manager.
+                wheel_ok = False
+            if cancelled():
+                with self._windows_tmux_setup_lock:
+                    self._windows_tmux_setup_done = True
+                return
+            try:
+                bindings_opened = manager is not None and manager.open()
+            except Exception:
+                bindings_opened = False
+            with self._windows_tmux_setup_lock:
+                if not self._windows_tmux_setup_cancelled:
+                    self._windows_tmux_setup_result = (
+                        wheel_ok, bindings_opened)
+                self._windows_tmux_setup_done = True
+
+        worker = threading.Thread(
+            target=prepare,
+            name="railmux-windows-tmux-setup",
+            daemon=False,
+        )
+        self._windows_tmux_setup_thread = worker
+        worker.start()
+
+    def _finish_windows_tmux_setup(self, loop, _user_data) -> None:
+        """Consume background lease setup on the Urwid thread."""
+        with self._windows_tmux_setup_lock:
+            result = self._windows_tmux_setup_result
+            done = self._windows_tmux_setup_done
+            if result is not None:
+                self._windows_tmux_setup_result = None
+        if result is None:
+            if not done:
+                loop.set_alarm_in(0.05, self._finish_windows_tmux_setup)
+            return
+        wheel_ok, bindings_opened = result
+        if not wheel_ok:
+            self._set_status(
+                "Mouse-wheel forwarding unavailable; tmux may have custom "
+                "root wheel bindings.",
+                "warn",
+            )
+        self._finish_tmux_bindings(bindings_opened)
+
+    def _cancel_windows_tmux_setup(self) -> None:
+        """Stop starting leases and wait before main-thread cleanup."""
+        worker = getattr(self, "_windows_tmux_setup_thread", None)
+        if worker is None:
+            return
+        with self._windows_tmux_setup_lock:
+            self._windows_tmux_setup_cancelled = True
+        # The managers use non-blocking locks and bounded tmux probes. Waiting
+        # here gives teardown sole cleanup ownership and prevents a late
+        # worker write from reinstalling bindings after their originals were
+        # restored. A non-daemon worker also makes this guarantee survive an
+        # exception raised later in teardown.
+        worker.join()
 
     def _set_workspace_target(self, slot_key: str) -> AgentSlot:
         """Apply one Target transition and refresh its tmux projection."""
@@ -8131,6 +8232,7 @@ class App:
             if isinstance(index, BackgroundCodexIndex):
                 index.close(timeout_s=0.2)
             self._teardown_scroll_acceleration()
+            self._cancel_windows_tmux_setup()
             selection = getattr(self, "_selection_isolation_manager", None)
             if selection is not None:
                 selection.close()
@@ -11097,13 +11199,20 @@ class App:
                 # copies to the *local* system clipboard (works over SSH / nested
                 # tmux on OSC-52-capable terminals). Pairs with set-clipboard on.
                 tmux_ctl.enable_clipboard_passthrough()
-                wheel = getattr(self, "_root_wheel_manager", None)
-                if wheel is not None and not wheel.open():
-                    self._set_status(
-                        "Mouse-wheel forwarding unavailable; tmux may have "
-                        "custom root wheel bindings.",
-                        "warn",
-                    )
+                if running_in_windows_wrapper():
+                    # Root-table lease discovery is particularly expensive in
+                    # MSYS2 because each tmux query launches a Windows process.
+                    # It is independent of provider/session restoration, so
+                    # finish it after the first interactive frame.
+                    self._start_windows_tmux_setup()
+                else:
+                    wheel = getattr(self, "_root_wheel_manager", None)
+                    if wheel is not None and not wheel.open():
+                        self._set_status(
+                            "Mouse-wheel forwarding unavailable; tmux may "
+                            "have custom root wheel bindings.",
+                            "warn",
+                        )
             self._railmux_pane_id = tmux_ctl.current_pane_id()
             if (self._railmux_pane_id is not None
                     and tmux_ctl.current_session_name() == "railmux"
@@ -11119,7 +11228,8 @@ class App:
                 # a saved agent-focused workspace will replace that temporary
                 # topology shortly. Do not expose its misleading row focus.
                 self._frame.set_window_active(False)
-            self._install_tmux_bindings()
+            if not running_in_windows_wrapper():
+                self._install_tmux_bindings()
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
             # not text input.
@@ -11188,6 +11298,11 @@ class App:
             if running_in_windows_wrapper():
                 self._loop.set_alarm_in(
                     0.05, self._report_windows_startup_summary)
+                # Leave one bounded initial-paint interval before consuming
+                # the lease result. Even if the worker completed immediately,
+                # its status/bar projection cannot delay the first frame.
+                self._loop.set_alarm_in(
+                    0.1, self._finish_windows_tmux_setup)
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.

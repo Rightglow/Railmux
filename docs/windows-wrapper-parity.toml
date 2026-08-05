@@ -83,9 +83,9 @@ evidence = "not-run"
 [[scenarios]]
 id = "WW-MOUSE-CHROME"
 features = ["P06", "W05", "W06"]
-automation = ["tests/test_tmux_ctl.py", "tests/test_tmux_binding_manager.py", "tests/test_tmux_integration.py", "tests/test_fast_full_window.py"]
+automation = ["tests/test_tmux_ctl.py", "tests/test_tmux_binding_manager.py", "tests/test_tmux_integration.py", "tests/test_fast_full_window.py", "tests/test_fullscreen_binding.py"]
 manual = "Verify preview wheel, sidebar scrolling, double-click, right-click menus, responsive dialogs, Mode, Layout, status actions, and selection."
-evidence = "2026-08-03 dev9 candidate: a real isolated official tmux 3.7b server received Mode through range=control|0, preserved pane-range zoom, and restored all root bindings. Dev16 automation proves that SSH hover, drag, and click feedback repaint only affected rows without a clear-screen frame and suppress redundant cursor-visibility writes. Windows Terminal pointer behavior remains manual."
+evidence = "2026-08-03 dev9 candidate: a real isolated official tmux 3.7b server received Mode through range=control|0, preserved pane-range zoom, and restored all root bindings. Dev16 automation proves that SSH hover, drag, and click feedback repaint only affected rows without a clear-screen frame and suppress redundant cursor-visibility writes. On 2026-08-05 an isolated dev17 candidate on the real Windows 10/MSYS2 host deferred crash-safe wheel/function/status lease preparation past first paint, then exposed owned F8/F9, status-control, right-click, and wheel root bindings; empty-session app restore measured 2.3s (index 0.0s, pane recovery 0.6s), down from controlled 9.4s before batching. Windows Terminal pointer behavior remains manual."
 
 [[scenarios]]
 id = "WW-LIFECYCLE"
