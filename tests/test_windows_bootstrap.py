@@ -63,11 +63,11 @@ def test_noninteractive_missing_runtime_is_actionable_and_never_installs(capsys)
         runtime_finder=lambda **_kwargs: None,
         stdin_isatty=lambda: False,
         version_info=(3, 10),
-    ) == 1
+    ) == 2
 
     output = capsys.readouterr().out
     assert "managed runtime was not entered" in output
-    assert "Status: not installed" in output
+    assert "Managed Windows runtime: not ready" in output
     assert "railmux runtime install" in output
 
 
@@ -224,7 +224,7 @@ def test_noninteractive_doctor_never_installs_from_reusable_base(
         ),
         stdin_isatty=lambda: False,
         version_info=(3, 10),
-    ) == 1
+    ) == 2
 
     install.assert_not_called()
 
@@ -235,11 +235,26 @@ def test_missing_runtime_remote_doctor_reports_that_probe_was_not_run(capsys):
         environ={"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
         runtime_finder=lambda **_kwargs: None,
         version_info=(3, 10),
-    ) == 1
+    ) == 2
 
     output = capsys.readouterr().out
     assert "Remote preflight: not run" in output
     assert "private-host" not in output
+
+
+def test_missing_runtime_doctor_json_keeps_doctor_schema(capsys):
+    assert main(
+        ["doctor", "--json"],
+        environ={"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
+        runtime_finder=lambda **_kwargs: None,
+        version_info=(3, 10),
+    ) == 2
+
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot["schema_version"] == 4
+    assert snapshot["status"] == "runtime_not_installed"
+    assert snapshot["managed_windows"]["schema"] == 1
+    assert "schema" not in snapshot
 
 
 def test_ready_runtime_receives_exact_argv_and_child_environment(tmp_path):

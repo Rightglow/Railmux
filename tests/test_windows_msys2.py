@@ -1403,6 +1403,19 @@ def test_runtime_status_reports_package_drift_without_mutating(tmp_path):
     assert marker["content_id"] == _TEST_CONTENT_ID
 
 
+def test_runtime_status_distinguishes_reusable_base_from_current_app(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+
+    snapshot = windows_msys2.managed_runtime_status(
+        version="0.4.0.dev99", environ=environ)
+
+    assert snapshot["status"] == "base_ready"
+    assert snapshot["current_app"] is False
+
+
 def test_prune_retains_current_previous_and_process_proven_layers(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
@@ -1446,6 +1459,28 @@ def test_prune_ignores_unmarked_directories_and_fails_closed_on_process_probe(
     assert unmarked.is_dir()
 
 
+def test_prune_refuses_linked_application_parent(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    external = tmp_path / "external-opt"
+    (external / "railmux" / "apps").mkdir(parents=True)
+    original_opt = root / "opt"
+    original_backup = root / "opt-original"
+    original_opt.rename(original_backup)
+    original_opt.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(RuntimeInstallError, match="nothing was removed"):
+        windows_msys2.plan_managed_runtime_prune(
+            version=VERSION,
+            environ=environ,
+            probe=lambda argv, **_kwargs: completed(argv, stdout=b""),
+        )
+
+    assert external.is_dir()
+
+
 def test_apply_prune_replans_under_lock_before_deleting(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
@@ -1474,3 +1509,70 @@ def test_apply_prune_replans_under_lock_before_deleting(tmp_path):
 
     assert applied.remove_apps == (old20,)
     assert not old20.exists()
+
+
+def test_apply_prune_keeps_original_when_atomic_isolation_fails(
+    tmp_path, monkeypatch,
+):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    old20 = add_marked_app(root, "0.4.0.dev20")
+    add_marked_app(root, "0.4.0.dev22")
+    def no_processes(argv, **_kwargs):
+        return completed(argv, stdout=b"")
+    plan = windows_msys2.plan_managed_runtime_prune(
+        version=VERSION, environ=environ, probe=no_processes)
+
+    @contextmanager
+    def locked(_base):
+        yield
+
+    monkeypatch.setattr(
+        windows_msys2.os, "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("busy")),
+    )
+    with pytest.raises(RuntimeInstallError, match="left untouched"):
+        windows_msys2.apply_managed_runtime_prune(
+            plan,
+            version=VERSION,
+            environ=environ,
+            probe=no_processes,
+            lock_factory=locked,
+        )
+
+    assert old20.is_dir()
+
+
+def test_apply_prune_reports_quarantined_partial_cleanup(tmp_path, monkeypatch):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    old20 = add_marked_app(root, "0.4.0.dev20")
+    add_marked_app(root, "0.4.0.dev22")
+    def no_processes(argv, **_kwargs):
+        return completed(argv, stdout=b"")
+    plan = windows_msys2.plan_managed_runtime_prune(
+        version=VERSION, environ=environ, probe=no_processes)
+
+    @contextmanager
+    def locked(_base):
+        yield
+
+    monkeypatch.setattr(
+        windows_msys2.shutil, "rmtree",
+        lambda *_args: (_ for _ in ()).throw(OSError("busy")),
+    )
+    with pytest.raises(RuntimeInstallError, match="isolated from use"):
+        windows_msys2.apply_managed_runtime_prune(
+            plan,
+            version=VERSION,
+            environ=environ,
+            probe=no_processes,
+            lock_factory=locked,
+        )
+
+    assert not old20.exists()
+    assert len(list(old20.parent.glob(".railmux-prune-railmux-0.4.0.dev20-*"))) == 1

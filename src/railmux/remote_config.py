@@ -205,9 +205,10 @@ def _ensure_remote_config_cli(
     else:
         reason = "Railmux is not installed or discoverable remotely."
 
-    windows_remote = bool(
-        launch_mode is RemoteLaunchMode.DIRECT
-        or hello is not None and hello.platform == "windows-msys2"
+    windows_remote = (
+        hello.platform == "windows-msys2"
+        if hello is not None
+        else launch_mode is RemoteLaunchMode.DIRECT
     )
     if windows_remote:
         raise ProbeError(

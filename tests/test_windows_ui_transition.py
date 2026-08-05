@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -74,12 +75,14 @@ def _validated_tree(monkeypatch, tmp_path: Path) -> Path:
 def test_upgrade_exec_requires_exact_content_bound_app(monkeypatch, tmp_path):
     executable = _validated_tree(monkeypatch, tmp_path)
     request = transition.UpgradeRequest(
-        RUNTIME, TARGET_APP, TARGET_VERSION, CONTENT, "%2", "b" * 32)
+        RUNTIME, TARGET_APP, TARGET_VERSION, CONTENT, "%2", "b" * 32,
+        time.time() + 10.0,
+    )
 
     assert transition.upgrade_exec_argv(
         request,
-        ["old-railmux", "--inside-tmux", "--recover-ui-upgrade"],
-    ) == [str(executable), "--inside-tmux"]
+        ["old-railmux", "--inside-tmux", "--project", "/work"],
+    ) == [str(executable), "--inside-tmux", "--project", "/work"]
 
     (tmp_path / "railmux-base-content-v1.json").write_text(
         json.dumps({
@@ -116,7 +119,6 @@ def test_attached_cooperative_ui_is_never_mutated(monkeypatch, tmp_path):
         runtime=RUNTIME,
         target_app=TARGET_APP,
         target_version=TARGET_VERSION,
-        forwarded_args=(),
     )
 
     assert result.status == "pending"
@@ -141,6 +143,7 @@ def test_detached_cooperative_ui_requests_exact_upgrade(monkeypatch, tmp_path):
     monkeypatch.setattr(transition, "read_current_app", lambda *_args: _identity())
     monkeypatch.setattr(
         transition, "_session_shape", lambda *_args: (0, (("%2", 456, False),), "%2"))
+    monkeypatch.setattr(transition, "_probe_app_version", lambda *_args: True)
     requested = []
     monkeypatch.setattr(
         transition,
@@ -155,7 +158,6 @@ def test_detached_cooperative_ui_requests_exact_upgrade(monkeypatch, tmp_path):
         runtime=RUNTIME,
         target_app=TARGET_APP,
         target_version=TARGET_VERSION,
-        forwarded_args=("--project", "/work"),
     )
 
     assert result.status == "updated"
@@ -163,49 +165,25 @@ def test_detached_cooperative_ui_requests_exact_upgrade(monkeypatch, tmp_path):
         "target_app": TARGET_APP,
         "target_version": TARGET_VERSION,
         "base_content_id": CONTENT,
+        "timeout": 8.0,
     }]
 
 
-def test_legacy_failure_rolls_back_without_new_hidden_argument(
-    monkeypatch, tmp_path,
-):
+def test_cooperative_timeout_clears_request(monkeypatch, tmp_path):
     _validated_tree(monkeypatch, tmp_path)
-    old_app = "railmux-0.4.0.dev23"
-    old_root = tmp_path / "opt" / "railmux" / "apps" / old_app
-    old_executable = old_root / "venv" / "bin" / "railmux"
-    old_executable.parent.mkdir(parents=True)
-    old_executable.write_text("#!/bin/sh\n", encoding="utf-8")
-    (old_root / "railmux-app.json").write_text(
-        json.dumps({
-            "schema": 1,
-            "runtime": RUNTIME,
-            "railmux": "0.4.0.dev23",
-        }),
-        encoding="utf-8",
-    )
-    shape = (0, (("%2", 456, False),), "%2")
     monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
     monkeypatch.setattr(transition, "_transition_lock", _always_locked)
-    monkeypatch.setattr(transition, "read_current_app", lambda *_args: None)
-    monkeypatch.setattr(transition, "_session_shape", lambda *_args: shape)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: _identity())
     monkeypatch.setattr(
-        transition, "_legacy_app_from_pane",
-        lambda *_args: (old_app, "0.4.0.dev23"),
-    )
-    monkeypatch.setattr(transition, "_set_target_option", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(transition, "_set_status", lambda *_args: None)
-    monkeypatch.setattr(
-        transition.windows_tmux_lifecycle,
-        "clear_empty_server_exit",
-        lambda: None,
-    )
-    calls = []
-    monkeypatch.setattr(
-        transition,
-        "_respawn",
-        lambda *_args, **kwargs: calls.append(kwargs) or True,
-    )
+        transition, "_session_shape", lambda *_args: (0, (("%2", 456, False),), "%2"))
+    monkeypatch.setattr(transition, "_probe_app_version", lambda *_args: True)
+    monkeypatch.setattr(transition, "_request_cooperative", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(transition, "_wait_for_app", lambda *_args, **_kwargs: False)
+    cleared = []
+    monkeypatch.setattr(
+        transition, "_clear_upgrade_request",
+        lambda *_args: cleared.append(1),
+    )
 
     result = transition.ensure_current_ui(
         TARGET,
@@ -213,12 +191,67 @@ def test_legacy_failure_rolls_back_without_new_hidden_argument(
         runtime=RUNTIME,
         target_app=TARGET_APP,
         target_version=TARGET_VERSION,
-        forwarded_args=("--project", "/work"),
     )
 
     assert result.status == "pending"
-    assert [call["recovery_entry"] for call in calls] == [True, False]
-    assert calls[1]["app"] == old_app
+    assert cleared == [1]
+
+
+def test_expired_cooperative_request_is_consumed_but_rejected(monkeypatch):
+    identity = _identity()
+    payload = {
+        "schema": 1,
+        "runtime": RUNTIME,
+        "app": TARGET_APP,
+        "version": TARGET_VERSION,
+        "base_content_id": CONTENT,
+        "pane_id": "%2",
+        "nonce": "b" * 32,
+        "expires_at": time.time() - 1.0,
+    }
+    monkeypatch.setattr(
+        transition, "_current_managed_identity", lambda: identity)
+    monkeypatch.setattr(transition.tmux_server, "current_target", lambda: TARGET)
+    monkeypatch.setattr(
+        transition.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: json.dumps(payload),
+    )
+    cleared = []
+    monkeypatch.setattr(
+        transition.subprocess,
+        "run",
+        lambda *_args, **_kwargs: cleared.append(1),
+    )
+
+    assert transition.consume_upgrade_request() is None
+    assert cleared == [1]
+
+
+def test_legacy_controller_is_never_respawned(monkeypatch, tmp_path):
+    _validated_tree(monkeypatch, tmp_path)
+    shape = (0, (("%2", 456, False),), "%2")
+    monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
+    monkeypatch.setattr(transition, "_transition_lock", _always_locked)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: None)
+    monkeypatch.setattr(transition, "_session_shape", lambda *_args: shape)
+    mutations = []
+    monkeypatch.setattr(
+        transition, "_set_target_option",
+        lambda *_args, **_kwargs: mutations.append(1) or True,
+    )
+
+    result = transition.ensure_current_ui(
+        TARGET,
+        "$1",
+        runtime=RUNTIME,
+        target_app=TARGET_APP,
+        target_version=TARGET_VERSION,
+    )
+
+    assert result.status == "legacy"
+    assert "Soft Quit" in (result.detail or "")
+    assert mutations == []
 
 
 def test_legacy_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
@@ -231,9 +264,28 @@ def test_legacy_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
         "_session_shape",
         lambda *_args: (0, (("%2", 456, False), ("%3", 789, False)), "%2"),
     )
-    respawn = []
+    result = transition.ensure_current_ui(
+        TARGET,
+        "$1",
+        runtime=RUNTIME,
+        target_app=TARGET_APP,
+        target_version=TARGET_VERSION,
+    )
+
+    assert result.status == "legacy"
+
+
+def test_current_controller_startup_does_not_warn_as_legacy(monkeypatch, tmp_path):
+    _validated_tree(monkeypatch, tmp_path)
+    monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
+    monkeypatch.setattr(transition, "_transition_lock", _always_locked)
+    monkeypatch.setattr(transition, "read_current_app", lambda *_args: None)
     monkeypatch.setattr(
-        transition, "_respawn", lambda *_args, **_kwargs: respawn.append(1))
+        transition, "_session_shape",
+        lambda *_args: (0, (("%2", 456, False),), "%2"),
+    )
+    monkeypatch.setattr(
+        transition, "_pane_app_version", lambda *_args: TARGET_VERSION)
 
     result = transition.ensure_current_ui(
         TARGET,
@@ -241,16 +293,16 @@ def test_legacy_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
         runtime=RUNTIME,
         target_app=TARGET_APP,
         target_version=TARGET_VERSION,
-        forwarded_args=(),
     )
 
-    assert result.status == "pending"
-    assert respawn == []
+    assert result.status == "starting"
 
 
 def test_cooperative_wake_saves_state_and_returns_provider_panes(monkeypatch):
     request = transition.UpgradeRequest(
-        RUNTIME, TARGET_APP, TARGET_VERSION, CONTENT, "%2", "b" * 32)
+        RUNTIME, TARGET_APP, TARGET_VERSION, CONTENT, "%2", "b" * 32,
+        time.time() + 10.0,
+    )
     monkeypatch.setattr(app_module, "running_in_windows_wrapper", lambda: True)
     monkeypatch.setattr(
         transition, "consume_upgrade_request", lambda: request)

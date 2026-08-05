@@ -1,10 +1,10 @@
 """Fail-closed app-layer transitions for the managed Windows outer UI.
 
 This module runs only inside Railmux's private MSYS2 runtime.  It never kills
-the dedicated tmux server or a provider session.  A cooperative dev24+ App
-saves its own state and returns swap-owned panes before ``exec``.  The one-time
-legacy path is deliberately narrower: a detached, single-pane outer session
-may have only its controller pane respawned, with rollback on failed startup.
+the dedicated tmux server, an older stateful controller, or a provider session.
+A cooperative dev24+ App saves its own state and returns swap-owned panes
+before ``exec``.  Released dev11-dev23 controllers require an explicit Soft
+Quit before the next app layer starts.
 """
 from __future__ import annotations
 
@@ -18,11 +18,11 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterator, Mapping, Sequence
 
 from packaging.version import InvalidVersion, Version
 
-from railmux import restart_state, tmux_server, windows_tmux_lifecycle
+from railmux import restart_state, tmux_server
 from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256
 
 
@@ -73,6 +73,7 @@ class UpgradeRequest:
     base_content_id: str
     pane_id: str
     nonce: str
+    expires_at: float
 
 
 @dataclass(frozen=True)
@@ -81,10 +82,13 @@ class TransitionOutcome:
     detail: str | None = None
 
 
-def diagnostic_status() -> dict[str, str | None]:
+def diagnostic_status(
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, str | None]:
     """Return bounded managed-UI identity without paths, PIDs, or session IDs."""
-    runtime = os.environ.get("RAILMUX_MSYS2_RUNTIME_ID", "")
-    app = os.environ.get("RAILMUX_MSYS2_APP_ID", "")
+    env = os.environ if environ is None else environ
+    runtime = env.get("RAILMUX_MSYS2_RUNTIME_ID", "")
+    app = env.get("RAILMUX_MSYS2_APP_ID", "")
     app_match = _APP_RE.fullmatch(app)
     result: dict[str, str | None] = {
         "runtime_id": runtime or None,
@@ -167,15 +171,12 @@ def _validated_app(
     application = _APP_ROOT / app
     executable = application / "venv" / "bin" / "railmux"
     marker = _read_json(application / "railmux-app.json")
-    if marker not in (
-        {"schema": 1, "runtime": runtime, "railmux": version},
-        {
-            "schema": 2,
-            "runtime": runtime,
-            "railmux": version,
-            "base_content_id": base_content_id,
-        },
-    ):
+    if marker != {
+        "schema": 2,
+        "runtime": runtime,
+        "railmux": version,
+        "base_content_id": base_content_id,
+    }:
         return None
     try:
         if (
@@ -265,7 +266,6 @@ def read_current_app(
     if (
         identity is None
         or identity.session_id != session_id
-        or not tmux_server.target_is_live(target, timeout=1.0)
     ):
         return None
     return identity
@@ -398,6 +398,7 @@ def consume_upgrade_request() -> UpgradeRequest | None:
         request = UpgradeRequest(
             payload["runtime"], payload["app"], payload["version"],
             payload["base_content_id"], payload["pane_id"], payload["nonce"],
+            payload["expires_at"],
         )
     except (KeyError, TypeError, json.JSONDecodeError):
         return None
@@ -405,6 +406,7 @@ def consume_upgrade_request() -> UpgradeRequest | None:
         newer = Version(request.version) > Version(identity.version)
     except InvalidVersion:
         newer = False
+    now = time.time()
     if (
         payload.get("schema") != 1
         or request.runtime != identity.runtime
@@ -412,6 +414,9 @@ def consume_upgrade_request() -> UpgradeRequest | None:
         or request.pane_id != identity.pane_id
         or not isinstance(request.nonce, str)
         or re.fullmatch(r"[0-9a-f]{32}", request.nonce) is None
+        or not isinstance(request.expires_at, (int, float))
+        or isinstance(request.expires_at, bool)
+        or not now <= request.expires_at <= now + 30.0
         or not newer
         or _validated_app(
             request.app,
@@ -433,8 +438,7 @@ def upgrade_exec_argv(request: UpgradeRequest, argv: Sequence[str]) -> list[str]
     )
     if executable is None:
         return None
-    filtered = [value for value in argv[1:] if value != "--recover-ui-upgrade"]
-    return [str(executable), *filtered]
+    return [str(executable), *argv[1:]]
 
 
 @contextmanager
@@ -515,11 +519,12 @@ def _session_shape(
         return None
 
 
-def _legacy_app_from_pane(
+def _pane_app_version(
     target: tmux_server.TmuxServerTarget,
     pane_id: str,
     pane_pid: int,
-) -> tuple[str, str] | None:
+) -> str | None:
+    """Read-only best effort identity for a controller still starting up."""
     candidates: list[str] = []
     try:
         raw = Path(f"/proc/{pane_pid}/cmdline").read_bytes()
@@ -537,20 +542,27 @@ def _legacy_app_from_pane(
                 "#{pane_start_command}"),
             stderr=subprocess.DEVNULL,
             text=True,
+            encoding="utf-8",
+            errors="strict",
             timeout=1.0,
         )
         if len(start) <= _OPTION_LIMIT * 4:
             candidates.append(start)
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (
+        OSError,
+        UnicodeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ):
         pass
     pattern = re.compile(
-        r"/opt/railmux/apps/"
-        r"(railmux-([0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?))/venv/bin/railmux"
+        r"/opt/railmux/apps/railmux-"
+        r"([0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)/venv/bin/railmux"
     )
     for candidate in candidates:
         match = pattern.search(candidate)
         if match is not None:
-            return match.group(1), match.group(2)
+            return match.group(1)
     return None
 
 
@@ -577,6 +589,7 @@ def _request_cooperative(
     target_app: str,
     target_version: str,
     base_content_id: str,
+    timeout: float,
 ) -> bool:
     request = {
         "schema": 1,
@@ -586,6 +599,7 @@ def _request_cooperative(
         "base_content_id": base_content_id,
         "pane_id": current.pane_id,
         "nonce": secrets.token_hex(16),
+        "expires_at": time.time() + min(max(timeout, 1.0), 30.0),
     }
     encoded = json.dumps(request, separators=(",", ":"), sort_keys=True)
     if not _set_target_option(
@@ -603,40 +617,43 @@ def _request_cooperative(
         )
         return True
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        _clear_upgrade_request(target, current.pane_id)
         return False
 
 
-def _respawn(
+def _clear_upgrade_request(
     target: tmux_server.TmuxServerTarget,
     pane_id: str,
-    *,
-    runtime: str,
-    app: str,
-    executable: Path,
-    forwarded_args: Sequence[str],
-    recovery_entry: bool,
-) -> bool:
-    args = [value for value in forwarded_args if value != "--inside-tmux"]
-    recovery_args = ["--recover-ui-upgrade"] if recovery_entry else []
-    command = tmux_server.target_argv(
-        target,
-        "respawn-pane", "-k", "-t", pane_id,
-        "-e", "RAILMUX_WINDOWS_RUNTIME=msys2",
-        "-e", f"RAILMUX_MSYS2_RUNTIME_ID={runtime}",
-        "-e", f"RAILMUX_MSYS2_APP_ID={app}",
-        str(executable), "--inside-tmux", *recovery_args, *args,
-    )
+) -> None:
     try:
         subprocess.run(
-            command,
+            tmux_server.target_argv(
+                target, "set-option", "-pu", "-t", pane_id,
+                REQUESTED_APP_OPTION),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=2.0,
-            check=True,
+            timeout=1.0,
+            check=False,
         )
-        return True
-    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _probe_app_version(executable: Path, version: str) -> bool:
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            timeout=5.0,
+            check=False,
+        )
+    except (OSError, UnicodeError, subprocess.TimeoutExpired):
         return False
+    return result.returncode == 0 and result.stdout.strip() == f"railmux {version}"
 
 
 def ensure_current_ui(
@@ -646,7 +663,6 @@ def ensure_current_ui(
     runtime: str,
     target_app: str,
     target_version: str,
-    forwarded_args: Sequence[str],
     timeout: float = 8.0,
 ) -> TransitionOutcome:
     """Converge a detached managed outer UI without touching providers."""
@@ -686,77 +702,38 @@ def ensure_current_ui(
             if shape is None or shape[0] != 0:
                 return TransitionOutcome(
                     "pending", "the shared UI still has an attached terminal")
+            if not _probe_app_version(executable, target_version):
+                return TransitionOutcome(
+                    "blocked", "the new app did not pass its version probe")
             if not _request_cooperative(
                 target,
                 current,
                 target_app=target_app,
                 target_version=target_version,
                 base_content_id=content_id,
+                timeout=timeout,
             ):
                 return TransitionOutcome("pending", "upgrade request was not accepted")
-            return (
-                TransitionOutcome("updated")
-                if _wait_for_app(target, session_id, target_app, timeout=timeout)
-                else TransitionOutcome("pending", "running UI did not switch in time")
-            )
+            if _wait_for_app(target, session_id, target_app, timeout=timeout):
+                return TransitionOutcome("updated")
+            _clear_upgrade_request(target, current.pane_id)
+            return TransitionOutcome("pending", "running UI did not switch in time")
 
-        # dev11-dev23 do not publish CURRENT_APP_OPTION.  Limit their one-time
-        # migration to a detached, single live controller pane.
+        # dev11-dev23 do not publish CURRENT_APP_OPTION or save UI state
+        # periodically. Never SIGKILL that stateful controller merely to move
+        # app layers; attach it unchanged and require an explicit Soft Quit.
         shape = _session_shape(target, session_id)
         if shape is None:
             return TransitionOutcome("pending", "outer UI identity was unavailable")
         attached, panes, controller = shape
-        if attached != 0 or len(panes) != 1:
-            return TransitionOutcome(
-                "pending", "legacy UI is attached or has displayed agent panes")
-        pane_id, pane_pid, dead = panes[0]
-        if dead or controller != pane_id:
-            return TransitionOutcome("pending", "legacy controller was not exact")
-        legacy = _legacy_app_from_pane(target, pane_id, pane_pid)
-        if legacy is None:
-            return TransitionOutcome("pending", "legacy app version was not provable")
-        legacy_app, legacy_version = legacy
-        try:
-            if Version(legacy_version) >= Version(target_version):
-                return TransitionOutcome("pending", "legacy version was not older")
-        except InvalidVersion:
-            return TransitionOutcome("pending", "legacy version was invalid")
-        legacy_executable = _validated_app(
-            legacy_app,
-            legacy_version,
-            runtime=runtime,
-            base_content_id=content_id,
-        )
-        if legacy_executable is None:
-            return TransitionOutcome("pending", "legacy app marker was invalid")
-        # Close every observation race under the same exact target.
-        if _session_shape(target, session_id) != shape:
-            return TransitionOutcome("pending", "outer UI changed during validation")
-        _set_target_option(
-            target, "-p", pane_id, "remain-on-exit", "on")
-        windows_tmux_lifecycle.clear_empty_server_exit()
-        _set_status(target, session_id, "transitioning:legacy")
-        if not _respawn(
-            target,
-            pane_id,
-            runtime=runtime,
-            app=target_app,
-            executable=executable,
-            forwarded_args=forwarded_args,
-            recovery_entry=True,
-        ):
-            return TransitionOutcome("pending", "legacy UI respawn failed")
-        if _wait_for_app(target, session_id, target_app, timeout=timeout):
-            return TransitionOutcome("updated")
-        # Preserve usability when the new app cannot reach its ready boundary.
-        _respawn(
-            target,
-            pane_id,
-            runtime=runtime,
-            app=legacy_app,
-            executable=legacy_executable,
-            forwarded_args=forwarded_args,
-            recovery_entry=False,
-        )
-        _set_status(target, session_id, "pending:new-app-failed")
-        return TransitionOutcome("pending", "new UI failed; legacy UI restored")
+        controller_pane = next(
+            (pane for pane in panes if pane[0] == controller), None)
+        if controller_pane is not None and not controller_pane[2]:
+            detected = _pane_app_version(
+                target, controller_pane[0], controller_pane[1])
+            if detected == target_version:
+                return TransitionOutcome("starting")
+        detail = "the released dev11-dev23 UI must Soft Quit safely first"
+        if attached:
+            detail += "; its terminal is currently attached"
+        return TransitionOutcome("legacy", detail)

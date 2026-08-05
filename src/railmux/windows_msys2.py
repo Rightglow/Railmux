@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -580,7 +581,13 @@ def managed_runtime_status(
     base_valid = _base_marker_matches(root)
     identity = _decode_base_content_marker(root) if base_valid else None
     layers = _marked_app_versions(root) if base_valid else None
-    status = "ready" if base_valid and identity is not None else "incomplete"
+    current_app = bool(layers is not None and version in layers)
+    if base_valid and identity is not None:
+        status = "ready" if current_app else "base_ready"
+    elif base_valid:
+        status = "legacy_base"
+    else:
+        status = "incomplete"
     result: dict[str, object] = {
         "schema": 1,
         "runtime": MSYS2_RUNTIME_ID,
@@ -595,9 +602,7 @@ def managed_runtime_status(
         "core_packages": (
             dict(identity.core_packages) if identity is not None else None
         ),
-        "current_app": bool(
-            layers is not None and version in layers
-        ),
+        "current_app": current_app,
         "layers": sorted(layers or (), key=_version_key, reverse=True),
     }
     if verify and identity is not None:
@@ -818,6 +823,10 @@ def _version_key(version: str) -> tuple[tuple[int, ...], int]:
 def _marked_app_versions(root: Path) -> dict[str, Path] | None:
     applications = root / "opt" / "railmux" / "apps"
     try:
+        _validate_managed_application_root(root)
+    except RuntimeInstallError:
+        return None
+    try:
         candidates = list(applications.iterdir())
     except FileNotFoundError:
         return {}
@@ -825,7 +834,16 @@ def _marked_app_versions(root: Path) -> dict[str, Path] | None:
         return None
     result: dict[str, Path] = {}
     for candidate in candidates:
-        if candidate.is_symlink() or not candidate.is_dir():
+        try:
+            attributes = getattr(candidate.lstat(), "st_file_attributes", 0)
+        except OSError:
+            continue
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if (
+            candidate.is_symlink()
+            or attributes & reparse_flag
+            or not candidate.is_dir()
+        ):
             continue
         prefix = "railmux-"
         if not candidate.name.startswith(prefix):
@@ -945,6 +963,7 @@ def apply_managed_runtime_prune(
                 "the managed runtime changed while pruning; nothing was removed"
             )
         for application in current.remove_apps:
+            _validate_app_layer_path(current.root, application)
             app_name = application.name
             candidate_version = app_name.removeprefix("railmux-")
             if (
@@ -960,11 +979,31 @@ def apply_managed_runtime_prune(
                     "an app layer changed while pruning; remaining files were "
                     "left untouched"
                 )
-            shutil.rmtree(application)
+            quarantine = application.with_name(
+                f".railmux-prune-{app_name}-{secrets.token_hex(8)}")
+            try:
+                os.replace(application, quarantine)
+            except OSError as exc:
+                raise RuntimeInstallError(
+                    f"could not isolate app layer {app_name}; it was left "
+                    "untouched"
+                ) from exc
+            try:
+                shutil.rmtree(quarantine)
+            except OSError as exc:
+                raise RuntimeInstallError(
+                    f"app layer {app_name} was isolated from use but its "
+                    f"cleanup did not finish: {quarantine}"
+                ) from exc
         if current.pip_cache is not None:
             _validate_pip_cache_path(current.pip_cache)
             if current.pip_cache.exists():
-                shutil.rmtree(current.pip_cache)
+                try:
+                    shutil.rmtree(current.pip_cache)
+                except OSError as exc:
+                    raise RuntimeInstallError(
+                        "the private pip cache could not be fully removed"
+                    ) from exc
         return current
 
 
@@ -1746,6 +1785,61 @@ def _validate_pip_cache_path(cache: Path) -> None:
     if not cache.is_dir():
         raise RuntimeInstallError(
             f"the Railmux pip cache path is not a directory: {cache}"
+        )
+
+
+def _validate_app_layer_path(root: Path, application: Path) -> None:
+    applications = root / "opt" / "railmux" / "apps"
+    _validate_managed_application_root(root)
+    if application.parent != applications:
+        raise RuntimeInstallError(
+            "an app cleanup candidate escaped the managed application directory"
+        )
+    try:
+        attributes = getattr(application.lstat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise RuntimeInstallError(
+            f"an app cleanup candidate could not be inspected: {application.name}"
+        ) from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if (
+        application.is_symlink()
+        or attributes & reparse_flag
+        or not application.is_dir()
+    ):
+        raise RuntimeInstallError(
+            "an app cleanup candidate is a link or reparse point and was left "
+            f"untouched: {application.name}"
+        )
+
+
+def _validate_managed_application_root(root: Path) -> None:
+    current = root
+    for child in ("opt", "railmux", "apps"):
+        try:
+            attributes = getattr(current.lstat(), "st_file_attributes", 0)
+        except OSError as exc:
+            raise RuntimeInstallError(
+                "the managed application directory could not be inspected"
+            ) from exc
+        reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if current.is_symlink() or attributes & reparse_flag or not current.is_dir():
+            raise RuntimeInstallError(
+                "the managed application directory contains a link or reparse "
+                "point; cleanup was refused"
+            )
+        current = current / child
+    try:
+        attributes = getattr(current.lstat(), "st_file_attributes", 0)
+    except OSError as exc:
+        raise RuntimeInstallError(
+            "the managed application directory could not be inspected"
+        ) from exc
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    if current.is_symlink() or attributes & reparse_flag or not current.is_dir():
+        raise RuntimeInstallError(
+            "the managed application directory contains a link or reparse "
+            "point; cleanup was refused"
         )
 
 

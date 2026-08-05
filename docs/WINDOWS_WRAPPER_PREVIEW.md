@@ -21,7 +21,7 @@ Because MSYS2 repositories roll independently of that archive identifier, the
 base also owns a separate exact package-content identity: a SHA-256 of the
 bounded sorted pacman inventory plus the recorded tmux, Python, and pip package
 versions. dev24+ app markers bind to that identity. The released dev11-dev23
-base/app markers remain readable only for the bounded upgrade transition;
+base/app markers remain readable for safe attachment and explicit Soft Quit;
 `runtime status --verify` can report live package drift without silently
 changing either authority.
 
@@ -179,11 +179,10 @@ opens a WSL shell and runs the ordinary POSIX product there.
   upgraded. dev24+ controllers publish their exact content-bound app identity
   only after MainLoop is usable. A detached older dev24+ UI cooperatively saves
   state, returns displayed provider panes, releases UI-only leases, and execs
-  the validated new absolute app after a nonce-bound pane-local request. The
-  one-time dev11-dev23 migration may respawn only an exactly proven detached
-  single controller pane and rolls back to its old absolute app if the new
-  ready proof fails. Attached, multi-pane, ambiguous, or racing state is left
-  untouched with an instruction to Soft Quit. Neither path kills the tmux
+  the validated new absolute app after a nonce-bound pane-local request.
+  Released dev11-dev23 controllers remain untouched until the user chooses
+  Soft Quit; the next launch creates the dev24 UI. Attached, ambiguous, or
+  racing state is likewise left untouched. Neither path kills the tmux
   server, a provider session/process, or Codex/Claude history.
 - The ordinary label-selected tmux attach remains the fast path. If Windows
   rejects only that terminal attachment while the same server and immutable
@@ -389,7 +388,7 @@ view detached normally. Automated tests cover raw direct-error suppression,
 terminal-aware bridge status, and the unavailable-bridge error; desktop-side
 Windows Terminal clipboard receipt remains manual.
 
-dev24 automation adds fail-closed app-layer transition and rollback tests,
+dev24 automation adds fail-closed cooperative app-layer transition tests,
 exact package identity/drift tests, process-aware prune tests, native forwarding
 of every local/remote config and doctor form, and POSIX/direct remote probe
 coverage. These tests do not promote the preview to stable support: the exact

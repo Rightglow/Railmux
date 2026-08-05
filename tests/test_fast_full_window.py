@@ -5469,6 +5469,72 @@ def test_auto_remote_launch_falls_back_to_windows_and_pins_reconnect_mode(
     assert windows.stdin.getvalue() == REMOTE_START
 
 
+def test_auto_direct_fallback_accepts_authoritative_posix_hello(monkeypatch):
+    posix_shell = _PreflightProcess(1)
+    direct = _PreflightProcess()
+    processes = iter((posix_shell, direct))
+    startups = iter((
+        RemoteStartup(RemoteStartKind.FAILED, returncode=1),
+        RemoteStartup(
+            RemoteStartKind.HELLO,
+            RemoteHello(
+                fast_display_client.__version__,
+                PROTOCOL_VERSION,
+                True,
+                platform="posix",
+            ),
+        ),
+    ))
+    timeouts = []
+    monkeypatch.setattr(
+        fast_display_client, "_spawn_remote", lambda _argv: next(processes))
+    monkeypatch.setattr(
+        fast_display_client,
+        "await_remote_startup",
+        lambda _process, timeout=None: (
+            timeouts.append(timeout), next(startups))[1],
+    )
+
+    probe = fast_display_client.probe_remote_launch(
+        "server",
+        remote_args=("remote-server",),
+        ssh_args=(),
+        timeout=4.0,
+    )
+
+    assert probe.process is direct
+    assert probe.launch_mode is RemoteLaunchMode.DIRECT
+    assert probe.startup.hello is not None
+    assert probe.startup.hello.platform == "posix"
+    assert timeouts == [4.0, 4.0]
+
+
+def test_explicit_windows_rejects_direct_posix_hello(monkeypatch):
+    process = _PreflightProcess()
+    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
+    monkeypatch.setattr(
+        fast_display_client,
+        "await_remote_startup",
+        lambda *_args, **_kwargs: RemoteStartup(
+            RemoteStartKind.HELLO,
+            RemoteHello(
+                fast_display_client.__version__,
+                PROTOCOL_VERSION,
+                True,
+                platform="posix",
+            ),
+        ),
+    )
+
+    with pytest.raises(fast_display_client.ProbeError, match="non-Windows"):
+        fast_display_client.probe_remote_launch(
+            "server",
+            remote_args=("remote-server",),
+            ssh_args=(),
+            remote_platform="windows",
+        )
+
+
 def test_explicit_windows_remote_failure_never_runs_posix_installer(monkeypatch):
     process = _PreflightProcess(1)
     args = parse_client_args(["server", "--remote-platform", "windows"])

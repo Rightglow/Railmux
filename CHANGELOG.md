@@ -13,8 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add fail-closed managed-Windows app-layer transitions. dev24+ UIs save state,
   return displayed provider panes, and exec an exact content-bound new app;
-  the one-time dev11-dev23 migration is limited to a detached single controller
-  pane and rolls back to the old app if the new ready proof fails.
+  released dev11-dev23 UIs are never killed for migration and instead remain
+  available until the user chooses Soft Quit before the next launch.
 - Record the exact private MSYS2 package inventory in a content-identity marker,
   bind new app layers to it, expose read-only verification through
   `railmux runtime status --verify`, and add explicit process-aware
@@ -29,12 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Include the complete POSIX/WSL `0.3.6` maintenance baseline.
 - Make native Windows `doctor` and all noninteractive missing-runtime commands
   read-only: they report the explicit `runtime install` next step and never
   create even an app layer implicitly. Managed app venvs also refuse the POSIX
   self-upgrade path and direct users to the native PowerShell owner.
 - Expand native Windows and real-MSYS2 CI coverage for runtime identity/drift,
-  transition rollback, safe pruning, provider-path projection, config/doctor
+  cooperative transitions, safe pruning, provider-path projection, config/doctor
   forwarding, direct Windows remote probing, and privacy contracts.
 
 ## [0.4.0.dev23] - 2026-08-05
@@ -64,35 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   showing Preview-formatted transcript text on wheel-up. Canonical transcript
   fallback now requires an explicit provider `thread_rolled_back` increment;
   released heuristic markers safely downgrade without changing provider data.
-
-## [0.3.6] - 2026-08-05
-
-### Changed
-
-- Complete the 0.3 POSIX/WSL maintenance line with immediate, bounded
-  `railmux ssh` history entry from a coherent warm cache and asynchronous
-  cumulative deep pages. Native Windows platform support remains isolated to
-  the upcoming 0.4 line and is not included in this release.
-- Add a keyboard-only final warning before hard quit can stop live agent
-  sessions, while making every choice in the first quit dialog visibly
-  clickable and preserving its existing keyboard shortcuts.
-
-### Fixed
-
-- Keep SSH history continuous and faithful under live repainting: unaligned
-  captures are never spliced, accepted deep pages replace their timeline
-  atomically, cross-row terminal styles remain intact, and batched wheel input
-  preserves its full distance with one final paint.
-- Keep ordinary Codex resume, continuation, and context-compaction children on
-  styled raw pane history. Canonical transcript fallback now requires an exact
-  live rollout plus an explicit provider rollback increment, and released
-  heuristic markers safely downgrade without changing provider data.
-- Reduce startup and status-bar latency by batching independent tmux commands,
-  suppressing unchanged bar frames and unnecessary compact-layout probes, and
-  publishing shared binding capabilities only after their complete state is
-  ready.
-- Flush cross-host session-lease owner metadata before a claim returns, so a
-  second NFS client can report the owning host as soon as it observes the lock.
 
 ## [0.4.0.dev21] - 2026-08-05
 

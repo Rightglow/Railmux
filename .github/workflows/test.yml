@@ -165,7 +165,7 @@ jobs:
         run: |
           version=$(cat /tmp/railmux-version)
           app="/opt/railmux/apps/railmux-$version"
-          LC_ALL=C pacman -Q | sort > /tmp/railmux-packages
+          pacman -Q | LC_ALL=C sort > /tmp/railmux-packages
           content=$(sha256sum /tmp/railmux-packages | awk '{print $1}')
           count=$(wc -l < /tmp/railmux-packages)
           archive_sha=$("$app/venv/bin/python" -c \
@@ -202,6 +202,18 @@ jobs:
               "railmux": version,
               "base_content_id": content,
           }), encoding="utf-8")
+          PY
+          "$app/venv/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          from railmux.windows_msys2 import (
+              _collect_base_content_identity,
+              _decode_base_content_marker,
+          )
+          recorded = _decode_base_content_marker(Path("/"))
+          observed = _collect_base_content_identity(Path("/"), environ=os.environ)
+          assert recorded is not None
+          assert recorded == observed
           PY
           "$app/venv/bin/python" -m pytest -q \
             tests/test_windows_ui_transition.py \

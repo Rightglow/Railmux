@@ -364,7 +364,7 @@ def collect_doctor_snapshot(
     if running_in_windows_wrapper(env):
         from railmux.windows_ui_transition import diagnostic_status
 
-        managed_windows = ManagedWindowsDiagnostic(**diagnostic_status())
+        managed_windows = ManagedWindowsDiagnostic(**diagnostic_status(env))
     return DoctorSnapshot(
         schema_version=DOCTOR_SCHEMA_VERSION,
         railmux_version=__version__,

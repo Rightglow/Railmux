@@ -143,13 +143,12 @@ pip installed a newer app layer. dev24+ controllers publish their exact app
 identity only after reaching the usable MainLoop boundary. A detached older
 controller receives a pane-local nonce request and private F19 wakeup, saves
 portable state, returns displayed provider panes to their owning sessions,
-releases UI-only tmux state, then `exec`s the validated absolute new app. The
-one released legacy boundary, dev11-dev23, can migrate only a detached outer
-session whose sole live pane is the exactly proven controller; only that pane
-is respawned, `remain-on-exit` protects the gap, and a failed new ready proof
-respawns the old absolute app without new-only arguments. Attached clients,
-multiple/displayed panes, ambiguous identity, races, or failed validation leave
-the old UI running and report a pending Soft Quit. No transition kills the
+releases UI-only tmux state, then `exec`s the validated absolute new app.
+Released dev11-dev23 controllers do not implement that save boundary and are
+therefore never respawned or killed for migration. They remain attachable and
+report an explicit Soft Quit instruction; the following launch creates the
+dev24 UI. Attached clients, ambiguous identity, races, or failed validation
+likewise leave the old UI running. No transition kills the
 tmux server, a provider session, or a provider process, and the transition lock
 is scoped to the exact server label and immutable outer-session ID.
 
@@ -517,9 +516,10 @@ one ordered argv authority across both phases. Group parsing uses bounded
 POSIX quoting locally and never invokes a shell. The released singular
 `--ssh-arg` remains a hidden exact-argv compatibility input.
 Both config phases pin the same shell family returned by the common pre-attach
-probe. A direct hello must identify `windows-msys2`; managed Windows remotes
-use the shell-neutral command in both phases and never receive POSIX installer
-commands. `doctor --remote` uses that same probe with
+probe. Explicit Windows mode requires a `windows-msys2` direct hello; automatic
+mode may also accept an authoritative POSIX hello reached through the
+shell-neutral fallback. Managed Windows remotes use that command in both
+phases and never receive POSIX installer commands. `doctor --remote` uses that same probe with
 `--existing-session-only`, stops before the attach token, and reports the
 bounded remote runtime plus selected launch family. `--remote-platform` is
 shared by config and doctor so explicit Windows mode avoids the incompatible

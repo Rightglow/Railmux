@@ -1600,10 +1600,10 @@ def probe_remote_launch(
     """Probe one remote Railmux command and pin its shell launch family.
 
     ``auto`` preserves the POSIX discovery ladder, then makes one direct
-    shell-neutral attempt only after a non-SSH launch failure.  One deadline
-    covers both attempts.  A direct hello must identify the managed Windows
-    runtime; accepting a POSIX host through that path would incorrectly
-    suppress its supported POSIX repair/install flow.
+    shell-neutral attempt only after a non-SSH launch failure.  Each shell
+    family receives the full bounded startup timeout.  Explicit Windows mode
+    requires a managed Windows hello; auto mode accepts an authoritative POSIX
+    hello reached through a shell-neutral direct command.
     """
     if remote_platform not in {"auto", "posix", "windows"}:
         raise ValueError("invalid remote platform")
@@ -1612,19 +1612,24 @@ def probe_remote_launch(
         if remote_platform == "windows"
         else RemoteLaunchMode.POSIX
     )
-    deadline = time.monotonic() + timeout
+    effective_ssh_args = (
+        *ssh_args,
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=3",
+    )
 
     def start(mode: RemoteLaunchMode) -> tuple[subprocess.Popen, RemoteStartup]:
         argv = build_remote_command_argv(
             destination,
             remote_args=remote_args,
-            ssh_args=ssh_args,
+            ssh_args=effective_ssh_args,
             force_tty=force_tty,
             launch_mode=mode,
         )
         process = _spawn_remote(argv)
-        remaining = max(0.0, deadline - time.monotonic())
-        startup = await_remote_startup(process, timeout=remaining)
+        startup = await_remote_startup(process, timeout=timeout)
         return process, startup
 
     process, startup = start(launch_mode)
@@ -1641,7 +1646,7 @@ def probe_remote_launch(
     if (
         startup.kind is RemoteStartKind.HELLO
         and startup.hello is not None
-        and launch_mode is RemoteLaunchMode.DIRECT
+        and remote_platform == "windows"
         and startup.hello.platform != "windows-msys2"
     ):
         _stop_unstarted_remote(process)
@@ -1895,9 +1900,9 @@ def _remember_remote_launch_mode(
 def _remote_uses_windows_runtime(
     args: argparse.Namespace, hello: RemoteHello | None = None
 ) -> bool:
-    return _remote_launch_mode(args) is RemoteLaunchMode.DIRECT or (
-        hello is not None and hello.platform == "windows-msys2"
-    )
+    if hello is not None:
+        return hello.platform == "windows-msys2"
+    return _remote_launch_mode(args) is RemoteLaunchMode.DIRECT
 
 
 def remote_tmux_help(destination: str) -> str:
@@ -2374,13 +2379,7 @@ def prepare_remote_process(
     probe = probe_remote_launch(
         args.destination,
         remote_args=remote_args,
-        ssh_args=(
-            *args.ssh_arg,
-            "-o",
-            "ServerAliveInterval=5",
-            "-o",
-            "ServerAliveCountMax=3",
-        ),
+        ssh_args=args.ssh_arg,
         remote_platform=getattr(args, "remote_platform", "auto"),
     )
     process = probe.process

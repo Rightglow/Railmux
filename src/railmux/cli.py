@@ -508,11 +508,6 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=argparse.SUPPRESS,
     )
-    parser.add_argument(
-        "--recover-ui-upgrade",
-        action="store_true",
-        help=argparse.SUPPRESS,
-    )
     scroll_group = parser.add_mutually_exclusive_group()
     scroll_group.add_argument(
         "--scroll-coalescing",
@@ -528,8 +523,6 @@ def main(argv: list[str] | None = None) -> int:
         help="Force-disable tmux copy-mode wheel event coalescing",
     )
     args = parser.parse_args(raw_args)
-    if args.recover_ui_upgrade and not args.inside_tmux:
-        parser.error("--recover-ui-upgrade is reserved for managed recovery")
 
     try:
         config = load_config()
@@ -649,6 +642,7 @@ def main(argv: list[str] | None = None) -> int:
             tmux_server.target_session_id(dedicated_target, "railmux")
             if dedicated_target is not None else None
         )
+        created_detached_session = False
         if dedicated_target is not None and dedicated_session_id is None:
             from railmux.provider_paths import (
                 running_in_managed_windows_wrapper,
@@ -663,7 +657,12 @@ def main(argv: list[str] | None = None) -> int:
                         initial_size=_interactive_terminal_size(),
                     )
                 )
-        if dedicated_target is not None and dedicated_session_id is not None:
+                created_detached_session = dedicated_session_id is not None
+        if (
+            dedicated_target is not None
+            and dedicated_session_id is not None
+            and not created_detached_session
+        ):
             from railmux.provider_paths import running_in_managed_windows_wrapper
 
             if running_in_managed_windows_wrapper():
@@ -677,9 +676,8 @@ def main(argv: list[str] | None = None) -> int:
                     runtime=runtime_id,
                     target_app=app_id,
                     target_version=__version__,
-                    forwarded_args=raw_args,
                 )
-                if transition.status in {"pending", "blocked"}:
+                if transition.status in {"legacy", "pending", "blocked"}:
                     detail = transition.detail or "the running UI was unchanged"
                     print(
                         "info: the Windows app-layer update is pending; "

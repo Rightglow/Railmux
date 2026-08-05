@@ -55,7 +55,18 @@ def _runtime_status(
         return 0 if runtime is not None else 1
     print("Railmux Windows runtime")
     print(f"Backend: managed MSYS2 {MSYS2_RELEASE}")
-    print(f"Status: {'ready' if runtime is not None else 'not installed'}")
+    status = snapshot.get("status")
+    if runtime is not None:
+        display_status = "ready"
+    elif status == "base_ready":
+        display_status = "reusable base ready; current app layer not installed"
+    elif status == "legacy_base":
+        display_status = "reusable legacy base; current app layer not installed"
+    elif status == "incomplete":
+        display_status = "incomplete"
+    else:
+        display_status = "not installed"
+    print(f"Status: {display_status}")
     if runtime is not None:
         ownership = "Railmux-managed" if runtime.managed else "user-owned override"
         print(f"Runtime: {ownership} at {runtime.root}")
@@ -75,6 +86,45 @@ def _runtime_status(
     if isinstance(verification, str):
         print(f"Base verification: {verification}")
     return 0 if runtime is not None else 1
+
+
+def _native_doctor_missing_runtime(
+    *,
+    environ: Mapping[str, str],
+    json_output: bool,
+    remote_requested: bool,
+) -> int:
+    runtime = managed_runtime_status(
+        version=__version__, environ=environ, verify=False)
+    if json_output:
+        json.dump(
+            {
+                "schema_version": 4,
+                "status": "runtime_not_installed",
+                "railmux_version": __version__,
+                "managed_windows": runtime,
+                "remote_preflight": "not_run" if remote_requested else None,
+            },
+            sys.stdout,
+            indent=2,
+            sort_keys=True,
+        )
+        print()
+        return 2
+    print(
+        "Railmux diagnostics (native Windows bootstrap; managed runtime "
+        "was not entered)"
+    )
+    print(f"Railmux: {__version__}")
+    print("Platform: native Windows bootstrap")
+    print("Managed Windows runtime: not ready")
+    if remote_requested:
+        print(
+            "Remote preflight: not run; install the managed runtime first, "
+            "then retry the same command."
+        )
+    print("Next: run 'railmux runtime install' from an interactive PowerShell.")
+    return 2
 
 
 def _confirm_prune(*, input_fn: Callable[[str], str] = input) -> bool:
@@ -263,18 +313,13 @@ def main(
         )
     if arguments and arguments[0] == "doctor" and runtime is None:
         json_output = "--json" in arguments[1:]
-        if not json_output:
-            print(
-                "Railmux diagnostics (native Windows bootstrap; managed "
-                "runtime was not entered)"
-            )
-            if "--remote" in arguments[1:] or "--ssh" in arguments[1:]:
-                print(
-                    "Remote preflight: not run; install the managed runtime "
-                    "first, then retry the same command."
-                )
-        return _runtime_status(
-            runtime, environ=environ, json_output=json_output)
+        return _native_doctor_missing_runtime(
+            environ=environ,
+            json_output=json_output,
+            remote_requested=(
+                "--remote" in arguments[1:] or "--ssh" in arguments[1:]
+            ),
+        )
     if arguments and arguments[0] == "runtime":
         install_arguments = arguments[1:]
         if install_arguments[:1] == ["prune"]:
