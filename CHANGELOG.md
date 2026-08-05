@@ -65,6 +65,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback now requires an explicit provider `thread_rolled_back` increment;
   released heuristic markers safely downgrade without changing provider data.
 
+## [0.3.6] - 2026-08-05
+
+### Changed
+
+- Complete the 0.3 POSIX/WSL maintenance line with immediate, bounded
+  `railmux ssh` history entry from a coherent warm cache and asynchronous
+  cumulative deep pages. Native Windows platform support remains isolated to
+  the upcoming 0.4 line and is not included in this release.
+- Add a keyboard-only final warning before hard quit can stop live agent
+  sessions, while making every choice in the first quit dialog visibly
+  clickable and preserving its existing keyboard shortcuts.
+
+### Fixed
+
+- Keep SSH history continuous and faithful under live repainting: unaligned
+  captures are never spliced, accepted deep pages replace their timeline
+  atomically, cross-row terminal styles remain intact, and batched wheel input
+  preserves its full distance with one final paint.
+- Keep ordinary Codex resume, continuation, and context-compaction children on
+  styled raw pane history. Canonical transcript fallback now requires an exact
+  live rollout plus an explicit provider rollback increment, and released
+  heuristic markers safely downgrade without changing provider data.
+- Reduce startup and status-bar latency by batching independent tmux commands,
+  suppressing unchanged bar frames and unnecessary compact-layout probes, and
+  publishing shared binding capabilities only after their complete state is
+  ready.
+- Flush cross-host session-lease owner metadata before a claim returns, so a
+  second NFS client can report the owning host as soon as it observes the lock.
+
 ## [0.4.0.dev21] - 2026-08-05
 
 ### Changed
@@ -2349,7 +2378,9 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev24...HEAD
+[0.4.0.dev24]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev24
+[0.4.0.dev23]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...v0.4.0.dev23
 [0.4.0.dev22]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev21...v0.4.0.dev22
 [0.4.0.dev21]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev20...v0.4.0.dev21
 [0.4.0.dev20]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...v0.4.0.dev20
@@ -2369,6 +2400,12 @@ made after 0.2.21.
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
+[0.3.6]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6
+[0.3.6.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...v0.3.6.dev6
+[0.3.6.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...v0.3.6.dev5
+[0.3.6.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev3...v0.3.6.dev4
+[0.3.6.dev3]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev2...v0.3.6.dev3
+[0.3.6.dev2]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev1...v0.3.6.dev2
 [0.3.6.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6.dev1
 [0.3.5]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5
 [0.3.5.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5.dev1
