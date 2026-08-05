@@ -83,6 +83,78 @@ def test_detached_launcher_session_is_pinned_before_and_after_create(
     assert launched[0][1]["env"] == {"PATH": "/usr/bin"}
 
 
+def test_detached_managed_windows_session_receives_only_runtime_identity(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_ids = iter((None, "$7"))
+    launched = []
+    monkeypatch.setattr(tmux_server, "target_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: launched.append((argv, kwargs))
+        or SimpleNamespace(returncode=0),
+    )
+    env = {
+        "RAILMUX_WINDOWS_RUNTIME": "msys2",
+        "RAILMUX_MSYS2_RUNTIME_ID": "msys2-2026-03-22",
+        "RAILMUX_MSYS2_APP_ID": "railmux-0.4.0.dev19",
+        "CODEX_API_KEY": "must-not-enter-tmux",
+    }
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target, ["/opt/railmux/bin/railmux"], [], env=env,
+    ) == "$7"
+
+    argv = launched[0][0]
+    assert argv == [
+        "tmux", "-S", "/tmp/private", "new-session", "-d", "-s",
+        "railmux",
+        "-e", "RAILMUX_WINDOWS_RUNTIME=msys2",
+        "-e", "RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22",
+        "-e", "RAILMUX_MSYS2_APP_ID=railmux-0.4.0.dev19",
+        "/opt/railmux/bin/railmux", "--inside-tmux",
+    ]
+    assert all("CODEX_API_KEY" not in value for value in argv)
+
+
+def test_detached_session_rejects_unbounded_runtime_identity(monkeypatch):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_ids = iter((None, "$7"))
+    launched = []
+    monkeypatch.setattr(tmux_server, "target_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: launched.append(argv)
+        or SimpleNamespace(returncode=0),
+    )
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target,
+        ["railmux"],
+        [],
+        env={
+            "RAILMUX_WINDOWS_RUNTIME": "msys2",
+            "RAILMUX_MSYS2_APP_ID": "bad=value",
+        },
+    ) == "$7"
+
+    assert "RAILMUX_WINDOWS_RUNTIME=msys2" in launched[0]
+    assert all("bad=value" not in value for value in launched[0])
+
+
 def test_detached_launcher_session_refuses_changed_server_identity(
     monkeypatch,
 ):

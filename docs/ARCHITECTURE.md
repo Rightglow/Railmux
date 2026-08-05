@@ -70,7 +70,11 @@ therefore tries the ordinary label-selected tmux client first. Soft Quit can
 leave detached provider sessions on that server after the outer `railmux`
 session exits. When managed Windows proves an existing server but no outer UI,
 the launcher creates only that missing session detached through the
-revalidated server, then retains the ordinary direct-first order. It may make
+revalidated server. It passes only the bounded managed-runtime kind, runtime
+ID, and app-layer ID into that pane with tmux `-e`; no provider credential or
+general caller environment is persisted, and the child still has to verify
+the matching same-owner on-disk markers. It then retains the ordinary
+direct-first order. It may make
 one transparent bridge attempt only when that client rejects the attach within
 five seconds, stdin/stdout are real terminals, and a new identity-pinned query
 proves that the same server PID and immutable Railmux session still exist.
@@ -95,6 +99,12 @@ bounded set of old, same-owner relay endpoints only after they fail a connect
 probe and their age and inode identity remain unchanged. A bridge failure
 leaves the existing tmux workspace running and records only a bounded
 diagnostic category. POSIX launches never enter this fallback.
+
+The managed launcher suppresses tmux's raw direct-attach error only on this
+Windows path. A completed fallback emits one terminal-capability-aware Railmux
+info line; a bridge that cannot start or later fails emits an actionable
+Railmux error and leaves the existing workspace running. POSIX stderr remains
+unchanged.
 
 MSYS2 tmux may leave its AF_UNIX pathname after the last session exits, causing
 the next client to wait on an endpoint without a listener. The Windows wrapper

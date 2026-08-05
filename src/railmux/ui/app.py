@@ -902,6 +902,7 @@ class App:
         self._projected_target_pane_id: str | None = None
         self._target_toggle_warning_shown = False
         self._status_navigation_warning_shown = False
+        self._status_navigation_projected = False
         self._teardown_core_done: bool = False
         self._outer_teardown_done: bool = False
         self._exit_in_progress: bool = False
@@ -2523,11 +2524,7 @@ class App:
                     "warn",
                 )
             if manager.status_navigation_available:
-                # The initial bar is painted before the shared binding lease is
-                # acquired. Repaint once ownership is known so its wide
-                # Mode/Layout ranges (and compact page ranges) are immediately
-                # live rather than waiting for the next unrelated transition.
-                self._apply_tmux_bar(self._tmux_error_bar)
+                self._project_status_navigation()
             elif (running_in_windows_wrapper()
                   and not self._status_navigation_warning_shown):
                 self._status_navigation_warning_shown = True
@@ -2537,6 +2534,35 @@ class App:
                     "warn",
                 )
             self._sync_termux_tap_route()
+
+    def _project_status_navigation(self) -> None:
+        """Publish clickable ranges after both lease and status bar exist.
+
+        The Windows worker can finish before ``run`` enables the session-local
+        bar. Its immediate projection is then intentionally a no-op, so the
+        periodic caller retries until the first live bar has received both its
+        left navigation and unchanged right-side Copy range.
+        """
+        if getattr(self, "_status_navigation_projected", False):
+            return
+        manager = getattr(self, "_tmux_binding_manager", None)
+        if (not getattr(self, "_tmux_status_enabled", False)
+                or getattr(manager, "status_navigation_available", False)
+                is not True):
+            return
+        # The initial bar is painted before the shared binding lease is
+        # acquired. Invalidate its cache so the same visible labels are still
+        # rewritten with the newly available range metadata.
+        self._applied_tmux_bar_state = None
+        self._apply_tmux_bar(self._tmux_error_bar)
+        status_text = getattr(self, "_rendered_status_text", "")
+        if status_text:
+            self._render_status_to_tmux(
+                status_text,
+                getattr(self, "_rendered_status_level", "info"),
+                remember=False,
+            )
+        self._status_navigation_projected = True
 
     def _start_windows_tmux_setup(self) -> None:
         """Prepare expensive shared tmux leases without delaying first paint."""
@@ -11154,6 +11180,7 @@ class App:
 
     def _on_tick(self, loop, _user_data) -> None:
         self._refresh()
+        self._project_status_navigation()
         if self._pending_restore_state is not None:
             # A portable Codex preview may have been waiting for the first
             # immutable history generation even when no live recovery

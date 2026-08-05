@@ -166,7 +166,12 @@ shell and runs the ordinary POSIX product there.
   bridge attempt. If Soft Quit preserved detached providers but removed the
   outer UI, Railmux first creates only that missing outer session detached on
   the revalidated existing server; it then uses the same direct-first and
-  immutable-session bridge checks. The helper is spawned by that exact server,
+  immutable-session bridge checks. That new outer session receives only the
+  current bounded runtime kind, runtime ID, and Railmux app-layer ID through
+  tmux `-e`; credentials, provider variables, and the rest of the launcher
+  environment are excluded. The on-disk base/app markers remain independent
+  authority before MSYS2's NTFS privacy projection is accepted. The helper is
+  spawned by that exact server,
   owns an additional PTY-backed tmux client in the server's Windows Terminal
   Services session, and forwards opaque bytes, resize, heartbeat, and exit
   frames to the entry terminal. It never mirrors the UI, stores an origin preference,
@@ -177,7 +182,9 @@ shell and runs the ordinary POSIX product there.
   Output is suppressed at the `run-shell` boundary,
   sends are time-bounded, and the helper drains tmux's terminal-restore tail
   before reporting exit. Failure leaves the shared workspace running and is
-  exposed as a bounded `doctor` incident.
+  exposed as a bounded `doctor` incident. A successful bridge suppresses the
+  raw direct-client terminal error and prints one terminal-aware Railmux info
+  line; a failed or unavailable bridge retains an actionable Railmux error.
 - MSYS2 projects NTFS ACLs as 0644/0755 even when POSIX chmod requests
   0600/0700. Railmux accepts that representation only under the real
   Cygwin/MSYS managed wrapper after verifying separate same-owner on-disk base
@@ -204,7 +211,10 @@ shell and runs the ordinary POSIX product there.
   histories, UI state is
   projected back on the Urwid thread, and an early exit leaves lease cleanup
   with exactly one owner. Keyboard Mode/Layout paths remain available during
-  that bounded setup window.
+  that bounded setup window. Completion invalidates the pre-lease bar cache
+  and reprojects both left navigation and the unchanged current right-side
+  Copy range, so the first status text does not wait for a later tip to become
+  clickable.
 - tmux 3.7+ status actions use dedicated `control|N` ranges and crash-safe
   shared bindings. Railmux captures existing root-table bindings before
   replacement, restores only its own lease, and shows the `m`/`F8` keyboard
@@ -333,6 +343,18 @@ immutable session ID, entered it from OpenSSH, and detached normally. The
 provider tmux session survived both launches and no provider/session file was
 opened for mutation. Automatic bridge selection from the desktop Windows
 Terminal side of the Terminal Services boundary remains a manual check.
+
+The dev19 candidate reused that live provider and dedicated server after the
+outer UI had disappeared. The detached create carried only the exact managed
+runtime/app IDs, the new process revalidated its NTFS-projected private state,
+and the unresolved Codex marker moved from the proven-dead outer pane to the
+new immutable pane without reading or changing provider history. The first
+interactive status bar contained current tmux 3.7 control ranges; F6 copied the
+full status source into tmux's clipboard buffer and produced its transient
+acknowledgement. The provider survived repeated outer recreation and the final
+view detached normally. Automated tests cover raw direct-error suppression,
+terminal-aware bridge status, and the unavailable-bridge error; desktop-side
+Windows Terminal clipboard receipt remains manual.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
