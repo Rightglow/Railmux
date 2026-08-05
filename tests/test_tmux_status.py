@@ -36,19 +36,36 @@ def _status_app(*, enabled=True, session="railmux", codex_mode=False):
     return app
 
 
+def _tmux_commands(run):
+    """Expand batched ``tmux cmd ; cmd`` argv into logical commands."""
+    commands = []
+    for call in run.call_args_list:
+        argv = call.args[0]
+        if not argv or argv[0] != "tmux":
+            continue
+        command = ["tmux"]
+        for token in argv[1:]:
+            if token == ";":
+                commands.append(command)
+                command = ["tmux"]
+            else:
+                command.append(token)
+        commands.append(command)
+    return commands
+
+
 def _style_calls(run, option):
     """Every value pushed to ``option`` via tmux set-option, in call order."""
     return [
-        c.args[0][5]
-        for c in run.call_args_list
-        if c.args[0][:2] == ["tmux", "set-option"] and c.args[0][4] == option
+        argv[5]
+        for argv in _tmux_commands(run)
+        if argv[:2] == ["tmux", "set-option"] and argv[4] == option
     ]
 
 
 def _status_right_call(run):
     """The full argv of the status-right set-option (skips the bar-style swap)."""
-    for call in run.call_args_list:
-        argv = call.args[0]
+    for argv in _tmux_commands(run):
         if argv[:2] == ["tmux", "set-option"] and argv[4] == "status-right":
             return argv
     raise AssertionError("no status-right set-option captured")
@@ -81,10 +98,21 @@ def test_forces_status_redraw(monkeypatch):
 
     _status_app()._render_status_to_tmux("hi", "info")
 
-    argvs = [c.args[0] for c in run.call_args_list]
+    argvs = _tmux_commands(run)
     assert ["tmux", "refresh-client", "-S"] in argvs
     # set-option must come before the refresh so the redraw shows the new value.
-    assert argvs.index(_status_right_call(run)) < argvs.index(["tmux", "refresh-client", "-S"])
+    assert argvs.index(_status_right_call(run)) < argvs.index(
+        ["tmux", "refresh-client", "-S"])
+
+
+def test_status_update_uses_one_tmux_client(monkeypatch):
+    run = MagicMock()
+    monkeypatch.setattr("subprocess.run", run)
+
+    _status_app()._render_status_to_tmux("hi", "info")
+
+    run.assert_called_once()
+    assert _tmux_commands(run)[-1] == ["tmux", "refresh-client", "-S"]
 
 
 def test_level_styles_differ(monkeypatch):
@@ -207,6 +235,26 @@ def test_apply_bar_sets_normal_and_error_styles(monkeypatch):
     app._apply_tmux_bar(error=True)
     assert _style_calls(run, "status-style")[-1] == _TMUX_BAR_STYLE_ERROR
     assert _style_calls(run, "status-left")[-1] == _tmux_status_left(True, False)
+
+
+def test_identical_bar_frame_is_not_reapplied(monkeypatch):
+    run = MagicMock()
+    run.return_value.returncode = 0
+    monkeypatch.setattr("subprocess.run", run)
+    app = _status_app()
+
+    app._apply_tmux_bar(error=False)
+    app._apply_tmux_bar(error=False)
+
+    run.assert_called_once()
+    commands = _tmux_commands(run)
+    assert [argv[4] for argv in commands if argv[:2] == ["tmux", "set-option"]] == [
+        "status-style",
+        "status-left",
+        "status-left-length",
+        "status-right-length",
+    ]
+    assert commands[-1] == ["tmux", "refresh-client", "-S"]
 
 
 def test_status_left_shows_current_mode(monkeypatch):
@@ -474,6 +522,7 @@ def test_compact_error_status_uses_legible_control_colours():
 
 def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
     run = MagicMock()
+    run.return_value.returncode = 0
     monkeypatch.setattr("subprocess.run", run)
     app = _status_app()
     app._workspace = AgentWorkspace()
@@ -489,7 +538,7 @@ def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
     run.reset_mock()
     app._railmux_has_focus = False
     app._apply_tmux_bar(error=False)
-    assert "· Claude Code · ◨" in _style_calls(run, "status-left")[-1]
+    run.assert_not_called()
 
 
 def test_layout_indicator_maps_orientation_and_target():

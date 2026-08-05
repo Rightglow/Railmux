@@ -125,6 +125,20 @@ _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
 _SESSION_LEASE_PROBE_TTL_S = 2.0
 
 
+def _tmux_batch_argv(commands: list[list[str]]) -> list[str]:
+    """Encode independent tmux commands into one client invocation."""
+    argv = ["tmux"]
+    first = True
+    for command in commands:
+        if not command:
+            continue
+        if not first:
+            argv.append(";")
+        argv.extend(command)
+        first = False
+    return argv
+
+
 PALETTE = [
     # Status-bar message levels. Idle tips are dim; info neutral green;
     # warn/error escalate so failures stand out from routine feedback.
@@ -769,6 +783,11 @@ class App:
         self._delete_progress_text: str = "Deleting…"
         self._rendered_status_text: str | None = None
         self._rendered_status_level: str = "tip"
+        # Applying one logical status-bar frame used to spawn five tmux
+        # clients.  Keep the last complete frame so repeated focus/resize
+        # callbacks do not rewrite identical options, which is especially
+        # expensive under MSYS2 on Windows.
+        self._applied_tmux_bar_state: tuple[str, str, str, int, int] | None = None
         self._status_feedback_alarm: object | None = None
         self._attention_notice_key: tuple[str, int] | None = None
         self._tip_index: int = 0
@@ -3061,6 +3080,19 @@ class App:
         """Transition presentation while preserving pane topology and Target."""
         workspace = self._agent_workspace()
         if workspace.presentation is presentation:
+            return True
+        has_agent_page = any(slot.pane_id for slot in workspace.slots)
+        if not has_agent_page:
+            # With only the sidebar pane there is no tmux page to select,
+            # zoom, or preserve.  Avoid a chain of geometry subprocesses on
+            # initial compact terminals; the logical presentation still
+            # drives the responsive footer and status bar.
+            workspace.presentation = presentation
+            workspace.compact_page = WorkspacePage.SIDEBAR
+            self._pre_compact_wide_zoom_pane = None
+            self._pre_compact_layout_profile = None
+            self._remote_compact_prepared = None
+            self._apply_tmux_bar(self._tmux_error_bar)
             return True
         if presentation is WorkspacePresentation.COMPACT:
             owner = getattr(self, "_railmux_pane_id", None)
@@ -10559,7 +10591,9 @@ class App:
         elif (size_changed and workspace.presentation
               is WorkspacePresentation.COMPACT):
             self._apply_tmux_bar(self._tmux_error_bar)
+        has_agent_page = any(slot.pane_id for slot in workspace.slots)
         if (workspace.presentation is WorkspacePresentation.COMPACT
+                and has_agent_page
                 and self._window_is_zoomed() is False):
             # Retry a transient failed zoom and heal manual/unexpected unzoom;
             # compact presentation is defined by exactly one visible page.
@@ -10795,16 +10829,16 @@ class App:
             self._rendered_status_level = level
         try:
             import subprocess as _sp
-            _sp.run(
-                ["tmux", "set-option", "-t", self._tmux_status_session,
+            commands = [
+                ["set-option", "-t", self._tmux_status_session,
                  "status-right", payload],
+            ]
+            if refresh:
+                commands.append(["refresh-client", "-S"])
+            _sp.run(
+                _tmux_batch_argv(commands),
                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
             )
-            if refresh:
-                _sp.run(
-                    ["tmux", "refresh-client", "-S"],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                )
         except Exception:
             pass
 
@@ -10880,23 +10914,35 @@ class App:
                 self._status_layout_indicator(),
                 wrap_action,
             )
+        state = (
+            self._tmux_status_session,
+            bar,
+            brand,
+            left_length,
+            right_length,
+        )
+        if getattr(self, "_applied_tmux_bar_state", None) == state:
+            return
         try:
             import subprocess as _sp
-            for opt, val in (
-                ("status-style", bar),
-                ("status-left", brand),
-                ("status-left-length", str(left_length)),
-                ("status-right-length", str(right_length)),
-            ):
-                _sp.run(
-                    ["tmux", "set-option", "-t", self._tmux_status_session,
-                     opt, val],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            commands = [
+                ["set-option", "-t", self._tmux_status_session, opt, val]
+                for opt, val in (
+                    ("status-style", bar),
+                    ("status-left", brand),
+                    ("status-left-length", str(left_length)),
+                    ("status-right-length", str(right_length)),
                 )
+            ]
             # Force an immediate repaint (default status-interval is 15s) so a
             # mode toggle or error flip shows at once, not on the next tick.
-            _sp.run(["tmux", "refresh-client", "-S"],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            commands.append(["refresh-client", "-S"])
+            result = _sp.run(
+                _tmux_batch_argv(commands),
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+            if getattr(result, "returncode", 0) == 0:
+                self._applied_tmux_bar_state = state
         except Exception:
             pass
 
@@ -11040,21 +11086,17 @@ class App:
             if tmux_ctl.in_tmux():
                 sess = tmux_ctl.current_session_name() or "railmux"
                 _sp.run(
-                    ["tmux", "set-option", "-t", sess, "set-clipboard", "on"],
+                    _tmux_batch_argv([
+                        ["set-option", "-t", sess, "set-clipboard", "on"],
+                        ["set-option", "-t", sess, "focus-events", "on"],
+                        ["set-option", "-t", sess, "mouse", "on"],
+                    ]),
                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
                 )
                 # Force OSC 52 passthrough so a left-drag selection in either pane
                 # copies to the *local* system clipboard (works over SSH / nested
                 # tmux on OSC-52-capable terminals). Pairs with set-clipboard on.
                 tmux_ctl.enable_clipboard_passthrough()
-                _sp.run(
-                    ["tmux", "set-option", "-t", sess, "focus-events", "on"],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                )
-                _sp.run(
-                    ["tmux", "set-option", "-t", sess, "mouse", "on"],
-                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                )
                 wheel = getattr(self, "_root_wheel_manager", None)
                 if wheel is not None and not wheel.open():
                     self._set_status(
@@ -11111,11 +11153,13 @@ class App:
                 # visually clean.  These overrides remain session-scoped and
                 # teardown reverts them to the dedicated server's hidden
                 # baseline.
-                for opt, val in self._TMUX_BAR_OPTIONS:
-                    _sp.run(
-                        ["tmux", "set-option", "-t", sess, opt, val],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
+                _sp.run(
+                    _tmux_batch_argv([
+                        ["set-option", "-t", sess, opt, val]
+                        for opt, val in self._TMUX_BAR_OPTIONS
+                    ]),
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                )
                 self._tmux_status_session = sess
                 self._tmux_status_enabled = True
                 self._apply_tmux_bar(error=False)  # initial green bar

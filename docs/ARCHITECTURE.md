@@ -111,6 +111,14 @@ endpoint as having no live server; the normal `new-session -A` path can then
 replace it. This fallback neither unlinks the socket itself nor changes the
 shorter explicit bounds used to monitor a server already believed to be live.
 
+Independent tmux mutations that form one startup or status-bar transaction are
+sent through one tmux client, and an identical complete bar frame is not
+rewritten. This is a performance invariant on runtimes where spawning each tmux
+client is expensive, but it does not weaken option restoration or the
+crash-safe binding leases. A compact terminal with only Railmux's sidebar has
+no agent page to select or zoom, so its logical compact presentation must not
+perform agent-page geometry probes.
+
 Doctor collection has one versioned structured snapshot authority. Human text
 and `doctor --json` are renderers of that same snapshot, not independent probe
 paths. Stable JSON fields contain only bounded status/category values, numeric

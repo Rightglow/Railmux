@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev17] - 2026-08-05
+
+### Fixed
+
+- Batch independent startup/status-bar tmux commands, suppress identical bar
+  rewrites, and skip compact-page geometry probes when only the sidebar exists.
+  This removes Windows/MSYS2 process-spawn amplification without changing the
+  provider/session discovery path.
+
 ## [0.4.0.dev16] - 2026-08-05
 
 ### Added
@@ -2214,7 +2223,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...HEAD
+[0.4.0.dev17]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...v0.4.0.dev17
 [0.4.0.dev16]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev15...v0.4.0.dev16
 [0.4.0.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev14...v0.4.0.dev15
 [0.4.0.dev14]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev13...v0.4.0.dev14
