@@ -106,7 +106,7 @@ id = "WW-SSH-POSIX"
 features = ["S01", "S04", "S06", "S08", "S09", "S11", "S12", "S17"]
 automation = ["tests/test_fast_full_window.py", "tests/test_session_lease.py"]
 manual = "Run railmux ssh from Windows to Linux and macOS/Unix; verify restore, reconnect, history, mouse, paste, resize, and Ctrl-]."
-evidence = "Dev16 automation covers row-local hover/selection repaint and provider-session lease conflicts. The candidate also entered its Windows workspace from an ordinary OpenSSH client and detached cleanly, but Windows-origin railmux ssh to a Linux/macOS target remains an end-to-end manual check."
+evidence = "Dev16 automation covers row-local hover/selection repaint and provider-session lease conflicts. The candidate also entered its Windows workspace from an ordinary OpenSSH client and detached cleanly. Dev21 automation delivers eight SGR wheel reports in one local input batch, preserves all eight agent-history rows with one final overlay paint, restores live once when a downward batch reaches the bottom, and retains the existing one-per-direction bound for wheel input forwarded to remote sidebar/modal owners. Windows-origin railmux ssh to a Linux/macOS target remains an end-to-end manual check."
 
 [[scenarios]]
 id = "WW-RUNTIME-BRIDGES"
