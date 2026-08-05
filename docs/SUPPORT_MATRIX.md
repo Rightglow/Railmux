@@ -116,7 +116,7 @@ product capability.
 | S05 | Coalesced latest-state keyframes and row patches | Supported | Slow display output must not flow-control the real provider pane. |
 | S06 | Default-on bounded automatic reconnect | Supported | Only after a first frame; bottom-right retry status and display-only SSH keepalives bound silent outages; no install, takeover, session creation, detach, or provider mutation. |
 | S07 | Heartbeat lease and stale-helper cleanup | Supported | Stops only the helper's exact private tmux client, never the workspace or agents. |
-| S08 | Independent cached local history per agent pane | Supported | 300-line hot cache, 2,000-line cumulative expansion, configurable 2,000–20,000 cap; ordinary Codex history preserves styled raw pane capture and never switches format merely because a Preview locator exists. |
+| S08 | Independent cached local history per agent pane | Supported | 300-line hot cache, 2,000-line cumulative expansion, configurable 2,000–20,000 cap; unaligned captures are never spliced, and ordinary Codex history preserves styled raw pane capture without switching format merely because a Preview locator exists. |
 | S09 | Page Up/Down through verified agent history | Supported | Sidebar and dialogs retain their ordinary keys. |
 | S10 | Claude native history or styled local transcript policy | Supported | Choice can be persistent or current invocation; Codex normally uses tmux/history capture, with canonical transcript fallback gated by an exact confirmed branch marker. |
 | S11 | Pane-bounded local drag selection and automatic copy | Supported | Visible physical rows only; no autoscroll, soft-wrap join, or cross-pane selection. |
