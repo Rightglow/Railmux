@@ -698,10 +698,14 @@ def _filter_mode(app):
 
 def test_bracketed_paste_burst_is_dropped_whole():
     # A clipboard whose bytes include destructive command keys (k=kill,
-    # d+y=delete-confirm, q+enter=quit-all) must not reach dispatch.
+    # d+y=delete-confirm, q+enter+enter=twice-confirmed quit-all) must not
+    # reach dispatch.
     app = _paste_app()
     out = app._filter_input(
-        ["begin paste", "k", "d", "y", "q", "enter", "end paste"], [])
+        [
+            "begin paste", "k", "d", "y", "q", "enter", "enter",
+            "end paste",
+        ], [])
     assert out == []
     assert app._in_paste is False
     app._set_status.assert_called_once()

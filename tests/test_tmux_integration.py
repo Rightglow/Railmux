@@ -279,8 +279,6 @@ def test_exact_view_reset_preserves_live_pane_and_scrollback(isolated_tmux):
     )
     assert "rewind-stale-0" in retained
     assert "rewind-stale-159" in retained
-
-
 def test_real_railmux_inside_tmux_reaches_first_interactive_frame(tmp_path):
     """Boot the actual TUI on every supported tmux, including the 2.7 floor."""
     socket_root = Path(tempfile.mkdtemp(prefix="rx-start-", dir="/tmp"))
@@ -1915,6 +1913,18 @@ def test_real_remote_display_soft_quit_keeps_tmux_responsive(
         assert _wait_until(
             lambda: "q Quit" in captured_railmux(), timeout=8.0)
         process.stdin.write(encode_input(b"q"))
+        process.stdin.flush()
+        assert _wait_until(
+            lambda: "Quit railmux?" in captured_railmux(), timeout=3.0)
+        process.stdin.write(encode_input(b"\r"))
+        process.stdin.flush()
+        assert _wait_until(
+            lambda: "Confirm hard quit" in captured_railmux(), timeout=3.0)
+        assert process.poll() is None
+        assert tmux(
+            "has-session", "-t", "integration-agent", check=False
+        ).returncode == 0
+        process.stdin.write(encode_input(b"\x1b"))
         process.stdin.flush()
         assert _wait_until(
             lambda: "Quit railmux?" in captured_railmux(), timeout=3.0)

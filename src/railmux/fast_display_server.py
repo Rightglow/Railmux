@@ -1171,12 +1171,35 @@ def apply_path_open_request(
     )
 
 
-def _render_history_line(pyte: object, line: bytes, width: int) -> bytes:
-    """Parse one physical tmux line and emit only allowlisted SGR styling."""
+def _render_history_lines(
+    pyte: object,
+    lines: Sequence[bytes],
+    width: int,
+) -> tuple[bytes, ...]:
+    """Render physical tmux rows while retaining cross-row terminal style.
+
+    ``tmux capture-pane -e`` is a terminal stream, not a collection of
+    independently styled strings. In particular, tmux omits an SGR prefix
+    when a row inherits the previous row's foreground, background, or text
+    attributes. Keep one decoder alive for the ordered capture, but clear its
+    one-row cell buffer between rows. :func:`render_rows` then makes every
+    result independently paintable for the local history overlay.
+    """
     screen = pyte.Screen(width, 1)
     stream = pyte.ByteStream(screen)
-    stream.feed(line)
-    return render_rows(screen)[0]
+    rendered: list[bytes] = []
+    for line in lines:
+        screen.buffer[0].clear()
+        screen.cursor.x = 0
+        screen.cursor.y = 0
+        stream.feed(line)
+        rendered.append(render_rows(screen)[0])
+    return tuple(rendered)
+
+
+def _render_history_line(pyte: object, line: bytes, width: int) -> bytes:
+    """Render one self-contained physical row with allowlisted SGR styling."""
+    return _render_history_lines(pyte, (line,), width)[0]
 
 
 def _read_transcript_tail(fd: int) -> tuple[str, bool]:
@@ -1352,7 +1375,8 @@ def _capture_pane_history(
     # Retain the newest suffix when the styled representation reaches its byte
     # budget. Iterate backwards so an oversized response never sacrifices the
     # pane's current viewport merely to retain older scrollback.
-    current_raw = raw_lines[-pane.height :]
+    rendered_raw = _render_history_lines(pyte, raw_lines, pane.width)
+    current_raw = rendered_raw[-pane.height :]
     transcript_entry = None
     # ``None`` is retained only for old/test geometry that predates the
     # provider field; every validated live marker carries an explicit value.
@@ -1383,21 +1407,14 @@ def _capture_pane_history(
         transcript_lines = transcript_entry.rows
         history_count = max(0, max_lines - pane.height)
         source_lines = (
-            tuple((line, True) for line in transcript_lines[-history_count:])
-            if history_count
-            else ()
-        ) + tuple((line, False) for line in current_raw)
+            transcript_lines[-history_count:] if history_count else ()
+        ) + current_raw
     else:
-        source_lines = tuple((line, False) for line in raw_lines)
+        source_lines = rendered_raw
     newest_first: list[bytes] = []
     packed_size = 2  # history line-count prefix
     budget_truncated = False
-    for raw_line, rendered_already in reversed(source_lines[-max_lines:]):
-        rendered = (
-            raw_line
-            if rendered_already
-            else _render_history_line(pyte, raw_line, pane.width)
-        )
+    for rendered in reversed(source_lines[-max_lines:]):
         line_size = 4 + len(rendered)
         if packed_size + line_size > _HISTORY_SNAPSHOT_RAW_BUDGET:
             budget_truncated = True

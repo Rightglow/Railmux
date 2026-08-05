@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import re
-import signal
 import shlex
 import shutil
 import subprocess
@@ -1849,7 +1848,13 @@ RAILMUX_HISTORY_GENERATION_OPTION = "@railmux_history_generation_v1"
 # A confirmed branch transition prefixes the opaque SSH history cache epoch.
 # Plain generations use native pane history; only this explicit marker permits
 # the canonical transcript fallback that removes an abandoned rewind suffix.
-RAILMUX_CANONICAL_HISTORY_PREFIX = "canonical:"
+# Only the evidence-gated v2 marker authorizes transcript-backed Codex
+# scrolling.  The released v1 marker treated every live direct child rollout
+# as a rewind, but Codex can also create that shape while bootstrapping an
+# ordinary resume.  Keeping the prefix versioned makes existing over-broad
+# markers fail back to raw pane history on upgrade.
+RAILMUX_CANONICAL_HISTORY_PREFIX = "canonical-v2:"
+RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIX = "canonical:"
 # tmux names function keys only through F12. Private restore routes use
 # canonical xterm sequences in literal mode, so they cannot be confused with
 # user input forwarded to an agent pane.
@@ -3430,45 +3435,6 @@ def exact_pane_alive(identity: PaneIdentity) -> bool:
         and current.session_id == identity.session_id
         and current.session_name == identity.session_name
     )
-
-
-def reset_pane_view(identity: PaneIdentity) -> bool:
-    """Reset visible terminal state without deleting retained scrollback.
-
-    Revalidate the immutable session, pane process, and window before issuing
-    tmux's terminal reset. Then send the pane's foreground process group an
-    ordinary same-size ``SIGWINCH`` so its TUI repaints and reasserts terminal
-    modes without a geometry change or injected keyboard input. The reset can
-    push the old viewport into tmux history, but never destroys the retained
-    prefix; managed history surfaces use the provider's canonical transcript.
-    """
-    current = pane_identity(identity.pane_id)
-    if (current is None or current.dead
-            or current.pane_pid != identity.pane_pid
-            or current.session_id != identity.session_id
-            or current.window_id != identity.window_id):
-        return False
-    try:
-        subprocess.check_call(
-            ["tmux", "send-keys", "-R", "-t", identity.pane_id],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return False
-
-    current = pane_identity(identity.pane_id)
-    if (current is None or current.dead
-            or current.pane_pid != identity.pane_pid
-            or current.session_id != identity.session_id
-            or current.window_id != identity.window_id):
-        return True
-    try:
-        os.killpg(os.getpgid(current.pane_pid), signal.SIGWINCH)
-    except (OSError, ValueError):
-        # The presentation cache is already clean. A provider that exited or
-        # cannot be signalled will repaint on its next ordinary terminal write.
-        pass
-    return True
 
 
 def kill_session_identity(identity: PaneIdentity) -> bool:
