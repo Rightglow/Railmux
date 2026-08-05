@@ -33,6 +33,17 @@ def test_locked_lease_reports_owner_and_refuses_second_claim(tmp_path) -> None:
         first.close()
 
 
+def test_claim_flushes_owner_record_before_return(monkeypatch, tmp_path) -> None:
+    fsync = MagicMock()
+    monkeypatch.setattr(session_lease.os, "fsync", fsync)
+
+    claim = session_lease.acquire(tmp_path, "claude", ("session-a",))
+    try:
+        fsync.assert_called_once_with(claim.files[0][2])
+    finally:
+        claim.close()
+
+
 def test_unlocked_stale_record_is_not_an_active_lease(tmp_path) -> None:
     claim = session_lease.acquire(tmp_path, "codex", ("rollout-a",))
     path = claim.files[0][1]

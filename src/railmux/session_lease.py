@@ -248,6 +248,10 @@ def _write_owner_fd(fd: int, payload: dict) -> None:
         os.ftruncate(fd, 0)
         if os.write(fd, data) != len(data):
             raise OSError("short session lease owner write")
+        # The descriptor remains open for the provider lifetime.  Flush the
+        # diagnostic record now so another NFS client that observes the lock
+        # does not have to wait for close before it can name the owner.
+        os.fsync(fd)
     except OSError as exc:
         raise LeaseError("could not publish session lease owner") from exc
 

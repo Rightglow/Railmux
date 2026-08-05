@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Flush cross-host session-lease owner metadata before returning a claim, so a
+  second NFS client that already observes the lock can immediately identify the
+  owning host instead of showing the conservative `another host` fallback.
+
 ## [0.3.5] - 2026-08-04
 
 ### Added
