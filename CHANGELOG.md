@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev17] - 2026-08-05
+
+### Fixed
+
+- Keep `railmux ssh` scrollback continuous when periodic hot captures cannot
+  be aligned: never splice unrelated snapshots, preserve an already-frozen
+  viewport, and request cumulative deep history from the newest continuous
+  suffix.
+- Batch independent startup/status-bar tmux commands, suppress identical bar
+  rewrites, and skip compact-page geometry probes when only the sidebar exists.
+  This removes Windows/MSYS2 process-spawn amplification without changing the
+  provider/session discovery path.
+- On the managed Windows runtime, prepare crash-safe wheel and shared
+  function/status binding leases after the first interactive frame. Provider
+  indexing and pane restoration remain synchronous and read-only; keyboard
+  Mode/Layout controls remain available while mouse/status ownership finishes
+  in the background.
+
 ## [0.4.0.dev16] - 2026-08-05
 
 ### Added
@@ -2214,7 +2232,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...HEAD
+[0.4.0.dev17]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...v0.4.0.dev17
 [0.4.0.dev16]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev15...v0.4.0.dev16
 [0.4.0.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev14...v0.4.0.dev15
 [0.4.0.dev14]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev13...v0.4.0.dev14
@@ -2228,6 +2247,7 @@ made after 0.2.21.
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
+[0.3.6.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6.dev1
 [0.3.5]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5
 [0.3.5.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5.dev1
 [0.3.4]: https://github.com/Rightglow/Railmux/compare/v0.3.3...v0.3.4

@@ -3576,18 +3576,50 @@ def test_periodic_prefetch_never_moves_an_existing_frozen_viewport():
 
     assert action == HistoryAction()
     assert view.overlays() == before
-    # A redraw without safe anchors updates only the mutable live viewport;
-    # it must not erase already captured history behind the frozen view.
-    assert view.content_cache["%8"].lines == (
-        b"old-0",
-        b"old-1",
-        b"old-2",
-        b"old-3",
-        b"old-4",
-        b"new-5",
-        b"new-6",
-        b"new-7",
+    # A redraw without safe anchors cannot be spliced onto the old capture:
+    # doing so would manufacture a false seam and omit intermediate rows. The
+    # immutable frozen viewport remains visible, while the next history entry
+    # starts from the newest internally contiguous capture.
+    assert view.content_cache["%8"].lines == advanced.lines
+
+
+def test_unaligned_hot_prefetch_never_creates_a_discontinuous_history_seam():
+    view = LocalHistoryView(history_limit=2000)
+    first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    first_id, _limit = decode_history_prefetch(first.data)
+    old = HistorySnapshot(
+        first_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        tuple(f"old-{index}".encode() for index in range(300)),
+        more_available=True,
     )
+    view.accept_prefetch(HistoryBatch(first_id, (old,)))
+
+    second = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    second_id, _limit = decode_history_prefetch(second.data)
+    current = HistorySnapshot(
+        second_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        tuple(f"new-{index}".encode() for index in range(300)),
+        more_available=True,
+    )
+    view.accept_prefetch(HistoryBatch(second_id, (current,)))
+
+    wheel = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
+
+    assert view.viewports["%8"].snapshot.lines == current.lines
+    assert view.overlays()[0][1] == (b"new-296", b"new-297", b"new-298")
+    assert b"old-296" not in view.viewports["%8"].snapshot.lines
+    request = InputFrameDecoder().feed(wheel.protocol_frame)[0]
+    assert decode_history_request(request.data)[3] == 2000
 
 
 def test_temporary_blank_fullscreen_tail_is_removed_after_main_view_returns():

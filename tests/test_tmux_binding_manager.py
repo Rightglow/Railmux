@@ -181,6 +181,31 @@ def test_multiple_owners_share_install_and_last_owner_restores(
     assert restore.call_args.args[0] == backup
 
 
+def test_registration_publishes_all_capabilities_atomically(
+        monkeypatch, tmp_path):
+    _install_mocks(monkeypatch, tmp_path)
+
+    class ObservedManager(SharedTmuxBindingManager):
+        def __setattr__(self, name, value):
+            if name == "_registered" and value:
+                assert self._prefix_tab_managed
+                assert self._right_click_managed
+                assert self._selection_hook_managed
+                assert self._selection_hook_index == 9000
+                assert self._status_click_managed
+                assert self._termux_tap_managed
+            super().__setattr__(name, value)
+
+    first = ObservedManager("server", "%1")
+    second = ObservedManager("server", "%2")
+
+    # Cover both a fresh transaction and publication from an existing shared
+    # transaction. Before publication every public capability stays false.
+    assert not first.status_navigation_available
+    assert first.open()
+    assert second.open()
+
+
 def test_dead_owner_is_pruned_by_successor(monkeypatch, tmp_path):
     _backup, install, restore, _set, _unset = _install_mocks(
         monkeypatch, tmp_path)

@@ -194,6 +194,14 @@ shell and runs the ordinary POSIX product there.
 - Startup repaints the restoring surface with separate read-only indexing and
   tmux-reconnection stages. A slow startup reports its measured initialization
   time and the private-cache boundary after the first frame.
+- Provider indexing, immutable pane recovery, and the first interactive
+  sidebar frame remain synchronous. The managed runtime prepares only its
+  crash-safe root-wheel and shared function/status binding leases on a
+  non-daemon background worker; their tmux queries do not read provider
+  histories, UI state is
+  projected back on the Urwid thread, and an early exit leaves lease cleanup
+  with exactly one owner. Keyboard Mode/Layout paths remain available during
+  that bounded setup window.
 - tmux 3.7+ status actions use dedicated `control|N` ranges and crash-safe
   shared bindings. Railmux captures existing root-table bindings before
   replacement, restores only its own lease, and shows the `m`/`F8` keyboard
@@ -300,6 +308,19 @@ and rejected the second claim. This proves the tested filesystem's cross-host
 `flock` behavior and the owner-record flush, not arbitrary NFS/CIFS mount
 semantics. End-to-end Windows-origin `railmux ssh` mouse motion and authenticated
 provider resume remain manual dev16 checks.
+
+The dev17 candidate was installed into a new isolated tmux label on the same
+Windows 10 19045 / managed-MSYS2 host. Subprocess profiling proved an empty
+provider set (`index 0.0s`) and immutable pane recovery of 0.6s; repeated tmux
+client process creation, not provider-history parsing, dominated the older
+startup. Batching independent mutations and preparing only crash-safe
+wheel/function/status leases after first paint reduced the controlled app
+restore measurement from 9.4s before batching, through 4.6s after batching, to
+2.3s for the final candidate. The resulting live root table contained the
+owned F8/F9, status-control, right-click, and wheel bindings, and detaching left
+the isolated workspace healthy. This measures an empty-session SSH-origin
+terminal on that host; desktop Windows Terminal pointer behavior and
+authenticated provider restore remain manual checks.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
