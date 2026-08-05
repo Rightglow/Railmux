@@ -26,6 +26,7 @@ from railmux import tmux_server
 from railmux import windows_tmux_lifecycle
 from railmux.system_deps import ensure_tmux_available
 from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
+from railmux.terminal_status import command_status
 
 
 def _show_startup_message(
@@ -85,6 +86,9 @@ def _run_tmux_client_with_watchdog(
     expected_session_id: str | None = None,
 ) -> int:
     """Keep one monitor outside tmux so a frozen server cannot trap the TTY."""
+    from railmux.provider_paths import running_in_managed_windows_wrapper
+
+    managed_windows = running_in_managed_windows_wrapper()
     attributes = None
     if sys.stdin.isatty():
         try:
@@ -93,7 +97,14 @@ def _run_tmux_client_with_watchdog(
             pass
     started_at = time.monotonic()
     try:
-        process: object = subprocess.Popen(argv, env=env)
+        popen_kwargs: dict[str, object] = {"env": env}
+        if managed_windows and expected_target is not None:
+            # A fast direct-client rejection is an implementation detail when
+            # the server-origin bridge succeeds. Suppress tmux's raw
+            # ``open terminal failed`` line and emit one Railmux-owned status
+            # below; bridge failures still receive an actionable error.
+            popen_kwargs["stderr"] = subprocess.DEVNULL
+        process: object = subprocess.Popen(argv, **popen_kwargs)
     except OSError as exc:
         print(f"error: could not start tmux client: {exc}", file=sys.stderr)
         return 2
@@ -204,10 +215,6 @@ def _run_tmux_client_with_watchdog(
                 expected_session_id = tmux_server.target_session_id(
                     expected_target, "railmux", timeout=0.5)
 
-            from railmux.provider_paths import running_in_managed_windows_wrapper
-
-            managed_windows = running_in_managed_windows_wrapper()
-
             can_relay = bool(
                 current_target == expected_target
                 and expected_session_id is not None
@@ -223,13 +230,7 @@ def _run_tmux_client_with_watchdog(
                     start_relay_client,
                 )
 
-                print(
-                    "info: direct tmux attach was unavailable; reconnecting "
-                    "through the Windows terminal bridge",
-                    file=sys.stderr,
-                )
                 try:
-                    tty.setraw(sys.stdin.fileno())
                     relay = start_relay_client(
                         target=expected_target,
                         session_id=expected_session_id,
@@ -237,6 +238,15 @@ def _run_tmux_client_with_watchdog(
                         stdin_fd=sys.stdin.fileno(),
                         stdout_fd=sys.stdout.fileno(),
                     )
+                    print(
+                        command_status(
+                            "info",
+                            "connected through the Windows terminal bridge",
+                            stream=sys.stderr,
+                        ),
+                        file=sys.stderr,
+                    )
+                    tty.setraw(sys.stdin.fileno())
                     process = relay
                     returncode, watchdog_failed = monitor_client(
                         asynchronous_probe=True)
@@ -296,6 +306,14 @@ def _run_tmux_client_with_watchdog(
                     ),
                     consecutive_failures=1,
                 )
+                if not relay_attempted:
+                    print(
+                        "error: direct tmux attach was rejected and the "
+                        "Windows terminal bridge was unavailable; the "
+                        "existing workspace was left running; run "
+                        "'railmux doctor' for diagnostics",
+                        file=sys.stderr,
+                    )
         # Routine post-exit removal of a proof-authorized last-session socket
         # is housekeeping. Only pre-launch recovery is user-visible.
         windows_tmux_lifecycle.recover_abandoned_socket()

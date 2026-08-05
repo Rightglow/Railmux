@@ -1,4 +1,5 @@
 import os
+import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -708,8 +709,8 @@ def test_managed_windows_fast_attach_rejection_uses_one_terminal_bridge(
             self.closed = True
 
     relay = SuccessfulRelay()
-    monkeypatch.setattr(
-        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: ExitedClient())
+    popen = MagicMock(return_value=ExitedClient())
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
     monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
@@ -749,9 +750,53 @@ def test_managed_windows_fast_attach_rejection_uses_one_terminal_bridge(
     assert relay.closed
     recover.assert_called_once_with()
     record.assert_not_called()
+    assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
     stderr = capsys.readouterr().err
     assert "Windows terminal bridge" in stderr
+    assert "direct tmux attach was unavailable" not in stderr
+    assert "open terminal failed" not in stderr
     assert "cleaned an abandoned" not in stderr
+
+
+def test_managed_windows_attach_without_bridge_is_actionable(
+    monkeypatch, capsys,
+):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class ExitedClient:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    popen = MagicMock(return_value=ExitedClient())
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda **_kw: target)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    record = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.cli.tmux_health.record_incident", record)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"],
+        {"RAILMUX_WINDOWS_RUNTIME": "msys2"},
+        expected_target=target,
+        expected_session_id="$7",
+    ) == 1
+
+    assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
+    record.assert_called_once_with(
+        component="launcher",
+        reason="launcher-attach-rejected",
+        consecutive_failures=1,
+    )
+    stderr = capsys.readouterr().err
+    assert "bridge was unavailable" in stderr
+    assert "run 'railmux doctor'" in stderr
 
 
 def test_invalid_config_is_actionable_without_traceback(

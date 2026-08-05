@@ -108,6 +108,67 @@ def test_windows_unavailable_status_clicks_warn_with_keyboard_fallback(
     )
 
 
+def test_finished_status_lease_repaints_left_and_current_copy_range():
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = True
+    manager.selection_isolation_available = False
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _selection_isolation_manager=None,
+        _tmux_status_enabled=False,
+        _tmux_error_bar=False,
+        _applied_tmux_bar_state=("stale",),
+        _rendered_status_text="Restored session safely",
+        _rendered_status_level="success",
+    )
+    app._apply_tmux_bar = MagicMock()
+    app._render_status_to_tmux = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    app._sync_termux_tap_route = MagicMock()
+
+    app._finish_tmux_bindings(True)
+
+    app._apply_tmux_bar.assert_not_called()
+    app._render_status_to_tmux.assert_not_called()
+    assert getattr(app, "_status_navigation_projected", False) is False
+
+    # The worker may finish before run() enables its session-local status bar.
+    # The first periodic reconciliation must project the same remembered text.
+    app._tmux_status_enabled = True
+    app._project_status_navigation()
+
+    assert app._applied_tmux_bar_state is None
+    assert app._status_navigation_projected is True
+    app._apply_tmux_bar.assert_called_once_with(False)
+    app._render_status_to_tmux.assert_called_once_with(
+        "Restored session safely", "success", remember=False,
+    )
+
+
+def test_finished_status_lease_does_not_invent_empty_copy_source():
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = True
+    manager.selection_isolation_available = False
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _selection_isolation_manager=None,
+        _tmux_status_enabled=True,
+        _tmux_error_bar=False,
+        _rendered_status_text="",
+    )
+    app._apply_tmux_bar = MagicMock()
+    app._render_status_to_tmux = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    app._sync_termux_tap_route = MagicMock()
+
+    app._finish_tmux_bindings(True)
+
+    app._apply_tmux_bar.assert_called_once_with(False)
+    app._render_status_to_tmux.assert_not_called()
+
+
 def test_slow_windows_startup_summary_mentions_read_only_cache():
     import time
 

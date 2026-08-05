@@ -647,6 +647,39 @@ def launcher_argv(
     )
 
 
+_MANAGED_WINDOWS_SESSION_ENV = (
+    "RAILMUX_WINDOWS_RUNTIME",
+    "RAILMUX_MSYS2_RUNTIME_ID",
+    "RAILMUX_MSYS2_APP_ID",
+)
+_MANAGED_WINDOWS_SESSION_VALUE_RE = re.compile(
+    r"[A-Za-z0-9_.-]{1,128}\Z"
+)
+
+
+def _managed_windows_session_environment_args(
+    env: Mapping[str, str] | None,
+) -> list[str]:
+    """Return bounded, non-secret tmux ``new-session -e`` arguments.
+
+    A detached outer session can be created by an existing dedicated server
+    whose inherited environment belongs to an older Railmux app layer. Pass
+    only the three independently verified managed-runtime identity hints to
+    the new pane; provider credentials and the rest of the caller environment
+    must remain outside tmux metadata.
+    """
+    if env is None or env.get("RAILMUX_WINDOWS_RUNTIME") != "msys2":
+        return []
+    result: list[str] = []
+    for name in _MANAGED_WINDOWS_SESSION_ENV:
+        value = env.get(name)
+        if (not isinstance(value, str)
+                or _MANAGED_WINDOWS_SESSION_VALUE_RE.fullmatch(value) is None):
+            continue
+        result.extend(["-e", f"{name}={value}"])
+    return result
+
+
 def ensure_detached_launcher_session(
     target: TmuxServerTarget,
     launch_prefix: Sequence[str],
@@ -680,6 +713,7 @@ def ensure_detached_launcher_session(
                 "-d",
                 "-s",
                 "railmux",
+                *_managed_windows_session_environment_args(env),
                 *launch_prefix,
                 "--inside-tmux",
                 *forwarded_args,

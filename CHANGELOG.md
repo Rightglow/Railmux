@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev19] - 2026-08-05
+
+### Fixed
+
+- Preserve the current managed-runtime identity when Soft Quit recreates the
+  outer Windows UI on an older dedicated tmux server. The new pane can now
+  revalidate its private state directory, reclaim an exactly marked unresolved
+  provider, and install status-bar mouse bindings without weakening provider
+  history or immutable-tmux identity checks. Only three bounded, non-secret
+  Railmux runtime identifiers enter the tmux session environment. Completion
+  of the deferred lease now also reprojects both left navigation and the
+  current right-side Copy range, so the first visible status is clickable.
+- Hide tmux's raw `open terminal failed: not a terminal` implementation detail
+  when the Windows terminal bridge succeeds. A successful fallback now emits
+  one terminal-aware Railmux info line; unavailable or failed bridges retain
+  an actionable error and leave the workspace running.
+
 ## [0.4.0.dev18] - 2026-08-05
 
 ### Fixed
@@ -2242,7 +2259,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev18...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...HEAD
+[0.4.0.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev18...v0.4.0.dev19
 [0.4.0.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...v0.4.0.dev18
 [0.4.0.dev17]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...v0.4.0.dev17
 [0.4.0.dev16]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev15...v0.4.0.dev16
