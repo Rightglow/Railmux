@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-08-05
+
+### Changed
+
+- Complete the 0.3 POSIX/WSL maintenance line with immediate, bounded
+  `railmux ssh` history entry from a coherent warm cache and asynchronous
+  cumulative deep pages. Native Windows platform support remains isolated to
+  the upcoming 0.4 line and is not included in this release.
+- Add a keyboard-only final warning before hard quit can stop live agent
+  sessions, while making every choice in the first quit dialog visibly
+  clickable and preserving its existing keyboard shortcuts.
+
+### Fixed
+
+- Keep SSH history continuous and faithful under live repainting: unaligned
+  captures are never spliced, accepted deep pages replace their timeline
+  atomically, cross-row terminal styles remain intact, and batched wheel input
+  preserves its full distance with one final paint.
+- Keep ordinary Codex resume, continuation, and context-compaction children on
+  styled raw pane history. Canonical transcript fallback now requires an exact
+  live rollout plus an explicit provider rollback increment, and released
+  heuristic markers safely downgrade without changing provider data.
+- Reduce startup and status-bar latency by batching independent tmux commands,
+  suppressing unchanged bar frames and unnecessary compact-layout probes, and
+  publishing shared binding capabilities only after their complete state is
+  ready.
+- Flush cross-host session-lease owner metadata before a claim returns, so a
+  second NFS client can report the owning host as soon as it observes the lock.
+
 ## [0.3.6.dev6] - 2026-08-05
 
 ### Fixed
@@ -1997,7 +2026,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev6...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6
 [0.3.6.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...v0.3.6.dev6
 [0.3.6.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...v0.3.6.dev5
 [0.3.6.dev4]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev3...v0.3.6.dev4
