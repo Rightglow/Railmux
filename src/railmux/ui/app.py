@@ -387,6 +387,11 @@ class _Running:
     # provider generation lets the refresh path discard only that stale
     # presentation cache when the exact live writer advances to its child.
     codex_canonical_session_id: str | None = None
+    # A direct rollout child is a rewind only after its parent was proved to
+    # belong to this provider process generation.  An explicit Codex resume
+    # may create a child rollout during bootstrap without rewinding anything.
+    codex_rollout_proven_in_pane: bool = False
+    codex_baseline_message_count: int = 0
     codex_history_generation_stamped: bool = False
     lease_session_ids: frozenset[str] = frozenset()
     lease_warning: str | None = None
@@ -4377,6 +4382,18 @@ class App:
         return {session_id, *(
             alias for alias in aliases if isinstance(alias, str) and alias)}
 
+    def _codex_exact_meta(self, session_id: str) -> SessionMeta | None:
+        """Return one exact indexed rollout without following its lineage."""
+        index = getattr(self, "_codex_index", None)
+        get = getattr(index, "get", None)
+        if not callable(get):
+            return None
+        try:
+            meta = get(session_id, refresh=False)
+        except Exception:
+            return None
+        return meta if isinstance(meta, SessionMeta) else None
+
     def _session_identity_ids(self, session: SessionMeta) -> set[str]:
         if session.session_type == "codex":
             return self._codex_lineage_ids(session.session_id)
@@ -4544,6 +4561,7 @@ class App:
                 # The provider pane is proven by the swap identity above; the
                 # home placeholder cannot expose its rollout file descriptor.
                 probe_live_writer=False,
+                trust_codex_history_state=True,
             )
             if (running is None or running.tmux_name != name
                     or running.key in self._running):
@@ -6583,8 +6601,9 @@ class App:
         *,
         allow_missing_codex_metadata: bool = False,
         probe_live_writer: bool = True,
+        trust_codex_history_state: bool = False,
     ) -> _Running | None:
-        """Validate one state-file binding against current tmux and metadata.
+        """Validate one persisted binding against current tmux and metadata.
 
         The runtime file is a cache, not authority: every string is bounded,
         the tmux session/provider/cwd must still agree, and real ids must still
@@ -6651,8 +6670,54 @@ class App:
                 session_type=session_type,
             )
 
+        canonical_id = None
+        rollout_proven = False
+        baseline_count = 0
         if session_type == "codex":
+            canonical_id = (
+                raw.get("codex_canonical_session_id")
+                if trust_codex_history_state else None
+            )
+            if canonical_id is not None and (
+                not isinstance(canonical_id, str)
+                or not canonical_id
+                or len(canonical_id) > 256
+            ):
+                return None
+            if canonical_id is not None:
+                try:
+                    canonical_uuid = str(uuid.UUID(canonical_id))
+                except ValueError:
+                    canonical_uuid = None
+                if canonical_uuid != canonical_id.lower():
+                    canonical_id = None
+            rollout_proven = (
+                raw.get("codex_rollout_proven_in_pane", False)
+                if trust_codex_history_state else False
+            )
+            baseline_count = (
+                raw.get("codex_baseline_message_count", 0)
+                if trust_codex_history_state else 0
+            )
+            if (
+                not isinstance(rollout_proven, bool)
+                or not isinstance(baseline_count, int)
+                or isinstance(baseline_count, bool)
+                or baseline_count < 0
+            ):
+                return None
+            if canonical_id is None:
+                rollout_proven = False
+                baseline_count = 0
             meta = self._codex_index.get(key, refresh=False)
+            if (
+                canonical_id is not None
+                and meta is not None
+                and canonical_id not in self._codex_lineage_ids(key)
+            ):
+                canonical_id = None
+                rollout_proven = False
+                baseline_count = 0
             if (meta is not None
                     and self._path_key(meta.project.real_path)
                     != self._path_key(cwd)):
@@ -6708,6 +6773,9 @@ class App:
                     project=project,
                     status="busy",
                     session_type=session_type,
+                    codex_canonical_session_id=canonical_id,
+                    codex_rollout_proven_in_pane=rollout_proven,
+                    codex_baseline_message_count=baseline_count,
                 )
             meta = self._codex_representative(key) or meta
         else:
@@ -6722,6 +6790,12 @@ class App:
             status=meta.status,
             last_mtime=meta.last_mtime,
             session_type=session_type,
+            codex_canonical_session_id=(
+                canonical_id if session_type == "codex" else None),
+            codex_rollout_proven_in_pane=(
+                rollout_proven if session_type == "codex" else False),
+            codex_baseline_message_count=(
+                baseline_count if session_type == "codex" else 0),
         )
 
     def _running_binding_data(
@@ -6758,6 +6832,14 @@ class App:
                 # therefore identifies the process but must not authorize
                 # heuristic binding.
                 data["pre_launch_complete"] = False
+        elif running.session_type == "codex":
+            if running.codex_canonical_session_id is not None:
+                data["codex_canonical_session_id"] = (
+                    running.codex_canonical_session_id)
+                data["codex_rollout_proven_in_pane"] = (
+                    running.codex_rollout_proven_in_pane)
+                data["codex_baseline_message_count"] = (
+                    running.codex_baseline_message_count)
         return data
 
     def _stamp_running(self, running: _Running) -> bool:
@@ -6964,6 +7046,7 @@ class App:
                     projects,
                     allow_missing_codex_metadata=True,
                     probe_live_writer=False,
+                    trust_codex_history_state=True,
                 )
             else:
                 if not record.historical_shape:
@@ -7199,13 +7282,24 @@ class App:
                 projects[cwd_key] = project
             running: _Running | None = None
             if marker.phase == "resolved" and marker.session_id is not None:
+                binding: dict = {
+                    "key": marker.session_id,
+                    "tmux_name": name,
+                    "session_type": mode.session_type,
+                    "cwd": str(marker.cwd),
+                }
+                stamped_binding = stamps.get(name)
+                trusted_stamp = bool(
+                    isinstance(stamped_binding, dict)
+                    and stamped_binding.get("key") == marker.session_id
+                    and stamped_binding.get("tmux_name") == name
+                    and stamped_binding.get("session_type") == mode.session_type
+                    and stamped_binding.get("cwd") == str(marker.cwd)
+                )
+                if trusted_stamp:
+                    binding = stamped_binding
                 running = self._valid_running_binding(
-                    {
-                        "key": marker.session_id,
-                        "tmux_name": name,
-                        "session_type": mode.session_type,
-                        "cwd": str(marker.cwd),
-                    },
+                    binding,
                     {name: (marker.cwd, int(marker.created_at))},
                     projects,
                     allow_missing_codex_metadata=(
@@ -7215,7 +7309,18 @@ class App:
                     # marker. Immutable tmux identity was validated above;
                     # defer only that metadata veto until generation 1.
                     probe_live_writer=not allow_missing_codex_metadata,
+                    trust_codex_history_state=trusted_stamp,
                 )
+                if (
+                    running is not None
+                    and mode.session_type == "codex"
+                    and running.codex_canonical_session_id is None
+                ):
+                    exact = self._codex_exact_meta(marker.session_id)
+                    running.codex_canonical_session_id = marker.session_id
+                    running.codex_rollout_proven_in_pane = True
+                    running.codex_baseline_message_count = (
+                        exact.message_count if exact is not None else 0)
             if running is None:
                 pre_launch_ids: frozenset[str] = frozenset()
                 pre_launch_complete = False
@@ -7288,6 +7393,7 @@ class App:
                 live,
                 projects,
                 allow_missing_codex_metadata=allow_missing_codex_metadata,
+                trust_codex_history_state=True,
             )
             if running is None or running.tmux_name != name:
                 continue
@@ -8897,25 +9003,48 @@ class App:
         """Advance managed history after an exact live Codex branch transition.
 
         The provider rollout is the history authority, but Codex keeps using
-        the same terminal pane after a rewind.  Its abandoned suffix can
-        therefore survive in raw tmux scrollback even though the canonical
-        JSONL is already correct. Baseline the first observed rollout, then
-        reset only the live terminal view when the next canonical rollout names
-        that baseline as its parent. Local wheel scrolling remains terminal-
-        native. The SSH display keeps owning wheel history and normally reads
-        raw pane capture; only this confirmed transition marks that history as
-        canonical-transcript-backed so the abandoned suffix stays hidden. On
-        procfs systems the new rollout must also be open in this exact pane's
-        process tree; an unavailable probe degrades to the provider lineage
-        link, while a negative probe waits for a later refresh.
+        the same terminal pane after a rewind. Its abandoned suffix can remain
+        in raw tmux scrollback even though the canonical JSONL is correct.
+
+        A direct child is not sufficient evidence: Codex may also create one
+        while bootstrapping an ordinary ``resume``. Explicit-resume generations
+        therefore begin unproved. A child becomes a confirmed rewind only when
+        its parent was born/adopted in this pane generation or gained real
+        conversation messages after Railmux baselined it. An unproved first
+        child is adopted as the resume bootstrap generation without resetting
+        the pane or changing raw history format; descendants of that exact open
+        child can subsequently be confirmed normally.
         """
         current_id = meta.session_id
         previous_id = running.codex_canonical_session_id
         if previous_id is None:
+            logical_id = running.logical_session_id
+            if (
+                logical_id is not None
+                and current_id != logical_id
+                and current_id in self._codex_lineage_ids(logical_id)
+            ):
+                # The first coherent index generation may arrive after Codex
+                # has already published its ordinary resume-bootstrap child.
+                # Adopt that exact descendant directly; it is now the proved
+                # generation for any later branch transition.
+                if not self._codex_rollout_is_exact_open(
+                    running, meta, server, codex_rollout_probes
+                ):
+                    return
+                running.codex_rollout_proven_in_pane = True
             running.codex_canonical_session_id = current_id
+            running.codex_baseline_message_count = meta.message_count
             self._stamp_codex_history_state(running, meta)
+            self._stamp_running(running)
             return
         if current_id == previous_id:
+            if (
+                not running.codex_rollout_proven_in_pane
+                and meta.message_count > running.codex_baseline_message_count
+            ):
+                running.codex_rollout_proven_in_pane = True
+                self._stamp_running(running)
             if not running.codex_history_generation_stamped:
                 self._stamp_codex_history_state(running, meta)
             return
@@ -8923,23 +9052,63 @@ class App:
                 or current_id not in self._codex_lineage_ids(previous_id)):
             return
 
-        rollout_id = tmux_ctl.rollout_uuid_from_path(meta.jsonl_path)
-        if rollout_id != current_id:
+        if not self._codex_rollout_is_exact_open(
+            running, meta, server, codex_rollout_probes
+        ):
             return
+
+        previous_meta = self._codex_exact_meta(previous_id)
+        parent_gained_conversation = bool(
+            previous_meta is not None
+            and previous_meta.message_count
+            > running.codex_baseline_message_count
+        )
+        if not (
+            running.codex_rollout_proven_in_pane
+            or parent_gained_conversation
+        ):
+            # Ordinary Codex resume bootstrap: the direct child is exact and
+            # open in this pane, but the dormant parent never participated in
+            # this process generation. Adopt it as the new raw-history baseline
+            # and deliberately overwrite any released v1 canonical marker.
+            running.codex_canonical_session_id = current_id
+            running.codex_baseline_message_count = meta.message_count
+            running.codex_rollout_proven_in_pane = True
+            self._stamp_codex_history_state(running, meta)
+            self._stamp_running(running)
+            return
+
+        # Do not reset the live terminal. SSH history enters atomically from
+        # the canonical generation below, so mutating tmux's current screen is
+        # unnecessary and can leave an idle Codex TUI blank when a same-size
+        # SIGWINCH is ignored. The exact live pane remains an authority gate
+        # before publishing the branch marker.
+        if self._codex_real_pane_identity(running) is None:
+            return
+        running.codex_canonical_session_id = current_id
+        running.codex_baseline_message_count = meta.message_count
+        running.codex_rollout_proven_in_pane = True
+        self._stamp_codex_history_state(running, meta, canonical=True)
+        self._stamp_running(running)
+
+    def _codex_rollout_is_exact_open(
+        self,
+        running: _Running,
+        meta: SessionMeta,
+        server: tmux_ctl.ServerSnapshot | None,
+        codex_rollout_probes: dict[str, set[str] | None] | None,
+    ) -> bool:
+        """Require a rollout path/FD match before adopting a live generation."""
+        current_id = meta.session_id
+        if tmux_ctl.rollout_uuid_from_path(meta.jsonl_path) != current_id:
+            return False
         probes = codex_rollout_probes if codex_rollout_probes is not None else {}
         if running.tmux_name in probes:
             open_ids = probes[running.tmux_name]
         else:
             open_ids = self._codex_rollout_ids(running, server)
             probes[running.tmux_name] = open_ids
-        if open_ids is not None and current_id not in open_ids:
-            return
-
-        identity = self._codex_real_pane_identity(running)
-        if identity is None or not tmux_ctl.reset_pane_view(identity):
-            return
-        running.codex_canonical_session_id = current_id
-        self._stamp_codex_history_state(running, meta, canonical=True)
+        return open_ids is None or current_id in open_ids
 
     def _codex_real_pane_identity(
         self, running: _Running,
@@ -8962,8 +9131,10 @@ class App:
         """Publish Preview source plus the SSH history-source cache epoch.
 
         A plain UUID keeps managed SSH history on raw pane capture. Only a
-        confirmed rewind transition writes ``canonical:<uuid>`` and permits a
-        transcript projection. Preserve that exact marker across app restarts.
+        confirmed rewind transition writes ``canonical-v2:<uuid>`` and permits
+        a transcript projection. Preserve that exact v2 marker across app
+        restarts; the released over-broad ``canonical:<uuid>`` marker is
+        intentionally replaced with a plain UUID.
         """
         if running.is_legacy:
             return
@@ -8992,18 +9163,29 @@ class App:
         canonical_generation = (
             f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{meta.session_id}"
         )
-        generation_results = []
-        for pane_id in sorted(pane_ids):
-            existing = tmux_ctl.pane_user_option(
+        existing_generations = {
+            pane_id: tmux_ctl.pane_user_option(
                 pane_id, tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION)
-            if not canonical and existing == canonical_generation:
-                generation_results.append(True)
-                continue
-            generation_results.append(tmux_ctl.set_pane_user_option(
+            for pane_id in sorted(pane_ids)
+        }
+        effective_canonical = canonical or any(
+            marker == canonical_generation
+            for marker in existing_generations.values()
+        )
+        if effective_canonical:
+            running.codex_rollout_proven_in_pane = True
+        desired_generation = (
+            canonical_generation if effective_canonical else meta.session_id)
+        generation_results = [
+            True
+            if existing_generations[pane_id] == desired_generation
+            else tmux_ctl.set_pane_user_option(
                 pane_id,
                 tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION,
-                canonical_generation if canonical else meta.session_id,
-            ))
+                desired_generation,
+            )
+            for pane_id in sorted(pane_ids)
+        ]
         transcript_stamped = marker is not None and all(transcript_results)
         generation_stamped = all(generation_results)
         running.codex_history_generation_stamped = bool(
@@ -9201,6 +9383,12 @@ class App:
             r.status = candidate.status
             r.last_mtime = candidate.last_mtime
             r.attention = candidate.attention
+            if session_type == "codex":
+                # Placeholder exclusion plus exact rollout correlation proves
+                # this generation was born in the pane we launched.
+                r.codex_canonical_session_id = candidate.session_id
+                r.codex_rollout_proven_in_pane = True
+                r.codex_baseline_message_count = candidate.message_count
             self._running[candidate.session_id] = r
             self._stamp_running(r)
             # A new provider session has no UUID to reserve before launch.

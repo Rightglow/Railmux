@@ -107,8 +107,15 @@ immediate. For a stable pane, geometry, and history source, uniquely
 aligned snapshots are merged into one newest-bounded timeline. Unaligned hot
 captures are never spliced: the cache switches to the newest internally
 contiguous suffix and the first wheel-up requests a cumulative deep page to
-recover older rows. An existing frozen viewport retains its immutable snapshot
-while that mutable cache changes. Native Claude, local transcript, and
+recover older rows. When that hot suffix reports older rows available, the
+first wheel-up keeps the live pane visible until the cumulative response
+arrives, then enters history atomically at the requested offset. It never
+paints the short suffix and later replaces it through a moving-live anchor;
+that transition could otherwise expose a gap or two style generations until
+the user returned to the bottom. Additional wheel-up ticks received during the
+bounded request accumulate into its initial offset. An existing frozen
+viewport retains its immutable snapshot while that mutable cache changes.
+Native Claude, local transcript, and
 undecided history are separate sources and are never merged. Protocol v15 also
 carries the opaque pane-local Codex history
 generation; a changed non-content generation replaces that pane's cached
@@ -597,24 +604,31 @@ default history view.
 
 A live Codex rewind or running-turn steering also advances the canonical
 rollout while retaining the same provider pane. Railmux baselines the first
-indexed rollout for each live entry and treats only a direct canonical child as
-a branch transition. Where
-procfs is available, that child rollout must be open in the exact pane process
-tree; a negative probe waits, while platforms without procfs use the explicit
-provider parent link. After revalidating the real pane identity across either
-its detached home or swap display location, Railmux resets only tmux's visible
-terminal state, preserving its retained scrollback, then sends the unchanged
-foreground process group `SIGWINCH` so the provider redraws at the same geometry
-and reasserts its terminal modes. A pane-local generation marker is normally a
-plain rollout UUID, meaning the full-window SSH history manager must use styled
-raw pane capture. Only this confirmed branch transition may prefix that exact
-UUID as canonical and permit a transcript projection that excludes the
+indexed rollout for each live entry, but a direct canonical child alone is not
+branch evidence: Codex may create the same parent/child shape while
+bootstrapping an ordinary resume. An explicit-resume generation is initially
+unproved. Its first exact open child is adopted as a raw-history bootstrap
+generation unless the parent was already born/adopted in this pane generation
+or its indexed real-message count advanced after the baseline. Once adopted,
+that child is proved for later direct transitions. This conversation cursor,
+not rollout mtime or size, prevents startup/config writes from authorizing a
+false rewind. Where procfs is available, every candidate child must additionally
+be open in the exact pane process tree; a negative probe waits, while platforms
+without procfs retain the same provider-link plus generation-evidence rule.
+After revalidating the real pane identity across either its detached home or
+swap display location, Railmux leaves the live terminal and retained tmux
+scrollback untouched. A pane-local generation marker is normally a plain
+rollout UUID, meaning the full-window SSH history manager must use styled raw
+pane capture. Only this confirmed branch transition may write the evidence-gated
+`canonical-v2:` prefix and permit a transcript projection that excludes the
 abandoned suffix; the prefix and transcript locator must name the same rollout.
+Released `canonical:` markers fail back to plain raw history on upgrade because
+they were produced by the older, insufficient direct-child test.
 The transcript locator alone is never authority to change scrolling format.
 Direct local wheel input remains native tmux/provider scrolling, while Space or
 context Preview remains the explicit formatted provider projection. This sends
-no provider input, never resizes the pane, never deletes tmux history, never
-touches provider history, and never mutates a legacy-server session.
+no provider input, never resets or resizes the pane, never deletes tmux history,
+never touches provider history, and never mutates a legacy-server session.
 
 While that first generation is pending, Codex Projects and Sessions display an
 explicit `Indexing…` state with indeterminate section counts. Generation zero

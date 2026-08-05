@@ -341,10 +341,9 @@ Scrolling a live agent does not enter Preview. Direct `railmux` uses the
 terminal/tmux scrolling behavior; `railmux ssh` keeps its own bounded,
 per-pane history and normally preserves the live terminal's captured styling.
 When Railmux confirms that a running Codex session advanced after rewind or
-steering, it resets only the current terminal view before Codex redraws and
-invalidates that pane's SSH history generation. Retained tmux scrollback is not
-erased; the SSH history for that branched generation uses the canonical
-rollout so its abandoned suffix stays hidden.
+steering, it leaves the live terminal untouched and advances only that pane's
+SSH history generation. The SSH history for that branched generation uses the
+canonical rollout so its abandoned suffix stays hidden.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
 their latest 2,000 saved records. Press `/` to search, `n`/`N` to move between

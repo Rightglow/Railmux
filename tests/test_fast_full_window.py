@@ -3615,11 +3615,73 @@ def test_unaligned_hot_prefetch_never_creates_a_discontinuous_history_seam():
 
     wheel = view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True))
 
-    assert view.viewports["%8"].snapshot.lines == current.lines
-    assert view.overlays()[0][1] == (b"new-296", b"new-297", b"new-298")
-    assert b"old-296" not in view.viewports["%8"].snapshot.lines
+    # Do not briefly expose the 300-line hot suffix. It has no anchor to the
+    # previous capture and an active provider may repaint again before the deep
+    # response, which used to leave a visible gap until returning to bottom.
+    assert not wheel.render_history
+    assert not view.active
+    assert view.overlays() == ()
+    # More wheel ticks while the bounded response is in flight adjust the
+    # eventual starting point without exposing or replacing the hot suffix.
+    assert view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True)) == HistoryAction()
     request = InputFrameDecoder().feed(wheel.protocol_frame)[0]
-    assert decode_history_request(request.data)[3] == 2000
+    request_id, _x, _y, max_lines = decode_history_request(request.data)
+    assert max_lines == 2000
+
+    deep = HistorySnapshot(
+        request_id,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        tuple(f"deep-{index}".encode() for index in range(1700)) + current.lines,
+    )
+    accepted = view.accept(deep)
+
+    assert accepted.render_history
+    assert view.viewports["%8"].snapshot.lines == deep.lines
+    assert view.overlays()[0][1] == (b"new-295", b"new-296", b"new-297")
+    assert b"old-296" not in view.viewports["%8"].snapshot.lines
+
+
+def test_initial_deep_history_retry_and_wheel_down_are_bounded():
+    view = LocalHistoryView(history_limit=2000)
+    route = HistorySnapshot(
+        1,
+        "%8",
+        30,
+        0,
+        30,
+        3,
+        tuple(f"line-{index}".encode() for index in range(300)),
+        more_available=True,
+    )
+    view.visible_routes = (route,)
+    view.content_cache["%8"] = route
+    view._routes_ready = True
+    wheel_up = SgrMouseEvent(b"up", 64, 40, 2, True)
+    wheel_down = SgrMouseEvent(b"down", 65, 40, 2, True)
+
+    first = view.wheel(wheel_up, now=1.0)
+    first_message = InputFrameDecoder().feed(first.protocol_frame)[0]
+    first_id, *_rest = decode_history_request(first_message.data)
+    assert view.wheel(wheel_up, now=2.0) == HistoryAction()
+
+    retry = view.wheel(wheel_up, now=20.0)
+    retry_message = InputFrameDecoder().feed(retry.protocol_frame)[0]
+    retry_id, *_rest = decode_history_request(retry_message.data)
+    assert retry_id != first_id
+    assert view.metrics.timeouts == 1
+    pending = view._deep_pending[retry_id]
+    assert pending.initial_offset == 3
+
+    assert view.wheel(wheel_down, now=21.0) == HistoryAction()
+    assert not view.pending and not view.active
+    late = replace(route, request_id=retry_id, lines=tuple(
+        f"deep-{index}".encode() for index in range(2000)))
+    assert view.accept(late) == HistoryAction()
+    assert not view.active
 
 
 def test_temporary_blank_fullscreen_tail_is_removed_after_main_view_returns():
@@ -6660,6 +6722,38 @@ def test_server_accepts_canonical_history_only_for_matching_transcript(
     assert not mismatched[0].canonical_history
 
 
+def test_server_released_v1_canonical_marker_fails_back_to_raw(
+    monkeypatch, tmp_path,
+):
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    path.write_text('{"type":"response_item"}\n')
+    transcript = fast_display_server.tmux_server.encode_transcript_source(
+        "codex", session_id, path)
+    assert transcript is not None
+    generation = (
+        f"{tmux_ctl.RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIX}{session_id}"
+    )
+    monkeypatch.setattr(
+        fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 10 0 1  "
+            f"{transcript} {generation} \n"
+        ),
+    )
+
+    panes = fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask")
+
+    assert len(panes) == 1
+    assert not panes[0].canonical_history
+    assert panes[0].history_generation == 0
+
+
 def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
     marker = fast_display_server.json.dumps(
         {
@@ -6873,6 +6967,85 @@ def test_server_history_capture_honours_limits_above_the_old_4096_cap(
     assert calls[0][-2:] == ["-S", "-5000"]
 
 
+def test_server_raw_styled_hot_and_deep_history_keep_codex_foreground(
+    monkeypatch,
+):
+    pyte = pytest.importorskip("pyte")
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        40,
+        2,
+        history_size=398,
+        transcript_source="codex-marker",
+        transcript_backed=True,
+        transcript_provider="codex",
+        history_generation=17,
+    )
+    wrap_head = (
+        b"\033[48;5;22m 1 \033[0m\033[38;5;2m\033[48;5;22m"
+        b"+export VERY_LONG_ADDITION="
+    )
+    wrap_continuation = (
+        b"\033[39m   \033[0m\033[38;5;2m\033[48;5;22m"
+        b"continued-value\033[39m"
+    )
+    highlighted = (
+        b"\033[48;5;22m 2 \033[0m\033[38;5;2m\033[48;5;22m+"
+        b"\033[38;2;205;214;244mvalue = 1\033[39m"
+    )
+    monochrome = (
+        b"\033[48;5;22m 3 \033[0m\033[38;5;2m\033[48;5;22m"
+        b"+#!/bin/bash\033[39m"
+    )
+    raw = b"\n".join((
+        *(f"old-{index}".encode() for index in range(99)),
+        wrap_head,
+        wrap_continuation,
+        *(f"line-{index}".encode() for index in range(297)),
+        highlighted,
+        monochrome,
+    )) + b"\n"
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda *_args, **_kwargs: raw)
+    transcript_rows = MagicMock()
+    monkeypatch.setattr(
+        fast_display_server, "_transcript_rows", transcript_rows)
+
+    terminal = fast_display_server._extended_pyte(pyte)
+    hot = fast_display_server._capture_pane_history(
+        terminal, pane, 1, 300)
+    deep = fast_display_server._capture_pane_history(
+        terminal, pane, 2, 400)
+
+    assert hot is not None and deep is not None
+    assert not hot.transcript_backed and not deep.transcript_backed
+    assert hot.transcript_available and deep.transcript_available
+    assert hot.lines == deep.lines[-300:]
+    assert b"continued-value" in hot.lines[0]
+    transcript_rows.assert_not_called()
+
+    def styled_row(row):
+        screen = terminal.Screen(40, 1)
+        terminal.ByteStream(screen).feed(row)
+        return screen
+
+    highlighted_screen = styled_row(deep.lines[-2])
+    monochrome_screen = styled_row(deep.lines[-1])
+    highlighted_start = highlighted_screen.display[0].index("value")
+    monochrome_start = monochrome_screen.display[0].index("#!/bin/bash")
+    assert highlighted_screen.buffer[0][highlighted_start].fg == "cdd6f4"
+    assert monochrome_screen.buffer[0][monochrome_start].fg == "00cd00"
+    coloured_backgrounds = {
+        char.bg
+        for screen in (highlighted_screen, monochrome_screen)
+        for char in screen.buffer[0].values()
+        if char.bg != "default"
+    }
+    assert coloured_backgrounds == {"005f00"}
+
+
 def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
     pane = fast_display_server._PaneGeometry(
         "%8",
@@ -7007,45 +7180,6 @@ def test_server_codex_history_uses_canonical_transcript_after_rewind(
     assert snapshot.lines[-2:] == (b"live-a", b"live-b")
     assert all(b"abandoned red interruption" not in line
                for line in snapshot.lines)
-
-
-def test_server_codex_history_uses_raw_capture_without_confirmed_rewind(
-    monkeypatch,
-):
-    pane = fast_display_server._PaneGeometry(
-        "%8",
-        31,
-        0,
-        40,
-        2,
-        mouse_forwardable=True,
-        history_size=500,
-        transcript_source="codex-marker",
-        transcript_backed=True,
-        transcript_provider="codex",
-        history_generation=17,
-    )
-    transcript_rows = MagicMock()
-    monkeypatch.setattr(fast_display_server, "_transcript_rows", transcript_rows)
-    monkeypatch.setattr(
-        subprocess,
-        "check_output",
-        lambda *_args, **_kwargs: b"raw terminal history\nlive-a\nlive-b\n",
-    )
-    monkeypatch.setattr(
-        fast_display_server,
-        "_render_history_line",
-        lambda _pyte, line, _width: line,
-    )
-
-    snapshot = fast_display_server._capture_pane_history(
-        object(), pane, 8, 100)
-
-    assert snapshot is not None
-    assert not snapshot.transcript_backed
-    assert snapshot.transcript_available
-    assert b"raw terminal history" in snapshot.lines
-    transcript_rows.assert_not_called()
 
 
 def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
