@@ -153,10 +153,13 @@ move an existing viewport or replace a deeper cached timeline with its
 captures are suppressed until a newer screen update can have made that cache
 stale; route changes, reconnect, and bounded policy-recovery refreshes remain
 immediate. For a stable pane, geometry, and history source, uniquely
-aligned snapshots are merged into one newest-bounded timeline; an unaligned
-full-screen redraw may replace only the mutable live viewport. Native Claude,
-local transcript, and undecided history are separate sources and are never
-merged. Protocol v15 also carries the opaque pane-local Codex history
+aligned snapshots are merged into one newest-bounded timeline. Unaligned hot
+captures are never spliced: the cache switches to the newest internally
+contiguous suffix and the first wheel-up requests a cumulative deep page to
+recover older rows. An existing frozen viewport retains its immutable snapshot
+while that mutable cache changes. Native Claude, local transcript, and
+undecided history are separate sources and are never merged. Protocol v15 also
+carries the opaque pane-local Codex history
 generation; a changed non-content generation replaces that pane's cached
 timeline instead of merging across a confirmed rewind. A rejected deep
 response does not mutate the reusable cache. Deep

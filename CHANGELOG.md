@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep `railmux ssh` scrollback continuous when periodic hot captures cannot
+  be aligned: never splice unrelated snapshots, preserve an already-frozen
+  viewport, and request cumulative deep history from the newest continuous
+  suffix.
 - Batch independent startup/status-bar tmux commands, suppress identical bar
   rewrites, and skip compact-page geometry probes when only the sidebar exists.
   This removes Windows/MSYS2 process-spawn amplification without changing the
@@ -2243,6 +2247,7 @@ made after 0.2.21.
 [0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
 [0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
 [0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
+[0.3.6.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6.dev1
 [0.3.5]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5
 [0.3.5.dev1]: https://github.com/Rightglow/Railmux/compare/v0.3.4...v0.3.5.dev1
 [0.3.4]: https://github.com/Rightglow/Railmux/compare/v0.3.3...v0.3.4

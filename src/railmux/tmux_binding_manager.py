@@ -540,7 +540,6 @@ class SharedTmuxBindingManager:
                                     )
                                     break
                             return False
-                        self._registered = True
                         self._prefix_tab_managed = state["prefix_tab_managed"]
                         self._right_click_managed = (
                             state["right_click_managed"])
@@ -552,6 +551,10 @@ class SharedTmuxBindingManager:
                             state["status_click_managed"])
                         self._termux_tap_managed = (
                             state["termux_tap_managed"])
+                        # Publish registration only after every capability is
+                        # final so concurrent readers cannot observe a torn
+                        # lease during managed-Windows background setup.
+                        self._registered = True
                         return True
 
                 backup = tmux_ctl.prepare_root_function_bindings()
@@ -701,13 +704,13 @@ class SharedTmuxBindingManager:
                             state["termux_tap_backup"], token=token)
                     self._remove_state()
                     return False
-                self._registered = True
                 self._prefix_tab_managed = state["prefix_tab_managed"]
                 self._right_click_managed = state["right_click_managed"]
                 self._selection_hook_managed = state["selection_hook_managed"]
                 self._selection_hook_index = state["selection_hook_index"]
                 self._status_click_managed = state["status_click_managed"]
                 self._termux_tap_managed = state["termux_tap_managed"]
+                self._registered = True
                 return True
         except OSError:
             return False

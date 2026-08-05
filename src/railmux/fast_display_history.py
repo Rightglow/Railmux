@@ -287,15 +287,17 @@ class LocalHistoryView:
                 # intermediate output above the current screen.
                 lines = incoming.lines
             else:
-                # A full-screen TUI redraw can leave no trustworthy text
-                # anchor. Preserve the known history and replace only the
-                # mutable live viewport. Appending every unaligned 300-line
-                # prefetch would duplicate a full screen every three seconds.
-                live_count = min(incoming.height, len(incoming.lines))
-                retained = previous.lines[
-                    : -min(previous.height, len(previous.lines))
-                ]
-                lines = retained + incoming.lines[-live_count:]
+                # Never splice two captures whose timelines cannot be aligned.
+                # Retaining old history and replacing only the live viewport
+                # looked conservative, but it silently omitted every row
+                # produced between those two pieces. That false seam appeared
+                # as discontinuous SSH history until returning to the bottom
+                # forced a fresh deep capture. Keep the newest internally
+                # contiguous hot capture instead; the first wheel-up requests
+                # a cumulative deep page and can recover older rows safely.
+                # An already-frozen viewport owns its immutable snapshot and
+                # therefore remains undisturbed by this cache replacement.
+                lines = incoming.lines
         else:
             start = min(0, delta)
             incoming_end = delta + len(incoming.lines)
