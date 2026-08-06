@@ -119,6 +119,10 @@ _PACKAGE_URL_COMMAND = (
 _PACKAGE_INVENTORY_COMMAND = "set -o pipefail; pacman -Q | LC_ALL=C sort"
 _PACKAGE_INVENTORY_LIMIT = 1024 * 1024
 _CORE_RUNTIME_PACKAGES = ("tmux", "python", "python-pip")
+_MAX_BASE_UPDATE_PASSES = 3
+_PRIVATE_GPG_SHUTDOWN_COMMAND = (
+    "gpgconf --homedir /etc/pacman.d/gnupg --kill all"
+)
 _IN_USE_APPS_COMMAND = (
     "for f in /proc/[0-9]*/cmdline; do "
     "[ -r \"$f\" ] || continue; tr '\\0' '\\n' <\"$f\"; done"
@@ -1624,16 +1628,21 @@ def _run_checked(
     if returncode:
         if allow_failure:
             return returncode
-        if _NATIVE_WINDOWS and returncode & 0xFFFFFFFF == 0xC0000135:
-            reporter.note(
-                "Windows reported STATUS_DLL_NOT_FOUND. Check whether security "
-                "software quarantined a file in the private MSYS2 staging tree.",
-                level="error",
-            )
+        _explain_windows_status(returncode, reporter)
         reporter.command_failed(label, returncode)
         raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
     reporter.command_succeeded()
     return 0
+
+
+def _explain_windows_status(returncode: int, reporter: InstallReporter) -> None:
+    if _NATIVE_WINDOWS and returncode & 0xFFFFFFFF == 0xC0000135:
+        reporter.note(
+            "Windows reported STATUS_DLL_NOT_FOUND outside a confirmed MSYS2 "
+            "core-update restart. Check whether security software quarantined "
+            "a file in the private MSYS2 staging tree.",
+            level="error",
+        )
 
 
 def _pacman_command(*, packages: bool, relaxed: bool) -> str:
@@ -1644,10 +1653,11 @@ def _pacman_command(*, packages: bool, relaxed: bool) -> str:
         if not packages
         else ""
     )
+    operation = "-Syu" if packages else "-Syuu"
     return (
         'cache=$(cygpath -u "$1") && mkdir -p "$cache" && '
         f"{keyring}pacman --config {_PACMAN_CONFIG} --cachedir \"$cache\" "
-        f"-Syu --noconfirm{timeout}{needed}"
+        f"{operation} --noconfirm{timeout}{needed}"
     )
 
 
@@ -1693,7 +1703,8 @@ def _run_pacman_with_recovery(
     runner: Runner | None,
     label: str,
     mirror_optimizer: MirrorOptimizer,
-) -> None:
+    allow_core_restart: bool = False,
+) -> bool:
     argv = _bash_command(root, _pacman_command(packages=packages, relaxed=False), str(cache))
     returncode = _run_checked(
         argv,
@@ -1704,11 +1715,20 @@ def _run_pacman_with_recovery(
         progress="pacman",
         allow_failure=True,
     )
+    restart_requested = reporter.command_requested_msys2_restart
     if returncode == 0:
-        return
+        return restart_requested
+    if allow_core_restart and not packages and restart_requested:
+        reporter.note(
+            "MSYS2 replaced core runtime files and closed its own process as "
+            "expected; continuing from a fresh Windows-launched shell.",
+            level="warning",
+        )
+        return True
     network_failure = reporter.command_had_network_failure
     hard_failed_hosts = reporter.hard_failed_mirror_hosts
     if not network_failure:
+        _explain_windows_status(returncode, reporter)
         reporter.command_failed(label, returncode)
         raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
     reporter.note(
@@ -1739,13 +1759,112 @@ def _run_pacman_with_recovery(
         _pacman_command(packages=packages, relaxed=True),
         str(cache),
     )
-    _run_checked(
+    retry_returncode = _run_checked(
         retry_argv,
         env=env,
         reporter=reporter,
         runner=runner,
         label=f"{label} resilient retry",
         progress="pacman",
+        allow_failure=True,
+    )
+    restart_requested = reporter.command_requested_msys2_restart
+    if retry_returncode == 0:
+        return restart_requested
+    if allow_core_restart and not packages and restart_requested:
+        reporter.note(
+            "MSYS2 replaced core runtime files and closed its own process as "
+            "expected; continuing from a fresh Windows-launched shell.",
+            level="warning",
+        )
+        return True
+    _explain_windows_status(retry_returncode, reporter)
+    reporter.command_failed(f"{label} resilient retry", retry_returncode)
+    raise RuntimeInstallError(
+        f"{label} resilient retry failed with exit code {retry_returncode}"
+    )
+
+
+def _run_base_update_with_restarts(
+    root: Path,
+    *,
+    cache: Path,
+    env: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+    mirror_optimizer: MirrorOptimizer,
+) -> None:
+    """Run MSYS2's full upgrade in fresh processes until restart-safe."""
+    try:
+        for pass_number in range(1, _MAX_BASE_UPDATE_PASSES + 1):
+            restart_requested = _run_pacman_with_recovery(
+                root,
+                packages=False,
+                cache=cache,
+                env=env,
+                reporter=reporter,
+                runner=runner,
+                label=f"MSYS2 base update pass {pass_number}",
+                mirror_optimizer=mirror_optimizer,
+                allow_core_restart=pass_number < _MAX_BASE_UPDATE_PASSES,
+            )
+            if restart_requested:
+                reporter.note(
+                    "Starting a new MSYS2 process for the remaining update…"
+                )
+                continue
+            if pass_number == 1:
+                # MSYS2's supported unattended update procedure invokes Syuu
+                # twice, even when the first pass did not request a restart.
+                reporter.note(
+                    "Starting the required second MSYS2 update pass in a new "
+                    "process…"
+                )
+                continue
+            return
+        raise RuntimeInstallError(
+            "MSYS2 repeatedly requested a core-runtime restart; the temporary "
+            "base was not published"
+        )
+    finally:
+        _stop_private_gpg_agents(
+            root,
+            env=env,
+            reporter=reporter,
+            runner=runner,
+            strict=sys.exc_info()[0] is None,
+        )
+
+
+def _stop_private_gpg_agents(
+    root: Path,
+    *,
+    env: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+    strict: bool,
+) -> None:
+    returncode = _run_checked(
+        _bash_command(root, _PRIVATE_GPG_SHUTDOWN_COMMAND),
+        env=env,
+        reporter=reporter,
+        runner=runner,
+        label="Stopping private MSYS2 keyring agents",
+        allow_failure=True,
+    )
+    if returncode == 0:
+        return
+    if not strict:
+        reporter.note(
+            "Could not stop a private MSYS2 keyring agent while recovering "
+            "from another installation failure.",
+            level="warning",
+        )
+        return
+    reporter.command_failed("Stopping private MSYS2 keyring agents", returncode)
+    raise RuntimeInstallError(
+        "stopping private MSYS2 keyring agents failed with exit code "
+        f"{returncode}"
     )
 
 
@@ -2399,16 +2518,20 @@ def install_managed_runtime(
                         "pacman is noninteractive; displayed [Y/n] prompts do "
                         "not require input."
                     )
+                    reporter.note(
+                        "Core updates may close the first MSYS2 process; "
+                        "Railmux will start the required fresh process "
+                        "automatically.",
+                        level="muted",
+                    )
                     package_cache = cache_base / f"pacman-{MSYS2_RUNTIME_ID}"
                     package_cache.mkdir(parents=True, exist_ok=True)
-                    _run_pacman_with_recovery(
+                    _run_base_update_with_restarts(
                         root,
-                        packages=False,
                         cache=package_cache,
                         env=child_env,
                         reporter=reporter,
                         runner=runner,
-                        label="MSYS2 base update",
                         mirror_optimizer=mirror_optimizer,
                     )
                     reporter.done()
@@ -2445,16 +2568,25 @@ def install_managed_runtime(
                         reporter=reporter,
                         runner=runner,
                     )
-                    _run_pacman_with_recovery(
-                        root,
-                        packages=True,
-                        cache=package_cache,
-                        env=child_env,
-                        reporter=reporter,
-                        runner=runner,
-                        label="MSYS2 package installation",
-                        mirror_optimizer=mirror_optimizer,
-                    )
+                    try:
+                        _run_pacman_with_recovery(
+                            root,
+                            packages=True,
+                            cache=package_cache,
+                            env=child_env,
+                            reporter=reporter,
+                            runner=runner,
+                            label="MSYS2 package installation",
+                            mirror_optimizer=mirror_optimizer,
+                        )
+                    finally:
+                        _stop_private_gpg_agents(
+                            root,
+                            env=child_env,
+                            reporter=reporter,
+                            runner=runner,
+                            strict=sys.exc_info()[0] is None,
+                        )
                     reporter.done()
 
                     identity = _ensure_base_content_identity(

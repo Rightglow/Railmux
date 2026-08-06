@@ -64,6 +64,22 @@ def test_verbose_reporter_streams_the_same_sanitized_output(tmp_path):
     assert "package 中文\nprogress\n" in path.read_text(encoding="utf-8")
 
 
+def test_reporter_recognizes_only_the_explicit_msys2_core_restart(tmp_path):
+    path = tmp_path / "install.log"
+    with InstallReporter(path, verbose=False, stream=io.StringIO()) as reporter:
+        reporter.command_started("first update")
+        reporter.command_output(
+            ":: To complete this update all MSYS2 processes including this "
+            "terminal will be closed. Confirm to proceed [Y/n]"
+        )
+        reporter.command_output_finished()
+        assert reporter.command_requested_msys2_restart
+
+        reporter.command_started("second update")
+        reporter.command_output("warning: terminate other MSYS2 programs\n")
+        assert not reporter.command_requested_msys2_restart
+
+
 def test_verbose_reporter_never_fails_on_a_legacy_windows_console_codec(tmp_path):
     stream = Cp1252Stream()
     path = tmp_path / "install-0.4.0.dev7-20260803T000000Z-5.log"

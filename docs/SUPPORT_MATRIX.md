@@ -202,6 +202,12 @@ is labelled supported.
    or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
    Tar POSIX modes must never become NTFS read-only attributes on
    package-owned paths; pacman must be able to replace every staged base file.
+   Run MSYS2's full upgrade from fresh Windows-launched processes at least
+   twice. Treat termination as a successful core-runtime handoff only after the
+   exact pacman restart announcement, bound the restart loop, and require a
+   final pass that does not request another restart before publishing the base.
+   Stop GnuPG daemons by the private pacman keyring home before staging
+   activation; never use a machine-wide process-name or loaded-module kill.
 3. Key one private shared base authority by the pinned MSYS2 compatibility
    identifier, record an exact package-content identity for rolling repository
    results, bind each new app marker to it, and keep Railmux application venvs
@@ -234,7 +240,8 @@ is labelled supported.
    read-only doctor use the same pinned direct launch family once that runtime
    is present.
 10. Add unconditional native Windows bootstrap/import/package CI, full pinned
-    archive extraction plus native executable-loading CI, and a real
+    archive extraction plus two-pass base-update and native executable-loading
+    CI, and a real
     managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
     record a named and dated real Windows Terminal pass here for every release
     that claims it. Mocked OS branches and ordinary WSL evidence cannot close

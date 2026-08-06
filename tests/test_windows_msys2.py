@@ -797,6 +797,8 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         ).read_text(encoding="utf-8")
     )["railmux"] == VERSION
     joined = [" ".join(command) for command in commands]
+    base_updates = [command for command in joined if "-Syuu --noconfirm" in command]
+    assert len(base_updates) == 2
     assert any("-Syu --noconfirm" in command for command in joined)
     assert any("--needed tmux python python-pip" in command for command in joined)
     assert any('python -m venv "$1/venv"' in command for command in joined)
@@ -806,7 +808,8 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
     assert len(logs) == 1
     log = logs[0].read_text(encoding="utf-8")
     assert "[1/7] Preparing verified MSYS2" in log
-    assert "--- MSYS2 base update ---" in log
+    assert "--- MSYS2 base update pass 1 ---" in log
+    assert "--- MSYS2 base update pass 2 ---" in log
     assert "Installation completed successfully" in log
     config = runtime.root / "etc" / "railmux-pacman.conf"
     assert "[msys]" in config.read_text(encoding="utf-8")
@@ -1470,6 +1473,112 @@ def test_pacman_network_failure_retries_with_cache_and_relaxed_timeout(tmp_path)
     rendered = mirrorlist.read_text(encoding="utf-8")
     assert f"# Railmux inactive: Server = {tuna}" in rendered
     assert f"Server = {repo}" in rendered
+
+
+def test_base_update_restarts_after_confirmed_core_shutdown(tmp_path):
+    attempts = []
+    restart = (
+        b"upgrading msys2-runtime...\n"
+        b":: To complete this update all MSYS2 processes including this "
+        b"terminal will be closed. Confirm to proceed [Y/n]\n"
+    )
+
+    def runner(argv, *, env, check):
+        attempts.append(argv)
+        update_attempts = [item for item in attempts if "-Syuu" in item[4]]
+        if len(update_attempts) == 1 and "-Syuu" in argv[4]:
+            return completed(argv, returncode=0xC0000135, stdout=restart)
+        return completed(argv, stdout=b"there is nothing to do\n")
+
+    stream = io.StringIO()
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=stream
+    ) as reporter:
+        windows_msys2._run_base_update_with_restarts(
+            tmp_path / "msys64",
+            cache=tmp_path / "cache",
+            env={},
+            reporter=reporter,
+            runner=runner,
+            mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                None, None, False, (), ()
+            ),
+        )
+
+    updates = [argv for argv in attempts if "-Syuu --noconfirm" in argv[4]]
+    assert len(updates) == 2
+    assert updates[0][0] == updates[1][0]
+    assert windows_msys2._PRIVATE_GPG_SHUTDOWN_COMMAND in attempts[-1][4]
+    rendered = stream.getvalue()
+    assert "closed its own process as expected" in rendered
+    assert "failed with exit code" not in rendered
+
+
+def test_base_update_does_not_mask_unconfirmed_missing_dll(tmp_path, monkeypatch):
+    monkeypatch.setattr(windows_msys2, "_NATIVE_WINDOWS", True)
+    attempts = []
+
+    def runner(argv, *, env, check):
+        attempts.append(argv)
+        if windows_msys2._PRIVATE_GPG_SHUTDOWN_COMMAND in argv[4]:
+            return completed(argv)
+        return completed(
+            argv,
+            returncode=0xC0000135,
+            stdout=b"upgrading msys2-runtime...\n",
+        )
+
+    stream = io.StringIO()
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=stream
+    ) as reporter:
+        with pytest.raises(RuntimeInstallError, match="3221225781"):
+            windows_msys2._run_base_update_with_restarts(
+                tmp_path / "msys64",
+                cache=tmp_path / "cache",
+                env={},
+                reporter=reporter,
+                runner=runner,
+                mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                    None, None, False, (), ()
+                ),
+            )
+
+    updates = [argv for argv in attempts if "-Syuu --noconfirm" in argv[4]]
+    assert len(updates) == 1
+    assert "outside a confirmed MSYS2 core-update restart" in stream.getvalue()
+
+
+def test_base_update_restart_loop_is_bounded(tmp_path):
+    attempts = []
+    restart = (
+        b":: To complete this update all MSYS2 processes including this "
+        b"terminal will be closed. Confirm to proceed [Y/n]\n"
+    )
+
+    def runner(argv, *, env, check):
+        attempts.append(argv)
+        if windows_msys2._PRIVATE_GPG_SHUTDOWN_COMMAND in argv[4]:
+            return completed(argv)
+        return completed(argv, stdout=restart)
+
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=io.StringIO()
+    ) as reporter:
+        with pytest.raises(RuntimeInstallError, match="repeatedly requested"):
+            windows_msys2._run_base_update_with_restarts(
+                tmp_path / "msys64",
+                cache=tmp_path / "cache",
+                env={},
+                reporter=reporter,
+                runner=runner,
+                mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                    None, None, False, (), ()
+                ),
+            )
+
+    updates = [argv for argv in attempts if "-Syuu --noconfirm" in argv[4]]
+    assert len(updates) == windows_msys2._MAX_BASE_UPDATE_PASSES
 
 
 def test_completed_package_cache_count_ignores_signatures_partials_and_links(tmp_path):

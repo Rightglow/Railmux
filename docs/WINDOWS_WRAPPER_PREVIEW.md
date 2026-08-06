@@ -432,6 +432,26 @@ read-only-mode file before launching the extracted bash, cygpath, and pacman.
 A real field retry against a repository with newer core packages remains
 required.
 
+That retry on dev27 again reached phase four and returned Windows
+`0xC0000135`, disproving the read-only mapping as the complete explanation.
+The bootstrap had also collapsed MSYS2's supported unattended upgrade into one
+shell process: pacman can successfully replace `msys2-runtime`, bash, and
+pacman, announce that all MSYS2 processes will close, and then deliberately
+terminate the updating shell. dev28 recognizes only that exact announcement as
+a successful handoff, launches a fresh shell for another full `pacman -Syuu`
+pass, always performs at least two passes, caps restart handoffs at three, and
+requires a final clean pass before the staged base can be published. The native
+full-archive gate now performs this real update sequence before executable
+loading. Its first candidate run proved both update passes and executable
+loading, then caught a private pacman-key `gpg-agent.exe` handle blocking
+immediate staging cleanup. The bootstrap now asks `gpgconf` to stop daemons for
+the private `/etc/pacman.d/gnupg` home after package transactions; it never uses
+the broader MSYS2 CI workaround that kills every process with `msys-2.0.dll`
+loaded. The second Windows Server 2025 candidate run completed both real update
+passes, executable loading, agent shutdown, and immediate recursive cleanup.
+That repository had no pending core packages, so the explicit core-restart
+branch remains unit-covered plus a field check on the originally affected host.
+
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
 website remain unchanged until the manual checklist is complete.

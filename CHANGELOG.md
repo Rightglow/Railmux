@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev28] - 2026-08-06
+
+### Fixed
+
+- Follow MSYS2's supported unattended update procedure by running the full
+  `pacman -Syuu` upgrade in fresh processes at least twice. When a successful
+  core-runtime transaction explicitly announces that it will close its own
+  process, accept that termination and continue from a newly launched shell;
+  dev27 could instead report the resulting Windows `0xC0000135` termination as
+  a phase-four failure.
+- Fail closed on the same process status when the exact MSYS2 core-restart
+  announcement is absent, retain the bounded mirror/cache recovery path for
+  each pass, and cap repeated restart requests at three passes.
+- Extend the native Windows full-archive gate through the real two-pass base
+  update before loading `bash`, `cygpath`, and `pacman`; explicitly stop only
+  the private pacman-key GnuPG agents so their executable handles cannot block
+  staging cleanup or activation.
+
 ## [0.4.0.dev27] - 2026-08-06
 
 ### Fixed
@@ -2388,7 +2406,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev27...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev28...HEAD
+[0.4.0.dev28]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev27...v0.4.0.dev28
 [0.4.0.dev27]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev26...v0.4.0.dev27
 [0.4.0.dev26]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...v0.4.0.dev26
 [0.4.0.dev25]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev25

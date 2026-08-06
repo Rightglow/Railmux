@@ -5,6 +5,7 @@ import io
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -13,7 +14,12 @@ from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_SHA256,
     Msys2Runtime,
     _extract_msys2_archive,
+    _run_base_update_with_restarts,
     download_from_sources,
+)
+from railmux.windows_pacman import (
+    optimize_pacman_mirror,
+    write_msys_only_pacman_config,
 )
 
 
@@ -39,6 +45,18 @@ def main() -> int:
             first = stream.read(1)
             stream.seek(0)
             stream.write(first)
+        write_msys_only_pacman_config(runtime.root)
+        with InstallReporter(
+            stage / "update.log", verbose=True, stream=sys.stdout
+        ) as reporter:
+            _run_base_update_with_restarts(
+                runtime.root,
+                cache=stage / "pacman-cache",
+                env=runtime.environment(os.environ),
+                reporter=reporter,
+                runner=None,
+                mirror_optimizer=optimize_pacman_mirror,
+            )
         result = subprocess.run(
             [
                 str(runtime.bash),

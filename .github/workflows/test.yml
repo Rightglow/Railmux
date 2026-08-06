@@ -132,14 +132,14 @@ jobs:
 
   windows-archive-smoke:
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - run: python -m pip install --no-deps -e .
-      - name: Extract and launch the pinned native Windows runtime
+      - name: Extract, update twice, and launch the pinned Windows runtime
         run: python tools/windows_archive_smoke.py
 
   windows-msys2-smoke:

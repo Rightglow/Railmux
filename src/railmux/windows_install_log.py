@@ -56,6 +56,10 @@ _PIP_NETWORK_ERROR_MARKERS = (
     "connection aborted",
     "temporary failure in name resolution",
 )
+_MSYS2_RESTART_MARKER = (
+    "to complete this update all msys2 processes including this terminal "
+    "will be closed"
+)
 _EXTRACTION_PERCENT_RE = re.compile(r"(?:^|\s)([0-9]{1,3})%\s")
 _PACKAGE_COUNT_RE = re.compile(r"^Packages \(([0-9]+)\)")
 _PACKAGE_DOWNLOAD_RE = re.compile(r"^\s*([^ ]+) downloading\.\.\.\s*$")
@@ -142,6 +146,7 @@ class InstallReporter:
         self._network_failure = False
         self._pip_network_failure = False
         self._hard_failed_hosts: set[str] = set()
+        self._msys2_restart_requested = False
 
     def __enter__(self) -> InstallReporter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,6 +214,7 @@ class InstallReporter:
         self._network_failure = False
         self._pip_network_failure = False
         self._hard_failed_hosts.clear()
+        self._msys2_restart_requested = False
         self._write_log(f"\n--- {label} ---\n")
 
     def command_output(self, output: bytes | str | None) -> None:
@@ -259,6 +265,8 @@ class InstallReporter:
         if line.strip():
             self._tail.append(line)
         lowered = line.lower()
+        if _MSYS2_RESTART_MARKER in lowered:
+            self._msys2_restart_requested = True
         if any(marker in lowered for marker in _NETWORK_ERROR_MARKERS):
             self._network_failure = True
         if any(marker in lowered for marker in _PIP_NETWORK_ERROR_MARKERS):
@@ -363,6 +371,10 @@ class InstallReporter:
     @property
     def hard_failed_mirror_hosts(self) -> frozenset[str]:
         return frozenset(self._hard_failed_hosts)
+
+    @property
+    def command_requested_msys2_restart(self) -> bool:
+        return self._msys2_restart_requested
 
     def heartbeat(self) -> None:
         now = self._clock()
