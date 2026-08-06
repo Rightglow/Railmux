@@ -10,6 +10,7 @@ from railmux.windows_pacman import (
     PACMAN_MIRROR_SOURCES,
     PacmanMirrorError,
     PacmanMirrorProbe,
+    _probe_package_url,
     deactivate_pacman_hosts,
     optimize_pacman_mirror,
     probe_pacman_mirror,
@@ -229,6 +230,40 @@ def test_network_probe_is_bounded_and_rejects_an_https_downgrade():
 
     assert requests[0][0].get_header("Range") == "bytes=0-262143"
     assert requests[0][1] == 8.0
+
+
+def test_package_probe_measures_a_real_bounded_transfer():
+    requests = []
+
+    def opener(request, *, timeout):
+        requests.append((request, timeout))
+        return FakeResponse(
+            b"\x28\xb5\x2f\xfd" + b"x" * (256 * 1024),
+            final_url="https://mirror.invalid/python.pkg.tar.zst",
+        )
+
+    _probe_package_url(
+        "https://mirror.invalid/python.pkg.tar.zst",
+        opener=opener,
+        clock=lambda: 1.0,
+    )
+
+    assert requests[0][0].get_header("Range") == "bytes=0-262143"
+    assert requests[0][1] == 5.0
+
+
+def test_package_probe_rejects_a_working_but_slow_source():
+    times = [0.0, 3.0]
+
+    with pytest.raises(PacmanMirrorError, match="too slow"):
+        _probe_package_url(
+            "https://mirror.invalid/python.pkg.tar.zst",
+            opener=lambda _request, **_kwargs: FakeResponse(
+                b"\x28\xb5\x2f\xfd" + b"x" * (256 * 1024),
+                final_url="https://mirror.invalid/python.pkg.tar.zst",
+            ),
+            clock=lambda: times.pop(0) if len(times) > 1 else times[0],
+        )
 
 
 def test_optimizer_limits_active_pool_but_reprobes_inactive_candidates(tmp_path):

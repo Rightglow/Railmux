@@ -324,7 +324,13 @@ class InstallReporter:
         if package_count is not None:
             self._package_total = int(package_count.group(1))
             self._package_step = max(1, self._package_total // 10)
-            self._progress_detail = f"preparing {self._package_total} packages"
+            self._progress_detail = (
+                f"waiting for the first transfer among "
+                f"{self._package_total} packages"
+            )
+            self.note(
+                f"Package transaction resolved: {self._package_total} packages."
+            )
             return
         total_download = _TOTAL_DOWNLOAD_RE.match(line)
         if total_download is not None:

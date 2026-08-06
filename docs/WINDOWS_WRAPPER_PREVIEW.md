@@ -133,8 +133,10 @@ opens a WSL shell and runs the ordinary POSIX product there.
   Railmux-private cache outside transactional staging. Before the package
   transaction, Railmux asks pacman for its resolved dependency URLs and probes
   up to twelve evenly distributed real package names across every active
-  source. A source that serves the database but blocks any sampled package is
-  made inactive when another verified source remains. HTTP 403/404 hosts are
+  source. Each probe transfers a bounded 256 KiB prefix and rejects both
+  blocked package paths and sources below the bounded minimum throughput. A
+  source that serves the database but fails any sampled package check is made
+  inactive when another verified source remains. HTTP 403/404 hosts are
   excluded after a failed transaction; low-speed exhaustion triggers one retry
   that reuses the cache and disables pacman's low-speed abort. This preview does
   not yet freeze a repository snapshot, so package versions may advance between
@@ -210,7 +212,12 @@ opens a WSL shell and runs the ordinary POSIX product there.
 - The ordinary label-selected tmux attach remains the fast path. If Windows
   rejects only that terminal attachment while the same server and immutable
   Railmux session remain healthy, Railmux makes one fail-closed transparent
-  bridge attempt. If Soft Quit preserved detached providers but removed the
+  bridge attempt. While a direct attach remains alive, the existing launcher
+  watchdog compares the exact entry TTY dimensions and sends `SIGWINCH` only
+  to its own tmux client when either dimension changes. This repairs a missed
+  MSYS2 native-console resize without directly resizing the shared window or
+  bypassing tmux's `smallest` multi-client policy. If Soft Quit preserved
+  detached providers but removed the
   outer UI, Railmux first creates only that missing outer session detached on
   the revalidated existing server; it then uses the same direct-first and
   immutable-session bridge checks. If both entry streams are real TTYs, the
@@ -490,7 +497,11 @@ executable loader resolves a different physical directory and cannot find the
 staged DLL set. Dev30 selects one non-virtualized profile root before creating
 the log, lock, cache, or staging tree and regression-protects both the packaged
 and traditional-Python location contracts. A fresh Store-Python field install
-is still required before this closes the real-host acceptance item.
+on 2026-08-06 then completed with dev30 from that non-virtualized root, closing
+the cross-process visibility failure. Its phase-five package transaction still
+spent more than 300 seconds before the first visible transfer; dev31 therefore
+measures bounded real package prefixes and excludes reachable-but-slow sources
+when another approved source passes.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

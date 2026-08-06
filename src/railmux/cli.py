@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -109,6 +110,9 @@ def _run_tmux_client_with_watchdog(
             attributes = termios.tcgetattr(sys.stdin.fileno())
         except (OSError, termios.error):
             pass
+    direct_terminal_size = (
+        _interactive_terminal_size() if managed_windows else None
+    )
     started_at = time.monotonic()
     try:
         popen_kwargs: dict[str, object] = {"env": env}
@@ -127,7 +131,7 @@ def _run_tmux_client_with_watchdog(
         *,
         asynchronous_probe: bool = False,
     ) -> tuple[int, bool]:
-        nonlocal expected_target, expected_session_id
+        nonlocal direct_terminal_size, expected_target, expected_session_id
         watchdog = tmux_health.FailureWatchdog.starting(
             (
                 time.monotonic()
@@ -151,6 +155,28 @@ def _run_tmux_client_with_watchdog(
             pump = getattr(process, "pump", None)
             if pump is None:
                 time.sleep(0.25)
+                if managed_windows:
+                    current_size = _interactive_terminal_size()
+                    if (
+                        current_size is not None
+                        and current_size != direct_terminal_size
+                    ):
+                        direct_terminal_size = current_size
+                        pid = getattr(process, "pid", None)
+                        if (
+                            isinstance(pid, int)
+                            and not isinstance(pid, bool)
+                            and pid > 0
+                        ):
+                            try:
+                                # MSYS2 occasionally misses the native
+                                # console's resize notification. Signal only
+                                # this launcher's direct tmux client so it
+                                # re-reads both dimensions; tmux remains the
+                                # authority for shared-window sizing.
+                                os.kill(pid, signal.SIGWINCH)
+                            except (OSError, ValueError):
+                                pass
             else:
                 pump(0.25)
             now = time.monotonic()

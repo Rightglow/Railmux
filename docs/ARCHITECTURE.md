@@ -82,6 +82,11 @@ ordinary direct-first order. It may make
 one transparent bridge attempt only when that client rejects the attach within
 five seconds, stdin/stdout are real terminals, and a new identity-pinned query
 proves that the same server PID and immutable Railmux session still exist.
+While the managed-Windows direct client is alive, the existing outer watchdog
+also compares the exact entry TTY dimensions. A changed width or height sends
+`SIGWINCH` only to that launcher-owned tmux client so MSYS2 re-reads native
+console geometry; it never resizes a tmux window directly or overrides the
+shared-window `smallest` policy. POSIX clients do not enter this path.
 
 The bridge creates a random, same-owner endpoint in Railmux's private runtime
 directory, then asks the pinned tmux server through `run-shell -b` to start an

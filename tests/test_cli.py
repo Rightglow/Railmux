@@ -1,4 +1,5 @@
 import os
+import signal
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
@@ -630,6 +631,80 @@ def test_local_tmux_watchdog_exits_and_records_after_consecutive_failures(
         consecutive_failures=3,
     )
     assert "stopped responding" in capsys.readouterr().err
+
+
+def test_managed_windows_direct_attach_notifies_height_only_resize(monkeypatch):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class DirectClient:
+        pid = 321
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    client = DirectClient()
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    sizes = [os.terminal_size((120, 40)), os.terminal_size((120, 55))]
+    monkeypatch.setattr(
+        "railmux.cli.os.get_terminal_size",
+        lambda _fd: sizes.pop(0) if len(sizes) > 1 else sizes[0],
+    )
+
+    def finish_after_poll(_seconds):
+        client.returncode = 0
+
+    monkeypatch.setattr("railmux.cli.time.sleep", finish_after_poll)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    notify = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.kill", notify)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], {}, expected_target=target,
+        expected_session_id="$7",
+    ) == 0
+    notify.assert_called_once_with(321, signal.SIGWINCH)
+
+
+def test_posix_direct_attach_does_not_poll_or_signal_resize(monkeypatch):
+    class DirectClient:
+        pid = 321
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    client = DirectClient()
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+
+    def finish_after_poll(_seconds):
+        client.returncode = 0
+
+    monkeypatch.setattr("railmux.cli.time.sleep", finish_after_poll)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: False,
+    )
+    get_size = MagicMock()
+    notify = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.get_terminal_size", get_size)
+    monkeypatch.setattr("railmux.cli.os.kill", notify)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], {},
+    ) == 0
+    get_size.assert_not_called()
+    notify.assert_not_called()
 
 
 def test_abrupt_tmux_client_exit_records_disappeared_server(monkeypatch):

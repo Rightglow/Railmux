@@ -310,6 +310,7 @@ def test_compact_reporter_surfaces_extraction_and_package_progress(tmp_path):
     assert "Extracting private runtime: 42%" in rendered
     assert "Extracting private runtime: 100%" in rendered
     assert "Package transaction: 48 packages, 57.40 MiB download." in rendered
+    assert "Package transaction resolved: 48 packages." in rendered
     assert "Downloading packages: 1/48" in rendered
     assert "Verifying downloaded package signatures" in rendered
     assert "Installing packages: 1/48" in rendered

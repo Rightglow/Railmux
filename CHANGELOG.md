@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev31] - 2026-08-06
+
+### Fixed
+
+- Supervise the managed-Windows direct tmux client for native terminal-size
+  changes and notify that exact client when MSYS2 misses a width or height
+  resize, without changing POSIX attach behavior or tmux's shared-window
+  `smallest` policy.
+- Measure bounded real package transfers before phase 5, exclude package paths
+  that are reachable but too slow when another approved source works, and
+  report the resolved package count before the first transfer starts.
+
 ## [0.4.0.dev30] - 2026-08-06
 
 ### Fixed

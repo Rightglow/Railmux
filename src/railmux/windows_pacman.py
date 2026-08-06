@@ -30,7 +30,9 @@ _MIRRORLIST_LIMIT = 256 * 1024
 _PACMAN_CONF_LIMIT = 256 * 1024
 _PROBE_BYTES = 256 * 1024
 _PROBE_TIMEOUT = 8.0
+_PACKAGE_PROBE_BYTES = 256 * 1024
 _PACKAGE_PROBE_TIMEOUT = 5.0
+_PACKAGE_PROBE_MIN_RATE = 128 * 1024
 _SWITCH_RATIO = 1.25
 _FRESHNESS_WINDOW_SECONDS = 6 * 60 * 60
 _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
@@ -91,18 +93,21 @@ def _probe_package_url(
     url: str,
     *,
     opener: Callable[..., object] = urllib.request.urlopen,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Require one real package prefix instead of trusting database access."""
+    """Require a responsive real package path, not only database access."""
     if urllib.parse.urlsplit(url).scheme.lower() != "https":
         raise PacmanMirrorError("package URL is not HTTPS")
     request = urllib.request.Request(
         url,
         headers={
             "Accept-Encoding": "identity",
-            "Range": "bytes=0-1023",
+            "Range": f"bytes=0-{_PACKAGE_PROBE_BYTES - 1}",
             "User-Agent": "Railmux-pacman-package-probe/1",
         },
     )
+    started = clock()
+    data = bytearray()
     try:
         with opener(request, timeout=_PACKAGE_PROBE_TIMEOUT) as response:
             final_url = getattr(response, "geturl", lambda: request.full_url)()
@@ -111,15 +116,31 @@ def _probe_package_url(
             status = getattr(response, "status", 200)
             if status not in (200, 206):
                 raise PacmanMirrorError(f"package returned HTTP {status}")
-            data = response.read(1024)
+            while len(data) < _PACKAGE_PROBE_BYTES:
+                chunk = response.read(min(
+                    64 * 1024, _PACKAGE_PROBE_BYTES - len(data)
+                ))
+                if not chunk:
+                    break
+                data.extend(chunk)
+                if clock() - started >= _PACKAGE_PROBE_TIMEOUT:
+                    break
     except PacmanMirrorError:
         raise
     except urllib.error.HTTPError as exc:
         raise PacmanMirrorError(f"package returned HTTP {exc.code}") from exc
     except (OSError, urllib.error.URLError, http.client.HTTPException) as exc:
         raise PacmanMirrorError("package probe failed") from exc
+    elapsed = max(clock() - started, 0.001)
+    if len(data) < 1024:
+        raise PacmanMirrorError("mirror returned too little package data")
     if not data.startswith(_ZSTD_MAGIC):
         raise PacmanMirrorError("mirror did not return an MSYS package")
+    if (
+        elapsed >= _PACKAGE_PROBE_TIMEOUT
+        or len(data) / elapsed < _PACKAGE_PROBE_MIN_RATE
+    ):
+        raise PacmanMirrorError("package transfer was too slow")
 
 
 def probe_pacman_mirror(
