@@ -98,6 +98,7 @@ from railmux.ui.workspace import (
     COMPACT_RESIZE_OPTION,
     DUAL_SIDEBAR_MIN_WIDTH,
     DUAL_SIDEBAR_PERCENT,
+    DisplayTransportKind,
     MINIMUM_AGENT_PANE_SIZE,
     SINGLE_SIDEBAR_PERCENT,
     SlotRestoreState,
@@ -2127,25 +2128,18 @@ class App:
         """
         import shlex
         import sys as _sys
-        mouse = self._less_mouse_flag
+        mouse = " --mouse" if self._less_mouse_flag else ""
         slot = slot or self._agent_workspace().target
-        # Tail the last 2000 lines so large sessions appear instantly. Tailing
-        # drops the leading ``session_meta`` record, so a long Codex rollout
-        # would otherwise be auto-detected as Claude and render blank. Pass the
-        # format explicitly from SessionMeta.session_type so the parser doesn't
-        # have to guess from the first tailed record (#5).
+        # The pager renderer reads the bounded tail into an anonymous seekable
+        # file before starting less.  Its first frame is therefore the final
+        # bottom page instead of a pipe visibly scrolling upward.
         fmt = "codex" if session_type == "codex" else "claude"
         path = shlex.quote(str(jsonl_path))
         python = shlex.quote(_sys.executable)
-        # LESSSECURE turns the pager into a viewer: no shell, pipe, editor,
-        # alternate-file, tag, or logfile commands. Do not persist searches,
-        # and suppress any user-configured input pre/postprocessors.
-        less_env = ("LESSSECURE=1 LESSHISTFILE=- "
-                    "LESSOPEN= LESSCLOSE=")
-        cmd = (f"tail -n 2000 {path} | "
-               f"{python} -m railmux.transcript --format {fmt} "
-               f"--preview-limit 2000 - | "
-               f"{less_env} less -R +G {mouse}").rstrip()
+        cmd = (
+            f"{python} -m railmux.preview_pager{mouse} --format {fmt} "
+            f"--preview-limit 2000 {path}"
+        )
         restore = slot.restore_state
         controller = getattr(self, "_railmux_pane_id", None)
         if (restore is not None and restore.kind == "agent" and controller
@@ -2157,33 +2151,50 @@ class App:
                 f"{shlex.quote(controller)} -- "
                 f"{shlex.quote(restore_sequence)}"
             )
-        # In swap mode ``slot.pane_id`` is the real provider pane. Return it
-        # home before the destructive ``respawn-pane -k`` below; only the
-        # display placeholder may be replaced by the transcript viewer.
-        if not self._display_transport().prepare_preview(slot):
-            self._set_status(
-                "failed to return the agent home before transcript preview",
-                "error",
-            )
-            return False
-        self._sync_slot_transcript_source(slot, None, None)
-        if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
+        replacing_preview = bool(
+            slot.in_history_mode
+            and slot.pane_id
+            and slot.agent_tmux_name is None
+            and slot.swap_state is None
+            and slot.transport_kind is DisplayTransportKind.NESTED
+        )
+        if replacing_preview:
+            assert slot.pane_id is not None
             if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
                 self._set_status("failed to respawn right pane for transcript")
                 return False
         else:
-            new_id = tmux_ctl.split_window_h(cmd, size_percent=70, detached=True)
-            if not new_id:
-                self._set_status("failed to create right pane for transcript")
+            # In swap mode ``slot.pane_id`` is the real provider pane. Return
+            # it home before replacing only the inert display placeholder.
+            if not self._display_transport().prepare_preview(slot):
+                self._set_status(
+                    "failed to return the agent home before transcript preview",
+                    "error",
+                )
                 return False
-            slot.pane_id = new_id
-            self._set_railmux_focus(self._railmux_has_focus, force_border=True)
+            self._sync_slot_transcript_source(slot, None, None)
+            if slot.pane_id:
+                if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
+                    self._set_status(
+                        "failed to respawn right pane for transcript")
+                    return False
+            else:
+                new_id = tmux_ctl.split_window_h(
+                    cmd, size_percent=70, detached=True)
+                if not new_id:
+                    self._set_status(
+                        "failed to create right pane for transcript")
+                    return False
+                slot.pane_id = new_id
+                self._set_railmux_focus(
+                    self._railmux_has_focus, force_border=True)
         # The display pane is now showing a transcript, not an agent session.
         slot.agent_tmux_name = None
         slot.mode_key = self._current_mode_key()
-        self._set_divider_active(
-            not getattr(self, "_railmux_has_focus", True), force=True)
-        self._install_tmux_bindings()
+        if not replacing_preview:
+            self._set_divider_active(
+                not getattr(self, "_railmux_has_focus", True), force=True)
+            self._install_tmux_bindings()
         return True
 
     def _sync_sidebar_to_agent_project(self, tmux_name: str | None) -> None:
@@ -2370,7 +2381,8 @@ class App:
                     and compact_return_page is not compact_target_page):
                 self._select_workspace_page(compact_return_page)
             return False
-        self._check_agent_slot_size(slot)
+        if not outcome.display_stable:
+            self._check_agent_slot_size(slot)
         if steal_focus:
             tmux_ctl.select_pane(slot.pane_id)
         slot.agent_tmux_name = agent_tmux_name
@@ -2379,7 +2391,7 @@ class App:
         self._set_active_tmux_target(agent_tmux_name, slot)
         self._set_railmux_focus(
             not steal_focus and not self._double_focus_visual_pending,
-            force_border=True,
+            force_border=not outcome.display_stable,
         )
         if running is not None and getattr(running, "is_legacy", False):
             self._teardown_scroll_acceleration()
@@ -2394,10 +2406,12 @@ class App:
                 and not (running is not None
                          and getattr(running, "is_legacy", False))):
             self._schedule_scroll_acceleration(agent_tmux_name)
-        if (slot is self._primary_slot
+        if (not outcome.display_stable
+                and slot is self._primary_slot
                 and not getattr(self, "_restoring_workspace", False)):
             self._apply_layout_profile(allow_create=True)
-        self._install_tmux_bindings()
+        if not outcome.target_unchanged:
+            self._install_tmux_bindings()
         if compact_target_page is not None:
             if steal_focus:
                 self._select_workspace_page(compact_target_page)

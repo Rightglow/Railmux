@@ -48,6 +48,8 @@ class AttachOutcome:
     kind: DisplayTransportKind
     reason: str | None = None
     fell_back: bool = False
+    display_stable: bool = False
+    target_unchanged: bool = False
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,90 @@ def _verified_displayed(state: SwapState) -> bool:
         and topology.single_live_pane is not None
         and topology.single_live_pane.pane_id == state.placeholder_pane_id
     )
+
+
+def _snapshot_verified_home(
+    snapshot: tmux_ctl.TmuxStateSnapshot,
+    state: SwapState,
+) -> bool:
+    real = snapshot.pane(state.agent_pane_id)
+    placeholder = snapshot.pane(state.placeholder_pane_id)
+    topology = snapshot.topology(state.agent_tmux_name)
+    return bool(
+        real is not None
+        and placeholder is not None
+        and topology is not None
+        and real.pane_pid == state.agent_pane_pid
+        and real.window_id == state.home_window_id
+        and placeholder.window_id == state.display_window_id
+        and state.home_window_id in topology.window_ids
+    )
+
+
+def _snapshot_verified_displayed(
+    snapshot: tmux_ctl.TmuxStateSnapshot,
+    state: SwapState,
+) -> bool:
+    real = snapshot.pane(state.agent_pane_id)
+    placeholder = snapshot.pane(state.placeholder_pane_id)
+    topology = snapshot.topology(state.agent_tmux_name)
+    return bool(
+        real is not None
+        and placeholder is not None
+        and topology is not None
+        and real.pane_pid == state.agent_pane_pid
+        and real.window_id == state.display_window_id
+        and placeholder.window_id == state.home_window_id
+        and topology.attached_clients == 0
+        and topology.single_live_pane is not None
+        and topology.single_live_pane.pane_id == state.placeholder_pane_id
+    )
+
+
+def _snapshot_marker_gate(
+    snapshot: tmux_ctl.TmuxStateSnapshot,
+    agent_tmux_name: str,
+    known_transactions: frozenset[str],
+) -> str | None:
+    for _window, marker, raw in snapshot.window_options:
+        if marker not in _MARKERS.values() or not raw:
+            continue
+        decoded = _decode_record(raw)
+        if decoded is None:
+            return "inconsistent swap recovery metadata exists"
+        state = decoded[1]
+        if (
+            state.agent_tmux_name == agent_tmux_name
+            and state.transaction_id not in known_transactions
+        ):
+            return "agent pane is owned by another swap transaction"
+    return None
+
+
+def _marker_commands(
+    state: SwapState,
+    slot_key: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    marker = _marker_for(slot_key)
+    raw = _encode_record(state, slot_key)
+    return (
+        ("set-window-option", "-t", state.home_window_id, marker, raw),
+        ("set-window-option", "-t", state.display_window_id, marker, raw),
+    )
+
+
+def _snapshot_has_marker_pair(
+    snapshot: tmux_ctl.TmuxStateSnapshot,
+    state: SwapState,
+    slot_key: str,
+) -> bool:
+    marker = _marker_for(slot_key)
+    for window in (state.home_window_id, state.display_window_id):
+        raw = snapshot.window_option(window, marker)
+        decoded = _decode_record(raw) if raw else None
+        if decoded is None or decoded != (slot_key, state):
+            return False
+    return True
 
 
 class NestedDisplayTransport:
@@ -542,6 +628,224 @@ class AgentDisplayTransport:
                     return "agent pane is owned by another swap transaction"
         return None
 
+    def _fast_switch_swap(
+        self,
+        slot: AgentSlot,
+        agent_tmux_name: str,
+    ) -> AttachOutcome | None:
+        """Switch an exact displayed swap in a bounded tmux transaction.
+
+        ``None`` means the optimized gate declined before making an
+        irreversible change and the established path should continue.  Every
+        mutation remains journaled and is followed by a coherent identity
+        snapshot; a failed or ambiguous mutation returns an explicit failure
+        with recovery metadata retained.
+        """
+        old = slot.swap_state
+        if (
+            old is None
+            or slot.transport_kind is not DisplayTransportKind.SWAP
+            or slot.display_parked
+            or tmux_ctl.tmux_version() < (3, 1)
+        ):
+            return None
+        marker_names = tuple(_MARKERS.values())
+        before = tmux_ctl.tmux_state_snapshot(marker_names)
+        if before is None or not _snapshot_verified_displayed(before, old):
+            return None
+        if not _snapshot_has_marker_pair(before, old, slot.key):
+            return None
+
+        # Clicking the already displayed row is an identity revalidation, not
+        # a reason to rewrite markers, resize windows, or move panes.
+        if old.agent_tmux_name == agent_tmux_name:
+            return AttachOutcome(
+                True,
+                DisplayTransportKind.SWAP,
+                display_stable=True,
+                target_unchanged=True,
+            )
+
+        known = frozenset(
+            state.transaction_id
+            for candidate in self.workspace.slots
+            if (state := candidate.swap_state) is not None
+        )
+        if _snapshot_marker_gate(
+                before, agent_tmux_name, known) is not None:
+            return None
+        if any(
+            candidate is not slot
+            and candidate.agent_tmux_name == agent_tmux_name
+            for candidate in self.workspace.slots
+        ):
+            return None
+        target_topology = before.topology(agent_tmux_name)
+        target_real = (
+            target_topology.single_live_pane
+            if target_topology is not None
+            and target_topology.attached_clients == 0
+            else None
+        )
+        if target_real is None or any(
+            candidate is not slot
+            and candidate.swap_state is not None
+            and candidate.swap_state.agent_pane_id == target_real.pane_id
+            for candidate in self.workspace.slots
+        ):
+            return None
+
+        old_real = before.pane(old.agent_pane_id)
+        keeper = before.topology(old.keeper_session)
+        if (
+            old_real is None
+            or keeper is None
+            or keeper.session_id != old.keeper_session_id
+            or old.display_window_id not in keeper.window_ids
+        ):
+            return None
+
+        returning = self._with_phase(old, "returning")
+        return_commands = (
+            *_marker_commands(returning, slot.key),
+            (
+                "resize-window", "-t", old.agent_tmux_name,
+                "-x", str(old_real.width), "-y", str(old_real.height),
+            ),
+            (
+                "swap-pane", "-d", "-s", old.agent_pane_id,
+                "-t", old.placeholder_pane_id,
+            ),
+        )
+        # The coherent postcondition is authoritative even if the client loses
+        # its final acknowledgement after tmux completed the atomic pane move.
+        tmux_ctl.run_command_queue(return_commands)
+        after_home = tmux_ctl.tmux_state_snapshot(marker_names)
+        if after_home is None or not _snapshot_verified_home(after_home, old):
+            if (
+                after_home is not None
+                and _snapshot_verified_displayed(after_home, old)
+            ):
+                _write_marker_pair(old, slot.key)
+                return None
+            return AttachOutcome(
+                False,
+                DisplayTransportKind.SWAP,
+                "could not verify the previous agent at home; "
+                "recovery metadata was retained",
+            )
+        target_topology = after_home.topology(agent_tmux_name)
+        target_real = (
+            target_topology.single_live_pane
+            if target_topology is not None
+            and target_topology.attached_clients == 0
+            else None
+        )
+        placeholder = after_home.pane(old.placeholder_pane_id)
+        keeper = after_home.topology(old.keeper_session)
+        if (
+            target_real is None
+            or placeholder is None
+            or placeholder.window_id != old.display_window_id
+            or keeper is None
+            or keeper.session_id != old.keeper_session_id
+            or old.display_window_id not in keeper.window_ids
+            or _snapshot_marker_gate(
+                after_home, agent_tmux_name, known,
+            ) is not None
+        ):
+            # Old is already proven safe at home.  The ordinary path can clear
+            # its matching marker and reevaluate the changed target topology.
+            return None
+
+        prepared = SwapState(
+            transaction_id=uuid.uuid4().hex,
+            agent_tmux_name=agent_tmux_name,
+            agent_pane_id=target_real.pane_id,
+            agent_pane_pid=target_real.pane_pid,
+            home_window_id=target_real.window_id,
+            placeholder_pane_id=old.placeholder_pane_id,
+            display_window_id=old.display_window_id,
+            keeper_session=old.keeper_session,
+            keeper_session_id=old.keeper_session_id,
+            outer_session_name=old.outer_session_name,
+            outer_session_id=old.outer_session_id,
+            owner_pane_id=old.owner_pane_id,
+            phase="prepared",
+        )
+        marker = _marker_for(slot.key)
+        switch_commands = (
+            ("set-window-option", "-t", old.home_window_id, "-u", marker),
+            ("set-window-option", "-t", old.display_window_id, "-u", marker),
+            (
+                "set-option", "-p", "-t", old.placeholder_pane_id,
+                "-u", tmux_server.HISTORY_SOURCE_OPTION,
+            ),
+            (
+                "set-option", "-p", "-t", old.placeholder_pane_id,
+                "-u", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            ),
+            *_marker_commands(prepared, slot.key),
+            (
+                "swap-pane", "-d", "-s", prepared.agent_pane_id,
+                "-t", prepared.placeholder_pane_id,
+            ),
+        )
+        tmux_ctl.run_guarded_window_transaction(
+            (
+                (old.home_window_id, marker, old.transaction_id),
+                (old.display_window_id, marker, old.transaction_id),
+            ),
+            switch_commands,
+        )
+        after_switch = tmux_ctl.tmux_state_snapshot(marker_names)
+        if (
+            after_switch is None
+            or not _snapshot_verified_displayed(after_switch, prepared)
+        ):
+            if (
+                after_switch is not None
+                and _snapshot_verified_home(after_switch, old)
+                and _snapshot_verified_home(after_switch, prepared)
+            ):
+                _clear_markers(prepared, slot.key)
+                return None
+            return AttachOutcome(
+                False,
+                DisplayTransportKind.SWAP,
+                "optimized pane switch could not be verified; "
+                "recovery metadata was retained",
+            )
+        displayed = self._with_phase(prepared, "displayed")
+        committed = tmux_ctl.run_guarded_window_transaction(
+            (
+                (prepared.home_window_id, marker, prepared.transaction_id),
+                (
+                    prepared.display_window_id,
+                    marker,
+                    prepared.transaction_id,
+                ),
+            ),
+            _marker_commands(displayed, slot.key),
+        )
+        slot.swap_state = displayed if committed else prepared
+        slot.pane_id = prepared.agent_pane_id
+        slot.transport_kind = DisplayTransportKind.SWAP
+        slot.agent_tmux_name = agent_tmux_name
+        slot.display_parked = False
+        if not committed:
+            return AttachOutcome(
+                False,
+                DisplayTransportKind.SWAP,
+                "pane switch committed but its recovery marker did not; "
+                "the verified pane was retained for recovery",
+            )
+        return AttachOutcome(
+            True,
+            DisplayTransportKind.SWAP,
+            display_stable=True,
+        )
+
     def attach(
         self,
         slot: AgentSlot,
@@ -570,6 +874,10 @@ class AgentDisplayTransport:
                 return AttachOutcome(
                     True, DisplayTransportKind.NESTED, reason, fell_back=True)
             return outcome
+
+        optimized = self._fast_switch_swap(slot, agent_tmux_name)
+        if optimized is not None:
+            return optimized
 
         if (slot.swap_state is not None
                 and slot.swap_state.agent_tmux_name == agent_tmux_name

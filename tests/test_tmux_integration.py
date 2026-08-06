@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import pty
 import select
@@ -2369,6 +2370,54 @@ def test_real_compact_parking_keeps_hidden_provider_geometry_stable(
 
     assert manager.return_home(workspace.primary)
     assert tmux_ctl.kill_session("compact-park-agent")
+
+
+def test_real_fast_swap_switch_reuses_placeholder_and_commits_markers(
+    isolated_tmux,
+):
+    _require_tmux((3, 1), "guarded fast swap transaction")
+    display_session, sidebar_pane, _socket_path = isolated_tmux
+    for name in ("fast-switch-a", "fast-switch-b"):
+        subprocess.run(
+            ["tmux", "new-session", "-d", "-s", name, "sleep", "60"],
+            check=True,
+        )
+    workspace = AgentWorkspace()
+    manager = AgentDisplayTransport(
+        workspace,
+        "swap",
+        auto_launched=True,
+        outer_session_name=display_session,
+        outer_session_id=tmux_ctl.current_session_id(),
+        owner_pane_id=sidebar_pane,
+    )
+    try:
+        assert manager.create_primary(agent_width=80)
+        first = manager.attach(workspace.primary, "fast-switch-a")
+        assert first.ok and first.kind is DisplayTransportKind.SWAP
+        first_state = workspace.primary.swap_state
+        assert first_state is not None
+        placeholder = first_state.placeholder_pane_id
+
+        second = manager.attach(workspace.primary, "fast-switch-b")
+
+        assert second.ok and second.display_stable
+        state = workspace.primary.swap_state
+        assert state is not None and state.phase == "displayed"
+        assert state.placeholder_pane_id == placeholder
+        assert tmux_ctl.pane_identity(first_state.agent_pane_id).window_id == (
+            first_state.home_window_id)
+        assert tmux_ctl.pane_identity(state.agent_pane_id).window_id == (
+            state.display_window_id)
+        marker = tmux_ctl.show_window_user_option(
+            state.display_window_id, "@railmux_swap_primary")
+        assert marker is not None
+        assert json.loads(marker)["transaction_id"] == state.transaction_id
+        assert json.loads(marker)["phase"] == "displayed"
+    finally:
+        manager.return_home(workspace.primary)
+        tmux_ctl.kill_session("fast-switch-a")
+        tmux_ctl.kill_session("fast-switch-b")
 
 
 def test_real_tmux_f20_reaches_urwid_private_resize_key(isolated_tmux):

@@ -94,6 +94,61 @@ class SessionTopology:
         return None
 
 
+@dataclass(frozen=True)
+class TmuxStateSnapshot:
+    """One coherent server-wide identity and marker observation.
+
+    ``tmux list-panes -a`` can project the owning session, immutable IDs,
+    geometry, and selected window options in one client invocation.  Keeping
+    that observation together matters on MSYS2, where repeatedly starting the
+    tmux client is materially more expensive than it is on Linux, but it also
+    closes avoidable gaps between otherwise independent safety queries.
+    """
+
+    topologies: tuple[SessionTopology, ...]
+    panes: tuple[PaneIdentity, ...]
+    window_options: tuple[tuple[str, str, str | None], ...] = ()
+
+    def topology(self, session_name: str) -> SessionTopology | None:
+        matches = [
+            topology for topology in self.topologies
+            if topology.session_name == session_name
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def pane(self, pane_id: str) -> PaneIdentity | None:
+        matches = [pane for pane in self.panes if pane.pane_id == pane_id]
+        if not matches:
+            return None
+        first = matches[0]
+        physical = (
+            first.pane_pid,
+            first.window_id,
+            first.dead,
+            first.width,
+            first.height,
+        )
+        if any(
+            (
+                pane.pane_pid,
+                pane.window_id,
+                pane.dead,
+                pane.width,
+                pane.height,
+            ) != physical
+            for pane in matches[1:]
+        ):
+            return None
+        return first
+
+    def window_option(self, window_id: str, name: str) -> str | None:
+        values = {
+            value for window, option, value in self.window_options
+            if window == window_id and option == name
+        }
+        return next(iter(values)) if len(values) == 1 else None
+
+
 def has_tmux() -> bool:
     """True if tmux is installed and on PATH."""
     return shutil.which("tmux") is not None
@@ -603,58 +658,214 @@ def pane_identity(pane_id: str) -> PaneIdentity | None:
         return None
 
 
-def session_topology(session_name: str) -> SessionTopology | None:
-    """Return the exact window/pane topology for one session name or ID."""
-    pane_fmt = (
-        "#{pane_id}\t#{pane_pid}\t#{session_name}\t#{session_id}\t"
-        "#{window_id}\t#{pane_dead}\t#{pane_width}\t#{pane_height}"
+_WINDOW_OPTION_RE = re.compile(r"@[A-Za-z0-9_.-]+\Z")
+
+
+def _tmux_state_snapshot(
+    window_options: tuple[str, ...],
+    *,
+    session_name: str | None,
+) -> TmuxStateSnapshot | None:
+    if any(not _WINDOW_OPTION_RE.fullmatch(name) for name in window_options):
+        return None
+    fields = (
+        "#{session_name}",
+        "#{session_id}",
+        "#{session_attached}",
+        "#{window_id}",
+        "#{pane_id}",
+        "#{pane_pid}",
+        "#{pane_dead}",
+        "#{pane_width}",
+        "#{pane_height}",
+        *(f"#{{{name}}}" for name in window_options),
     )
+    argv = ["tmux", "list-panes"]
+    if session_name is None:
+        argv.append("-a")
+    else:
+        argv.extend(("-s", "-t", session_name))
+    argv.extend(("-F", "\t".join(fields)))
     try:
-        session_raw = subprocess.check_output(
-            ["tmux", "display-message", "-p", "-t", session_name,
-             "#{session_name}\t#{session_id}"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-        session_fields = session_raw.split("\t")
-        if len(session_fields) != 2:
-            return None
-        actual_name, session_id = session_fields
-        attached = session_attached_count(session_name)
-        windows_text = subprocess.check_output(
-            ["tmux", "list-windows", "-t", session_name, "-F", "#{window_id}"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-        panes_text = subprocess.check_output(
-            ["tmux", "list-panes", "-s", "-t", session_name, "-F", pane_fmt],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
-        if not actual_name or not session_id or attached is None:
-            return None
-        windows = tuple(line for line in windows_text.splitlines() if line)
-        panes: list[PaneIdentity] = []
-        for raw in panes_text.splitlines():
-            fields = raw.split("\t")
-            if len(fields) != 8:
+        text = subprocess.check_output(
+            argv, stderr=subprocess.DEVNULL).decode().rstrip("\n")
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return None
+    if not text:
+        return None
+
+    grouped: dict[
+        tuple[str, str], dict[str, object]
+    ] = {}
+    physical_panes: dict[tuple[str, str], PaneIdentity] = {}
+    option_values: dict[tuple[str, str], str | None] = {}
+    expected = 9 + len(window_options)
+    try:
+        for raw in text.splitlines():
+            values = raw.split("\t")
+            if len(values) != expected:
                 return None
-            panes.append(PaneIdentity(
-                pane_id=fields[0],
-                pane_pid=int(fields[1]),
-                session_name=fields[2],
-                session_id=fields[3],
-                window_id=fields[4],
-                dead=fields[5] == "1",
-                width=int(fields[6]),
-                height=int(fields[7]),
-            ))
-        return SessionTopology(
+            (
+                actual_name,
+                session_id,
+                attached_raw,
+                window_id,
+                pane_id,
+                pane_pid_raw,
+                dead_raw,
+                width_raw,
+                height_raw,
+                *options_raw,
+            ) = values
+            if (
+                not actual_name
+                or not session_id
+                or not window_id
+                or not pane_id
+                or dead_raw not in {"0", "1"}
+            ):
+                return None
+            attached = int(attached_raw)
+            pane = PaneIdentity(
+                pane_id=pane_id,
+                pane_pid=int(pane_pid_raw),
+                session_name=actual_name,
+                session_id=session_id,
+                window_id=window_id,
+                dead=dead_raw == "1",
+                width=int(width_raw),
+                height=int(height_raw),
+            )
+            if attached < 0 or pane.pane_pid <= 0 or pane.width <= 0 or pane.height <= 0:
+                return None
+            key = (actual_name, session_id)
+            group = grouped.setdefault(
+                key,
+                {"attached": attached, "windows": {}, "panes": {}},
+            )
+            if group["attached"] != attached:
+                return None
+            windows = group["windows"]
+            panes = group["panes"]
+            assert isinstance(windows, dict) and isinstance(panes, dict)
+            windows[window_id] = None
+            previous = panes.get(pane_id)
+            if previous is not None and previous != pane:
+                return None
+            panes[pane_id] = pane
+            physical_key = (pane_id, window_id)
+            physical_previous = physical_panes.get(physical_key)
+            if physical_previous is not None and (
+                physical_previous.pane_pid != pane.pane_pid
+                or physical_previous.dead != pane.dead
+                or physical_previous.width != pane.width
+                or physical_previous.height != pane.height
+            ):
+                return None
+            physical_panes[physical_key] = pane
+            for name, value in zip(window_options, options_raw):
+                option_key = (window_id, name)
+                decoded = value or None
+                if (
+                    option_key in option_values
+                    and option_values[option_key] != decoded
+                ):
+                    return None
+                option_values[option_key] = decoded
+    except (TypeError, ValueError):
+        return None
+
+    topologies: list[SessionTopology] = []
+    for (actual_name, session_id), group in grouped.items():
+        windows = group["windows"]
+        panes = group["panes"]
+        assert isinstance(windows, dict) and isinstance(panes, dict)
+        topologies.append(SessionTopology(
             session_name=actual_name,
             session_id=session_id,
-            attached_clients=attached,
-            window_ids=windows,
-            panes=tuple(panes),
-        )
-    except (OSError, subprocess.CalledProcessError, UnicodeError, ValueError):
+            attached_clients=int(group["attached"]),
+            window_ids=tuple(windows),
+            panes=tuple(panes.values()),
+        ))
+    return TmuxStateSnapshot(
+        topologies=tuple(topologies),
+        panes=tuple(physical_panes.values()),
+        window_options=tuple(
+            (window, name, value)
+            for (window, name), value in option_values.items()
+        ),
+    )
+
+
+def tmux_state_snapshot(
+    window_options: tuple[str, ...] = (),
+) -> TmuxStateSnapshot | None:
+    """Capture every live session/pane and selected markers in one query."""
+    return _tmux_state_snapshot(window_options, session_name=None)
+
+
+def session_topology(session_name: str) -> SessionTopology | None:
+    """Return one exact topology using a single tmux client invocation."""
+    snapshot = _tmux_state_snapshot((), session_name=session_name)
+    if snapshot is None or len(snapshot.topologies) != 1:
         return None
+    return snapshot.topologies[0]
+
+
+def run_command_queue(commands: tuple[tuple[str, ...], ...]) -> bool:
+    """Run an ordered tmux command queue; tmux stops at the first failure."""
+    if not commands or any(not command for command in commands):
+        return False
+    argv = ["tmux"]
+    for index, command in enumerate(commands):
+        if index:
+            argv.append(";")
+        argv.extend(command)
+    try:
+        subprocess.check_call(
+            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def run_guarded_window_transaction(
+    guards: tuple[tuple[str, str, str], ...],
+    commands: tuple[tuple[str, ...], ...],
+) -> bool:
+    """Run *commands* only while every window marker still owns its tx.
+
+    The transaction token is an opaque lowercase hex UUID generated by
+    Railmux.  A false guard deliberately performs no mutation; callers prove
+    the resulting topology afterwards instead of trusting this return value.
+    """
+    if (
+        not guards
+        or not commands
+        or any(
+            not re.fullmatch(r"[0-9a-f]{16,64}", token)
+            or not _WINDOW_OPTION_RE.fullmatch(name)
+            for _window, name, token in guards
+        )
+    ):
+        return False
+    command = " ; ".join(shlex.join(list(item)) for item in commands)
+    for window, name, token in reversed(guards):
+        pattern = f'*"transaction_id":"{token}"*'
+        condition = f"#{{m:{pattern},#{{{name}}}}}"
+        command = shlex.join([
+            "if-shell", "-F", "-t", window,
+            condition, command, "run-shell 'exit 1'",
+        ])
+    try:
+        subprocess.check_call(
+            ["tmux", *shlex.split(command)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return False
 
 
 def detached_single_pane_start_command(
