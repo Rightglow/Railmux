@@ -1514,6 +1514,180 @@ def test_base_update_restarts_after_confirmed_core_shutdown(tmp_path):
     assert "failed with exit code" not in rendered
 
 
+def test_base_update_restarts_from_new_completed_pacman_core_journal(tmp_path):
+    root = tmp_path / "msys64"
+    old_entry = root / "var" / "lib" / "pacman" / "local" / "msys2-runtime-3.6.7-2"
+    old_entry.mkdir(parents=True)
+    (old_entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\n3.6.7-2\n",
+        encoding="utf-8",
+    )
+    journal = root / "var" / "log" / "pacman.log"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        "[old] [PACMAN] starting core system upgrade\n"
+        "[old] [ALPM] transaction started\n"
+        "[old] [ALPM] upgraded msys2-runtime (older -> old)\n"
+        "[old] [ALPM] transaction completed\n",
+        encoding="utf-8",
+    )
+    attempts = []
+
+    def runner(argv, *, env, check):
+        attempts.append(argv)
+        update_attempts = [item for item in attempts if "-Syuu" in item[4]]
+        if len(update_attempts) == 1 and "-Syuu" in argv[4]:
+            new_entry = old_entry.with_name("msys2-runtime-3.6.10-2")
+            old_entry.rename(new_entry)
+            (new_entry / "desc").write_text(
+                "%NAME%\nmsys2-runtime\n\n%VERSION%\n3.6.10-2\n",
+                encoding="utf-8",
+            )
+            with journal.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(
+                    "[now] [PACMAN] starting core system upgrade\n"
+                    "[now] [ALPM] transaction started\n"
+                    "[now] [ALPM] upgraded msys2-runtime (3.6.7-2 -> 3.6.10-2)\n"
+                    "[now] [ALPM] upgraded pacman (6.1.0-24 -> 6.1.0-25)\n"
+                    "[now] [ALPM] transaction completed\n"
+                )
+            return completed(
+                argv,
+                returncode=0xC0000135,
+                stdout=(
+                    b"error: failed retrieving file 'cached.pkg.tar.zst' "
+                    b"from old.example.invalid : Operation too slow\n"
+                ),
+            )
+        return completed(argv, stdout=b"there is nothing to do\n")
+
+    stream = io.StringIO()
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=stream
+    ) as reporter:
+        windows_msys2._run_base_update_with_restarts(
+            root,
+            cache=tmp_path / "cache",
+            env={},
+            reporter=reporter,
+            runner=runner,
+            mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                None, None, False, (), ()
+            ),
+        )
+
+    updates = [argv for argv in attempts if "-Syuu --noconfirm" in argv[4]]
+    assert len(updates) == 2
+    rendered = stream.getvalue()
+    assert "journal confirms a completed core update" in rendered
+    assert "final console prompt was not captured" in rendered
+    assert "STATUS_DLL_NOT_FOUND" not in rendered
+    assert "resilient retry" not in rendered
+
+
+@pytest.mark.parametrize(
+    "appended",
+    [
+        (
+            "[now] [PACMAN] starting core system upgrade\n"
+            "[now] [ALPM] transaction started\n"
+            "[now] [ALPM] upgraded msys2-runtime (old -> new)\n"
+        ),
+        (
+            "[now] [PACMAN] starting core system upgrade\n"
+            "[now] [ALPM] transaction started\n"
+            "[now] [ALPM] upgraded curl (old -> new)\n"
+            "[now] [ALPM] transaction completed\n"
+        ),
+        (
+            "[now] [PACMAN] starting core system upgrade\n"
+            "[now] [ALPM] transaction started\n"
+            "[now] [ALPM] upgraded msys2-runtime (old -> new)\n"
+            "[now] [ALPM] transaction completed\n"
+        ),
+    ],
+)
+def test_base_update_rejects_incomplete_or_noncore_pacman_journal(
+    tmp_path, monkeypatch, appended
+):
+    monkeypatch.setattr(windows_msys2, "_NATIVE_WINDOWS", True)
+    root = tmp_path / "msys64"
+    entry = root / "var" / "lib" / "pacman" / "local" / "msys2-runtime-old"
+    entry.mkdir(parents=True)
+    (entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nold\n",
+        encoding="utf-8",
+    )
+    journal = root / "var" / "log" / "pacman.log"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(
+        "[old] [PACMAN] starting core system upgrade\n"
+        "[old] [ALPM] transaction started\n"
+        "[old] [ALPM] upgraded msys2-runtime (older -> old)\n"
+        "[old] [ALPM] transaction completed\n",
+        encoding="utf-8",
+    )
+
+    def runner(argv, *, env, check):
+        if windows_msys2._PRIVATE_GPG_SHUTDOWN_COMMAND in argv[4]:
+            return completed(argv)
+        with journal.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(appended)
+        return completed(argv, returncode=0xC0000135)
+
+    stream = io.StringIO()
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=stream
+    ) as reporter:
+        with pytest.raises(RuntimeInstallError, match="3221225781"):
+            windows_msys2._run_base_update_with_restarts(
+                root,
+                cache=tmp_path / "cache",
+                env={},
+                reporter=reporter,
+                runner=runner,
+                mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                    None, None, False, (), ()
+                ),
+            )
+
+    assert "journal confirms" not in stream.getvalue()
+    assert "STATUS_DLL_NOT_FOUND" in stream.getvalue()
+
+
+def test_completed_core_journal_does_not_authorize_an_unrelated_status(tmp_path):
+    root = tmp_path / "msys64"
+    old_entry = root / "var" / "lib" / "pacman" / "local" / "msys2-runtime-old"
+    old_entry.mkdir(parents=True)
+    (old_entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nold\n", encoding="utf-8"
+    )
+    journal = root / "var" / "log" / "pacman.log"
+    journal.parent.mkdir(parents=True)
+    journal.write_text("[old] [PACMAN] previous command\n", encoding="utf-8")
+    checkpoint = windows_msys2._pacman_log_checkpoint(root)
+    new_entry = old_entry.with_name("msys2-runtime-new")
+    old_entry.rename(new_entry)
+    (new_entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nnew\n", encoding="utf-8"
+    )
+    with journal.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(
+            "[now] [PACMAN] starting core system upgrade\n"
+            "[now] [ALPM] transaction started\n"
+            "[now] [ALPM] upgraded msys2-runtime (old -> new)\n"
+            "[now] [ALPM] transaction completed\n"
+        )
+
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=io.StringIO()
+    ) as reporter:
+        reporter.command_started("update")
+        assert not windows_msys2._restart_evidence(
+            root, checkpoint, reporter, returncode=1
+        )
+
+
 def test_base_update_does_not_mask_unconfirmed_missing_dll(tmp_path, monkeypatch):
     monkeypatch.setattr(windows_msys2, "_NATIVE_WINDOWS", True)
     attempts = []
@@ -1546,7 +1720,7 @@ def test_base_update_does_not_mask_unconfirmed_missing_dll(tmp_path, monkeypatch
 
     updates = [argv for argv in attempts if "-Syuu --noconfirm" in argv[4]]
     assert len(updates) == 1
-    assert "outside a confirmed MSYS2 core-update restart" in stream.getvalue()
+    assert "neither pacman's restart announcement" in stream.getvalue()
 
 
 def test_base_update_restart_loop_is_bounded(tmp_path):
@@ -1560,12 +1734,12 @@ def test_base_update_restart_loop_is_bounded(tmp_path):
         attempts.append(argv)
         if windows_msys2._PRIVATE_GPG_SHUTDOWN_COMMAND in argv[4]:
             return completed(argv)
-        return completed(argv, stdout=restart)
+        return completed(argv, returncode=0xC0000135, stdout=restart)
 
     with InstallReporter(
         tmp_path / "install.log", verbose=False, stream=io.StringIO()
     ) as reporter:
-        with pytest.raises(RuntimeInstallError, match="repeatedly requested"):
+        with pytest.raises(RuntimeInstallError, match="exhausted the permitted"):
             windows_msys2._run_base_update_with_restarts(
                 tmp_path / "msys64",
                 cache=tmp_path / "cache",
@@ -1579,6 +1753,93 @@ def test_base_update_restart_loop_is_bounded(tmp_path):
 
     updates = [argv for argv in attempts if "-Syuu --noconfirm" in argv[4]]
     assert len(updates) == windows_msys2._MAX_BASE_UPDATE_PASSES
+    rendered = (tmp_path / "install.log").read_text(encoding="utf-8")
+    assert "final permitted update pass" in rendered
+    assert "had neither pacman's restart announcement" not in rendered
+
+
+def test_package_install_does_not_require_core_restart_journal(tmp_path):
+    root = tmp_path / "msys64"
+    journal = root / "var" / "log" / "pacman.log"
+    journal.parent.mkdir(parents=True)
+    with journal.open("wb") as stream:
+        stream.truncate(windows_msys2._PACMAN_LOG_MAX_SIZE + 1)
+
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=io.StringIO()
+    ) as reporter:
+        restarted = windows_msys2._run_pacman_with_recovery(
+            root,
+            packages=True,
+            cache=tmp_path / "cache",
+            env={},
+            reporter=reporter,
+            runner=lambda argv, **_kwargs: completed(argv),
+            label="packages",
+            mirror_optimizer=lambda _root: PacmanMirrorDecision(
+                None, None, False, (), ()
+            ),
+        )
+
+    assert not restarted
+
+
+def test_pacman_journal_proves_a_matching_core_downgrade(tmp_path):
+    root = tmp_path / "msys64"
+    old_entry = root / "var" / "lib" / "pacman" / "local" / "msys2-runtime-new"
+    old_entry.mkdir(parents=True)
+    (old_entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nnew\n", encoding="utf-8"
+    )
+    journal = root / "var" / "log" / "pacman.log"
+    journal.parent.mkdir(parents=True)
+    journal.write_text("[old] [PACMAN] previous command\n", encoding="utf-8")
+    checkpoint = windows_msys2._pacman_log_checkpoint(root)
+    new_entry = old_entry.with_name("msys2-runtime-old")
+    old_entry.rename(new_entry)
+    (new_entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nold\n", encoding="utf-8"
+    )
+    with journal.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(
+            "[now] [PACMAN] starting core system upgrade\n"
+            "[now] [ALPM] transaction started\n"
+            "[now] [ALPM] downgraded msys2-runtime (new -> old)\n"
+            "[now] [ALPM] transaction completed\n"
+        )
+
+    assert windows_msys2._pacman_log_core_transaction(root, checkpoint) == (
+        "msys2-runtime",
+    )
+
+
+def test_replaced_pacman_journal_cannot_reuse_a_checkpoint(tmp_path):
+    root = tmp_path / "msys64"
+    entry = root / "var" / "lib" / "pacman" / "local" / "msys2-runtime-old"
+    entry.mkdir(parents=True)
+    (entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nold\n", encoding="utf-8"
+    )
+    journal = root / "var" / "log" / "pacman.log"
+    journal.parent.mkdir(parents=True)
+    journal.write_text("[old] [PACMAN] previous command\n", encoding="utf-8")
+    checkpoint = windows_msys2._pacman_log_checkpoint(root)
+    replacement = journal.with_suffix(".replacement")
+    replacement.write_text(
+        "[now] [PACMAN] starting core system upgrade\n"
+        "[now] [ALPM] transaction started\n"
+        "[now] [ALPM] upgraded msys2-runtime (old -> new)\n"
+        "[now] [ALPM] transaction completed\n",
+        encoding="utf-8",
+    )
+    os.replace(replacement, journal)
+    new_entry = entry.with_name("msys2-runtime-new")
+    entry.rename(new_entry)
+    (new_entry / "desc").write_text(
+        "%NAME%\nmsys2-runtime\n\n%VERSION%\nnew\n", encoding="utf-8"
+    )
+
+    assert not windows_msys2._pacman_log_core_transaction(root, checkpoint)
 
 
 def test_completed_package_cache_count_ignores_signatures_partials_and_links(tmp_path):

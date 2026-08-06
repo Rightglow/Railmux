@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from railmux import windows_msys2
+from railmux import windows_install_log, windows_msys2
 from railmux.windows_install_log import InstallReporter, install_log_path
 from railmux.windows_msys2 import _run_checked
 
@@ -78,6 +78,19 @@ def test_reporter_recognizes_only_the_explicit_msys2_core_restart(tmp_path):
         reporter.command_started("second update")
         reporter.command_output("warning: terminate other MSYS2 programs\n")
         assert not reporter.command_requested_msys2_restart
+
+
+def test_reporter_recognizes_a_wrapped_msys2_core_restart(tmp_path):
+    path = tmp_path / "install.log"
+    with InstallReporter(path, verbose=False, stream=io.StringIO()) as reporter:
+        reporter.command_started("update")
+        reporter.command_output(
+            ":: To complete this update all MSYS2 processes including\n"
+            "\n"
+            "this terminal will be closed. Confirm to proceed [Y/n]\n"
+        )
+
+        assert reporter.command_requested_msys2_restart
 
 
 def test_verbose_reporter_never_fails_on_a_legacy_windows_console_codec(tmp_path):
@@ -174,6 +187,25 @@ def test_reporter_retains_only_five_owned_logs(tmp_path):
     assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
+def test_log_retention_never_removes_the_active_oldest_timestamp(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    current = logs / "install-0.4.0.dev29-20260806T000000Z-99.log"
+    current.write_text("active", encoding="utf-8")
+    os.utime(current, ns=(1, 1))
+    for number in range(6):
+        path = logs / f"install-0.4.0.dev28-20260805T00000{number}Z-{number}.log"
+        path.write_text(str(number), encoding="utf-8")
+        os.utime(path, ns=(number + 10, number + 10))
+
+    windows_install_log._prune_install_logs(logs, preserve=current)
+
+    owned = sorted(logs.glob("install-*.log"))
+    assert len(owned) == 5
+    assert current in owned
+    assert current.read_text(encoding="utf-8") == "active"
+
+
 def test_log_path_is_private_versioned_and_utc(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "getpid", lambda: 42)
 
@@ -232,7 +264,9 @@ def test_windows_missing_dll_status_is_explained(tmp_path, monkeypatch):
             )
 
     assert "STATUS_DLL_NOT_FOUND" in stream.getvalue()
-    assert "security software" in path.read_text(encoding="utf-8")
+    assert "matching package-database version change" in path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_compact_reporter_surfaces_extraction_and_package_progress(tmp_path):

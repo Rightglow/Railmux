@@ -120,6 +120,28 @@ _PACKAGE_INVENTORY_COMMAND = "set -o pipefail; pacman -Q | LC_ALL=C sort"
 _PACKAGE_INVENTORY_LIMIT = 1024 * 1024
 _CORE_RUNTIME_PACKAGES = ("tmux", "python", "python-pip")
 _MAX_BASE_UPDATE_PASSES = 3
+_PACMAN_LOG_RELATIVE = Path("var") / "log" / "pacman.log"
+_PACMAN_LOG_MAX_SIZE = 8 * 1024 * 1024
+_PACMAN_LOG_APPEND_LIMIT = 2 * 1024 * 1024
+_PACMAN_LOCAL_DB_ENTRY_LIMIT = 4096
+_PACMAN_LOCAL_DESC_LIMIT = 64 * 1024
+# Keep this aligned with alpm_pkg_is_core_package in the pacman build shipped
+# by the pinned base. Any one of these packages makes MSYS2 close its processes.
+_PACMAN_CORE_PACKAGES = frozenset(
+    {
+        "bash",
+        "filesystem",
+        "mintty",
+        "msys2-runtime",
+        "msys2-runtime-devel",
+        "pacman",
+        "pacman-mirrors",
+    }
+)
+_PACMAN_CORE_CHANGE_RE = re.compile(
+    r"\[ALPM] (?:upgraded|downgraded) ([^ ]+) \(([^ ]+) -> ([^)]+)\)",
+    re.IGNORECASE,
+)
 _PRIVATE_GPG_SHUTDOWN_COMMAND = (
     "gpgconf --homedir /etc/pacman.d/gnupg --kill all"
 )
@@ -198,6 +220,16 @@ class _ArchiveProbe:
 
 ArchiveProbe = Callable[[str, str, int], _ArchiveProbe]
 ArchiveResume = Callable[[str, str, int, int, Callable[[bytes], None]], None]
+
+
+@dataclass(frozen=True)
+class _PacmanLogCheckpoint:
+    existed: bool
+    size: int
+    identity: tuple[int, int] | None
+    tail_offset: int
+    tail_digest: str
+    core_versions: tuple[tuple[str, str], ...]
 
 
 def _format_download_size(size: int) -> str:
@@ -1638,9 +1670,11 @@ def _run_checked(
 def _explain_windows_status(returncode: int, reporter: InstallReporter) -> None:
     if _NATIVE_WINDOWS and returncode & 0xFFFFFFFF == 0xC0000135:
         reporter.note(
-            "Windows reported STATUS_DLL_NOT_FOUND outside a confirmed MSYS2 "
-            "core-update restart. Check whether security software quarantined "
-            "a file in the private MSYS2 staging tree.",
+            "Windows reported STATUS_DLL_NOT_FOUND, but this pass had neither "
+            "pacman's restart announcement nor a newly completed core "
+            "transaction with a matching package-database version change. "
+            "The temporary base will not be published; a missing or "
+            "quarantined staged DLL remains possible.",
             level="error",
         )
 
@@ -1676,6 +1710,215 @@ def _report_mirror_decision(
         )
 
 
+def _pacman_desc_value(text: str, field: str) -> str | None:
+    lines = text.splitlines()
+    marker = f"%{field}%"
+    for index, line in enumerate(lines[:-1]):
+        if line == marker and lines[index + 1]:
+            return lines[index + 1]
+    return None
+
+
+def _pacman_core_versions(root: Path) -> dict[str, str]:
+    local_db = root / "var" / "lib" / "pacman" / "local"
+    try:
+        if _path_is_link_or_reparse(local_db) or not local_db.is_dir():
+            raise RuntimeInstallError("the private pacman database is unsafe")
+        entries = list(local_db.iterdir())
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise RuntimeInstallError("could not inspect the private pacman database") from exc
+    if len(entries) > _PACMAN_LOCAL_DB_ENTRY_LIMIT:
+        raise RuntimeInstallError("the private pacman database is unexpectedly large")
+    versions: dict[str, str] = {}
+    for entry in entries:
+        if not any(
+            entry.name.startswith(prefix)
+            for prefix in (
+                "bash-",
+                "filesystem-",
+                "mintty-",
+                "msys2-runtime-",
+                "pacman-",
+            )
+        ):
+            continue
+        desc = entry / "desc"
+        try:
+            if (
+                _path_is_link_or_reparse(entry)
+                or not entry.is_dir()
+                or _path_is_link_or_reparse(desc)
+                or not desc.is_file()
+                or desc.stat().st_size > _PACMAN_LOCAL_DESC_LIMIT
+            ):
+                raise RuntimeInstallError("the private pacman database is unsafe")
+            text = desc.read_text(encoding="utf-8")
+        except RuntimeInstallError:
+            raise
+        except (OSError, UnicodeError) as exc:
+            raise RuntimeInstallError(
+                "could not read the private pacman database"
+            ) from exc
+        name = _pacman_desc_value(text, "NAME")
+        version = _pacman_desc_value(text, "VERSION")
+        if name is None or version is None or not _is_pacman_core_package(name):
+            continue
+        if name in versions:
+            raise RuntimeInstallError(
+                "the private pacman database contains duplicate core packages"
+            )
+        versions[name] = version
+    return versions
+
+
+def _pacman_log_checkpoint(root: Path) -> _PacmanLogCheckpoint:
+    """Pin the append-only pacman journal before a staged transaction."""
+    path = root / _PACMAN_LOG_RELATIVE
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return _PacmanLogCheckpoint(
+            False,
+            0,
+            None,
+            0,
+            hashlib.sha256().hexdigest(),
+            tuple(sorted(_pacman_core_versions(root).items())),
+        )
+    except OSError as exc:
+        raise RuntimeInstallError("could not inspect the private pacman log") from exc
+    try:
+        unsafe = _path_is_link_or_reparse(path)
+    except OSError as exc:
+        raise RuntimeInstallError("could not inspect the private pacman log") from exc
+    if (
+        unsafe
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_size < 0
+        or info.st_size > _PACMAN_LOG_MAX_SIZE
+    ):
+        raise RuntimeInstallError("the private pacman log is unsafe")
+    tail_offset = max(0, info.st_size - 4096)
+    try:
+        with path.open("rb") as stream:
+            stream.seek(tail_offset)
+            tail = stream.read(info.st_size - tail_offset)
+    except OSError as exc:
+        raise RuntimeInstallError("could not read the private pacman log") from exc
+    return _PacmanLogCheckpoint(
+        True,
+        info.st_size,
+        (info.st_dev, info.st_ino),
+        tail_offset,
+        hashlib.sha256(tail).hexdigest(),
+        tuple(sorted(_pacman_core_versions(root).items())),
+    )
+
+
+def _is_pacman_core_package(name: str) -> bool:
+    return name in _PACMAN_CORE_PACKAGES or name.startswith("msys2-runtime-")
+
+
+def _pacman_log_core_transaction(
+    root: Path, checkpoint: _PacmanLogCheckpoint
+) -> tuple[str, ...]:
+    """Return core packages from one newly completed journal transaction."""
+    path = root / _PACMAN_LOG_RELATIVE
+    try:
+        info = path.lstat()
+        unsafe = _path_is_link_or_reparse(path)
+    except OSError:
+        return ()
+    if (
+        unsafe
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_size < checkpoint.size
+        or info.st_size > _PACMAN_LOG_MAX_SIZE
+        or info.st_size - checkpoint.size > _PACMAN_LOG_APPEND_LIMIT
+    ):
+        return ()
+    if checkpoint.existed and (info.st_dev, info.st_ino) != checkpoint.identity:
+        return ()
+    try:
+        with path.open("rb") as stream:
+            if checkpoint.existed:
+                stream.seek(checkpoint.tail_offset)
+                previous_tail = stream.read(checkpoint.size - checkpoint.tail_offset)
+                if hashlib.sha256(previous_tail).hexdigest() != checkpoint.tail_digest:
+                    return ()
+            stream.seek(checkpoint.size)
+            appended = stream.read(_PACMAN_LOG_APPEND_LIMIT + 1)
+    except OSError:
+        return ()
+    if not appended or len(appended) > _PACMAN_LOG_APPEND_LIMIT:
+        return ()
+
+    core_started = False
+    transaction_started = False
+    changed: dict[str, tuple[str, str]] = {}
+    for line in appended.decode("utf-8", errors="replace").splitlines():
+        lowered = line.lower()
+        if "[pacman] starting core system upgrade" in lowered:
+            core_started = True
+            transaction_started = False
+            changed.clear()
+            continue
+        if not core_started:
+            continue
+        if "[alpm] transaction started" in lowered:
+            transaction_started = True
+            changed.clear()
+            continue
+        if not transaction_started:
+            continue
+        match = _PACMAN_CORE_CHANGE_RE.search(line)
+        if match is not None and _is_pacman_core_package(match.group(1)):
+            changed[match.group(1)] = (match.group(2), match.group(3))
+        if "[alpm] transaction completed" in lowered:
+            if changed:
+                try:
+                    after = _pacman_core_versions(root)
+                except RuntimeInstallError:
+                    return ()
+                before = dict(checkpoint.core_versions)
+                proven = tuple(
+                    sorted(
+                        name
+                        for name, (old_version, new_version) in changed.items()
+                        if before.get(name) == old_version
+                        and after.get(name) == new_version
+                        and old_version != new_version
+                    )
+                )
+                if proven:
+                    return proven
+            transaction_started = False
+    return ()
+
+
+def _restart_evidence(
+    root: Path,
+    checkpoint: _PacmanLogCheckpoint,
+    reporter: InstallReporter,
+    returncode: int,
+) -> bool:
+    if reporter.command_requested_msys2_restart:
+        return True
+    if returncode & 0xFFFFFFFF != 0xC0000135:
+        return False
+    packages = _pacman_log_core_transaction(root, checkpoint)
+    if not packages:
+        return False
+    reporter.note(
+        "The private pacman journal confirms a completed core update "
+        f"({', '.join(packages)}); its final console prompt was not captured.",
+        level="warning",
+    )
+    return True
+
+
 def _refresh_pacman_mirrors(
     root: Path,
     *,
@@ -1705,6 +1948,7 @@ def _run_pacman_with_recovery(
     mirror_optimizer: MirrorOptimizer,
     allow_core_restart: bool = False,
 ) -> bool:
+    checkpoint = _pacman_log_checkpoint(root) if not packages else None
     argv = _bash_command(root, _pacman_command(packages=packages, relaxed=False), str(cache))
     returncode = _run_checked(
         argv,
@@ -1715,9 +1959,23 @@ def _run_pacman_with_recovery(
         progress="pacman",
         allow_failure=True,
     )
-    restart_requested = reporter.command_requested_msys2_restart
+    restart_requested = (
+        _restart_evidence(root, checkpoint, reporter, returncode)
+        if checkpoint is not None
+        else False
+    )
     if returncode == 0:
         return restart_requested
+    if not packages and restart_requested and not allow_core_restart:
+        reporter.note(
+            "MSYS2 requested another core restart on the final permitted "
+            "update pass; the temporary base will not be published.",
+            level="error",
+        )
+        reporter.command_failed(label, returncode)
+        raise RuntimeInstallError(
+            f"{label} exhausted the permitted core-update restarts"
+        )
     if allow_core_restart and not packages and restart_requested:
         reporter.note(
             "MSYS2 replaced core runtime files and closed its own process as "
@@ -1759,6 +2017,7 @@ def _run_pacman_with_recovery(
         _pacman_command(packages=packages, relaxed=True),
         str(cache),
     )
+    retry_checkpoint = _pacman_log_checkpoint(root) if not packages else None
     retry_returncode = _run_checked(
         retry_argv,
         env=env,
@@ -1768,9 +2027,24 @@ def _run_pacman_with_recovery(
         progress="pacman",
         allow_failure=True,
     )
-    restart_requested = reporter.command_requested_msys2_restart
+    restart_requested = (
+        _restart_evidence(root, retry_checkpoint, reporter, retry_returncode)
+        if retry_checkpoint is not None
+        else False
+    )
     if retry_returncode == 0:
         return restart_requested
+    if not packages and restart_requested and not allow_core_restart:
+        reporter.note(
+            "MSYS2 requested another core restart on the final permitted "
+            "update pass; the temporary base will not be published.",
+            level="error",
+        )
+        reporter.command_failed(f"{label} resilient retry", retry_returncode)
+        raise RuntimeInstallError(
+            f"{label} resilient retry exhausted the permitted "
+            "core-update restarts"
+        )
     if allow_core_restart and not packages and restart_requested:
         reporter.note(
             "MSYS2 replaced core runtime files and closed its own process as "

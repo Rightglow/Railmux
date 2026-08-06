@@ -18,9 +18,16 @@ from railmux.windows_msys2 import (
     download_from_sources,
 )
 from railmux.windows_pacman import (
+    PACMAN_MIRROR_SOURCES,
+    PacmanMirrorDecision,
+    _render_measured_pool,
     optimize_pacman_mirror,
     write_msys_only_pacman_config,
 )
+
+
+def _keep_forced_mirror(_root: Path) -> PacmanMirrorDecision:
+    return PacmanMirrorDecision(None, None, False, (), ())
 
 
 def main() -> int:
@@ -46,6 +53,35 @@ def main() -> int:
             stream.seek(0)
             stream.write(first)
         write_msys_only_pacman_config(runtime.root)
+        decision = optimize_pacman_mirror(runtime.root)
+        forced_label = os.environ.get("RAILMUX_ARCHIVE_SMOKE_MIRROR", "").strip()
+        if forced_label:
+            matching = [
+                server
+                for label, server in PACMAN_MIRROR_SOURCES
+                if label == forced_label
+            ]
+            if len(matching) != 1:
+                raise SystemExit("unknown approved archive-smoke mirror label")
+            mirrorlist = runtime.root / "etc" / "pacman.d" / "mirrorlist.msys"
+            text = mirrorlist.read_text(encoding="utf-8")
+            mirrorlist.write_text(
+                _render_measured_pool(text, matching),
+                encoding="utf-8",
+                newline="\n",
+            )
+        selected = (
+            forced_label
+            or (
+                decision.selected.label
+                if decision.selected is not None
+                else "official order"
+            )
+        )
+        print(f"Measured production mirror selection: {selected}")
+        mirror_optimizer = optimize_pacman_mirror
+        if forced_label:
+            mirror_optimizer = _keep_forced_mirror
         with InstallReporter(
             stage / "update.log", verbose=True, stream=sys.stdout
         ) as reporter:
@@ -55,7 +91,7 @@ def main() -> int:
                 env=runtime.environment(os.environ),
                 reporter=reporter,
                 runner=None,
-                mirror_optimizer=optimize_pacman_mirror,
+                mirror_optimizer=mirror_optimizer,
             )
         result = subprocess.run(
             [

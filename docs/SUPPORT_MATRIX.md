@@ -240,8 +240,8 @@ is labelled supported.
    read-only doctor use the same pinned direct launch family once that runtime
    is present.
 10. Add unconditional native Windows bootstrap/import/package CI, full pinned
-    archive extraction plus two-pass base-update and native executable-loading
-    CI, and a real
+    archive extraction plus measured-mirror two-pass base-update and native
+    executable-loading CI, durable core-transaction restart evidence, and a real
     managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
     record a named and dated real Windows Terminal pass here for every release
     that claims it. Mocked OS branches and ordinary WSL evidence cannot close

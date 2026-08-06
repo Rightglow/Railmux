@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev29] - 2026-08-06
+
+### Fixed
+
+- Continue an MSYS2 core update when Windows terminates the updating shell
+  before pacman's final restart announcement reaches Railmux's output pipe.
+  The fallback accepts `0xC0000135` only when newly appended, bounded pacman
+  journal records prove a completed core transaction and the matching local
+  package database proves the same core package changed from the recorded old
+  version to the recorded new version; a fresh shell must still finish a clean
+  update pass before the staged runtime can be published.
+- Preserve the active UTF-8 installation log while rotating older logs, so a
+  failure path printed to the console cannot name the file currently selected
+  for retention cleanup. Wrapped/interleaved forms of pacman's explicit restart
+  announcement are also recognized as corroborating evidence.
+- Make the native full-archive smoke test perform production mirror selection
+  before both update passes and allow maintainers to select an exact approved
+  mirror when reproducing repository-specific core updates.
+
 ## [0.4.0.dev28] - 2026-08-06
 
 ### Fixed

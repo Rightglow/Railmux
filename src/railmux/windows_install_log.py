@@ -60,6 +60,7 @@ _MSYS2_RESTART_MARKER = (
     "to complete this update all msys2 processes including this terminal "
     "will be closed"
 )
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _EXTRACTION_PERCENT_RE = re.compile(r"(?:^|\s)([0-9]{1,3})%\s")
 _PACKAGE_COUNT_RE = re.compile(r"^Packages \(([0-9]+)\)")
 _PACKAGE_DOWNLOAD_RE = re.compile(r"^\s*([^ ]+) downloading\.\.\.\s*$")
@@ -91,7 +92,12 @@ def install_log_path(
     )
 
 
-def _prune_install_logs(directory: Path, *, keep: int = _LOG_KEEP_COUNT) -> None:
+def _prune_install_logs(
+    directory: Path,
+    *,
+    keep: int = _LOG_KEEP_COUNT,
+    preserve: Path | None = None,
+) -> None:
     candidates: list[Path] = []
     try:
         entries = list(directory.iterdir())
@@ -107,7 +113,11 @@ def _prune_install_logs(directory: Path, *, keep: int = _LOG_KEEP_COUNT) -> None
         )
     except OSError:
         return
-    for stale in candidates[max(keep, 1) :]:
+    preserved = preserve if preserve in candidates else None
+    others = [candidate for candidate in candidates if candidate != preserved]
+    other_limit = max(keep, 1) - (1 if preserved is not None else 0)
+    stale_candidates = others[max(other_limit, 0) :]
+    for stale in stale_candidates:
         try:
             stale.unlink()
         except OSError:
@@ -147,12 +157,15 @@ class InstallReporter:
         self._pip_network_failure = False
         self._hard_failed_hosts: set[str] = set()
         self._msys2_restart_requested = False
+        self._msys2_restart_lines: deque[str] = deque(maxlen=3)
 
     def __enter__(self) -> InstallReporter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._log = self.path.open("x", encoding="utf-8", newline="\n")
         self._write_log("Railmux Windows runtime installation\n")
-        _prune_install_logs(self.path.parent)
+        # Windows may defer the visible last-write timestamp of an open file.
+        # Never let retention mistake the active evidence log for an old one.
+        _prune_install_logs(self.path.parent, preserve=self.path)
         return self
 
     def __exit__(self, _exc_type, _exc, _traceback) -> None:
@@ -215,6 +228,7 @@ class InstallReporter:
         self._pip_network_failure = False
         self._hard_failed_hosts.clear()
         self._msys2_restart_requested = False
+        self._msys2_restart_lines.clear()
         self._write_log(f"\n--- {label} ---\n")
 
     def command_output(self, output: bytes | str | None) -> None:
@@ -265,7 +279,10 @@ class InstallReporter:
         if line.strip():
             self._tail.append(line)
         lowered = line.lower()
-        if _MSYS2_RESTART_MARKER in lowered:
+        normalized = " ".join(_ANSI_ESCAPE_RE.sub("", lowered).split())
+        if normalized:
+            self._msys2_restart_lines.append(normalized)
+        if _MSYS2_RESTART_MARKER in " ".join(self._msys2_restart_lines):
             self._msys2_restart_requested = True
         if any(marker in lowered for marker in _NETWORK_ERROR_MARKERS):
             self._network_failure = True
