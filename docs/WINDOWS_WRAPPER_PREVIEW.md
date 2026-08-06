@@ -529,6 +529,33 @@ respawns two different previews in the same pane and observes no stale first
 transcript. Windows Terminal click-to-first-preview timing remains a manual
 perceptual check.
 
+Dev34 addresses the corresponding live-session switch and first-preview paint
+without weakening pane ownership. A read-only probe on the dedicated Windows
+10 managed-MSYS2 host measured an otherwise trivial tmux client invocation at
+roughly 26--27 ms, versus roughly 2.6--2.8 ms on the contemporary Linux host;
+MSYS2 process startup is therefore a real platform floor, not SSH emulation.
+The older Railmux path amplified that floor with many independent identity,
+marker, geometry, and mutation clients. On tmux 3.1 or newer, an exact swap
+switch now uses one coherent server snapshot, a journaled old-pane return, a
+guarded marker handoff, and verified commit: three snapshots and three command
+queues in the successful case. The old provider must be proven at its immutable
+home before the new provider moves, each move is verified from immutable pane,
+process, session, window, keeper, and client-count identities, and a concurrent
+marker/topology change falls back or fails closed with recovery metadata
+retained. Older or ineligible topologies retain the established stepwise path.
+Clicking the already displayed target performs one coherent revalidation and
+does not resize or rewrite it. Preview now finishes its bounded read-only render
+into an anonymous seekable temporary file before starting `less +G`, so the
+first visible frame is the final bottom page rather than an upward pipe fill;
+the provider JSONL is never modified and no reusable transcript cache exists.
+Real Windows Terminal perceptual timing and authenticated-provider behavior
+remain manual release checks. The candidate wheel also upgraded the dedicated
+Windows 10 host from dev33 without network access by reusing the exact
+96-package base and verified prior dependencies. An ordinary OpenSSH PTY then
+started an isolated-label empty workspace through the Windows terminal bridge,
+reported a 2.6-second restore with 0.4 seconds in pane recovery, and detached
+normally; the isolated server and transfer files were removed afterwards.
+
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
 website remain unchanged until the manual checklist is complete.

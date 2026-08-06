@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev34] - 2026-08-06
+
 ### Changed
 
 - Render read-only Preview into an anonymous seekable file before opening its
@@ -2507,7 +2509,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev33...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev34...HEAD
+[0.4.0.dev34]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev33...v0.4.0.dev34
 [0.4.0.dev33]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev32...v0.4.0.dev33
 [0.4.0.dev32]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev31...v0.4.0.dev32
 [0.4.0.dev31]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev30...v0.4.0.dev31
