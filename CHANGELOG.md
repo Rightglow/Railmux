@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev32] - 2026-08-06
+
+### Fixed
+
+- Build ordinary managed-Windows app upgrades from the current native Railmux
+  package and the previous verified app layer's pure-Python dependencies,
+  avoiding PyPI when the copied layer passes bounded path checks, `pip check`,
+  dependency imports, and exact version validation. Any mismatch deletes the
+  unpublished venv and retains the existing cached online fallback.
+- Report the effective managed-Windows data and install-log directories from
+  `runtime status`, including JSON output, and write installation logs with a
+  UTF-8 signature so Windows PowerShell 5 does not decode punctuation through
+  CP936/another ANSI code page.
+- Paint a clicked session row before synchronous tmux attach/preview work, then
+  commit or roll back the highlight with the operation result, so Windows
+  process startup latency no longer delays pointer feedback.
+
 ## [0.4.0.dev31] - 2026-08-06
 
 ### Fixed

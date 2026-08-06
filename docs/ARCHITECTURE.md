@@ -142,6 +142,16 @@ Every dev24+ app marker binds to that exact content identity. Startup trusts an
 app only when the runtime ID, versioned directory, app marker, executable, and
 base content identity all agree; `runtime status --verify` may compare the live
 package database read-only and report drift without rewriting the marker.
+An ordinary managed-Windows version upgrade may seed its unpublished venv from
+the newest marked app that still probes as its exact version, then copy the
+currently executing native Railmux package into that new layer. The copy is
+limited to the known pure-Python dependency roots, rejects links and reparse
+points, and has file-count and byte bounds. The new environment must pass
+`pip check`, import every runtime dependency, report the requested Railmux
+version, and later pass the ordinary app probe before its marker is published.
+Any absence, mismatch, or copy/validation failure removes that unpublished
+venv and recreates it through the existing private pip-cache path; it never
+changes the prior layer or grants authority to reinstall the shared base.
 
 An existing outer UI is never assumed to have changed merely because native
 pip installed a newer app layer. dev24+ controllers publish their exact app

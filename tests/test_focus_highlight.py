@@ -1256,6 +1256,7 @@ def test_preview_reports_info_status():
     app._show_transcript = MagicMock(return_value=True)
     app._set_active_target = MagicMock()
     app._set_status = MagicMock()
+    app._sessions_pane = MagicMock()
 
     session = MagicMock()
     session.display_title = "old chat"
@@ -1267,6 +1268,7 @@ def test_preview_reports_info_status():
     assert app._in_history_mode is True
     msg = app._set_status.call_args.args[0]
     assert "Previewing" in msg and "old chat" in msg
+    app._sessions_pane.set_selected_session.assert_not_called()
 
 
 def test_preview_targets_explicit_active_secondary_slot():

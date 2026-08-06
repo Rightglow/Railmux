@@ -159,6 +159,32 @@ def add_marked_app(root: Path, version: str) -> Path:
     return application
 
 
+def add_dependency_seed(application: Path) -> Path:
+    site = application / "venv" / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    for name in ("packaging", "pyte", "tomlkit", "urwid", "wcwidth"):
+        package = site / name
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        info = site / f"{name}-1.0.dist-info"
+        info.mkdir()
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.4\nName: {name}\nVersion: 1.0\n",
+            encoding="utf-8",
+        )
+    (site / "typing_extensions.py").write_text("", encoding="utf-8")
+    typing_info = site / "typing_extensions-1.0.dist-info"
+    typing_info.mkdir()
+    (typing_info / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: typing-extensions\nVersion: 1.0\n",
+        encoding="utf-8",
+    )
+    executable = application / "venv" / "bin" / "railmux"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_bytes(b"fixture")
+    return site
+
+
 def test_approved_archive_sources_are_https_and_share_one_pinned_artifact():
     assert MSYS2_ARCHIVE_NAME.endswith(".tar.xz")
     assert not MSYS2_ARCHIVE_NAME.endswith(".sfx.exe")
@@ -910,6 +936,163 @@ def test_dev11_adopts_verified_dev10_base_without_downloading_or_copying(tmp_pat
     ).read_text(encoding="utf-8")
     assert "[1/3] Reusing verified MSYS2" in log
     assert "will not be downloaded, copied, or upgraded" in log
+
+
+def test_shared_base_upgrade_reuses_verified_dependencies_and_native_package(
+    tmp_path, monkeypatch
+):
+    environ = {"LOCALAPPDATA": str(tmp_path), "USERPROFILE": r"C:\Users\u"}
+    root = managed_root(environ)
+    assert root is not None
+    previous_version = "0.4.0.dev30"
+    previous = make_runtime(
+        root,
+        managed=True,
+        version=previous_version,
+        shared=True,
+    )
+    assert previous.app_name is not None
+    add_dependency_seed(root / "opt" / "railmux" / "apps" / previous.app_name)
+
+    payload = tmp_path / "native-payload"
+    package = payload / "railmux"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        f'__version__ = "{VERSION}"\n', encoding="utf-8")
+    (package / "entrypoint.py").write_text(
+        "def main():\n    return 0\n", encoding="utf-8")
+    info = payload / f"railmux-{VERSION}.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        "Metadata-Version: 2.4\n"
+        "Name: railmux\n"
+        f"Version: {VERSION}\n"
+        "Requires-Dist: packaging>=23.0\n"
+        "Requires-Dist: tomlkit>=0.13.2,<1\n"
+        "Requires-Dist: urwid>=2.6.16\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "_native_application_payload",
+        lambda _version: (package, info),
+    )
+
+    current_app = root / "opt" / "railmux" / "apps" / f"railmux-{VERSION}"
+    commands = []
+
+    def runner(argv, *, env, check):
+        commands.append(argv)
+        if windows_msys2._VENV_COMMAND in argv[4]:
+            site = current_app / "venv" / "lib" / "python3.12" / "site-packages"
+            site.mkdir(parents=True)
+            (current_app / "venv" / "bin").mkdir(parents=True)
+        return completed(argv)
+
+    def probe(argv, **_kwargs):
+        executable = argv[6]
+        observed = VERSION if executable.endswith(
+            f"/railmux-{VERSION}/venv/bin/railmux"
+        ) else previous_version
+        return completed(argv, stdout=f"railmux {observed}\n".encode())
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    runtime = install_managed_runtime(
+        version=VERSION,
+        environ=environ,
+        runner=runner,
+        probe=probe,
+        lock_factory=unlocked,
+    )
+
+    assert runtime.app_name == f"railmux-{VERSION}"
+    assert not any("pip install" in command[4] for command in commands)
+    assert any("pip check" in command[4] for command in commands)
+    current_site = windows_msys2._venv_site_packages(current_app)
+    assert current_site is not None
+    assert (current_site / "packaging" / "__init__.py").is_file()
+    assert (current_site / "railmux" / "entrypoint.py").is_file()
+    entrypoint = (current_app / "venv" / "bin" / "railmux").read_text(
+        encoding="utf-8")
+    assert entrypoint.startswith(
+        f"#!/opt/railmux/apps/railmux-{VERSION}/venv/bin/python\n")
+    log = next(
+        (Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8-sig")
+    assert "without network access" in log
+
+
+def test_invalid_local_dependency_seed_recreates_venv_and_uses_pip(
+    tmp_path, monkeypatch
+):
+    environ = {"LOCALAPPDATA": str(tmp_path), "USERPROFILE": r"C:\Users\u"}
+    root = managed_root(environ)
+    assert root is not None
+    previous_version = "0.4.0.dev30"
+    previous = make_runtime(
+        root,
+        managed=True,
+        version=previous_version,
+        shared=True,
+    )
+    assert previous.app_name is not None
+    add_dependency_seed(root / "opt" / "railmux" / "apps" / previous.app_name)
+    payload = tmp_path / "native-payload"
+    package = payload / "railmux"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    info = payload / f"railmux-{VERSION}.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text(
+        f"Metadata-Version: 2.4\nName: railmux\nVersion: {VERSION}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "_native_application_payload",
+        lambda _version: (package, info),
+    )
+    current_app = root / "opt" / "railmux" / "apps" / f"railmux-{VERSION}"
+    commands = []
+
+    def runner(argv, *, env, check):
+        commands.append(argv)
+        if windows_msys2._VENV_COMMAND in argv[4]:
+            site = current_app / "venv" / "lib" / "python3.12" / "site-packages"
+            site.mkdir(parents=True)
+            (current_app / "venv" / "bin").mkdir(parents=True)
+        if "pip check" in argv[4]:
+            return completed(argv, returncode=1, stderr=b"broken seed\n")
+        return completed(argv)
+
+    def probe(argv, **_kwargs):
+        executable = argv[6]
+        observed = VERSION if executable.endswith(
+            f"/railmux-{VERSION}/venv/bin/railmux"
+        ) else previous_version
+        return completed(argv, stdout=f"railmux {observed}\n".encode())
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    install_managed_runtime(
+        version=VERSION,
+        environ=environ,
+        runner=runner,
+        probe=probe,
+        lock_factory=unlocked,
+    )
+
+    assert sum(windows_msys2._VENV_COMMAND in command[4] for command in commands) == 2
+    assert sum("pip install" in command[4] for command in commands) == 1
+    log = next(
+        (Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8-sig")
+    assert "falling back to the private PyPI cache" in log
 
 
 def test_shared_base_app_download_retries_with_private_cache_and_longer_timeout(

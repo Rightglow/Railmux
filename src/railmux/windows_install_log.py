@@ -162,7 +162,12 @@ class InstallReporter:
 
     def __enter__(self) -> InstallReporter:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._log = self.path.open("x", encoding="utf-8", newline="\n")
+        # Windows PowerShell 5 treats BOM-less UTF-8 as the active ANSI code
+        # page.  The signature keeps Chinese systems from rendering the
+        # middle dot/ellipsis as mojibake while remaining ordinary UTF-8 for
+        # modern readers (use ``utf-8-sig`` when the exact first character
+        # matters).
+        self._log = self.path.open("x", encoding="utf-8-sig", newline="\n")
         self._write_log("Railmux Windows runtime installation\n")
         # Windows may defer the visible last-write timestamp of an open file.
         # Never let retention mistake the active evidence log for an old one.

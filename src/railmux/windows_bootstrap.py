@@ -20,6 +20,7 @@ from railmux.windows_msys2 import (
     plan_managed_runtime_prune,
     reusable_managed_base_candidate,
 )
+from railmux.windows_paths import managed_windows_data_root
 
 
 _MINIMUM_WINDOWS_PYTHON = (3, 10)
@@ -49,6 +50,14 @@ def _runtime_status(
 ) -> int:
     snapshot = managed_runtime_status(
         version=__version__, environ=environ, verify=verify)
+    data_root = (
+        managed_windows_data_root(environ)
+        if runtime is None or runtime.managed
+        else None
+    )
+    if data_root is not None:
+        snapshot["data_root"] = str(data_root)
+        snapshot["log_directory"] = str(data_root / "logs")
     if json_output:
         json.dump(snapshot, sys.stdout, indent=2, sort_keys=True)
         print()
@@ -75,6 +84,9 @@ def _runtime_status(
         if root is not None:
             print(f"Managed location: {root}")
         print("Next: run 'railmux runtime install' from an interactive PowerShell.")
+    if data_root is not None:
+        print(f"Data root: {data_root}")
+        print(f"Install logs: {data_root / 'logs'}")
     print("Provider data: shared from the Windows user profile")
     content = snapshot.get("content_identity")
     if isinstance(content, str):

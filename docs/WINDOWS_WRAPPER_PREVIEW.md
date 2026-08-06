@@ -141,16 +141,20 @@ opens a WSL shell and runs the ordinary POSIX product there.
   that reuses the cache and disables pacman's low-speed abort. This preview does
   not yet freeze a repository snapshot, so package versions may advance between
   installations.
-- Versioned Railmux application installs use a separate pip-managed cache under
-  the selected Railmux-owned Windows data root, outside both the shared base and
-  every provider directory. The first attempt uses a 60-second network timeout
-  with five pip retries. If the command still does not complete, the same launch
-  retries it once with the same cache, a 120-second network timeout, and five
-  pip retries; successfully cached dependency wheels are therefore reusable
-  across the recovery attempt and later preview versions. A failed final
-  attempt never publishes the app marker, never falls back to reinstalling the
-  base, and never opens or modifies Codex/Claude histories. The pip cache is
-  disposable and may be deleted to recover from suspected cache damage while
+- An ordinary version-only upgrade first builds the unpublished app layer
+  without network access: it copies only the known pure-Python dependency roots
+  from the newest marked app that still probes as its exact version, and copies
+  the currently executing native Railmux package into the new venv. Source
+  trees must contain no link/reparse point and remain within bounded file-count
+  and byte limits. `pip check`, explicit dependency imports, exact version
+  validation, and the normal executable probe all precede marker publication.
+  If no eligible prior layer exists or any local check fails, the unpublished
+  venv is deleted and recreated through the separate pip-managed cache under
+  the selected Railmux-owned Windows data root. That fallback uses a 60-second
+  network timeout with five pip retries, then one 120-second recovery attempt
+  with the same cache. A failed final attempt never publishes the app marker,
+  never falls back to reinstalling the base, and never opens or modifies
+  Codex/Claude histories. The pip cache is disposable and may be deleted while
   no Railmux installation is running.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
@@ -160,12 +164,15 @@ opens a WSL shell and runs the ordinary POSIX product there.
   summarized once, the console uses terminal-aware color while the log remains
   plain, printed `[Y/n]` prompts do not require input, and a command
   failure shows a bounded tail. Complete
-  subprocess output is written explicitly as UTF-8 beneath the selected
+  subprocess output is written as UTF-8 with a Windows-compatible signature
+  beneath the selected
   Railmux-owned Windows data root's `logs` directory; URL credentials and
   common secret query fields are redacted, unrelated files are never pruned,
   and at most five recognized install logs are retained. Legacy Windows console
   encodings affect only the best-effort display copy, not the UTF-8 evidence
-  log.
+  log. `runtime status` reports the effective data root and log directory in
+  both human and JSON output, so Store/MSIX Python users are not directed to
+  the intentionally unused virtualized `%LOCALAPPDATA%` path.
 - Installation is serialized. A new base is staged, exactly probed, and
   atomically renamed. A versioned Railmux venv is built at its final POSIX path
   so console-script shebangs never retain a temporary path; it remains
@@ -502,6 +509,14 @@ the cross-process visibility failure. Its phase-five package transaction still
 spent more than 300 seconds before the first visible transfer; dev31 therefore
 measures bounded real package prefixes and excludes reachable-but-slow sources
 when another approved source passes.
+A subsequent upgrade on that Store-Python host confirmed dev31 local resize
+reflow, including height changes, but measured 91 seconds in the three-phase
+app-layer step. Its retained log showed that venv creation was immediate,
+cached dependency payloads were present, and roughly 75 seconds were spent on
+PyPI metadata plus the 503 KiB Railmux wheel transfer before local unpacking.
+That evidence is the dev32 boundary: version-only upgrades take the bounded
+local dependency/payload path above, while the online installer remains a
+validated fallback rather than the default.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

@@ -9,6 +9,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import http.client
+import importlib.metadata as importlib_metadata
 import json
 import lzma
 import os
@@ -159,6 +160,22 @@ _PACKAGE_COMMAND = (
     '"$1/venv/bin/python" -m pip install --disable-pip-version-check '
     '--cache-dir "$cache" --only-binary=:all: '
     '--timeout "$4" --retries "$5" "railmux[ssh]==$2"'
+)
+_LOCAL_APP_CHECK_COMMAND = (
+    'chmod 755 "$1/venv/bin/railmux" && '
+    '"$1/venv/bin/python" -m pip check && '
+    '"$1/venv/bin/python" -c '
+    "'import packaging, pyte, tomlkit, typing_extensions, urwid, wcwidth, "
+    "railmux, sys; assert railmux.__version__ == sys.argv[1]' \"$2\""
+)
+_LOCAL_APP_COPY_FILE_LIMIT = 20_000
+_LOCAL_APP_COPY_SIZE_LIMIT = 128 * 1024 * 1024
+_DEPENDENCY_SEED_NAMES = frozenset(
+    {"packaging", "pyte", "tomlkit", "typing_extensions.py", "urwid", "wcwidth"}
+)
+_DEPENDENCY_DIST_INFO_RE = re.compile(
+    r"(?:packaging|pyte|tomlkit|typing_extensions|urwid|wcwidth)-.+\.dist-info\Z",
+    re.IGNORECASE,
 )
 
 
@@ -2454,6 +2471,289 @@ def _validate_managed_application_root(root: Path) -> None:
         )
 
 
+def _venv_site_packages(application: Path) -> Path | None:
+    """Return one ordinary MSYS2 venv site-packages directory."""
+    library = application / "venv" / "lib"
+    try:
+        candidates = list(library.glob("python*/site-packages"))
+    except OSError:
+        return None
+    valid: list[Path] = []
+    for candidate in candidates:
+        try:
+            if _path_is_link_or_reparse(candidate) or not candidate.is_dir():
+                continue
+        except OSError:
+            continue
+        valid.append(candidate)
+    return valid[0] if len(valid) == 1 else None
+
+
+def _native_application_payload(version: str) -> tuple[Path, Path] | None:
+    """Locate the currently executing pure-Python package and dist-info."""
+    try:
+        distribution = importlib_metadata.distribution("railmux")
+    except importlib_metadata.PackageNotFoundError:
+        return None
+    if distribution.version != version:
+        return None
+    package = Path(__file__).resolve().parent
+    if not package.is_dir():
+        return None
+    info_names = {
+        Path(str(item)).parts[0]
+        for item in distribution.files or ()
+        if Path(str(item)).parts
+        and Path(str(item)).parts[0].casefold().startswith("railmux-")
+        and Path(str(item)).parts[0].casefold().endswith(".dist-info")
+    }
+    if len(info_names) != 1:
+        return None
+    info = Path(distribution.locate_file(next(iter(info_names))))
+    if not info.is_dir():
+        return None
+    return package, info
+
+
+def _copy_local_tree(
+    source: Path,
+    destination: Path,
+    *,
+    budget: list[int],
+    ignored_names: frozenset[str] = frozenset(),
+) -> None:
+    """Copy one bounded tree without following links or reparse points."""
+    try:
+        if _path_is_link_or_reparse(source) or not source.is_dir():
+            raise RuntimeInstallError("a local application seed tree was unsafe")
+    except OSError as exc:
+        raise RuntimeInstallError(
+            "a local application seed tree could not be inspected"
+        ) from exc
+    destination.mkdir()
+    for current_text, directories, files in os.walk(source, followlinks=False):
+        current = Path(current_text)
+        relative = current.relative_to(source)
+        target_root = destination / relative
+        kept_directories: list[str] = []
+        for name in directories:
+            if name in ignored_names or name == "__pycache__":
+                continue
+            child = current / name
+            try:
+                if _path_is_link_or_reparse(child) or not child.is_dir():
+                    raise RuntimeInstallError(
+                        "a local application seed contained an unsafe directory"
+                    )
+            except OSError as exc:
+                raise RuntimeInstallError(
+                    "a local application seed could not be inspected"
+                ) from exc
+            kept_directories.append(name)
+            (target_root / name).mkdir()
+        directories[:] = kept_directories
+        for name in files:
+            if (
+                name in ignored_names
+                or name.endswith((".pyc", ".pyo"))
+                or name.endswith((".pth", ".egg-link"))
+            ):
+                continue
+            child = current / name
+            try:
+                info = child.lstat()
+                if (
+                    _path_is_link_or_reparse(child)
+                    or not stat.S_ISREG(info.st_mode)
+                ):
+                    raise RuntimeInstallError(
+                        "a local application seed contained an unsafe file"
+                    )
+            except OSError as exc:
+                raise RuntimeInstallError(
+                    "a local application seed could not be inspected"
+                ) from exc
+            budget[0] += 1
+            budget[1] += info.st_size
+            if (
+                budget[0] > _LOCAL_APP_COPY_FILE_LIMIT
+                or budget[1] > _LOCAL_APP_COPY_SIZE_LIMIT
+            ):
+                raise RuntimeInstallError(
+                    "the local application seed exceeded its safety bound"
+                )
+            # Do not carry an NTFS read-only attribute from a packaged-Python
+            # cache or an older app layer into the new writable venv.
+            shutil.copyfile(child, target_root / name)
+
+
+def _copy_local_file(source: Path, destination: Path, *, budget: list[int]) -> None:
+    try:
+        info = source.lstat()
+        if _path_is_link_or_reparse(source) or not stat.S_ISREG(info.st_mode):
+            raise RuntimeInstallError("a local dependency seed file was unsafe")
+    except OSError as exc:
+        raise RuntimeInstallError(
+            "a local dependency seed file could not be inspected"
+        ) from exc
+    budget[0] += 1
+    budget[1] += info.st_size
+    if (
+        budget[0] > _LOCAL_APP_COPY_FILE_LIMIT
+        or budget[1] > _LOCAL_APP_COPY_SIZE_LIMIT
+    ):
+        raise RuntimeInstallError("the local application seed exceeded its safety bound")
+    shutil.copyfile(source, destination)
+
+
+def _dependency_seed_entries(site_packages: Path) -> list[Path] | None:
+    try:
+        entries = list(site_packages.iterdir())
+    except OSError:
+        return None
+    selected = [
+        entry
+        for entry in entries
+        if entry.name in _DEPENDENCY_SEED_NAMES
+        or _DEPENDENCY_DIST_INFO_RE.fullmatch(entry.name)
+    ]
+    names = {entry.name for entry in selected}
+    if not _DEPENDENCY_SEED_NAMES.issubset(names):
+        return None
+    for dependency in _DEPENDENCY_SEED_NAMES - {"typing_extensions.py"}:
+        if not any(
+            name.casefold().startswith(f"{dependency.casefold()}-")
+            and name.casefold().endswith(".dist-info")
+            for name in names
+        ):
+            return None
+    if not any(
+        name.casefold().startswith("typing_extensions-")
+        and name.casefold().endswith(".dist-info")
+        for name in names
+    ):
+        return None
+    return selected
+
+
+def _verified_dependency_seed(
+    root: Path,
+    *,
+    version: str,
+    environ: Mapping[str, str],
+    probe: Probe,
+) -> tuple[str, Path] | None:
+    marked = _marked_app_versions(root)
+    if not marked:
+        return None
+    for candidate_version in sorted(marked, key=_version_key, reverse=True):
+        if candidate_version == version:
+            continue
+        app_name = _app_name(candidate_version)
+        candidate = Msys2Runtime(root, managed=False, app_name=app_name)
+        if not probe_runtime(
+            candidate,
+            version=candidate_version,
+            environ=environ,
+            probe=probe,
+        ):
+            continue
+        site_packages = _venv_site_packages(marked[candidate_version])
+        if (
+            site_packages is not None
+            and _dependency_seed_entries(site_packages) is not None
+        ):
+            return candidate_version, site_packages
+    return None
+
+
+def _install_application_from_local_seed(
+    root: Path,
+    *,
+    final_app: Path,
+    final_posix: str,
+    version: str,
+    environ: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+    probe: Probe,
+) -> str:
+    """Build an upgrade layer locally; return ready, unavailable, or failed."""
+    payload = _native_application_payload(version)
+    seed = _verified_dependency_seed(
+        root, version=version, environ=environ, probe=probe)
+    target_site = _venv_site_packages(final_app)
+    if payload is None or seed is None or target_site is None:
+        return "unavailable"
+    source_package, source_info = payload
+    seed_version, seed_site = seed
+    seed_entries = _dependency_seed_entries(seed_site)
+    if seed_entries is None:
+        return "unavailable"
+    budget = [0, 0]
+    try:
+        for source in seed_entries:
+            destination = target_site / source.name
+            if destination.exists() or destination.is_symlink():
+                raise RuntimeInstallError(
+                    "the new application environment unexpectedly contained "
+                    f"{source.name}"
+                )
+            if source.is_dir():
+                _copy_local_tree(source, destination, budget=budget)
+            else:
+                _copy_local_file(source, destination, budget=budget)
+        _copy_local_tree(
+            source_package,
+            target_site / "railmux",
+            budget=budget,
+        )
+        _copy_local_tree(
+            source_info,
+            target_site / source_info.name,
+            budget=budget,
+            ignored_names=frozenset(
+                {"RECORD", "direct_url.json", "INSTALLER", "REQUESTED"}
+            ),
+        )
+        entrypoint = final_app / "venv" / "bin" / "railmux"
+        with entrypoint.open("x", encoding="utf-8", newline="\n") as stream:
+            stream.write(
+                f"#!{final_posix}/venv/bin/python\n"
+                "from railmux.entrypoint import main\n"
+                "raise SystemExit(main())\n"
+            )
+    except (OSError, shutil.Error, RuntimeInstallError) as exc:
+        reporter.note(
+            "Verified local app-layer reuse was unavailable "
+            f"({exc}); falling back to the private PyPI cache.",
+            level="warning",
+        )
+        return "failed"
+    returncode = _run_checked(
+        _bash_command(root, _LOCAL_APP_CHECK_COMMAND, final_posix, version),
+        env=Msys2Runtime(root, managed=False).environment(environ),
+        reporter=reporter,
+        runner=runner,
+        label="Local Railmux application validation",
+        allow_failure=True,
+    )
+    if returncode:
+        reporter.note(
+            "The locally reused dependency layer did not satisfy the current "
+            "package contract; falling back to the private PyPI cache.",
+            level="warning",
+        )
+        return "failed"
+    reporter.note(
+        f"Reused verified dependencies from Railmux {seed_version}; installed "
+        f"Railmux {version} from the current Windows package without network "
+        "access.",
+        level="success",
+    )
+    return "ready"
+
+
 def _install_application(
     root: Path,
     *,
@@ -2534,21 +2834,48 @@ def _install_application(
         runner=runner,
         label="Railmux virtual environment creation",
     )
-    package_arguments = (
-        final_posix,
-        version,
-        str(cache),
-        str(_PIP_INITIAL_TIMEOUT_SECONDS),
-        str(_PIP_INITIAL_RETRIES),
-    )
-    package_returncode = _run_checked(
-        _bash_command(root, _PACKAGE_COMMAND, *package_arguments),
-        env=child_env,
+    local_install = _install_application_from_local_seed(
+        root,
+        final_app=final_app,
+        final_posix=final_posix,
+        version=version,
+        environ=environ,
         reporter=reporter,
         runner=runner,
-        label="Railmux runtime package installation",
-        allow_failure=True,
+        probe=probe,
     )
+    if local_install == "failed":
+        try:
+            shutil.rmtree(final_app / "venv")
+        except OSError as exc:
+            raise RuntimeInstallError(
+                "could not reset the unpublished local application seed"
+            ) from exc
+        _run_checked(
+            _bash_command(root, _VENV_COMMAND, final_posix),
+            env=child_env,
+            reporter=reporter,
+            runner=runner,
+            label="Railmux virtual environment recovery",
+        )
+    if local_install == "ready":
+        package_returncode = 0
+    else:
+        package_arguments = (
+            final_posix,
+            version,
+            str(cache),
+            str(_PIP_INITIAL_TIMEOUT_SECONDS),
+            str(_PIP_INITIAL_RETRIES),
+        )
+        package_returncode = _run_checked(
+            _bash_command(root, _PACKAGE_COMMAND, *package_arguments),
+            env=child_env,
+            reporter=reporter,
+            runner=runner,
+            label="Railmux runtime package installation",
+            allow_failure=True,
+        )
     if package_returncode:
         network_failure = (
             reporter.command_had_network_failure

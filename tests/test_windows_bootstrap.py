@@ -72,9 +72,10 @@ def test_noninteractive_missing_runtime_is_actionable_and_never_installs(capsys)
 
 
 def test_runtime_status_reports_missing_without_installing(capsys):
+    environ = {"LOCALAPPDATA": r"C:\Users\u\AppData\Local"}
     result = main(
         ["runtime", "status"],
-        environ={"LOCALAPPDATA": r"C:\Users\u\AppData\Local"},
+        environ=environ,
         runtime_finder=lambda **_kwargs: None,
         version_info=(3, 10),
     )
@@ -83,6 +84,34 @@ def test_runtime_status_reports_missing_without_installing(capsys):
     output = capsys.readouterr().out
     assert "Status: not installed" in output
     assert "Provider data: shared" in output
+    data_root = windows_bootstrap.managed_windows_data_root(environ)
+    assert f"Data root: {data_root}" in output
+    assert f"Install logs: {data_root / 'logs'}" in output
+
+
+def test_runtime_status_json_exposes_the_actual_packaged_python_log_root(
+    capsys, tmp_path, monkeypatch
+):
+    data_root = tmp_path / ".railmux" / "windows"
+    monkeypatch.setattr(
+        windows_bootstrap,
+        "managed_windows_data_root",
+        lambda _environ: data_root,
+    )
+
+    assert main(
+        ["runtime", "status", "--json"],
+        environ={
+            "LOCALAPPDATA": str(tmp_path / "AppData" / "Local"),
+            "USERPROFILE": str(tmp_path),
+        },
+        runtime_finder=lambda **_kwargs: None,
+        version_info=(3, 10),
+    ) == 1
+
+    snapshot = json.loads(capsys.readouterr().out)
+    assert snapshot["data_root"] == str(data_root)
+    assert snapshot["log_directory"] == str(data_root / "logs")
 
 
 def test_runtime_status_labels_user_owned_override(capsys, tmp_path):

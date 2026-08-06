@@ -2035,21 +2035,35 @@ class App:
 
     # --- history preview (display pane shows a transcript, not an agent session) ---
 
+    def _paint_session_row_click_now(self, session_id: str | None) -> None:
+        """Acknowledge a pointer selection before synchronous tmux work."""
+        pane = getattr(self, "_sessions_pane", None)
+        if pane is None:
+            return
+        pane.set_selected_session(session_id)
+        loop = getattr(self, "_loop", None)
+        if loop is not None:
+            loop.draw_screen()
+
     def _on_session_row_preview(self, session: SessionMeta) -> None:
         """Apply click semantics after rechecking whether the row is live."""
-        running = self._by_session_id(session.session_id)
-        if (running is not None
-                and self._agent_session_alive(running.tmux_name)):
-            self._on_running_select(
-                RunningEntry(
-                    tmux_name=running.tmux_name,
-                    label=running.label,
-                    status=running.status,
-                ),
-                steal_focus=False,
-            )
-            return
-        self._on_session_preview(session)
+        self._paint_session_row_click_now(session.session_id)
+        try:
+            running = self._by_session_id(session.session_id)
+            if (running is not None
+                    and self._agent_session_alive(running.tmux_name)):
+                self._on_running_select(
+                    RunningEntry(
+                        tmux_name=running.tmux_name,
+                        label=running.label,
+                        status=running.status,
+                    ),
+                    steal_focus=False,
+                )
+                return
+            self._on_session_preview(session)
+        finally:
+            self._paint_session_row_click_now(None)
 
     def _on_session_preview(self, session: SessionMeta) -> None:
         """Show the provider's canonical current-branch history.

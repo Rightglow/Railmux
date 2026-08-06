@@ -64,6 +64,18 @@ def test_verbose_reporter_streams_the_same_sanitized_output(tmp_path):
     assert "package 中文\nprogress\n" in path.read_text(encoding="utf-8")
 
 
+def test_install_log_has_utf8_signature_for_windows_powershell(tmp_path):
+    path = tmp_path / "install-0.4.0.dev32-20260806T000000Z-2.log"
+
+    with InstallReporter(path, verbose=False, stream=io.StringIO()) as reporter:
+        reporter.done("共享基础 · 正常")
+
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")
+    rendered = path.read_text(encoding="utf-8-sig")
+    assert rendered.startswith("Railmux Windows runtime installation")
+    assert "共享基础 · 正常" in rendered
+
+
 def test_reporter_recognizes_only_the_explicit_msys2_core_restart(tmp_path):
     path = tmp_path / "install.log"
     with InstallReporter(path, verbose=False, stream=io.StringIO()) as reporter:
