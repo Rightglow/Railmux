@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Render read-only Preview into an anonymous seekable file before opening its
+  pager, so the first visible frame is the completed bottom page instead of a
+  pipe scrolling upward. The provider transcript remains read-only and no
+  reusable history cache is created.
+- Collapse exact running-session switches into coherent tmux snapshots and
+  journaled command queues on modern tmux. Identity, independent-client,
+  marker, post-move verification, and fail-closed recovery gates remain in
+  force while process-start amplification is substantially reduced on MSYS2.
+
 ## [0.4.0.dev33] - 2026-08-06
 
 ### Fixed
@@ -21,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer instead of launching a separate `tail` process. This preserves the
   bounded, read-only provider-aware view while reducing Windows/MSYS2 process
   startup on every preview.
+
+## [0.3.6] - 2026-08-05
+
+### Changed
+
+- Complete the 0.3 POSIX/WSL maintenance line with immediate, bounded
+  `railmux ssh` history entry from a coherent warm cache and asynchronous
+  cumulative deep pages. Native Windows platform support remains isolated to
+  the upcoming 0.4 line and is not included in this release.
+- Add a keyboard-only final warning before hard quit can stop live agent
+  sessions, while making every choice in the first quit dialog visibly
+  clickable and preserving its existing keyboard shortcuts.
 
 ## [0.4.0.dev32] - 2026-08-06
 

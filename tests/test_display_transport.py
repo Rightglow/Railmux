@@ -53,6 +53,9 @@ class FakeTmux:
         self.split_commands: list[str] = []
         self.split_kwargs: list[dict] = []
         self.dual_calls: list[tuple[str, str, str, int, int]] = []
+        self.fast_enabled = False
+        self.snapshot_calls = 0
+        self.command_batches: list[tuple[tuple[str, ...], ...]] = []
         self._patch(monkeypatch)
 
     def _patch(self, monkeypatch):
@@ -87,6 +90,10 @@ class FakeTmux:
             "session_ids": lambda: frozenset(
                 str(session["id"]) for session in self.sessions.values()),
             "list_window_user_options": self.list_window_user_options,
+            "tmux_state_snapshot": self.tmux_state_snapshot,
+            "run_command_queue": self.run_command_queue,
+            "run_guarded_window_transaction": (
+                self.run_guarded_window_transaction),
         }
         for name, value in names.items():
             monkeypatch.setattr(transport_mod.tmux_ctl, name, value)
@@ -278,6 +285,61 @@ class FakeTmux:
             + [self.window_options.get((window, name), "") for name in names]
         ) for window in windows]
 
+    def tmux_state_snapshot(self, names=()):
+        if not self.fast_enabled:
+            return None
+        self.snapshot_calls += 1
+        topologies = tuple(
+            self.session_topology(name) for name in self.sessions
+        )
+        return tmux_ctl.TmuxStateSnapshot(
+            topologies=tuple(item for item in topologies if item is not None),
+            panes=tuple(self.panes.values()),
+            window_options=tuple(
+                (window, name, self.window_options.get((window, name)))
+                for window in sorted({
+                    window for session in self.sessions.values()
+                    for window in session["windows"]
+                })
+                for name in names
+            ),
+        )
+
+    def run_command_queue(self, commands):
+        self.command_batches.append(commands)
+        for command in commands:
+            name, *args = command
+            if name == "set-window-option":
+                target = args[args.index("-t") + 1]
+                if "-u" in args:
+                    marker = args[-1]
+                    if not self.set_window_user_option(target, marker, None):
+                        return False
+                elif not self.set_window_user_option(target, args[-2], args[-1]):
+                    return False
+            elif name == "set-option":
+                target = args[args.index("-t") + 1]
+                option = args[-1]
+                value = None if "-u" in args else args[-1]
+                if not self.set_pane_user_option(target, option, value):
+                    return False
+            elif name == "resize-window":
+                continue
+            elif name == "swap-pane":
+                source = args[args.index("-s") + 1]
+                target = args[args.index("-t") + 1]
+                if not self.swap_panes(source, target):
+                    return False
+            else:
+                raise AssertionError(f"unexpected command: {command}")
+        return True
+
+    def run_guarded_window_transaction(self, guards, commands):
+        for window, marker, token in guards:
+            if token not in self.window_options.get((window, marker), ""):
+                return False
+        return self.run_command_queue(commands)
+
 
 @pytest.fixture
 def rig(monkeypatch):
@@ -321,6 +383,107 @@ def test_successful_swap_out_and_home(rig):
     assert workspace.primary.swap_state is None
     assert not fake.window_options
     assert "railmux-keep-1" in fake.killed_sessions
+
+
+def test_exact_same_swap_target_is_one_snapshot_noop(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    swap_count = len(fake.swap_calls)
+    respawn_count = len(fake.respawned)
+    fake.fast_enabled = True
+
+    outcome = manager.attach(workspace.primary, "agent-a")
+
+    assert outcome.ok and outcome.display_stable and outcome.target_unchanged
+    assert fake.snapshot_calls == 1
+    assert len(fake.swap_calls) == swap_count
+    assert len(fake.respawned) == respawn_count
+    assert fake.command_batches == []
+
+
+def test_fast_swap_switch_keeps_journal_and_bounded_command_budget(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    placeholder = workspace.primary.swap_state.placeholder_pane_id
+    respawn_count = len(fake.respawned)
+    fake.fast_enabled = True
+
+    outcome = manager.attach(workspace.primary, "agent-b")
+
+    assert outcome.ok and outcome.display_stable
+    assert not outcome.target_unchanged
+    assert fake.snapshot_calls == 3
+    assert len(fake.command_batches) == 3
+    assert len(fake.respawned) == respawn_count
+    assert fake.panes["%2"].window_id == "@2"
+    assert fake.panes["%3"].window_id == "@1"
+    assert fake.panes[placeholder].window_id == "@3"
+    state = workspace.primary.swap_state
+    assert state is not None and state.agent_tmux_name == "agent-b"
+    for window in (state.home_window_id, state.display_window_id):
+        assert json.loads(fake.window_options[
+            (window, "@railmux_swap_primary")
+        ])["phase"] == "displayed"
+
+
+def test_fast_switch_never_clears_concurrently_replaced_marker(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    old = workspace.primary.swap_state
+    assert old is not None
+    fake.fast_enabled = True
+    original = fake.run_command_queue
+    calls = 0
+
+    def replace_after_return(commands):
+        nonlocal calls
+        calls += 1
+        result = original(commands)
+        if calls == 1:
+            fake.window_options[
+                (old.display_window_id, "@railmux_swap_primary")
+            ] = "foreign-newer-marker"
+        return result
+
+    monkeypatch.setattr(
+        transport_mod.tmux_ctl, "run_command_queue", replace_after_return)
+
+    outcome = manager.attach(workspace.primary, "agent-b")
+
+    assert not outcome.ok
+    assert fake.panes["%3"].window_id == "@3"
+    assert fake.window_options[
+        (old.display_window_id, "@railmux_swap_primary")
+    ] == "foreign-newer-marker"
+
+
+def test_fast_switch_rechecks_new_agent_after_old_is_safe_home(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    fake.fast_enabled = True
+    original = fake.run_command_queue
+    calls = 0
+
+    def attach_target_after_return(commands):
+        nonlocal calls
+        calls += 1
+        result = original(commands)
+        if calls == 1:
+            fake.sessions["agent-b"]["attached"] = 1
+        return result
+
+    monkeypatch.setattr(
+        transport_mod.tmux_ctl, "run_command_queue", attach_target_after_return)
+
+    outcome = manager.attach(workspace.primary, "agent-b")
+
+    assert outcome.ok and outcome.kind is DisplayTransportKind.NESTED
+    assert fake.panes["%3"].window_id == "@3"
+    assert workspace.primary.swap_state is None
 
 
 def test_compact_parking_keeps_agent_home_and_slot_placeholder_stable(rig):

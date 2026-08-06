@@ -879,6 +879,45 @@ def test_single_click_prepaints_sidebar_before_agent_transport_switch():
         "session:new-session", "running:cc-live", "draw", "attach"]
 
 
+def test_stable_same_target_skips_geometry_chrome_and_binding_reprojection():
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    slot = app._workspace.primary
+    slot.pane_id = "%2"
+    slot.agent_tmux_name = "cc-live"
+    app._double_focus_visual_pending = False
+    app._paint_slot_active_tmux_target = MagicMock()
+    app._redraw_focus_state_now = MagicMock()
+    app._check_agent_slot_size = MagicMock()
+    app._set_active_tmux_target = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    app._schedule_scroll_acceleration = MagicMock()
+    app._apply_layout_profile = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._modes = MagicMock()
+    app._modes.return_value.for_tmux_name.return_value = MagicMock(key="claude")
+    app._running = {
+        "session": SimpleNamespace(
+            key="session", tmux_name="cc-live", is_placeholder=False,
+            is_legacy=False),
+    }
+    transport = MagicMock()
+    transport.attach.return_value = AttachOutcome(
+        True,
+        DisplayTransportKind.SWAP,
+        display_stable=True,
+        target_unchanged=True,
+    )
+    app._display_transport_manager = transport
+
+    assert app._attach_agent_slot(slot, "cc-live", steal_focus=False)
+
+    app._check_agent_slot_size.assert_not_called()
+    app._apply_layout_profile.assert_not_called()
+    app._install_tmux_bindings.assert_not_called()
+    app._set_railmux_focus.assert_called_once_with(True, force_border=False)
+
+
 def test_compact_background_attach_uses_full_target_then_returns_page():
     app = App.__new__(App)
     app._workspace = AgentWorkspace()
@@ -1486,7 +1525,7 @@ def test_live_transcript_viewer_exit_signals_exact_slot_restore(
         tmp_path / "session.jsonl", session_type="codex")
 
     assert commands[0][0] == "%2"
-    assert "less -R +G" in commands[0][1]
+    assert "railmux.preview_pager" in commands[0][1]
     assert "tmux send-keys -l -t %1" in commands[0][1]
     assert "\x1b[42~" in commands[0][1]
     assert slot.agent_tmux_name is None

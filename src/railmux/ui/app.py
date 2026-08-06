@@ -2209,24 +2209,18 @@ class App:
         """
         import shlex
         import sys as _sys
-        mouse = self._less_mouse_flag
+        mouse = " --mouse" if self._less_mouse_flag else ""
         slot = slot or self._agent_workspace().target
-        # The renderer reads the last 2000 records itself so large sessions
-        # appear instantly without launching a separate ``tail`` process.
-        # This drops the leading ``session_meta`` record from long Codex
-        # rollouts, so pass the format explicitly from SessionMeta rather than
-        # asking the bounded input to auto-detect it (#5).
+        # The pager renderer reads the bounded tail into an anonymous seekable
+        # file before starting less.  Its first frame is therefore the final
+        # bottom page instead of a pipe visibly scrolling upward.
         fmt = "codex" if session_type == "codex" else "claude"
         path = shlex.quote(str(jsonl_path))
         python = shlex.quote(_sys.executable)
-        # LESSSECURE turns the pager into a viewer: no shell, pipe, editor,
-        # alternate-file, tag, or logfile commands. Do not persist searches,
-        # and suppress any user-configured input pre/postprocessors.
-        less_env = ("LESSSECURE=1 LESSHISTFILE=- "
-                    "LESSOPEN= LESSCLOSE=")
-        cmd = (f"{python} -m railmux.transcript --format {fmt} "
-               f"--preview-limit 2000 {path} | "
-               f"{less_env} less -R +G {mouse}").rstrip()
+        cmd = (
+            f"{python} -m railmux.preview_pager{mouse} --format {fmt} "
+            f"--preview-limit 2000 {path}"
+        )
         restore = slot.restore_state
         controller = getattr(self, "_railmux_pane_id", None)
         if (restore is not None and restore.kind == "agent" and controller
@@ -2476,7 +2470,8 @@ class App:
                     and compact_return_page is not compact_target_page):
                 self._select_workspace_page(compact_return_page)
             return False
-        self._check_agent_slot_size(slot)
+        if not outcome.display_stable:
+            self._check_agent_slot_size(slot)
         if steal_focus:
             tmux_ctl.select_pane(slot.pane_id)
         slot.agent_tmux_name = agent_tmux_name
@@ -2485,7 +2480,7 @@ class App:
         self._set_active_tmux_target(agent_tmux_name, slot)
         self._set_railmux_focus(
             not steal_focus and not self._double_focus_visual_pending,
-            force_border=True,
+            force_border=not outcome.display_stable,
         )
         if running is not None and getattr(running, "is_legacy", False):
             self._teardown_scroll_acceleration()
@@ -2500,10 +2495,12 @@ class App:
                 and not (running is not None
                          and getattr(running, "is_legacy", False))):
             self._schedule_scroll_acceleration(agent_tmux_name)
-        if (slot is self._primary_slot
+        if (not outcome.display_stable
+                and slot is self._primary_slot
                 and not getattr(self, "_restoring_workspace", False)):
             self._apply_layout_profile(allow_create=True)
-        self._install_tmux_bindings()
+        if not outcome.target_unchanged:
+            self._install_tmux_bindings()
         if compact_target_page is not None:
             if steal_focus:
                 self._select_workspace_page(compact_target_page)

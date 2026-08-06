@@ -967,6 +967,18 @@ or unowned outer session uses nested display. Controlled preview, close, soft
 quit, hard quit, and delete return the real pane before replacing a display
 placeholder or killing its home session.
 
+Switching one already displayed exact swap target to another may batch those
+same phases on tmux 3.1 or newer. One server-wide snapshot must contain the
+session, pane, window, client-count, keeper, and marker identities used by the
+decision; the old pane is journaled and verified at home before a guarded
+marker handoff can move the new pane, and the new pane is verified before its
+marker becomes `displayed`. Guarded mutation compares the still-current
+transaction IDs and never clears a concurrently replaced marker. A changed
+target topology falls back only after the old provider is proven safe at home;
+an ambiguous post-move state retains recovery metadata and fails closed. Older
+tmux retains the established stepwise transaction. This batching changes
+client-process count, not ownership or recovery authority.
+
 Before a controlled return or compact parking swap, Railmux best-effort sizes
 the detached home window from the visible real pane. The home currently owns
 only an inert placeholder, so this preserves the provider's last visible PTY
@@ -1051,9 +1063,13 @@ routing with focus, selection, or history.
   tmux/provider-native scrolling, while `railmux ssh` keeps exclusive ownership
   through its bounded per-pane history layer. Explicit Preview returns the real
   pane home first and normal viewer exit signals the controller to restore that
-  exact live agent. Every action path uses the Target pane remembered from tmux
-  focus. A confirmed live Codex rewind invalidates the same pane's SSH cache
-  generation before its child rollout continues drawing.
+  exact live agent. The bounded formatter completes into an anonymous,
+  seekable temporary file before `less +G` starts, so Preview paints one final
+  bottom page instead of exposing incremental pipe output; the derivative is
+  never a reusable cache and closes with the pager. Every action path uses the
+  Target pane remembered from tmux focus. A confirmed live Codex rewind
+  invalidates the same pane's SSH cache generation before its child rollout
+  continues drawing.
 - Cycling back to single removes only the outer secondary pane, remembers its
   exact instance-local tmux target, and never kills the detached agent session.
 - The same background tmux session should not be attached in both slots.

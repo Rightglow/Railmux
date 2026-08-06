@@ -225,18 +225,35 @@ def test_pane_identity_parses_stable_location_outside_tmux():
 
 
 def test_session_topology_requires_exact_server_results(monkeypatch):
-    outputs = iter((
-        b"agent\t$2\n",
-        b"0\n",
-        b"@3\n",
-        b"%7\t4242\tagent\t$2\t@3\t0\t91\t31\n",
-    ))
-    monkeypatch.setattr(subprocess, "check_output", lambda *_a, **_k: next(outputs))
+    output = b"agent\t$2\t0\t@3\t%7\t4242\t0\t91\t31\n"
+    check = MagicMock(return_value=output)
+    monkeypatch.setattr(subprocess, "check_output", check)
     topology = tmux_ctl.session_topology("agent")
     assert topology is not None
     assert topology.session_name == "agent"
     assert topology.single_live_pane.pane_id == "%7"
     assert topology.attached_clients == 0
+    assert check.call_count == 1
+    assert check.call_args.args[0][:6] == [
+        "tmux", "list-panes", "-s", "-t", "agent", "-F"]
+
+
+def test_tmux_state_snapshot_captures_grouped_sessions_and_markers(monkeypatch):
+    marker = '{"transaction_id":"abc"}'
+    output = (
+        f"outer\t$1\t1\t@1\t%1\t101\t0\t40\t30\t{marker}\n"
+        f"keeper\t$4\t0\t@1\t%1\t101\t0\t40\t30\t{marker}\n"
+        "agent\t$2\t0\t@2\t%2\t202\t0\t80\t24\t\n"
+    ).encode()
+    monkeypatch.setattr(subprocess, "check_output", lambda *_a, **_k: output)
+
+    snapshot = tmux_ctl.tmux_state_snapshot(("@railmux_swap_primary",))
+
+    assert snapshot is not None
+    assert snapshot.topology("keeper").session_id == "$4"
+    assert snapshot.pane("%1").window_id == "@1"
+    assert snapshot.window_option(
+        "@1", "@railmux_swap_primary") == marker
 
 
 def test_detached_single_pane_start_command_rejects_attached_session(
