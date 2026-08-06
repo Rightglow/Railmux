@@ -628,6 +628,22 @@ def test_preview_versions_share_one_base_but_use_separate_app_layers(tmp_path):
     )
 
 
+def test_packaged_python_runtime_root_avoids_local_app_data(tmp_path, monkeypatch):
+    safe = tmp_path / ".railmux" / "windows"
+    monkeypatch.setattr(
+        windows_msys2, "managed_windows_data_root", lambda _environ: safe
+    )
+    environ = {
+        "LOCALAPPDATA": str(tmp_path / "AppData" / "Local"),
+        "USERPROFILE": str(tmp_path),
+    }
+
+    assert managed_root(environ) == (
+        safe / "runtimes" / "shared" / windows_msys2.MSYS2_RUNTIME_ID
+    )
+    assert windows_msys2._managed_cache(environ) == safe / "cache"
+
+
 def test_explicit_user_runtime_is_probed_but_never_requires_managed_marker(tmp_path):
     root = tmp_path / "用户-owned-msys"
     runtime = make_runtime(root, managed=False)
@@ -1266,6 +1282,57 @@ def test_verified_base_archive_cache_avoids_a_second_download(tmp_path, monkeypa
 
     assert selected == archive
     assert source == "verified local cache"
+
+
+def test_packaged_python_reuses_verified_pre_fix_archive_cache(tmp_path, monkeypatch):
+    payload = b"verified prior cache archive"
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_SIZE", len(payload))
+    monkeypatch.setattr(
+        windows_msys2,
+        "MSYS2_ARCHIVE_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    prior = tmp_path / "virtualized-cache"
+    prior.mkdir()
+    (prior / MSYS2_ARCHIVE_NAME).write_bytes(payload)
+    current = tmp_path / "non-virtualized-cache"
+
+    selected, source = windows_msys2._prepare_cached_archive(
+        current,
+        downloader=lambda *_args: pytest.fail("prior cache should avoid downloading"),
+        prior_caches=(prior,),
+    )
+
+    assert selected.read_bytes() == payload
+    assert source == "verified prior local cache"
+
+
+def test_packaged_python_never_reuses_unverified_pre_fix_archive(
+    tmp_path, monkeypatch
+):
+    payload = b"expected archive"
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_SIZE", len(payload))
+    monkeypatch.setattr(
+        windows_msys2,
+        "MSYS2_ARCHIVE_SHA256",
+        hashlib.sha256(payload).hexdigest(),
+    )
+    prior = tmp_path / "virtualized-cache"
+    prior.mkdir()
+    (prior / MSYS2_ARCHIVE_NAME).write_bytes(b"tampered archive")
+    current = tmp_path / "non-virtualized-cache"
+
+    def downloader(_url, destination, _sha256):
+        destination.write_bytes(payload)
+
+    selected, source = windows_msys2._prepare_cached_archive(
+        current,
+        downloader=downloader,
+        prior_caches=(prior,),
+    )
+
+    assert selected.read_bytes() == payload
+    assert source in {label for label, _url in MSYS2_ARCHIVE_SOURCES}
 
 
 def _write_test_tar(path: Path, entries: list[tuple[tarfile.TarInfo, bytes]]) -> None:

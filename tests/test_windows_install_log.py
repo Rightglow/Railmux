@@ -223,6 +223,25 @@ def test_log_path_is_private_versioned_and_utc(tmp_path, monkeypatch):
     )
 
 
+def test_log_path_uses_packaged_python_non_virtualized_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        windows_install_log,
+        "managed_windows_data_root",
+        lambda _environ: tmp_path / ".railmux" / "windows",
+    )
+
+    path = install_log_path(
+        {
+            "LOCALAPPDATA": str(tmp_path / "AppData" / "Local"),
+            "USERPROFILE": str(tmp_path),
+        },
+        version="0.4.0.dev30",
+        clock=lambda: 0,
+    )
+
+    assert path.parent == tmp_path / ".railmux" / "windows" / "logs"
+
+
 def test_default_command_runner_uses_no_stdin_and_captures_utf8(tmp_path):
     stream = io.StringIO()
     path = tmp_path / "install-0.4.0.dev7-20260803T000000Z-4.log"

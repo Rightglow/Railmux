@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev30] - 2026-08-06
+
+### Fixed
+
+- Keep managed MSYS2 executables, package caches, and UTF-8 installation logs
+  outside AppData write virtualization when Railmux is launched by a Microsoft
+  Store or other MSIX-packaged Python. Packaged interpreters now use the
+  non-virtualized `%USERPROFILE%\.railmux\windows` tree, so PowerShell and the
+  MSYS2 loader resolve the same physical files; traditional Python installs
+  retain `%LOCALAPPDATA%\Railmux` and existing runtimes unchanged.
+- Reuse a pre-dev30 AppData cache only when its pinned MSYS2 archive still
+  matches the exact expected size and SHA-256. Incomplete runtime staging,
+  unverified downloads, provider histories, and user-owned MSYS2 trees are
+  never migrated or removed.
+
 ## [0.4.0.dev29] - 2026-08-06
 
 ### Fixed

@@ -192,7 +192,10 @@ is labelled supported.
 
 1. `pip install`, package import, CLI parsing, bootstrap configuration, version
    check, update, and privacy-safe diagnostics work under supported Windows
-   Python without importing POSIX-only Railmux modules before handoff.
+   Python without importing POSIX-only Railmux modules before handoff. An
+   AppX/MSIX-packaged Python must place executable runtime state where native
+   PowerShell and MSYS2 child processes see the same non-virtualized files;
+   traditional Python must retain its existing LocalAppData runtime.
 2. Offer an explicit, cancellable managed-MSYS2 installation with approved
    pinned sources, one fixed integrity digest across safe source fallback,
    bounded speed probes and exact-offset resume, visible bounded download
@@ -200,6 +203,9 @@ is labelled supported.
    caches, network-failure recovery, bounded phase progress/heartbeats,
    complete UTF-8 diagnostic logs, private ownership, and no system-wide PATH
    or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
+   A storage-location transition may reuse only a base archive that still
+   matches its pinned size and SHA-256; it must not migrate incomplete staging
+   or executable runtime trees across visibility boundaries.
    Tar POSIX modes must never become NTFS read-only attributes on
    package-owned paths; pacman must be able to replace every staged base file.
    Run MSYS2's full upgrade from fresh Windows-launched processes at least

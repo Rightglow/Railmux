@@ -42,6 +42,10 @@ from railmux.windows_pacman import (
     validate_transaction_package_mirrors,
     write_msys_only_pacman_config,
 )
+from railmux.windows_paths import (
+    legacy_local_app_data_root,
+    managed_windows_data_root,
+)
 from railmux.terminal_status import STYLE_ACCENT, STYLE_MUTED, styled
 
 
@@ -554,17 +558,17 @@ class Msys2Runtime:
 
 
 def _managed_base(environ: Mapping[str, str]) -> Path | None:
-    local_app_data = environ.get("LOCALAPPDATA", "").strip()
-    if not local_app_data:
+    data_root = managed_windows_data_root(environ)
+    if data_root is None:
         return None
-    return Path(local_app_data) / "Railmux" / "runtimes"
+    return data_root / "runtimes"
 
 
 def _managed_cache(environ: Mapping[str, str]) -> Path | None:
-    local_app_data = environ.get("LOCALAPPDATA", "").strip()
-    if not local_app_data:
+    data_root = managed_windows_data_root(environ)
+    if data_root is None:
         return None
-    return Path(local_app_data) / "Railmux" / "cache"
+    return data_root / "cache"
 
 
 def _path_is_link_or_reparse(path: Path) -> bool:
@@ -595,6 +599,7 @@ def _prepare_cached_archive(
     cache: Path,
     *,
     downloader: Downloader | None,
+    prior_caches: Sequence[Path] = (),
 ) -> tuple[Path, str]:
     cache.mkdir(parents=True, exist_ok=True)
     archive = cache / MSYS2_ARCHIVE_NAME
@@ -604,6 +609,18 @@ def _prepare_cached_archive(
         archive.unlink(missing_ok=True)
     except OSError as exc:
         raise RuntimeInstallError("could not replace the private archive cache") from exc
+    for prior_cache in prior_caches:
+        prior_archive = prior_cache / MSYS2_ARCHIVE_NAME
+        if prior_archive == archive or not _archive_cache_is_valid(prior_archive):
+            continue
+        try:
+            shutil.copyfile(prior_archive, archive)
+        except OSError:
+            archive.unlink(missing_ok=True)
+            continue
+        if _archive_cache_is_valid(archive):
+            return archive, "verified prior local cache"
+        archive.unlink(missing_ok=True)
     source = download_from_sources(
         archive,
         MSYS2_ARCHIVE_SHA256,
@@ -1178,7 +1195,9 @@ def apply_managed_runtime_prune(
     """Re-plan under the install lock, then remove only unchanged candidates."""
     base = _managed_base(environ)
     if base is None:
-        raise RuntimeInstallError("LOCALAPPDATA is unavailable")
+        raise RuntimeInstallError(
+            "a non-virtualized Windows user data directory is unavailable"
+        )
     effective_lock = install_lock if lock_factory is None else lock_factory
     with effective_lock(base):
         current = plan_managed_runtime_prune(
@@ -2629,11 +2648,16 @@ def install_managed_runtime(
     base = _managed_base(environ)
     cache_base = _managed_cache(environ)
     if base is None or cache_base is None:
-        raise RuntimeInstallError("LOCALAPPDATA is unavailable")
+        raise RuntimeInstallError(
+            "a non-virtualized Windows user data directory is unavailable"
+        )
+    data_root = base.parent
     try:
         base.mkdir(parents=True, exist_ok=True)
         cache_base.mkdir(parents=True, exist_ok=True)
-        log_path = install_log_path(environ, version=version)
+        log_path = install_log_path(
+            environ, version=version, data_root=data_root
+        )
     except OSError as exc:
         raise RuntimeInstallError("could not create the private runtime log") from exc
     final_root = base / "shared" / MSYS2_RUNTIME_ID
@@ -2749,6 +2773,11 @@ def install_managed_runtime(
                     archive, source = _prepare_cached_archive(
                         cache_base,
                         downloader=downloader,
+                        prior_caches=tuple(
+                            legacy / "cache"
+                            for legacy in (legacy_local_app_data_root(environ),)
+                            if legacy is not None and legacy != data_root
+                        ),
                     )
                     reporter.done(source)
 

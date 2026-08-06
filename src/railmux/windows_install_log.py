@@ -22,6 +22,7 @@ from railmux.terminal_status import (
     STYLE_WARNING,
     styled,
 )
+from railmux.windows_paths import managed_windows_data_root
 
 
 _LOG_KEEP_COUNT = 5
@@ -79,14 +80,14 @@ def install_log_path(
     *,
     version: str,
     clock: Callable[[], float] = time.time,
+    data_root: Path | None = None,
 ) -> Path:
-    local_app_data = environ.get("LOCALAPPDATA", "").strip()
-    if not local_app_data:
-        raise OSError("LOCALAPPDATA is unavailable")
+    root = managed_windows_data_root(environ) if data_root is None else data_root
+    if root is None:
+        raise OSError("a non-virtualized Windows data directory is unavailable")
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(clock()))
     return (
-        Path(local_app_data)
-        / "Railmux"
+        root
         / "logs"
         / f"install-{version}-{stamp}-{os.getpid()}.log"
     )

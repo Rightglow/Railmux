@@ -9,8 +9,13 @@ fallback or a base for this implementation.
 ## Decision and ownership
 
 Native Windows Python is only a bootstrap. With explicit consent it installs a
-private MSYS2 base beneath `%LOCALAPPDATA%\Railmux\runtimes`, then hands the
-original argv to a version-isolated Railmux application inside that base. The
+private MSYS2 base beneath `%LOCALAPPDATA%\Railmux\runtimes` for traditional
+Python or `%USERPROFILE%\.railmux\windows\runtimes` for an MSIX-packaged
+Python, then hands the original argv to a version-isolated Railmux application
+inside that base. AppData writes made by packaged desktop applications may be
+redirected into a package-private view that PowerShell and executable child
+loaders do not share, so packaged Python must use the non-virtualized profile
+location for the complete executable tree, caches, locks, and logs. The
 MSYS2 release identifier is the base compatibility and refresh boundary; a new
 Railmux development build reuses that base and installs only its own venv while
 the identifier remains unchanged. That one POSIX application remains the owner
@@ -69,6 +74,15 @@ opens a WSL shell and runs the ordinary POSIX product there.
   3.9 for POSIX because Python package metadata cannot express an OS-specific
   interpreter floor; the native entrypoint enforces the Windows floor before
   runtime discovery.
+- Traditional Python installations keep all Railmux-owned Windows state under
+  `%LOCALAPPDATA%\Railmux`. A process with an AppX/MSIX package identity uses
+  `%USERPROFILE%\.railmux\windows` instead, because new AppData writes can be
+  virtualized away from `bash`, `pacman`, `tmux`, and PowerShell. Package
+  identity is queried through the Windows API with a narrow executable-path
+  fallback. Railmux never falls back to virtualized AppData when a packaged
+  process lacks `USERPROFILE`. A fixed-size/SHA-256-verified base archive from
+  the previous logical AppData cache may be copied into the new cache; staged
+  runtimes, markers, app layers, and arbitrary files are never migrated.
 - `railmux --version`, `--help`, `runtime status`, and `doctor` do not install a
   runtime. When an exact private base candidate already exists, ordinary launch
   and `runtime install` state that only the versioned app layer is changing and
@@ -125,17 +139,17 @@ opens a WSL shell and runs the ordinary POSIX product there.
   that reuses the cache and disables pacman's low-speed abort. This preview does
   not yet freeze a repository snapshot, so package versions may advance between
   installations.
-- Versioned Railmux application installs use a separate pip-managed cache at
-  `%LOCALAPPDATA%\Railmux\cache\pip`, outside both the shared base and every
-  provider directory. The first attempt uses a 60-second network timeout with five
-  pip retries. If the command still does not complete, the same launch retries
-  it once with the same cache, a 120-second network timeout, and five pip retries;
-  successfully cached dependency wheels are therefore reusable across the
-  recovery attempt and later preview versions. A failed final attempt never
-  publishes the app marker, never falls back to reinstalling the base, and
-  never opens or modifies Codex/Claude histories. The pip cache is disposable
-  and may be deleted to recover from suspected cache damage while no Railmux
-  installation is running.
+- Versioned Railmux application installs use a separate pip-managed cache under
+  the selected Railmux-owned Windows data root, outside both the shared base and
+  every provider directory. The first attempt uses a 60-second network timeout
+  with five pip retries. If the command still does not complete, the same launch
+  retries it once with the same cache, a 120-second network timeout, and five
+  pip retries; successfully cached dependency wheels are therefore reusable
+  across the recovery attempt and later preview versions. A failed final
+  attempt never publishes the app marker, never falls back to reinstalling the
+  base, and never opens or modifies Codex/Claude histories. The pip cache is
+  disposable and may be deleted to recover from suspected cache damage while
+  no Railmux installation is running.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
   run archive download, extraction, pacman update, or package installation.
@@ -144,11 +158,12 @@ opens a WSL shell and runs the ordinary POSIX product there.
   summarized once, the console uses terminal-aware color while the log remains
   plain, printed `[Y/n]` prompts do not require input, and a command
   failure shows a bounded tail. Complete
-  subprocess output is written explicitly as UTF-8 beneath
-  `%LOCALAPPDATA%\Railmux\logs`; URL credentials and common secret query fields
-  are redacted, unrelated files are never pruned, and at most five recognized
-  install logs are retained. Legacy Windows console encodings affect only the
-  best-effort display copy, not the UTF-8 evidence log.
+  subprocess output is written explicitly as UTF-8 beneath the selected
+  Railmux-owned Windows data root's `logs` directory; URL credentials and
+  common secret query fields are redacted, unrelated files are never pruned,
+  and at most five recognized install logs are retained. Legacy Windows console
+  encodings affect only the best-effort display copy, not the UTF-8 evidence
+  log.
 - Installation is serialized. A new base is staged, exactly probed, and
   atomically renamed. A versioned Railmux venv is built at its final POSIX path
   so console-script shebangs never retain a temporary path; it remains
@@ -464,6 +479,18 @@ production install and can pin one exact approved mirror for repository-specific
 reproduction. The active UTF-8 reporter log is excluded from bounded retention
 while it is open, so the printed failure path remains available after staging
 cleanup.
+
+A fresh Windows 11 / Microsoft Store Python field report against dev29 showed
+that the bootstrap could read its own `%LOCALAPPDATA%\Railmux` staging while
+PowerShell saw no `Railmux\runtimes` or `Railmux\logs` directory at that
+logical path. The phase-four child then returned `0xC0000135` before any
+confirmed pacman core transaction. This matches Windows packaged-app AppData
+write virtualization: the parent sees a merged package-private view while the
+executable loader resolves a different physical directory and cannot find the
+staged DLL set. Dev30 selects one non-virtualized profile root before creating
+the log, lock, cache, or staging tree and regression-protects both the packaged
+and traditional-Python location contracts. A fresh Store-Python field install
+is still required before this closes the real-host acceptance item.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
