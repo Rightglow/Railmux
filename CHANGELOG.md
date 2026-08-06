@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev27] - 2026-08-06
+
+### Fixed
+
+- Keep every package-owned file and directory writable when the official
+  MSYS2 tar archive is extracted on native Windows. dev26 incorrectly mapped
+  POSIX `0444`/`0555` modes through Windows `chmod`, which sets the NTFS
+  read-only attribute and could prevent the first pacman base update from
+  replacing package-owned files; the reported process then exited with
+  `0xC0000135`.
+- Add a native Windows CI gate that downloads and extracts the complete pinned
+  archive, proves an upstream read-only-mode file can be updated, and launches
+  the extracted `bash`, `cygpath`, and `pacman` executables.
+
 ## [0.4.0.dev26] - 2026-08-06
 
 ### Fixed
@@ -2374,7 +2388,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev26...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev27...HEAD
+[0.4.0.dev27]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev26...v0.4.0.dev27
 [0.4.0.dev26]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...v0.4.0.dev26
 [0.4.0.dev25]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev25
 [0.4.0.dev24]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev24

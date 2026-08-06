@@ -85,7 +85,10 @@ opens a WSL shell and runs the ordinary POSIX product there.
   under the single `msys64` root; absolute/traversal paths, backslashes,
   duplicates, links, special files, staging reparse points, and unexpected
   inventory or expanded size fail closed before the temporary base can be
-  published. The bootstrap samples the official GitHub release first. When
+  published. POSIX archive modes are not mapped to NTFS read-only attributes:
+  all package-owned files and directories remain writable so pacman can
+  transactionally replace them when the rolling repository is newer than the
+  pinned base. The bootstrap samples the official GitHub release first. When
   its projected remaining time exceeds 60 seconds, it concurrently samples
   the MSYS2 repository and the MSYS2-listed TUNA and NJU mirrors, switches only
   for at least a 25% measured improvement, and otherwise continues the best
@@ -413,8 +416,21 @@ extracted on Linux with the production extractor and matched all 16,485
 members and 289,361,533 regular-file bytes. The production dev26 wheel then
 repeated that exact full extraction under native Windows 10/Python 3.12,
 produced `usr/bin/bash.exe`, and reported bounded 5% file-count milestones.
-The subsequent seven-phase package/app installation remains a release-candidate
-field check before this evidence can promote support.
+A separate isolated Windows 10 dev26 installation subsequently completed all
+seven package/app phases when its selected repository reported no pending base
+updates.
+
+The first external dev26 fresh-install report reached phase four but exited
+with Windows `0xC0000135`, consistent with an incomplete executable dependency
+set. Investigation showed that Python's Windows `chmod` had converted the tar's
+POSIX `0444`/`0555` modes into NTFS read-only attributes; the same tree produced
+`Access denied` when a package-owned `usr/bin/bashbug` file was removed. This
+can prevent pacman from replacing package-owned files whenever the selected
+rolling repository has newer core packages. dev27 keeps package-owned paths
+writable and adds a native Windows full-archive gate that mutates an upstream
+read-only-mode file before launching the extracted bash, cygpath, and pacman.
+A real field retry against a repository with newer core packages remains
+required.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

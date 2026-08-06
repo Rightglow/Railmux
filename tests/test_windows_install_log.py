@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import io
 import os
+import subprocess
 import sys
 
+import pytest
+
+from railmux import windows_msys2
 from railmux.windows_install_log import InstallReporter, install_log_path
 from railmux.windows_msys2 import _run_checked
 
@@ -192,6 +196,27 @@ def test_default_command_runner_uses_no_stdin_and_captures_utf8(tmp_path):
 
     assert "captured 中文" not in stream.getvalue()
     assert "captured 中文" in path.read_text(encoding="utf-8")
+
+
+def test_windows_missing_dll_status_is_explained(tmp_path, monkeypatch):
+    stream = io.StringIO()
+    path = tmp_path / "install.log"
+    monkeypatch.setattr(windows_msys2, "_NATIVE_WINDOWS", True)
+
+    with InstallReporter(path, verbose=False, stream=stream) as reporter:
+        with pytest.raises(windows_msys2.RuntimeInstallError, match="3221225781"):
+            _run_checked(
+                ["fixture.exe"],
+                env={},
+                reporter=reporter,
+                runner=lambda *_args, **_kwargs: subprocess.CompletedProcess(
+                    [], 0xC0000135
+                ),
+                label="MSYS2 base update",
+            )
+
+    assert "STATUS_DLL_NOT_FOUND" in stream.getvalue()
+    assert "security software" in path.read_text(encoding="utf-8")
 
 
 def test_compact_reporter_surfaces_extraction_and_package_progress(tmp_path):

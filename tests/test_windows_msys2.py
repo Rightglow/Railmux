@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import re
+import stat
 import subprocess
 import tarfile
 from contextlib import contextmanager
@@ -1291,12 +1293,16 @@ def test_tar_xz_extraction_is_internal_bounded_and_progress_visible(
         _tar_directory("msys64"),
         _tar_directory("msys64/usr"),
         _tar_file("msys64/usr/bash.exe", b"verified bash"),
+        _tar_file("msys64/usr/read-only-upstream", b"must stay writable"),
     ]
+    entries[-1][0].mode = 0o444
     archive = tmp_path / MSYS2_ARCHIVE_NAME
     _write_test_tar(archive, entries)
-    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_MEMBER_COUNT", 3)
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_MEMBER_COUNT", 4)
     monkeypatch.setattr(
-        windows_msys2, "MSYS2_ARCHIVE_UNPACKED_SIZE", len(b"verified bash")
+        windows_msys2,
+        "MSYS2_ARCHIVE_UNPACKED_SIZE",
+        len(b"verified bash") + len(b"must stay writable"),
     )
     destination = tmp_path / "stage"
     destination.mkdir()
@@ -1309,10 +1315,32 @@ def test_tar_xz_extraction_is_internal_bounded_and_progress_visible(
     assert (destination / "msys64" / "usr" / "bash.exe").read_bytes() == (
         b"verified bash"
     )
+    package_owned = destination / "msys64" / "usr" / "read-only-upstream"
+    if os.name == "nt":
+        readonly = getattr(stat, "FILE_ATTRIBUTE_READONLY", 0x1)
+        assert not getattr(package_owned.stat(), "st_file_attributes", 0) & readonly
+    else:
+        assert stat.S_IMODE(package_owned.stat().st_mode) == 0o444
     rendered = output.getvalue()
-    assert "Extracting private runtime: 1/3 files (33%)" in rendered
-    assert "Extracting private runtime: 3/3 files (100%)" in rendered
+    assert "Extracting private runtime: 1/4 files (25%)" in rendered
+    assert "Extracting private runtime: 4/4 files (100%)" in rendered
     assert "MSYS2 archive extraction" in log.read_text(encoding="utf-8")
+
+
+def test_native_windows_extraction_clears_posix_read_only_modes(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / "package-owned"
+    path.write_bytes(b"fixture")
+    applied = []
+    monkeypatch.setattr(windows_msys2, "_NATIVE_WINDOWS", True)
+    monkeypatch.setattr(
+        windows_msys2.os, "chmod", lambda target, mode: applied.append((target, mode))
+    )
+
+    windows_msys2._apply_archive_mode(path, 0o444)
+
+    assert applied == [(path, stat.S_IWRITE)]
 
 
 @pytest.mark.parametrize(

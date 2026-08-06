@@ -200,6 +200,8 @@ is labelled supported.
    caches, network-failure recovery, bounded phase progress/heartbeats,
    complete UTF-8 diagnostic logs, private ownership, and no system-wide PATH
    or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
+   Tar POSIX modes must never become NTFS read-only attributes on
+   package-owned paths; pacman must be able to replace every staged base file.
 3. Key one private shared base authority by the pinned MSYS2 compatibility
    identifier, record an exact package-content identity for rolling repository
    results, bind each new app marker to it, and keep Railmux application venvs
@@ -231,7 +233,8 @@ is labelled supported.
    install and arbitrary native runtimes remain out of scope. Remote config and
    read-only doctor use the same pinned direct launch family once that runtime
    is present.
-10. Add unconditional native Windows bootstrap/import/package CI plus a real
+10. Add unconditional native Windows bootstrap/import/package CI, full pinned
+    archive extraction plus native executable-loading CI, and a real
     managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
     record a named and dated real Windows Terminal pass here for every release
     that claims it. Mocked OS branches and ordinary WSL evidence cannot close

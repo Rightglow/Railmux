@@ -80,6 +80,7 @@ MSYS2_BASE_LINEAGE_SHA256 = (
     "6fe0cc8154132040e034ff4daface2a4163a9d1f6ebaaa1133394bff460bd5cf"
 )
 MSYS2_RUNTIME_ID = f"msys2-{MSYS2_RELEASE}"
+_NATIVE_WINDOWS = os.name == "nt"
 RUNTIME_SCHEMA = 1
 
 _RUNTIME_OVERRIDE = "RAILMUX_MSYS2_ROOT"
@@ -621,6 +622,16 @@ def _ensure_safe_archive_directory(root: Path, parts: Sequence[str]) -> Path:
     return current
 
 
+def _apply_archive_mode(path: Path, mode: int) -> None:
+    if _NATIVE_WINDOWS:
+        # Windows chmod maps a missing owner-write bit to the NTFS read-only
+        # attribute; applying tar's POSIX 0444/0555 modes would prevent pacman
+        # from replacing those files during the first base update.
+        os.chmod(path, stat.S_IWRITE)
+    else:
+        os.chmod(path, mode)
+
+
 def _extract_msys2_archive(
     archive: Path,
     destination: Path,
@@ -696,7 +707,7 @@ def _extract_msys2_archive(
                                     )
                                 output.write(chunk)
                                 remaining -= len(chunk)
-                        os.chmod(target, member.mode & 0o777)
+                        _apply_archive_mode(target, member.mode & 0o777)
                     except RuntimeInstallError:
                         raise
                     except OSError as exc:
@@ -715,7 +726,7 @@ def _extract_msys2_archive(
                 "the verified MSYS2 archive expanded to an unexpected size"
             )
         for directory, mode in reversed(directories):
-            os.chmod(directory, mode)
+            _apply_archive_mode(directory, mode)
     except RuntimeInstallError:
         reporter.note(
             "MSYS2 archive extraction failed; the temporary base was not "
@@ -1613,6 +1624,12 @@ def _run_checked(
     if returncode:
         if allow_failure:
             return returncode
+        if _NATIVE_WINDOWS and returncode & 0xFFFFFFFF == 0xC0000135:
+            reporter.note(
+                "Windows reported STATUS_DLL_NOT_FOUND. Check whether security "
+                "software quarantined a file in the private MSYS2 staging tree.",
+                level="error",
+            )
         reporter.command_failed(label, returncode)
         raise RuntimeInstallError(f"{label} failed with exit code {returncode}")
     reporter.command_succeeded()
