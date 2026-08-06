@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev26] - 2026-08-06
+
+### Fixed
+
+- Replace execution of the official MSYS2 self-extracting archive with bounded,
+  in-process extraction of the equivalent pinned official `tar.xz` artifact.
+  This fixes fresh Windows installation on systems where the 7-Zip SFX exited
+  with `cannot find sfx`, rejects unsafe paths, links, special files, duplicate
+  members, and unexpected archive inventories, and never publishes a partial
+  base.
+- Show file-count progress while the private MSYS2 base is extracted, retain
+  exact size and SHA-256 verification across the approved source fallback, and
+  continue reusing verified dev24/dev25 base installations without downloading
+  or rebuilding them.
+
 ## [0.4.0.dev25] - 2026-08-05
 
 ### Added
@@ -2359,7 +2374,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev26...HEAD
+[0.4.0.dev26]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...v0.4.0.dev26
 [0.4.0.dev25]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev25
 [0.4.0.dev24]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev24
 [0.4.0.dev23]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...v0.4.0.dev23

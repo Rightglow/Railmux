@@ -79,8 +79,13 @@ opens a WSL shell and runs the ordinary POSIX product there.
   700 MB base operation and `N` cancels immediately; `runtime install --yes` is
   the explicit noninteractive authority. `runtime install --verbose` streams
   raw subprocess output in addition to retaining it in the install log.
-- The official MSYS2 self-extracting base release, filename, size, and SHA-256
-  are pinned. The bootstrap samples the official GitHub release first. When
+- The official MSYS2 `tar.xz` base release, filename, size, SHA-256, member
+  count, and expanded regular-file size are pinned. Railmux extracts it in
+  process without executing downloaded archive code. Every member must remain
+  under the single `msys64` root; absolute/traversal paths, backslashes,
+  duplicates, links, special files, staging reparse points, and unexpected
+  inventory or expanded size fail closed before the temporary base can be
+  published. The bootstrap samples the official GitHub release first. When
   its projected remaining time exceeds 60 seconds, it concurrently samples
   the MSYS2 repository and the MSYS2-listed TUNA and NJU mirrors, switches only
   for at least a 25% measured improvement, and otherwise continues the best
@@ -89,7 +94,7 @@ opens a WSL shell and runs the ordinary POSIX product there.
   strict HTTPS `206` responses with the expected `Content-Range`; if adaptive
   transfer is unavailable, the bootstrap falls back to ordinary full downloads
   in the approved order. A wrong final size or SHA-256 removes the archive, and
-  every path must produce the same Railmux-pinned digest before execution.
+  every path must produce the same Railmux-pinned digest before extraction.
   Interactive downloads show bytes, total size, and percentage, while
   redirected logs receive bounded milestones. A verified base is retained in
   the Railmux-private cache so a future base generation can recover without
@@ -398,6 +403,18 @@ Windows-to-Windows SSH/config/doctor through OpenSSH. These checks do not
 promote the preview to stable support: the exact dev23-to-dev24 Soft Quit
 boundary, Windows Terminal visual/input checklist, Windows-to-POSIX endpoints,
 and macOS-origin remote paths remain release-specific manual checks.
+
+dev26 replaces the MSYS2 SFX execution path after a fresh Windows 11/Python
+3.12 install reproduced the SFX's `cannot find sfx` exit despite an exact
+size/SHA-verified cache. Automation exercises real `tar.xz` decoding, bounded
+inventory and progress, traversal/backslash rejection, link rejection, and
+the no-archive-execution boundary. The full pinned official archive was also
+extracted on Linux with the production extractor and matched all 16,485
+members and 289,361,533 regular-file bytes. The production dev26 wheel then
+repeated that exact full extraction under native Windows 10/Python 3.12,
+produced `usr/bin/bash.exe`, and reported bounded 5% file-count milestones.
+The subsequent seven-phase package/app installation remains a release-candidate
+field check before this evidence can promote support.
 
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and

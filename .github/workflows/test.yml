@@ -172,7 +172,7 @@ jobs:
           content=$(sha256sum /tmp/railmux-packages | awk '{print $1}')
           count=$(wc -l < /tmp/railmux-packages)
           archive_sha=$("$app/venv/bin/python" -c \
-            'from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256; print(MSYS2_ARCHIVE_SHA256)')
+            'from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256; print(MSYS2_BASE_LINEAGE_SHA256)')
           RUNTIME_ID=msys2-2026-03-22 VERSION="$version" \
             CONTENT="$content" PACKAGE_COUNT="$count" ARCHIVE_SHA="$archive_sha" \
             "$app/venv/bin/python" - <<'PY'

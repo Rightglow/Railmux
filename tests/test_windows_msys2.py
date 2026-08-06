@@ -5,6 +5,7 @@ import io
 import json
 import re
 import subprocess
+import tarfile
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_SHA256,
     MSYS2_ARCHIVE_SIZE,
     MSYS2_ARCHIVE_SOURCES,
+    MSYS2_BASE_LINEAGE_SHA256,
     MSYS2_RUNTIME_ID,
     Msys2Runtime,
     RuntimeInstallError,
@@ -102,7 +104,7 @@ def make_runtime(
                     {
                         "schema": 1,
                         "runtime": MSYS2_RUNTIME_ID,
-                        "archive_sha256": MSYS2_ARCHIVE_SHA256,
+                        "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
                         "content_id": _TEST_CONTENT_ID,
                         "package_count": 3,
                         "core_packages": {
@@ -156,7 +158,12 @@ def add_marked_app(root: Path, version: str) -> Path:
 
 
 def test_approved_archive_sources_are_https_and_share_one_pinned_artifact():
-    assert MSYS2_ARCHIVE_SIZE == 52_820_994
+    assert MSYS2_ARCHIVE_NAME.endswith(".tar.xz")
+    assert not MSYS2_ARCHIVE_NAME.endswith(".sfx.exe")
+    assert MSYS2_ARCHIVE_SIZE == 53_466_096
+    assert MSYS2_ARCHIVE_SHA256 == (
+        "6b4a986a3ec4f1e40313bdf17903a6f5c854373d4230c40f14c5e35c4bac7fce"
+    )
     assert len(MSYS2_ARCHIVE_SOURCES) == 4
     assert len({url for _label, url in MSYS2_ARCHIVE_SOURCES}) == 4
     for label, url in MSYS2_ARCHIVE_SOURCES:
@@ -728,21 +735,22 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         assert destination.name == MSYS2_ARCHIVE_NAME
         destination.write_bytes(b"verified fixture")
 
+    def extractor(archive, output, *, reporter):
+        assert archive.name == MSYS2_ARCHIVE_NAME
+        bash = output / "msys64" / "usr" / "bin" / "bash.exe"
+        bash.parent.mkdir(parents=True)
+        bash.write_bytes(b"fixture")
+        config = output / "msys64" / "etc" / "pacman.conf"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(
+            "[options]\nParallelDownloads = 5\n"
+            "[mingw64]\nInclude = /etc/pacman.d/mirrorlist.mingw\n"
+            "[msys]\nInclude = /etc/pacman.d/mirrorlist.msys\n",
+            encoding="utf-8",
+        )
+
     def runner(argv, *, env, check):
         commands.append(argv)
-        if argv[0].endswith(MSYS2_ARCHIVE_NAME):
-            output = Path(next(arg[2:] for arg in argv if arg.startswith("-o")))
-            bash = output / "msys64" / "usr" / "bin" / "bash.exe"
-            bash.parent.mkdir(parents=True)
-            bash.write_bytes(b"fixture")
-            config = output / "msys64" / "etc" / "pacman.conf"
-            config.parent.mkdir(parents=True, exist_ok=True)
-            config.write_text(
-                "[options]\nParallelDownloads = 5\n"
-                "[mingw64]\nInclude = /etc/pacman.d/mirrorlist.mingw\n"
-                "[msys]\nInclude = /etc/pacman.d/mirrorlist.msys\n",
-                encoding="utf-8",
-            )
         return completed(argv)
 
     def probe(argv, *, env, timeout):
@@ -759,6 +767,7 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
         environ=environ,
         downloader=downloader,
         runner=runner,
+        extractor=extractor,
         probe=probe,
         lock_factory=unlocked,
         mirror_optimizer=lambda _root: PacmanMirrorDecision(
@@ -790,6 +799,7 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
     assert any("--needed tmux python python-pip" in command for command in joined)
     assert any('python -m venv "$1/venv"' in command for command in joined)
     assert any('railmux[ssh]==$2' in command for command in joined)
+    assert all(MSYS2_ARCHIVE_NAME not in command for command in joined)
     logs = list((Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log"))
     assert len(logs) == 1
     log = logs[0].read_text(encoding="utf-8")
@@ -1251,6 +1261,132 @@ def test_verified_base_archive_cache_avoids_a_second_download(tmp_path, monkeypa
 
     assert selected == archive
     assert source == "verified local cache"
+
+
+def _write_test_tar(path: Path, entries: list[tuple[tarfile.TarInfo, bytes]]) -> None:
+    with tarfile.open(path, mode="w:xz") as archive:
+        for member, payload in entries:
+            archive.addfile(member, io.BytesIO(payload) if member.isreg() else None)
+
+
+def _tar_directory(name: str) -> tuple[tarfile.TarInfo, bytes]:
+    member = tarfile.TarInfo(name)
+    member.type = tarfile.DIRTYPE
+    member.mode = 0o755
+    return member, b""
+
+
+def _tar_file(name: str, payload: bytes) -> tuple[tarfile.TarInfo, bytes]:
+    member = tarfile.TarInfo(name)
+    member.size = len(payload)
+    member.mode = 0o755 if name.endswith(".exe") else 0o644
+    return member, payload
+
+
+def test_tar_xz_extraction_is_internal_bounded_and_progress_visible(
+    tmp_path,
+    monkeypatch,
+):
+    entries = [
+        _tar_directory("msys64"),
+        _tar_directory("msys64/usr"),
+        _tar_file("msys64/usr/bash.exe", b"verified bash"),
+    ]
+    archive = tmp_path / MSYS2_ARCHIVE_NAME
+    _write_test_tar(archive, entries)
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_MEMBER_COUNT", 3)
+    monkeypatch.setattr(
+        windows_msys2, "MSYS2_ARCHIVE_UNPACKED_SIZE", len(b"verified bash")
+    )
+    destination = tmp_path / "stage"
+    destination.mkdir()
+    log = tmp_path / "install.log"
+    output = io.StringIO()
+
+    with InstallReporter(log, verbose=False, stream=output) as reporter:
+        windows_msys2._extract_msys2_archive(archive, destination, reporter=reporter)
+
+    assert (destination / "msys64" / "usr" / "bash.exe").read_bytes() == (
+        b"verified bash"
+    )
+    rendered = output.getvalue()
+    assert "Extracting private runtime: 1/3 files (33%)" in rendered
+    assert "Extracting private runtime: 3/3 files (100%)" in rendered
+    assert "MSYS2 archive extraction" in log.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("member", "message"),
+    [
+        (_tar_file("../outside", b"bad"), "unsafe path"),
+        (_tar_file("/absolute", b"bad"), "unsafe path"),
+        (_tar_file(r"msys64\..\outside", b"bad"), "unsafe path"),
+    ],
+)
+def test_tar_xz_extraction_rejects_paths_outside_staging(
+    tmp_path,
+    monkeypatch,
+    member,
+    message,
+):
+    archive = tmp_path / MSYS2_ARCHIVE_NAME
+    _write_test_tar(archive, [member])
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_MEMBER_COUNT", 1)
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_UNPACKED_SIZE", 3)
+    destination = tmp_path / "stage"
+    destination.mkdir()
+
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=io.StringIO()
+    ) as reporter:
+        with pytest.raises(RuntimeInstallError, match=message):
+            windows_msys2._extract_msys2_archive(
+                archive, destination, reporter=reporter
+            )
+
+    assert not (tmp_path / "outside").exists()
+
+
+def test_tar_xz_extraction_rejects_links_and_special_files(tmp_path, monkeypatch):
+    member = tarfile.TarInfo("msys64/link")
+    member.type = tarfile.SYMTYPE
+    member.linkname = "../outside"
+    archive = tmp_path / MSYS2_ARCHIVE_NAME
+    _write_test_tar(archive, [_tar_directory("msys64"), (member, b"")])
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_MEMBER_COUNT", 2)
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_UNPACKED_SIZE", 0)
+    destination = tmp_path / "stage"
+    destination.mkdir()
+
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=io.StringIO()
+    ) as reporter:
+        with pytest.raises(RuntimeInstallError, match="unsupported link"):
+            windows_msys2._extract_msys2_archive(
+                archive, destination, reporter=reporter
+            )
+
+
+def test_tar_xz_extraction_rejects_changed_inventory_without_publishing(
+    tmp_path,
+    monkeypatch,
+):
+    archive = tmp_path / MSYS2_ARCHIVE_NAME
+    _write_test_tar(archive, [_tar_directory("msys64")])
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_MEMBER_COUNT", 2)
+    monkeypatch.setattr(windows_msys2, "MSYS2_ARCHIVE_UNPACKED_SIZE", 0)
+    destination = tmp_path / "stage"
+    destination.mkdir()
+
+    with InstallReporter(
+        tmp_path / "install.log", verbose=False, stream=io.StringIO()
+    ) as reporter:
+        with pytest.raises(RuntimeInstallError, match="member count changed"):
+            windows_msys2._extract_msys2_archive(
+                archive, destination, reporter=reporter
+            )
+
+    assert (destination / "msys64").is_dir()
 
 
 def test_pacman_network_failure_retries_with_cache_and_relaxed_timeout(tmp_path):

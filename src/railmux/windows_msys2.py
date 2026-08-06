@@ -10,6 +10,7 @@ import concurrent.futures
 import hashlib
 import http.client
 import json
+import lzma
 import os
 import re
 import secrets
@@ -17,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -25,7 +27,7 @@ import urllib.request
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from railmux.windows_install_log import (
     InstallReporter,
@@ -44,7 +46,7 @@ from railmux.terminal_status import STYLE_ACCENT, STYLE_MUTED, styled
 
 
 MSYS2_RELEASE = "2026-03-22"
-MSYS2_ARCHIVE_NAME = f"msys2-base-x86_64-{MSYS2_RELEASE.replace('-', '')}.sfx.exe"
+MSYS2_ARCHIVE_NAME = f"msys2-base-x86_64-{MSYS2_RELEASE.replace('-', '')}.tar.xz"
 MSYS2_ARCHIVE_SOURCES = (
     (
         "GitHub",
@@ -65,8 +67,16 @@ MSYS2_ARCHIVE_SOURCES = (
         f"https://mirror.nju.edu.cn/msys2/distrib/x86_64/{MSYS2_ARCHIVE_NAME}",
     ),
 )
-MSYS2_ARCHIVE_SIZE = 52_820_994
+MSYS2_ARCHIVE_SIZE = 53_466_096
 MSYS2_ARCHIVE_SHA256 = (
+    "6b4a986a3ec4f1e40313bdf17903a6f5c854373d4230c40f14c5e35c4bac7fce"
+)
+MSYS2_ARCHIVE_MEMBER_COUNT = 16_485
+MSYS2_ARCHIVE_UNPACKED_SIZE = 289_361_533
+# Schema-1 base-content markers released in dev24/dev25 use the SFX digest as
+# their pinned release-lineage token.  Keep accepting and writing that durable
+# value while the bootstrap consumes the equivalent official tar.xz artifact.
+MSYS2_BASE_LINEAGE_SHA256 = (
     "6fe0cc8154132040e034ff4daface2a4163a9d1f6ebaaa1133394bff460bd5cf"
 )
 MSYS2_RUNTIME_ID = f"msys2-{MSYS2_RELEASE}"
@@ -141,7 +151,7 @@ class BaseContentIdentity:
         return {
             "schema": 1,
             "runtime": MSYS2_RUNTIME_ID,
-            "archive_sha256": MSYS2_ARCHIVE_SHA256,
+            "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
             "content_id": self.content_id,
             "package_count": self.package_count,
             "core_packages": dict(self.core_packages),
@@ -166,6 +176,7 @@ Probe = Callable[..., subprocess.CompletedProcess[bytes]]
 Runner = Callable[..., subprocess.CompletedProcess]
 Downloader = Callable[[str, Path, str], None]
 MirrorOptimizer = Callable[[Path], PacmanMirrorDecision]
+Extractor = Callable[..., None]
 
 
 @dataclass(frozen=True)
@@ -519,9 +530,20 @@ def _managed_cache(environ: Mapping[str, str]) -> Path | None:
     return Path(local_app_data) / "Railmux" / "cache"
 
 
+def _path_is_link_or_reparse(path: Path) -> bool:
+    info = path.lstat()
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & reparse_flag
+    )
+
+
 def _archive_cache_is_valid(path: Path) -> bool:
     try:
-        if path.is_symlink() or path.stat().st_size != MSYS2_ARCHIVE_SIZE:
+        if (
+            _path_is_link_or_reparse(path)
+            or path.stat().st_size != MSYS2_ARCHIVE_SIZE
+        ):
             return False
         digest = hashlib.sha256()
         with path.open("rb") as stream:
@@ -551,6 +573,166 @@ def _prepare_cached_archive(
         downloader=downloader,
     )
     return archive, source
+
+
+def _safe_archive_parts(member: tarfile.TarInfo) -> tuple[str, ...]:
+    name = member.name
+    raw_parts = name.split("/")
+    pure = PurePosixPath(name)
+    if (
+        not name
+        or "\\" in name
+        or pure.is_absolute()
+        or any(part in {"", ".", ".."} for part in raw_parts)
+        or not raw_parts
+        or raw_parts[0] != "msys64"
+    ):
+        raise RuntimeInstallError(
+            "the verified MSYS2 archive contained an unsafe path"
+        )
+    return tuple(raw_parts)
+
+
+def _ensure_safe_archive_directory(root: Path, parts: Sequence[str]) -> Path:
+    current = root
+    for part in parts:
+        candidate = current / part
+        try:
+            if _path_is_link_or_reparse(candidate) or not candidate.is_dir():
+                raise RuntimeInstallError(
+                    "the MSYS2 extraction staging directory became unsafe"
+                )
+        except FileNotFoundError:
+            try:
+                candidate.mkdir()
+            except OSError as exc:
+                raise RuntimeInstallError(
+                    "could not create the MSYS2 extraction staging directory"
+                ) from exc
+            if _path_is_link_or_reparse(candidate) or not candidate.is_dir():
+                raise RuntimeInstallError(
+                    "the MSYS2 extraction staging directory became unsafe"
+                )
+        except OSError as exc:
+            raise RuntimeInstallError(
+                "could not inspect the MSYS2 extraction staging directory"
+            ) from exc
+        current = candidate
+    return current
+
+
+def _extract_msys2_archive(
+    archive: Path,
+    destination: Path,
+    *,
+    reporter: InstallReporter,
+) -> None:
+    """Extract the pinned tar.xz without executing downloaded code."""
+    reporter.command_started("MSYS2 archive extraction", progress="extract")
+    seen: set[tuple[str, ...]] = set()
+    directories: list[tuple[Path, int]] = []
+    member_count = 0
+    unpacked_size = 0
+    try:
+        if _path_is_link_or_reparse(destination) or not destination.is_dir():
+            raise RuntimeInstallError(
+                "the MSYS2 extraction staging directory is unsafe"
+            )
+        with tarfile.open(archive, mode="r|xz") as stream:
+            for member in stream:
+                member_count += 1
+                if member_count > MSYS2_ARCHIVE_MEMBER_COUNT:
+                    raise RuntimeInstallError(
+                        "the verified MSYS2 archive member count changed"
+                    )
+                parts = _safe_archive_parts(member)
+                if parts in seen:
+                    raise RuntimeInstallError(
+                        "the verified MSYS2 archive contained a duplicate path"
+                    )
+                seen.add(parts)
+                if not (member.isdir() or member.isreg()):
+                    raise RuntimeInstallError(
+                        "the verified MSYS2 archive contained an unsupported link "
+                        "or special file"
+                    )
+                parent = _ensure_safe_archive_directory(destination, parts[:-1])
+                target = parent / parts[-1]
+                if member.isdir():
+                    directory = _ensure_safe_archive_directory(destination, parts)
+                    directories.append((directory, member.mode & 0o777))
+                else:
+                    if member.size < 0:
+                        raise RuntimeInstallError(
+                            "the verified MSYS2 archive contained an invalid file"
+                        )
+                    unpacked_size += member.size
+                    if unpacked_size > MSYS2_ARCHIVE_UNPACKED_SIZE:
+                        raise RuntimeInstallError(
+                            "the verified MSYS2 archive expanded beyond its "
+                            "pinned size"
+                        )
+                    try:
+                        try:
+                            target.lstat()
+                        except FileNotFoundError:
+                            pass
+                        else:
+                            raise RuntimeInstallError(
+                                "the MSYS2 extraction staging path already exists"
+                            )
+                        source = stream.extractfile(member)
+                        if source is None:
+                            raise RuntimeInstallError(
+                                "the verified MSYS2 archive file was unreadable"
+                            )
+                        remaining = member.size
+                        with target.open("xb") as output:
+                            while remaining:
+                                chunk = source.read(min(1024 * 1024, remaining))
+                                if not chunk:
+                                    raise RuntimeInstallError(
+                                        "the verified MSYS2 archive ended early"
+                                    )
+                                output.write(chunk)
+                                remaining -= len(chunk)
+                        os.chmod(target, member.mode & 0o777)
+                    except RuntimeInstallError:
+                        raise
+                    except OSError as exc:
+                        raise RuntimeInstallError(
+                            "could not write the MSYS2 extraction staging file"
+                        ) from exc
+                reporter.extraction_progress(
+                    member_count, MSYS2_ARCHIVE_MEMBER_COUNT
+                )
+        if member_count != MSYS2_ARCHIVE_MEMBER_COUNT:
+            raise RuntimeInstallError(
+                "the verified MSYS2 archive member count changed"
+            )
+        if unpacked_size != MSYS2_ARCHIVE_UNPACKED_SIZE:
+            raise RuntimeInstallError(
+                "the verified MSYS2 archive expanded to an unexpected size"
+            )
+        for directory, mode in reversed(directories):
+            os.chmod(directory, mode)
+    except RuntimeInstallError:
+        reporter.note(
+            "MSYS2 archive extraction failed; the temporary base was not "
+            "published.",
+            level="error",
+        )
+        raise
+    except (OSError, lzma.LZMAError, tarfile.TarError, EOFError) as exc:
+        reporter.note(
+            "MSYS2 archive extraction failed; the temporary base was not "
+            "published.",
+            level="error",
+        )
+        raise RuntimeInstallError(
+            "the verified MSYS2 tar.xz archive could not be extracted"
+        ) from exc
+    reporter.command_succeeded()
 
 
 def managed_root(environ: Mapping[str, str]) -> Path | None:
@@ -690,7 +872,7 @@ def _decode_base_content_marker(root: Path) -> BaseContentIdentity | None:
     if (
         payload.get("schema") != 1
         or payload.get("runtime") != MSYS2_RUNTIME_ID
-        or payload.get("archive_sha256") != MSYS2_ARCHIVE_SHA256
+        or payload.get("archive_sha256") != MSYS2_BASE_LINEAGE_SHA256
         or not isinstance(content_id, str)
         or re.fullmatch(r"[0-9a-f]{64}", content_id) is None
         or not isinstance(package_count, int)
@@ -2022,6 +2204,7 @@ def install_managed_runtime(
     probe: Probe = _probe,
     lock_factory: Callable[[Path], object] = install_lock,
     mirror_optimizer: MirrorOptimizer = optimize_pacman_mirror,
+    extractor: Extractor = _extract_msys2_archive,
     verbose: bool = False,
     reuse_only: bool = False,
 ) -> Msys2Runtime:
@@ -2160,14 +2343,7 @@ def install_managed_runtime(
                     reporter.done(source)
 
                     reporter.phase(2, 7, "Extracting the private MSYS2 base")
-                    _run_checked(
-                        [str(archive), "-y", f"-o{stage}"],
-                        env=environ,
-                        reporter=reporter,
-                        runner=runner,
-                        label="MSYS2 extraction",
-                        progress="extract",
-                    )
+                    extractor(archive, stage, reporter=reporter)
                     root = stage / "msys64"
                     if not (root / "usr" / "bin" / "bash.exe").is_file():
                         raise RuntimeInstallError(

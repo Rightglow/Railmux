@@ -23,7 +23,7 @@ from typing import Iterator, Mapping, Sequence
 from packaging.version import InvalidVersion, Version
 
 from railmux import restart_state, tmux_server
-from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256
+from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256
 
 
 CURRENT_APP_OPTION = "@railmux_current_app_v1"
@@ -136,7 +136,7 @@ def _base_identity(runtime: str) -> str | None:
         or not isinstance(content, dict)
         or content.get("schema") != 1
         or content.get("runtime") != runtime
-        or content.get("archive_sha256") != MSYS2_ARCHIVE_SHA256
+        or content.get("archive_sha256") != MSYS2_BASE_LINEAGE_SHA256
         or not isinstance(content_id, str)
         or _CONTENT_RE.fullmatch(content_id) is None
         or not isinstance(package_count, int)

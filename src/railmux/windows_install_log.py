@@ -235,6 +235,24 @@ class InstallReporter:
             self._consume_output_line(self._pending_output)
             self._pending_output = ""
 
+    def extraction_progress(self, completed: int, total: int) -> None:
+        """Report bounded in-process archive extraction progress."""
+        if total <= 0:
+            return
+        completed = min(max(completed, 0), total)
+        percent = min(100, int(completed * 100 / total))
+        self._progress_detail = (
+            f"extracting private runtime: {completed}/{total} files "
+            f"({percent}%)"
+        )
+        if percent >= self._last_extraction_percent + 5 or percent == 100:
+            self.note(
+                f"Extracting private runtime: {completed}/{total} files "
+                f"({percent}%)"
+            )
+            self._last_extraction_percent = percent
+        self.heartbeat()
+
     def _consume_output_line(self, raw_line: str) -> None:
         line = _redact_line(raw_line)
         self._write_log(f"{line}\n")

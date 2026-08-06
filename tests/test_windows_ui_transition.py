@@ -8,7 +8,7 @@ import pytest
 import urwid
 
 from railmux import tmux_server, windows_ui_transition as transition
-from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256
+from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256
 from railmux.ui import app as app_module
 from railmux.ui.app import App
 
@@ -46,7 +46,7 @@ def _validated_tree(monkeypatch, tmp_path: Path) -> Path:
         json.dumps({
             "schema": 1,
             "runtime": RUNTIME,
-            "archive_sha256": MSYS2_ARCHIVE_SHA256,
+            "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
             "content_id": CONTENT,
             "package_count": 3,
             "core_packages": {
@@ -88,7 +88,7 @@ def test_upgrade_exec_requires_exact_content_bound_app(monkeypatch, tmp_path):
         json.dumps({
             "schema": 1,
             "runtime": RUNTIME,
-            "archive_sha256": MSYS2_ARCHIVE_SHA256,
+            "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
             "content_id": "c" * 64,
             "package_count": 3,
             "core_packages": {
