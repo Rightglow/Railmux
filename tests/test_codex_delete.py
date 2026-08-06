@@ -655,7 +655,10 @@ def test_show_transcript_codex_passes_explicit_format(monkeypatch):
     app, captured = _transcript_app(monkeypatch)
     assert app._show_transcript(Path("/tmp/r.jsonl"), session_type="codex")
     assert captured["prepared"] is True
-    assert "railmux.transcript --format codex --preview-limit 2000 -" in captured["cmd"]
+    assert (
+        "railmux.transcript --format codex --preview-limit 2000 /tmp/r.jsonl"
+        in captured["cmd"]
+    )
 
 
 def test_show_transcript_claude_passes_explicit_format(monkeypatch):
@@ -670,8 +673,8 @@ def test_show_transcript_uses_secure_read_only_pager_and_quotes_python(monkeypat
     assert app._show_transcript(Path("/tmp/a file.jsonl"), session_type="codex")
     cmd = captured["cmd"]
     assert "'/tmp/Python Dir/python' -m railmux.transcript" in cmd
-    assert "tail -n 2000 '/tmp/a file.jsonl'" in cmd
-    assert "--preview-limit 2000" in cmd
+    assert "tail -n" not in cmd
+    assert "--preview-limit 2000 '/tmp/a file.jsonl'" in cmd
     assert "LESSSECURE=1" in cmd
     assert "LESSHISTFILE=-" in cmd
     assert "LESSOPEN= LESSCLOSE=" in cmd

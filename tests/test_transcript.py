@@ -11,6 +11,7 @@ from railmux.transcript import (
     BOLD,
     CLAUDE_ACCENT,
     RESET,
+    _tail_utf8_lines,
     _is_real_user,
     _render_user,
     _render_assistant_blocks,
@@ -610,6 +611,43 @@ def test_main_preview_banner_and_footer(tmp_path, capsys):
     assert "Read-only history preview" in output
     assert "latest 2,000 records" in output
     assert "/ search" in output and "q close" in output
+
+
+def test_tail_utf8_lines_reads_complete_final_records_across_blocks(tmp_path):
+    jsonl = tmp_path / "large.jsonl"
+    long_line = "older-" + "x" * 70_000
+    jsonl.write_text(
+        "\n".join((long_line, "保留一", "保留二", "保留三")),
+        encoding="utf-8",
+    )
+
+    stream = _tail_utf8_lines(jsonl, 3)
+
+    assert stream.read().splitlines() == ["保留一", "保留二", "保留三"]
+
+
+def test_main_preview_limit_bounds_a_direct_file_without_external_tail(
+    tmp_path, capsys,
+):
+    jsonl = tmp_path / "claude.jsonl"
+    _write_jsonl(jsonl, [
+        {
+            "type": "user",
+            "message": {"role": "user", "content": f"message-{index}"},
+        }
+        for index in range(5)
+    ])
+
+    main([
+        "transcript", "--format", "claude", "--preview-limit", "2",
+        str(jsonl),
+    ])
+
+    output = capsys.readouterr().out
+    assert "message-0" not in output
+    assert "message-2" not in output
+    assert "message-3" in output
+    assert "message-4" in output
 
 
 def test_main_rejects_bad_preview_limit(capsys):

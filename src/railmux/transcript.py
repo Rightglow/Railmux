@@ -7,6 +7,7 @@ Usage::
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
@@ -41,16 +42,45 @@ _SKIP_TYPES = frozenset({
 })
 
 # Top-level record types that only ever appear in a Codex rollout JSONL.  The
-# preview pipeline in the UI runs ``tail -n 2000`` before piping into this
-# module, so for rollouts longer than 2000 lines the leading ``session_meta``
-# header is dropped and the first record seen here is a ``response_item`` /
-# ``event_msg`` / ``turn_context``.  Detect Codex by the *presence* of any of
-# these types rather than by a leading ``session_meta`` (see issue #5).
+# preview reader keeps only the final 2,000 records, so for longer rollouts the
+# leading ``session_meta`` header is dropped and the first record seen here is
+# a ``response_item`` / ``event_msg`` / ``turn_context``.  Detect Codex by the
+# *presence* of any of these types rather than by a leading ``session_meta``
+# (see issue #5).
 _CODEX_TYPES = frozenset({
     "session_meta", "response_item", "event_msg", "turn_context",
     "compacted", "world_state",
 })
 _CLAUDE_TYPES = _SKIP_TYPES | frozenset({"user", "assistant"})
+
+_TAIL_BLOCK_SIZE = 64 * 1024
+
+
+def _tail_utf8_lines(path: Path, limit: int) -> io.StringIO:
+    """Return the final *limit* UTF-8 lines without scanning from the start.
+
+    The preview caller previously launched a separate ``tail`` process before
+    the Python renderer.  Reading backwards here removes that process from the
+    latency-sensitive Windows path while retaining the same record boundary.
+    One extra newline is collected before slicing so the first returned line
+    can never be a block-boundary fragment.
+    """
+    chunks: list[bytes] = []
+    newline_count = 0
+    with path.open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        position = stream.tell()
+        while position > 0 and newline_count <= limit:
+            size = min(_TAIL_BLOCK_SIZE, position)
+            position -= size
+            stream.seek(position)
+            chunk = stream.read(size)
+            chunks.append(chunk)
+            newline_count += chunk.count(b"\n")
+    payload = b"".join(reversed(chunks))
+    lines = payload.splitlines(keepends=True)
+    selected = b"".join(lines[-limit:])
+    return io.StringIO(selected.decode("utf-8", errors="replace"))
 
 
 def _sanitize_text(value: object) -> str:
@@ -382,8 +412,8 @@ def format_transcript(
 
     *fmt* is an optional explicit format hint (``"codex"`` or ``"claude"``).
     When omitted (the default), the format is auto-detected from the record
-    types actually present in the stream, so a Codex rollout whose leading
-    ``session_meta`` header was stripped by ``tail`` still renders as Codex.
+    types actually present in the stream, so a bounded Codex rollout whose
+    leading ``session_meta`` header was omitted still renders as Codex.
 
     Callers should write each chunk to stdout, e.g.::
 
@@ -670,7 +700,15 @@ def main(argv: list[str] | None = None) -> None:
         if not jsonl_path.exists():
             print(f"File not found: {jsonl_path}", file=sys.stderr)
             sys.exit(1)
-        stream = jsonl_path
+        try:
+            stream = (
+                _tail_utf8_lines(jsonl_path, preview_limit)
+                if preview_limit is not None
+                else jsonl_path
+            )
+        except OSError:
+            print(f"Could not read: {jsonl_path}", file=sys.stderr)
+            sys.exit(1)
 
     try:
         if preview_limit is not None:

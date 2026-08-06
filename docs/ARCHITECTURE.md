@@ -175,6 +175,16 @@ crash-safe binding leases. A compact terminal with only Railmux's sidebar has
 no agent page to select or zoom, so its logical compact presentation must not
 perform agent-page geometry probes.
 
+Explicit transcript Preview has one similarly bounded hot path. Once a slot is
+already in history mode with no displayed provider or pending swap identity, a
+new stopped-session Preview may respawn that same Railmux-owned pane directly.
+It does not repeat the return-home transaction, already-cleared transcript
+marker, unchanged border projection, or shared binding projection. The first
+transition from any live provider retains every identity-pinned return-home
+check, and a failed replacement never creates another pane or commits a new
+active target. The transcript renderer itself reads the final 2,000 UTF-8 JSONL
+records backwards; an external `tail` process is not part of the click path.
+
 Doctor collection has one versioned structured snapshot authority. Human text
 and `doctor --json` are renderers of that same snapshot, not independent probe
 paths. Stable JSON fields contain only bounded status/category values, numeric

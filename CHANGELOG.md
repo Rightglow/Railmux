@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev33] - 2026-08-06
+
+### Fixed
+
+- Reuse an already-owned transcript pane when switching between stopped
+  session previews, avoiding redundant pane inventories, marker writes,
+  border/binding projection, and display-transport preparation. Entering
+  Preview from a live provider still performs the complete identity-pinned
+  return-home transaction, and a failed replacement leaves the prior workspace
+  state intact.
+- Read the final 2,000 JSONL records backwards inside the existing transcript
+  renderer instead of launching a separate `tail` process. This preserves the
+  bounded, read-only provider-aware view while reducing Windows/MSYS2 process
+  startup on every preview.
+
 ## [0.4.0.dev32] - 2026-08-06
 
 ### Fixed
@@ -2469,7 +2484,12 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev28...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev33...HEAD
+[0.4.0.dev33]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev32...v0.4.0.dev33
+[0.4.0.dev32]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev31...v0.4.0.dev32
+[0.4.0.dev31]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev30...v0.4.0.dev31
+[0.4.0.dev30]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev29...v0.4.0.dev30
+[0.4.0.dev29]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev28...v0.4.0.dev29
 [0.4.0.dev28]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev27...v0.4.0.dev28
 [0.4.0.dev27]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev26...v0.4.0.dev27
 [0.4.0.dev26]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...v0.4.0.dev26

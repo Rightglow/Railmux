@@ -100,6 +100,7 @@ from railmux.ui.workspace import (
     COMPACT_RESIZE_OPTION,
     DUAL_SIDEBAR_MIN_WIDTH,
     DUAL_SIDEBAR_PERCENT,
+    DisplayTransportKind,
     MINIMUM_AGENT_PANE_SIZE,
     SINGLE_SIDEBAR_PERCENT,
     SlotRestoreState,
@@ -1177,6 +1178,7 @@ class App:
         *,
         mode_key: str | None = None,
         project_key: str | None = None,
+        sync_transcript_source: bool = True,
     ) -> None:
         """Update one slot, painting sidebar highlights only for the Target."""
         slot.active_session_id = session_id
@@ -1202,7 +1204,8 @@ class App:
             )
         elif session_id is None:
             slot.project_key = None
-        self._sync_slot_transcript_source(slot, session_id, tmux_name)
+        if sync_transcript_source:
+            self._sync_slot_transcript_source(slot, session_id, tmux_name)
         self._paint_slot_active_target(slot, session_id, tmux_name)
 
     def _sync_slot_transcript_source(
@@ -1296,7 +1299,8 @@ class App:
     def _set_active_target(self, session_id: str | None,
                            tmux_name: str | None, *,
                            mode_key: str | None = None,
-                           project_key: str | None = None) -> None:
+                           project_key: str | None = None,
+                           sync_transcript_source: bool = True) -> None:
         """Compatibility entry point for the currently exposed primary slot."""
         self._set_slot_active_target(
             self._primary_slot,
@@ -1304,6 +1308,7 @@ class App:
             tmux_name,
             mode_key=mode_key,
             project_key=project_key,
+            sync_transcript_source=sync_transcript_source,
         )
 
     def _set_active_tmux_target(
@@ -2104,10 +2109,19 @@ class App:
             }
             if slot is self._primary_slot:
                 self._set_active_target(
-                    session.session_id, None, **target_kwargs)
+                    session.session_id,
+                    None,
+                    sync_transcript_source=False,
+                    **target_kwargs,
+                )
             else:
                 self._set_slot_active_target(
-                    slot, session.session_id, None, **target_kwargs)
+                    slot,
+                    session.session_id,
+                    None,
+                    sync_transcript_source=False,
+                    **target_kwargs,
+                )
             if not self._show_attention_status(session.attention):
                 self._set_status(
                     f"≡ Previewing {session.display_title} (current history)")
@@ -2197,11 +2211,11 @@ class App:
         import sys as _sys
         mouse = self._less_mouse_flag
         slot = slot or self._agent_workspace().target
-        # Tail the last 2000 lines so large sessions appear instantly. Tailing
-        # drops the leading ``session_meta`` record, so a long Codex rollout
-        # would otherwise be auto-detected as Claude and render blank. Pass the
-        # format explicitly from SessionMeta.session_type so the parser doesn't
-        # have to guess from the first tailed record (#5).
+        # The renderer reads the last 2000 records itself so large sessions
+        # appear instantly without launching a separate ``tail`` process.
+        # This drops the leading ``session_meta`` record from long Codex
+        # rollouts, so pass the format explicitly from SessionMeta rather than
+        # asking the bounded input to auto-detect it (#5).
         fmt = "codex" if session_type == "codex" else "claude"
         path = shlex.quote(str(jsonl_path))
         python = shlex.quote(_sys.executable)
@@ -2210,9 +2224,8 @@ class App:
         # and suppress any user-configured input pre/postprocessors.
         less_env = ("LESSSECURE=1 LESSHISTFILE=- "
                     "LESSOPEN= LESSCLOSE=")
-        cmd = (f"tail -n 2000 {path} | "
-               f"{python} -m railmux.transcript --format {fmt} "
-               f"--preview-limit 2000 - | "
+        cmd = (f"{python} -m railmux.transcript --format {fmt} "
+               f"--preview-limit 2000 {path} | "
                f"{less_env} less -R +G {mouse}").rstrip()
         restore = slot.restore_state
         controller = getattr(self, "_railmux_pane_id", None)
@@ -2225,33 +2238,58 @@ class App:
                 f"{shlex.quote(controller)} -- "
                 f"{shlex.quote(restore_sequence)}"
             )
-        # In swap mode ``slot.pane_id`` is the real provider pane. Return it
-        # home before the destructive ``respawn-pane -k`` below; only the
-        # display placeholder may be replaced by the transcript viewer.
-        if not self._display_transport().prepare_preview(slot):
-            self._set_status(
-                "failed to return the agent home before transcript preview",
-                "error",
-            )
-            return False
-        self._sync_slot_transcript_source(slot, None, None)
-        if slot.pane_id and tmux_ctl.pane_alive(slot.pane_id):
+        # A preview-to-preview switch keeps the same Railmux-owned outer pane,
+        # whose provider and SSH transcript markers were already cleared by
+        # the first transition.  ``respawn-pane`` is itself the bounded
+        # liveness check, so do not launch redundant tmux clients on this hot
+        # path.  Entering preview from a live agent still uses the complete
+        # return-home identity transaction below.
+        replacing_preview = bool(
+            slot.in_history_mode
+            and slot.pane_id
+            and slot.agent_tmux_name is None
+            and slot.swap_state is None
+            and slot.transport_kind is DisplayTransportKind.NESTED
+        )
+        if replacing_preview:
+            assert slot.pane_id is not None
             if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
                 self._set_status("failed to respawn right pane for transcript")
                 return False
         else:
-            new_id = tmux_ctl.split_window_h(cmd, size_percent=70, detached=True)
-            if not new_id:
-                self._set_status("failed to create right pane for transcript")
+            # In swap mode ``slot.pane_id`` is the real provider pane. Return
+            # it home before the destructive ``respawn-pane -k`` below; only
+            # the display placeholder may be replaced by the viewer.
+            if not self._display_transport().prepare_preview(slot):
+                self._set_status(
+                    "failed to return the agent home before transcript preview",
+                    "error",
+                )
                 return False
-            slot.pane_id = new_id
-            self._set_railmux_focus(self._railmux_has_focus, force_border=True)
+            self._sync_slot_transcript_source(slot, None, None)
+            # prepare_preview already proved an existing pane immediately
+            # before this mutation.  A race now fails in respawn-pane rather
+            # than paying for a second process-wide list-panes query.
+            if slot.pane_id:
+                if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
+                    self._set_status("failed to respawn right pane for transcript")
+                    return False
+            else:
+                new_id = tmux_ctl.split_window_h(
+                    cmd, size_percent=70, detached=True)
+                if not new_id:
+                    self._set_status("failed to create right pane for transcript")
+                    return False
+                slot.pane_id = new_id
+                self._set_railmux_focus(
+                    self._railmux_has_focus, force_border=True)
         # The display pane is now showing a transcript, not an agent session.
         slot.agent_tmux_name = None
         slot.mode_key = self._current_mode_key()
-        self._set_divider_active(
-            not getattr(self, "_railmux_has_focus", True), force=True)
-        self._install_tmux_bindings()
+        if not replacing_preview:
+            self._set_divider_active(
+                not getattr(self, "_railmux_has_focus", True), force=True)
+            self._install_tmux_bindings()
         return True
 
     def _sync_sidebar_to_agent_project(self, tmux_name: str | None) -> None:

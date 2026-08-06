@@ -76,9 +76,9 @@ evidence = "Dev32 automation copies only bounded non-link dependency roots from 
 [[scenarios]]
 id = "WW-PREVIEW-OPEN"
 features = ["P04", "P05", "P06"]
-automation = ["tests/test_path_codec.py", "tests/test_codex_index.py", "tests/test_session_lease.py"]
+automation = ["tests/test_path_codec.py", "tests/test_codex_index.py", "tests/test_session_lease.py", "tests/test_transcript.py", "tests/test_focus_highlight.py", "tests/test_tmux_integration.py"]
 manual = "Preview, scroll, close, and open authenticated native Codex and Claude sessions, including sessions created outside Railmux."
-evidence = "2026-08-03 spike launched native Codex 0.146.0 and Claude Code 2.1.220 in MSYS tmux. The 2026-08-05 dev16 candidate passed real-MSYS holder transfer/release and a real shared-scratch two-host conflict test with immediate owner visibility; authenticated restore/preview remains manual."
+evidence = "2026-08-03 spike launched native Codex 0.146.0 and Claude Code 2.1.220 in MSYS tmux. The 2026-08-05 dev16 candidate passed real-MSYS holder transfer/release and a real shared-scratch two-host conflict test with immediate owner visibility. Dev33 automation reads a bounded direct-file tail without an external process, proves that repeat Preview performs one pane replacement without transport/marker/chrome revalidation, preserves the complete first live-to-preview boundary, and respawns two real transcript viewers in one isolated tmux pane without stale content. Authenticated native-provider preview remains manual."
 
 [[scenarios]]
 id = "WW-RESIZE-REFLOW"

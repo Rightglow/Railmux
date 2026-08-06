@@ -518,6 +518,17 @@ That evidence is the dev32 boundary: version-only upgrades take the bounded
 local dependency/payload path above, while the online installer remains a
 validated fallback rather than the default.
 
+Dev33 removes the remaining deterministic process amplification from repeated
+stopped-session Preview. After the first identity-pinned live-to-preview
+transition, the same Railmux-owned pane is replaced directly without repeated
+pane inventories, marker writes, or unchanged chrome/binding projection. The
+Python renderer reads the final 2,000 UTF-8 JSONL records backwards instead of
+starting a separate `tail` process. Unit coverage protects both the repeat
+fast path and the ordinary live-provider boundary; a real isolated tmux smoke
+respawns two different previews in the same pane and observes no stale first
+transcript. Windows Terminal click-to-first-preview timing remains a manual
+perceptual check.
+
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
 website remain unchanged until the manual checklist is complete.

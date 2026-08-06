@@ -160,6 +160,72 @@ def _require_tmux(minimum: tuple[int, int], feature: str) -> None:
         )
 
 
+def test_real_transcript_preview_respawns_one_owned_pane(
+    isolated_tmux, tmp_path,
+):
+    """Exercise the no-tail viewer and its repeat-preview tmux primitive."""
+    if shutil.which("less") is None:
+        pytest.skip("less is not installed")
+    _session_name, controller_pane, socket_path = isolated_tmux
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    first.write_text(
+        '{"type":"user","message":{"role":"user",'
+        '"content":"first-preview"}}\n',
+        encoding="utf-8",
+    )
+    second.write_text(
+        '{"type":"user","message":{"role":"user",'
+        '"content":"second-preview"}}\n',
+        encoding="utf-8",
+    )
+
+    def viewer(path: Path) -> str:
+        producer = shlex.join((
+            sys.executable,
+            "-m",
+            "railmux.transcript",
+            "--format",
+            "claude",
+            "--preview-limit",
+            "2000",
+            str(path),
+        ))
+        return (
+            f"{producer} | LESSSECURE=1 LESSHISTFILE=- "
+            "LESSOPEN= LESSCLOSE= less -R +G"
+        )
+
+    pane_id = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "split-window", "-d", "-h",
+            "-P", "-F", "#{pane_id}", "-t", controller_pane,
+            viewer(first),
+        ],
+        text=True,
+    ).strip()
+
+    def pane_contains(value: str) -> bool:
+        capture = subprocess.run(
+            ["tmux", "-S", socket_path, "capture-pane", "-p", "-t", pane_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return capture.returncode == 0 and value in capture.stdout
+
+    assert _wait_until(lambda: pane_contains("first-preview"))
+    subprocess.run(
+        [
+            "tmux", "-S", socket_path, "respawn-pane", "-k", "-t", pane_id,
+            viewer(second),
+        ],
+        check=True,
+    )
+    assert _wait_until(lambda: pane_contains("second-preview"))
+    assert not pane_contains("first-preview")
+
+
 def test_real_transparent_windows_relay_attaches_and_detaches(isolated_tmux):
     session_name, _pane_id, socket_path = isolated_tmux
     target = TmuxServerTarget(
