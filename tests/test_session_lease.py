@@ -198,6 +198,64 @@ def test_hold_cli_rejects_missing_inherited_lease_fd() -> None:
     assert result.stdout == b""
 
 
+def test_start_holder_rejects_a_changed_supplied_process_birth(
+    monkeypatch,
+) -> None:
+    claim = MagicMock()
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: "new-birth")
+    popen = MagicMock()
+    monkeypatch.setattr(session_lease.subprocess, "Popen", popen)
+
+    assert not session_lease.start_holder(
+        claim, pane_id="%9", pane_pid=42, process_start="old-birth")
+
+    claim.close.assert_called_once_with()
+    popen.assert_not_called()
+
+
+def test_app_waits_for_exact_new_pane_birth_before_transferring_lease(
+    monkeypatch,
+) -> None:
+    app = App.__new__(App)
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, "cc-session-a", "$9", "@9", False, 80, 24)
+    claim = MagicMock()
+    tokens = iter((None, "birth-42"))
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: pane)
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: next(tokens))
+    monkeypatch.setattr(app_mod.time, "sleep", lambda _seconds: None)
+    transfer = MagicMock(return_value=True)
+    monkeypatch.setattr(session_lease, "start_holder", transfer)
+
+    assert app._start_session_lease_holder(claim, pane)
+    transfer.assert_called_once_with(
+        claim, pane_id="%9", pane_pid=42, process_start="birth-42")
+    claim.close.assert_not_called()
+
+
+def test_app_lease_wait_fails_closed_if_new_pane_identity_changes(
+    monkeypatch,
+) -> None:
+    app = App.__new__(App)
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, "cc-session-a", "$9", "@9", False, 80, 24)
+    replaced = tmux_ctl.PaneIdentity(
+        "%9", 43, "cc-session-a", "$9", "@9", False, 80, 24)
+    claim = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: replaced)
+    token = MagicMock()
+    monkeypatch.setattr(session_lease, "process_start_token", token)
+    transfer = MagicMock()
+    monkeypatch.setattr(session_lease, "start_holder", transfer)
+
+    assert not app._start_session_lease_holder(claim, pane)
+    claim.close.assert_called_once_with()
+    token.assert_not_called()
+    transfer.assert_not_called()
+
+
 def test_running_entry_reacquires_after_its_holder_lock_disappears(
     monkeypatch, tmp_path,
 ) -> None:
@@ -239,6 +297,10 @@ def test_running_entry_reacquires_after_its_holder_lock_disappears(
     monkeypatch.setattr(session_lease, "acquire", acquire)
     start_holder = MagicMock(return_value=True)
     monkeypatch.setattr(session_lease, "start_holder", start_holder)
+    token = "birth-local"
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: pane)
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: token)
 
     assert app._ensure_running_session_lease(running, session)
 
@@ -247,7 +309,8 @@ def test_running_entry_reacquires_after_its_holder_lock_disappears(
 
     acquire.assert_called_once_with(tmp_path, "claude", ["session-a"])
     start_holder.assert_called_once_with(
-        claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid)
+        claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid,
+        process_start=token)
 
 
 def test_running_lease_failure_stays_visible_on_its_row(

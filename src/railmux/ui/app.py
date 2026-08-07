@@ -337,6 +337,8 @@ _TMUX_LEVEL_STYLE = {
 # How often the Running pane is re-ordered by recency.  Re-sorting on every poll
 # would make rows jump under the cursor mid-click, so it's throttled to this.
 _RUNNING_SORT_INTERVAL = 60.0
+_SESSION_LEASE_IDENTITY_SETTLE_S = 1.0
+_SESSION_LEASE_IDENTITY_POLL_S = 0.025
 
 # Cross-platform identity stamp stored on each detached agent tmux session.
 # Unlike the short-lived runtime state file, a session option lives exactly as
@@ -4808,8 +4810,9 @@ class App:
         """Whether an owned agent still has a live process-bearing pane.
 
         In swap mode the home session contains only the placeholder, so its
-        existence is not proof that the agent survived. In nested mode the
-        agent remains in its own session and the session identity is enough.
+        existence is not proof that the agent survived. In nested mode a
+        ``remain-on-exit`` session can likewise survive its provider, so only
+        a unique non-dead process-bearing pane counts as live.
         """
         running = self._by_tmux(tmux_name)
         if running is not None and running.is_legacy:
@@ -4826,10 +4829,59 @@ class App:
         if real_pane is not None:
             if server is not None:
                 return real_pane in server.panes
-            return tmux_ctl.pane_alive(real_pane)
+            return tmux_ctl.pane_process_alive(real_pane)
         if server is not None:
             return tmux_name in server.sessions
-        return tmux_ctl.session_exists(tmux_name)
+        topology = tmux_ctl.session_topology(tmux_name)
+        return bool(
+            topology is not None and topology.single_live_pane is not None
+        )
+
+    @staticmethod
+    def _same_live_pane(
+        expected: tmux_ctl.PaneIdentity,
+        current: tmux_ctl.PaneIdentity | None,
+    ) -> bool:
+        return bool(
+            current is not None
+            and not current.dead
+            and current.pane_id == expected.pane_id
+            and current.pane_pid == expected.pane_pid
+            and current.session_id == expected.session_id
+            and current.session_name == expected.session_name
+            and current.window_id == expected.window_id
+        )
+
+    def _start_session_lease_holder(
+        self,
+        claim: session_lease.LeaseClaim,
+        pane: tmux_ctl.PaneIdentity,
+    ) -> bool:
+        """Transfer a lease after a just-respawned pane publishes its birth.
+
+        MSYS2 can expose the exact tmux pane before its process-birth token is
+        queryable. Retry only while every immutable pane field still matches;
+        a disappeared, dead, moved, or replaced pane closes the claim instead
+        of weakening the cross-host identity boundary.
+        """
+        deadline = time.monotonic() + _SESSION_LEASE_IDENTITY_SETTLE_S
+        while True:
+            current = tmux_ctl.pane_identity(pane.pane_id)
+            if not self._same_live_pane(pane, current):
+                claim.close()
+                return False
+            process_start = session_lease.process_start_token(pane.pane_pid)
+            if process_start is not None:
+                return session_lease.start_holder(
+                    claim,
+                    pane_id=pane.pane_id,
+                    pane_pid=pane.pane_pid,
+                    process_start=process_start,
+                )
+            if time.monotonic() >= deadline:
+                claim.close()
+                return False
+            time.sleep(_SESSION_LEASE_IDENTITY_POLL_S)
 
     def _recover_unrepresented_displayed_agents(
         self, server: tmux_ctl.ServerSnapshot | None,
@@ -5049,8 +5101,8 @@ class App:
                 if attempt < 2:
                     time.sleep(0.05)
             pane = topology.single_live_pane if topology is not None else None
-            if pane is None or not session_lease.start_holder(
-                    lease_claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid):
+            if pane is None or not self._start_session_lease_holder(
+                    lease_claim, pane):
                 # ``start_holder`` closes the claim on its own failure.  A
                 # missing topology never called it, so close explicitly.
                 lease_claim.close()
@@ -9296,11 +9348,7 @@ class App:
             except session_lease.LeaseError:
                 return finish("shared locking is unavailable")
             def _start_holder() -> None:
-                session_lease.start_holder(
-                    claim,
-                    pane_id=identity.pane_id,
-                    pane_pid=identity.pane_pid,
-                )
+                self._start_session_lease_holder(claim, identity)
 
             repair = threading.Thread(
                 target=_start_holder,
@@ -9477,7 +9525,8 @@ class App:
         real_pane = self._display_transport().displayed_real_pane(
             running.tmux_name)
         if real_pane is not None:
-            return tmux_ctl.pane_identity(real_pane)
+            identity = tmux_ctl.pane_identity(real_pane)
+            return identity if identity is not None and not identity.dead else None
         topology = tmux_ctl.session_topology(running.tmux_name)
         return topology.single_live_pane if topology is not None else None
 
@@ -9692,10 +9741,11 @@ class App:
                         candidate = matches[0]  # exact
                     else:
                         continue  # not yet correlatable → wait, don't guess
-                # else: open_ids is None → no procfs (macOS) → heuristic below.
+                # else: exact FD correlation is unavailable (macOS or MSYS2's
+                # partial proc projection) → the fenced heuristic below.
             if candidate is None:
                 # Heuristic fallback, used only where exact correlation is
-                # impossible (no procfs, e.g. macOS) or for Claude placeholders.
+                # impossible (macOS/MSYS2) or for Claude placeholders.
                 # Bind ONLY when exactly one new rollout appeared; if several
                 # did, a concurrent codex/railmux is writing the same cwd and we
                 # can't tell which is ours — leave the placeholder rather than
@@ -9776,10 +9826,11 @@ class App:
         placeholder's tmux pane (or its descendants) currently holds open under
         the codex sessions dir — the filename UUID is the placeholder's exact
         session_id. Returns ``None`` ONLY when correlation is impossible on this
-        platform (no procfs, e.g. macOS) → caller may use the heuristic. On
-        procfs it returns a set (EMPTY while codex/pane isn't ready yet) → caller
-        must WAIT, not fall back. Best-effort: any failure degrades to ``None``
-        (heuristic) rather than raising into the UI."""
+        platform (macOS, or MSYS2's partial proc projection) → caller may use
+        the heuristic. With authoritative Linux procfs it returns a set (EMPTY
+        while codex/pane isn't ready yet) → caller must WAIT, not fall back.
+        Best-effort: failures retain that platform boundary instead of raising
+        into the UI."""
         try:
             sessions_dir = self._codex_home_path() / "sessions"
             # Swap display moves the real provider pane out of its named home

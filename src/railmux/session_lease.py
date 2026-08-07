@@ -412,10 +412,20 @@ def owner_matches_pane(
     )
 
 
-def start_holder(claim: LeaseClaim, *, pane_id: str, pane_pid: int) -> bool:
+def start_holder(
+    claim: LeaseClaim,
+    *,
+    pane_id: str,
+    pane_pid: int,
+    process_start: str | None = None,
+) -> bool:
     """Transfer one acquired claim to an independent pane-lifetime holder."""
-    token = process_start_token(pane_pid)
-    if not pane_id.startswith("%") or token is None:
+    token = process_start or process_start_token(pane_pid)
+    if (
+        not pane_id.startswith("%")
+        or token is None
+        or process_start_token(pane_pid) != token
+    ):
         claim.close()
         return False
     argv = [

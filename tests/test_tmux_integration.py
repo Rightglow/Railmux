@@ -1512,6 +1512,42 @@ def test_real_exact_kill_refuses_reused_session_name(isolated_tmux):
     assert tmux_ctl.kill_session(holder.session_name)
 
 
+def test_real_snapshot_and_exact_reap_treat_dead_pane_as_stopped(
+    isolated_tmux,
+):
+    holder, reason = tmux_ctl.create_detached_holder("railmux-dead-provider")
+    assert holder is not None, reason
+    subprocess.run(
+        [
+            "tmux", "set-window-option", "-t", holder.pane_id,
+            "remain-on-exit", "on",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "tmux", "respawn-pane", "-k", "-t", holder.pane_id,
+            "sh -c 'exit 0'",
+        ],
+        check=True,
+    )
+    assert _wait_until(
+        lambda: (
+            (identity := tmux_ctl.pane_identity(holder.pane_id)) is not None
+            and identity.dead
+        )
+    )
+    dead = tmux_ctl.pane_identity(holder.pane_id)
+    assert dead is not None and dead.dead
+
+    snapshot = tmux_ctl.server_snapshot()
+    assert snapshot is not None
+    assert dead.session_name not in snapshot.sessions
+    assert dead.pane_id not in snapshot.panes
+    assert tmux_ctl.kill_pane_identity(dead)
+    assert tmux_ctl.pane_identity(dead.pane_id) is None
+
+
 def test_real_tmux_session_split_attach_persistence_and_styles(isolated_tmux):
     display_session, primary_pane, socket_path = isolated_tmux
     agent_session = "railmux-smoke-agent"

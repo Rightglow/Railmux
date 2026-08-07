@@ -193,7 +193,13 @@ def test_stale_preview_callback_rechecks_live_running_session(monkeypatch):
     app._has_less = True
     attached = []
     previewed = []
-    monkeypatch.setattr(tmux_ctl, "session_exists", lambda _name: True)
+    live = tmux_ctl.PaneIdentity(
+        "%9", 42, "cx-live", "$9", "@9", False, 80, 24)
+    monkeypatch.setattr(
+        tmux_ctl, "session_topology",
+        lambda _name: tmux_ctl.SessionTopology(
+            "cx-live", "$9", 0, ("@9",), (live,)),
+    )
     monkeypatch.setattr(
         app, "_on_running_select",
         lambda entry, **kwargs: attached.append((entry.tmux_name, kwargs)),
@@ -318,7 +324,7 @@ def test_agent_session_liveness_uses_displayed_swap_pane(monkeypatch):
         displayed_real_pane=lambda _name: "%real",
     )
     monkeypatch.setattr(app, "_display_transport", lambda: transport)
-    monkeypatch.setattr(tmux_ctl, "pane_alive", lambda _pane: False)
+    monkeypatch.setattr(tmux_ctl, "pane_process_alive", lambda _pane: False)
     monkeypatch.setattr(tmux_ctl, "session_exists", lambda _name: True)
 
     assert not app._agent_session_alive("cx-placeholder-home")

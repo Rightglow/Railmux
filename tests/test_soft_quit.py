@@ -2124,8 +2124,14 @@ def test_restore_portable_agent_by_validated_session_id(monkeypatch):
     app._running[session_id] = running
     app._attach_in_right_pane = MagicMock(return_value=True)
     app._set_status = MagicMock()
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, running.tmux_name, "$9", "@9", False, 80, 24)
     monkeypatch.setattr(
-        "railmux.ui.app.tmux_ctl.session_exists", lambda name: name == running.tmux_name)
+        "railmux.ui.app.tmux_ctl.session_topology",
+        lambda name: tmux_ctl.SessionTopology(
+            name, "$9", 0, ("@9",), (pane,),
+        ) if name == running.tmux_name else None,
+    )
 
     restored = app._restore_right_pane({
         "right_kind": "agent",
@@ -3334,6 +3340,19 @@ def test_correlate_codex_rollout_fails_closed_without_config(monkeypatch):
     assert app._correlate_codex_rollout(r) == set()
 
 
+def test_msys_proc_projection_uses_fenced_placeholder_fallback(monkeypatch):
+    """MSYS /proc cannot identify FDs opened by native Windows Codex."""
+    monkeypatch.setattr(tmux_ctl.sys, "platform", "msys")
+    monkeypatch.setattr(tmux_ctl.os.path, "isdir", lambda _path: True)
+    app = App.__new__(App)
+    running = _Running(
+        key="__new__-tok-1", tmux_name="cx-x", label="p/(new)",
+        session_type="codex",
+    )
+
+    assert app._correlate_codex_rollout(running) is None
+
+
 def test_correlate_codex_rollout_follows_swap_displayed_real_pane(monkeypatch):
     """A swap leaves only an inert placeholder in the named home session."""
     session_id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -3366,6 +3385,25 @@ def test_correlate_codex_rollout_follows_swap_displayed_real_pane(monkeypatch):
     assert app._correlate_codex_rollout(running) == {session_id}
     process_probe.assert_called_once_with(4242, sessions_dir)
     home_probe.assert_not_called()
+
+
+def test_codex_identity_rejects_dead_displayed_provider(monkeypatch):
+    app = App.__new__(App)
+    running = _Running(
+        key="session-a", tmux_name="cx-session-a", label="p/session",
+        session_type="codex",
+    )
+    manager = MagicMock()
+    manager.displayed_real_pane.return_value = "%42"
+    app._display_transport_manager = manager
+    dead = tmux_ctl.PaneIdentity(
+        "%42", 42, "railmux", "$1", "@1", True, 80, 24)
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: dead)
+    topology = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "session_topology", topology)
+
+    assert app._codex_real_pane_identity(running) is None
+    topology.assert_not_called()
 
 
 def test_launch_snapshots_pre_existing_ids(monkeypatch):

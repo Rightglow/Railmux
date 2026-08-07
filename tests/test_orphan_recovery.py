@@ -156,6 +156,9 @@ def test_resume_launch_transfers_cross_host_claim_to_exact_provider_pane(
     )
     transferred = MagicMock(return_value=True)
     monkeypatch.setattr(session_lease, "start_holder", transferred)
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: pane)
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: "birth-9")
     claim = MagicMock(session_ids=("session-a",))
 
     assert app._launch(
@@ -169,7 +172,8 @@ def test_resume_launch_transfers_cross_host_claim_to_exact_provider_pane(
     )
 
     transferred.assert_called_once_with(
-        claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid)
+        claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid,
+        process_start="birth-9")
     assert app._running["session-a"].lease_session_ids == frozenset({"session-a"})
 
 

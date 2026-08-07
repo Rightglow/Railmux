@@ -1290,16 +1290,27 @@ class AgentDisplayTransport:
         if slot is None or slot.swap_state is None:
             return None
         identity = tmux_ctl.pane_identity(slot.swap_state.agent_pane_id)
-        return identity.pane_pid if identity is not None else None
+        return (
+            identity.pane_pid
+            if identity is not None and not identity.dead else None
+        )
 
     def reap_dead_display(self, slot: AgentSlot) -> str | None:
         state = slot.swap_state
-        if state is None or tmux_ctl.pane_identity(state.agent_pane_id) is not None:
+        if state is None:
+            return None
+        real = tmux_ctl.pane_identity(state.agent_pane_id)
+        if real is not None and not real.dead:
+            return None
+        if real is not None and not tmux_ctl.kill_pane_identity(real):
+            # Keep the journal and model intact when the exact dead pane could
+            # not be removed. Recovery remains marker-authorized on a retry.
             return None
         topology = tmux_ctl.session_topology(state.agent_tmux_name)
         if (topology is not None and topology.single_live_pane is not None
                 and topology.single_live_pane.pane_id == state.placeholder_pane_id):
-            tmux_ctl.kill_session(state.agent_tmux_name)
+            if not tmux_ctl.kill_pane_identity(topology.single_live_pane):
+                return None
         _clear_markers(state, slot.key)
         agent = state.agent_tmux_name
         slot.clear_display()

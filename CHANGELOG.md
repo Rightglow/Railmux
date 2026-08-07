@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Treat a provider's normal Codex `/exit`, Claude Code `exit`, or equivalent
+  process exit as one provider-neutral lifecycle transition. Exact dead
+  `remain-on-exit` panes are reaped before Running/lease validation, the display
+  returns to the established single/dual-layout state, and saved provider
+  history remains untouched.
+- Let managed Windows promote a new Codex `(new)` entry after exactly one
+  post-launch rollout appears. MSYS2's projected `/proc` is no longer treated
+  as authority for file descriptors opened by native Windows Codex; complete
+  pre-launch exclusion and ambiguity refusal remain mandatory.
+- Retry cross-host lease transfer only while a just-respawned Windows provider
+  retains the same immutable pane identity, closing the claim on replacement
+  or timeout. This avoids a process-birth publication race without weakening
+  shared-session single-writer protection.
 - Tell managed Windows Terminal tmux clients—including the server-session PTY
   bridge—to use DEC synchronized output. Codex active-turn redraws now present
   only completed frames instead of exposing transient hardware-cursor

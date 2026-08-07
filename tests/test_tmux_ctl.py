@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 import railmux.tmux_ctl as tmux_ctl
 from railmux.tmux_ctl import (
     _bindings_are_tmux_defaults,
@@ -52,6 +54,44 @@ def test_pane_process_alive_rejects_dead_remain_on_exit_pane():
 
         run.return_value = MagicMock(returncode=0, stdout="0\n")
         assert tmux_ctl.pane_process_alive("%7") is True
+
+
+def test_kill_pane_identity_accepts_an_exact_dead_pane():
+    pane = tmux_ctl.PaneIdentity(
+        "%7", 42, "cc-session", "$7", "@7", True, 80, 24)
+    with patch.object(tmux_ctl, "pane_identity", return_value=pane), \
+         patch.object(tmux_ctl.subprocess, "check_call") as check:
+        assert tmux_ctl.kill_pane_identity(pane)
+
+    check.assert_called_once_with(
+        ["tmux", "kill-pane", "-t", "%7"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def test_kill_pane_identity_rejects_a_reused_pane_id():
+    expected = tmux_ctl.PaneIdentity(
+        "%7", 42, "cc-session", "$7", "@7", True, 80, 24)
+    replacement = tmux_ctl.PaneIdentity(
+        "%7", 43, "other", "$8", "@8", False, 80, 24)
+    with patch.object(tmux_ctl, "pane_identity", return_value=replacement), \
+         patch.object(tmux_ctl.subprocess, "check_call") as check:
+        assert not tmux_ctl.kill_pane_identity(expected)
+
+    check.assert_not_called()
+
+
+def test_kill_pane_identity_never_kills_a_revived_live_pane():
+    expected = tmux_ctl.PaneIdentity(
+        "%7", 42, "cc-session", "$7", "@7", True, 80, 24)
+    revived = tmux_ctl.PaneIdentity(
+        "%7", 42, "cc-session", "$7", "@7", False, 80, 24)
+    with patch.object(tmux_ctl, "pane_identity", return_value=revived), \
+         patch.object(tmux_ctl.subprocess, "check_call") as check:
+        assert not tmux_ctl.kill_pane_identity(expected)
+
+    check.assert_not_called()
 
 
 def test_rollout_uuid_from_path_requires_canonical_filename():
@@ -154,20 +194,25 @@ def test_copy_to_clipboard_rejects_unsafe_or_unbounded_payload():
 
 
 def test_server_snapshot_collects_sessions_and_panes():
-    output = "cc-one\t%1\t101\ncc-one\t%2\t102\ncc-two\t%3\t201\n"
+    output = (
+        "cc-one\t%1\t101\t0\n"
+        "cc-one\t%2\t102\t1\n"
+        "cc-two\t%3\t201\t0\n"
+        "cc-dead\t%4\t301\t1\n"
+    )
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output(output) as call:
         snapshot = server_snapshot()
 
     assert snapshot is not None
     assert snapshot.sessions == frozenset({"cc-one", "cc-two"})
-    assert snapshot.panes == frozenset({"%1", "%2", "%3"})
+    assert snapshot.panes == frozenset({"%1", "%3"})
     assert snapshot.session_pids == (("cc-one", 101), ("cc-two", 201))
     assert snapshot.pane_pid_for("cc-one") == 101
     assert snapshot.pane_pid_for("missing") is None
     assert call.call_args.args[0] == [
         "tmux", "list-panes", "-a", "-F",
-        "#{session_name}\t#{pane_id}\t#{pane_pid}",
+        "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}",
     ]
 
 
@@ -175,6 +220,26 @@ def test_server_snapshot_rejects_malformed_output():
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output("cc-one %1\n"):
         assert server_snapshot() is None
+
+
+def test_server_snapshot_rejects_unknown_dead_state():
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         _mock_check_output("cc-one\t%1\t101\tmaybe\n"):
+        assert server_snapshot() is None
+
+
+@pytest.mark.parametrize(
+    ("platform", "directory", "expected"),
+    (("linux", True, True), ("msys", True, False), ("darwin", True, False),
+     ("linux", False, False)),
+)
+def test_proc_fs_authority_is_linux_only(
+    monkeypatch, platform, directory, expected,
+):
+    monkeypatch.setattr(tmux_ctl.sys, "platform", platform)
+    monkeypatch.setattr(tmux_ctl.os.path, "isdir", lambda _path: directory)
+
+    assert tmux_ctl.proc_fs_available() is expected
 
 
 def test_server_snapshot_returns_none_when_tmux_probe_fails():

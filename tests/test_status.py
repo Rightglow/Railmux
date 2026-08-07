@@ -4,6 +4,7 @@ import os
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import urwid
@@ -509,18 +510,49 @@ def test_refresh_snapshot_prunes_dead_targets(app, monkeypatch):
     assert killed == ["%9"]
 
 
+@pytest.mark.parametrize("session_type", ("claude", "codex"))
+def test_refresh_reaps_normal_provider_exit_before_lease_validation(
+    app, monkeypatch, session_type,
+):
+    """A clean /exit is removal, not a missing-identity lease warning."""
+    a, _Running = app
+    a._running[_UID] = _Running(
+        key=_UID, tmux_name="cc-exited", label="project/session",
+        session_type=session_type,
+    )
+    transport = a._display_transport()
+    primary = a._agent_workspace().primary
+    monkeypatch.setattr(
+        transport,
+        "reap_dead_display",
+        lambda slot: "cc-exited" if slot is primary else None,
+    )
+    lease = MagicMock()
+    monkeypatch.setattr(a, "_ensure_running_session_lease", lease)
+
+    a._refresh()
+
+    assert _UID not in a._running
+    lease.assert_not_called()
+
+
 def test_refresh_falls_back_when_snapshot_is_unavailable(app, monkeypatch):
     a, _Running = app
     a._running[_UID] = _Running(key=_UID, tmux_name="cc-x", label="l")
     a._right_pane_id = "%9"
     a._right_pane_claude = "cc-x"
-    session_calls = []
+    topology_calls = []
     pane_calls = []
     monkeypatch.setattr(tmux_ctl, "server_snapshot", lambda: None)
     monkeypatch.setattr(
         tmux_ctl,
-        "session_exists",
-        lambda name: session_calls.append(name) or True,
+        "session_topology",
+        lambda name: topology_calls.append(name) or tmux_ctl.SessionTopology(
+            name, "$9", 0, ("@9",), (
+                tmux_ctl.PaneIdentity(
+                    "%8", 42, name, "$9", "@9", False, 80, 24),
+            ),
+        ),
     )
     monkeypatch.setattr(
         tmux_ctl,
@@ -530,7 +562,7 @@ def test_refresh_falls_back_when_snapshot_is_unavailable(app, monkeypatch):
 
     a._refresh()
 
-    assert session_calls == ["cc-x", "cc-x"]
+    assert topology_calls == ["cc-x", "cc-x"]
     assert pane_calls == ["%9"]
 
 

@@ -709,10 +709,13 @@ a marker whose live immutable tmux objects and supported mode validate. A live
 different outer owner fences concurrent Railmux windows; if that exact owner
 pane is absent from a successful full-server snapshot, a new instance may take
 over only after a crash-safe compare/write/readback owner claim. Snapshot or
-claim failure stays unresolved, and concurrent claimants cannot both adopt. Linux
-resolution requires descendant/open-rollout correlation where available; a
-procfs error is ambiguity, not permission to guess. Without exact correlation,
-only one candidate fenced by a complete pre-launch snapshot may resolve.
+claim failure stays unresolved, and concurrent claimants cannot both adopt.
+Actual Linux procfs requires descendant/open-rollout correlation where
+available; a procfs error is ambiguity, not permission to guess. MSYS2's
+projected `/proc` cannot enumerate descriptors opened by native Windows Codex
+and is therefore not correlation authority. Like macOS, managed Windows may
+resolve without exact correlation only when a complete pre-launch exclusion
+leaves exactly one new candidate; zero or multiple candidates stay unresolved.
 
 Resolution commits the marker's UUID before changing the in-memory registry,
 so interruption is idempotent. Until that commit, attach and stop callbacks
@@ -744,8 +747,13 @@ while an unavailable lock service fails resume closed.
 The acquired descriptors transfer to a small independent holder tied to the
 exact provider pane PID and process-birth token. They therefore survive UI
 Soft Quit, but are released by the operating system when that pane exits or the
-holder dies. New sessions acquire their UUID immediately when placeholder
-resolution proves it. A live UI periodically revalidates the advisory locks
+holder dies. A newly respawned MSYS2 pane may publish before its native process
+birth token becomes queryable, so transfer may retry for one bounded interval
+only while pane ID, PID, session ID/name, and window ID remain unchanged and
+non-dead. Replacement, disappearance, timeout, or a changed birth token closes
+the claim rather than weakening identity. New sessions acquire their UUID
+immediately when placeholder resolution proves it. A live UI periodically
+revalidates the advisory locks
 rather than trusting its in-memory lease list, so it can replace an
 unexpectedly dead holder while the exact provider pane remains alive; a sticky
 Running-row warning remains visible until protection is restored. Confirmed
@@ -960,8 +968,15 @@ the Running entry only after the exact tmux identity is confirmed dead. A
 failed kill therefore leaves a truthful empty display slot and a still-live
 Running entry that can be reopened; it must not collapse an explicitly chosen
 dual layout. Natural provider exit follows the same visible-layout invariant:
-the exited slot becomes the branded empty surface, while the other slot keeps
-its position and Target remains on the same numbered pane.
+single layout returns to the full-width sidebar, while a dual layout rebuilds
+the exited slot as the branded empty surface and keeps the other slot in place.
+Tmux
+`remain-on-exit` is diagnostic retention, not liveness: a server snapshot
+excludes dead panes and dead-only sessions, and swap recovery kills a dead pane
+only after its full immutable identity still matches. Running and its lease
+warning disappear before the subsequent status pass; provider histories are
+not changed. This path is provider-neutral and covers normal Codex, Claude Code,
+and shell-level exits on POSIX and managed Windows.
 
 Confirmed deletion is split at that same ownership boundary. The Urwid thread
 closes the confirmation, paints a durable bounded
@@ -1465,7 +1480,10 @@ ownership from cwd, title, or rollout recency. Where procfs is unavailable or
 the probe fails, the parent rollout remains the status authority.
 
 New-session placeholder resolution follows that same swap-aware real-pane
-identity. Once the exact rollout becomes visible in the pinned index
+identity. On actual Linux, rollout-FD correlation is authoritative when
+available; MSYS2's projected procfs is deliberately non-authoritative for a
+native Windows provider and uses the fenced single-new-candidate fallback.
+Once the exact rollout becomes visible in the pinned index
 generation, its title, provider status, attention, and activity timestamp are
 promoted to Running together and that one-time identity transition may bypass
 the ordinary reorder throttle. Promotion retains the current Projects-pane

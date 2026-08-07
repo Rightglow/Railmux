@@ -263,11 +263,13 @@ def in_tmux() -> bool:
 
 
 def server_snapshot() -> ServerSnapshot | None:
-    """Return all session names and pane IDs using one tmux process.
+    """Return session names and pane IDs that still own live processes.
 
     None means the snapshot was unavailable or malformed. Callers can then
     fall back to targeted probes instead of treating a transient tmux failure
-    as an empty server and pruning live state.
+    as an empty server and pruning live state. A ``remain-on-exit`` pane is a
+    diagnostic shell corpse, not a running provider, so it is deliberately
+    excluded together with a session that contains no other live pane.
     """
     if not in_tmux():
         return None
@@ -275,7 +277,7 @@ def server_snapshot() -> ServerSnapshot | None:
         out = subprocess.check_output(
             [
                 "tmux", "list-panes", "-a", "-F",
-                "#{session_name}\t#{pane_id}\t#{pane_pid}",
+                "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}",
             ],
             stderr=subprocess.DEVNULL,
         ).decode()
@@ -286,14 +288,18 @@ def server_snapshot() -> ServerSnapshot | None:
     panes: set[str] = set()
     session_pids: dict[str, int] = {}
     for line in out.splitlines():
-        fields = line.split("\t", 2)
-        if len(fields) != 3 or not all(fields):
+        fields = line.split("\t", 3)
+        if len(fields) != 4 or not all(fields):
             return None
-        session_name, pane_id, raw_pid = fields
+        session_name, pane_id, raw_pid, pane_dead = fields
+        if pane_dead not in {"0", "1"}:
+            return None
         try:
             pane_pid = int(raw_pid)
         except ValueError:
             return None
+        if pane_dead == "1":
+            continue
         sessions.add(session_name)
         panes.add(pane_id)
         session_pids.setdefault(session_name, pane_pid)
@@ -387,9 +393,12 @@ def pane_pid_for_session(session_name: str) -> int | None:
 def proc_fs_available() -> bool:
     """True when a Linux-style ``/proc`` with fd symlinks is present.
 
-    Correlation (#12) reads ``/proc/<pid>/fd/*``; macOS and other platforms
-    without procfs return False so callers fall back to the heuristic."""
-    return os.path.isdir("/proc")
+    MSYS2 projects a ``/proc`` tree, but it cannot enumerate file descriptors
+    held by the native Windows Codex process with Linux semantics. Treat only
+    Linux procfs as rollout-correlation authority; macOS and managed Windows
+    use the existing fenced single-candidate fallback.
+    """
+    return sys.platform.startswith("linux") and os.path.isdir("/proc")
 
 
 def descendant_pids(pid: int) -> list[int]:
@@ -3662,6 +3671,29 @@ def kill_session_identity(identity: PaneIdentity) -> bool:
         subprocess.check_call(
             ["tmux", "kill-session", "-t", identity.session_id],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def kill_pane_identity(identity: PaneIdentity) -> bool:
+    """Kill one exact pane, including a verified remain-on-exit corpse."""
+    current = pane_identity(identity.pane_id)
+    if (
+        current is None
+        or current.pane_pid != identity.pane_pid
+        or current.session_id != identity.session_id
+        or current.session_name != identity.session_name
+        or current.window_id != identity.window_id
+        or current.dead != identity.dead
+    ):
+        return False
+    try:
+        subprocess.check_call(
+            ["tmux", "kill-pane", "-t", identity.pane_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         return True
     except (OSError, subprocess.CalledProcessError):

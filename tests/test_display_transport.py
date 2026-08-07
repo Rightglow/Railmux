@@ -85,6 +85,7 @@ class FakeTmux:
             "swap_panes": self.swap_panes,
             "kill_session": self.kill_session,
             "kill_pane": self.kill_pane,
+            "kill_pane_identity": self.kill_pane_identity,
             "new_detached_session": self.new_detached_session,
             "select_pane": lambda _pane: True,
             "session_ids": lambda: frozenset(
@@ -260,6 +261,19 @@ class FakeTmux:
             del self.sessions[name]
         return True
 
+    def kill_pane_identity(self, identity):
+        current = self.panes.get(identity.pane_id)
+        if (
+            current is None
+            or current.pane_pid != identity.pane_pid
+            or current.session_id != identity.session_id
+            or current.session_name != identity.session_name
+            or current.window_id != identity.window_id
+            or current.dead != identity.dead
+        ):
+            return False
+        return self.kill_pane(identity.pane_id)
+
     def new_detached_session(self, name, _command, env=None):
         if name in self.sessions:
             return False, "already exists"
@@ -383,6 +397,71 @@ def test_successful_swap_out_and_home(rig):
     assert workspace.primary.swap_state is None
     assert not fake.window_options
     assert "railmux-keep-1" in fake.killed_sessions
+
+
+def test_reap_normal_provider_exit_clears_exact_swap_state(rig):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    state = workspace.primary.swap_state
+    assert state is not None
+    fake.panes[state.agent_pane_id] = replace(
+        fake.panes[state.agent_pane_id], dead=True)
+    fake.dead_panes.add(state.agent_pane_id)
+
+    assert manager.reap_dead_display(workspace.primary) == "agent-a"
+
+    assert workspace.primary.swap_state is None
+    assert workspace.primary.agent_tmux_name is None
+    assert state.agent_pane_id not in fake.panes
+    assert "agent-a" not in fake.sessions
+
+
+def test_reap_live_provider_preserves_swap_state(rig):
+    _fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    state = workspace.primary.swap_state
+
+    assert manager.reap_dead_display(workspace.primary) is None
+    assert workspace.primary.swap_state is state
+
+
+def test_reap_dead_provider_keeps_journal_if_exact_kill_fails(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    state = workspace.primary.swap_state
+    assert state is not None
+    fake.panes[state.agent_pane_id] = replace(
+        fake.panes[state.agent_pane_id], dead=True)
+    monkeypatch.setattr(
+        transport_mod.tmux_ctl, "kill_pane_identity", lambda _pane: False)
+
+    assert manager.reap_dead_display(workspace.primary) is None
+    assert workspace.primary.swap_state is state
+    assert state.agent_pane_id in fake.panes
+    assert "agent-a" in fake.sessions
+
+
+def test_reap_dead_provider_keeps_journal_if_home_identity_changes(
+    rig, monkeypatch,
+):
+    fake, workspace, manager = rig
+    assert manager.attach(workspace.primary, "agent-a").ok
+    state = workspace.primary.swap_state
+    assert state is not None
+    fake.panes[state.agent_pane_id] = replace(
+        fake.panes[state.agent_pane_id], dead=True)
+    original_kill = fake.kill_pane_identity
+    monkeypatch.setattr(
+        transport_mod.tmux_ctl,
+        "kill_pane_identity",
+        lambda pane: original_kill(pane) if pane.dead else False,
+    )
+
+    assert manager.reap_dead_display(workspace.primary) is None
+    assert workspace.primary.swap_state is state
+    assert "agent-a" in fake.sessions
 
 
 def test_exact_same_swap_target_is_one_snapshot_noop(rig):
