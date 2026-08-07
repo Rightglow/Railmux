@@ -141,9 +141,13 @@ jobs:
           .\.wheel-venv\Scripts\railmux --version
           .\.wheel-venv\Scripts\railmux --help
           $statusJson = .\.wheel-venv\Scripts\railmux runtime status --json
-          if ($LASTEXITCODE -ne 1) { throw "missing runtime status should exit 1" }
+          $statusExit = $LASTEXITCODE
+          if ($statusExit -ne 1) { throw "missing runtime status should exit 1" }
           $status = $statusJson | ConvertFrom-Json
           if ($status.status -ne "not_installed") { throw "unexpected runtime status" }
+          # GitHub's pwsh wrapper exits with a lingering native LASTEXITCODE.
+          # The expected status=1 was asserted above, so clear it after validation.
+          $global:LASTEXITCODE = 0
       - run: python -m pip install --no-deps -e .
       - name: Verify native bootstrap and contract tests
         run: >-
