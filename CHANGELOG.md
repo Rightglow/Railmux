@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc3] - 2026-08-07
+
 ### Fixed
 
 - Treat a provider's normal Codex `/exit`, Claude Code `exit`, or equivalent
@@ -2620,7 +2622,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc2...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc3...HEAD
+[0.4.0rc3]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc2...v0.4.0rc3
 [0.4.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc1...v0.4.0rc2
 [0.4.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev36...v0.4.0rc1
 [0.4.0.dev36]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev35...v0.4.0.dev36
