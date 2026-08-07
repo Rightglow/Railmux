@@ -1,3 +1,4 @@
+from pathlib import Path
 
 import pytest
 
@@ -188,3 +189,10 @@ def test_resolved_codex_home_makes_relative_path_absolute(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
     cfg = Config(codex_home="state/codex")
     assert cfg.resolved_codex_home() == tmp_path / "state" / "codex"
+
+
+def test_resolved_codex_home_translates_native_windows_path(monkeypatch):
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    cfg = Config(codex_home=r"D:\provider\codex")
+
+    assert cfg.resolved_codex_home() == Path("/d/provider/codex")

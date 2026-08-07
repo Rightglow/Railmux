@@ -1,3 +1,4 @@
 include tools/denested_transport_benchmark.py
 include tools/release_notes.py
 include tools/wheel_smoke.py
+include tools/windows_archive_smoke.py

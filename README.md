@@ -55,13 +55,37 @@ agents without losing their context.
 
 ## Quick start
 
-Railmux requires Python 3.9+, `tmux`, `less`, and Claude Code or Codex on
-`PATH`. The two agent CLIs are independent, so either one is enough to start.
+On macOS, Linux, and WSL, Railmux requires Python 3.9+, `tmux`, `less`, and
+Claude Code or Codex on `PATH`. Native Windows requires Python 3.10+ and a
+Windows-native Claude Code or Codex; Railmux manages its own private
+MSYS2/tmux/Python runtime. The two agent CLIs are independent, so either one is
+enough to start.
 
 ```bash
 pip install railmux
 # or: pip3 install railmux
 railmux
+```
+
+On native Windows, that same two-command flow is intentional. The first
+`railmux` launch explains and asks once before installing the private runtime,
+then opens the ordinary Railmux UI inside it. A fresh runtime uses roughly
+700 MB because it contains a complete MSYS2 compatibility base, tmux, and
+Python—not because the Railmux package itself is that large. Later Railmux
+versions reuse the same verified base while its pinned MSYS2 release is
+unchanged and install only a version-isolated application layer.
+
+The managed runtime does not replace Git Bash, adopt an existing MSYS2, edit
+the system `PATH`, or move provider data. Codex and Claude Code remain native
+Windows programs and continue using the same `%USERPROFILE%\.codex` and
+`%USERPROFILE%\.claude` directories as direct PowerShell launches. Useful
+read-only and maintenance commands are:
+
+```powershell
+railmux runtime status --json
+railmux runtime status --verify
+railmux runtime install --yes
+railmux runtime prune --dry-run
 ```
 
 If installation succeeds but your shell says `railmux: command not found`,
@@ -73,9 +97,9 @@ put the same line in `~/.zshrc` (macOS default) or `~/.bashrc`:
 export PATH="$(python3 -m site --user-base)/bin:$PATH"
 ```
 
-If `tmux` is missing, an interactive Railmux launch can offer to install it
-with Homebrew on macOS or `apt-get` on Debian/Ubuntu/WSL, always after showing
-the exact command and asking for confirmation. See
+On POSIX/WSL, if `tmux` is missing, an interactive Railmux launch can offer to
+install it with Homebrew on macOS or `apt-get` on Debian/Ubuntu/WSL, always
+after showing the exact command and asking for confirmation. See
 [FAQ 5](#5-pip-reports-externally-managed-environment) when system Python
 requires a virtual environment.
 
@@ -92,8 +116,8 @@ that host without opening or resizing its tmux workspace. See
 [Configuration](#configuration) for the complete interface.
 
 If ordinary SSH cannot keep up with full-screen redraws, install Railmux on
-your local macOS, Linux, or Windows WSL environment and use its responsive,
-locally cached SSH display:
+your local macOS, Linux, WSL, or native Windows environment and use its
+responsive, locally cached SSH display:
 
 ```bash
 railmux ssh your-server
@@ -101,7 +125,7 @@ railmux ssh your-server
 
 The local machine needs an OpenSSH-compatible `ssh` executable on `PATH`;
 Railmux checks this before entering its full-screen display. macOS, most Linux
-distributions, and Windows WSL normally include one.
+distributions, WSL, and current Windows installations normally provide one.
 
 For several SSH options, use a single quoted group, for example
 `railmux ssh your-server --ssh-args='-J jump-host -p 2222'`.
@@ -119,6 +143,14 @@ preflight. Multiple
 terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
 for focus and layout limits.
 
+A Linux or macOS client can also connect to an OpenSSH-enabled Windows account
+with `railmux ssh --remote-platform windows USER@HOST`. That Windows account
+must already have the matching Railmux package and managed runtime installed;
+Railmux deliberately does not bootstrap or repair the Windows runtime through
+SSH. Automatic mode can detect the same direct launcher, but the explicit
+platform avoids an incompatible POSIX probe and a possible second password
+prompt. Arbitrary user-owned MSYS2 installations are not remote targets.
+
 ## Controls
 
 ### Mouse
@@ -129,7 +161,8 @@ for focus and layout limits.
 | Left-click (running) | Switch the Target pane to that session |
 | Wheel over a live agent | Scroll its live terminal history (native locally, Railmux-managed over `railmux ssh`) |
 | Double-click | Open/attach in the Target pane and move focus there |
-| Right-click | Context menu (Open, Preview, Info, Rename, Star, Copy title, Kill, Term, Delete) |
+| Right-click session | Context menu (Open, Preview, Info, Rename, Star, Copy title, Kill, Term, Delete) |
+| Right-click project | Copy absolute path, Star/Unstar, Info, or open managed Term |
 
 Unavailable context-menu actions are hidden for the selected session state.
 Single-click and `␣` act in the Target pane without moving keyboard focus, but
@@ -541,6 +574,13 @@ checks. Update checks time out quickly and never prevent offline startup;
 failed installs continue with the installed version and print a manual
 command. Editable source installations are reported but never overwritten.
 
+Inside the managed Windows runtime, the app layer never modifies the native
+Python installation that owns it. Upgrade that outer package from PowerShell
+with `py -m pip install --upgrade railmux` (or the same Python executable used
+for installation); the next `railmux` launch automatically reuses the matching
+base and installs/enters the new app layer. `railmux runtime install --yes` is
+the explicit equivalent for scripting or repair.
+
 ## Diagnostics
 
 ```bash
@@ -657,12 +697,13 @@ Railmux supports two SSH workflows:
   display coalesces superseded redraws and keeps bounded history locally. This
   is usually smoother for Codex rewinds, Claude redraws, and slower links.
 
-The local SSH client supports macOS, Linux, and Windows WSL and requires an
-OpenSSH-compatible `ssh` executable on `PATH`. Railmux checks for it before
-entering the full-screen display. The remote host needs Python 3.9+, tmux, and
-the `pyte` display dependency; Linux and other Unix-like servers are the
-primary targets. Automatic setup installs the matching `railmux[ssh]` extra,
-or you can install that extra manually on the remote.
+The local SSH client supports macOS, Linux, WSL, and native Windows and requires
+an OpenSSH-compatible `ssh` executable on `PATH`. Railmux checks for it before
+entering the full-screen display. A POSIX remote needs Python 3.9+, tmux, and
+the `pyte` display dependency. Automatic POSIX setup installs the matching
+`railmux[ssh]` extra, or you can install that extra manually. A Windows remote
+uses the preinstalled managed runtime described above and is never provisioned
+through SSH.
 
 #### Quick start with `railmux ssh`
 

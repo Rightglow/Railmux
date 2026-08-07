@@ -1,4 +1,5 @@
 """Tests for F8/F9 dispatch and managed binding lifecycle."""
+import threading
 from unittest.mock import MagicMock
 
 from railmux import tmux_server
@@ -71,6 +72,25 @@ def test_install_skips_without_tmux_binding_manager():
     app._install_tmux_bindings()  # must not raise
 
 
+def test_registered_binding_manager_does_not_force_unchanged_target_projection():
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = False
+    manager.selection_isolation_available = False
+    manager.termux_tap_available = False
+    manager.open.return_value = True
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _selection_isolation_manager=None,
+    )
+    app._sync_target_pane_option = MagicMock(return_value=True)
+    app._sync_termux_tap_route = MagicMock()
+
+    app._install_tmux_bindings()
+
+    app._sync_target_pane_option.assert_called_once_with(force=False)
+
+
 def test_unavailable_target_toggle_warns_once_without_projection():
     manager = MagicMock()
     manager.target_toggle_available = False
@@ -84,6 +104,289 @@ def test_unavailable_target_toggle_warns_once_without_projection():
     app._sync_target_pane_option.assert_not_called()
     app._set_status.assert_called_once_with(
         "Ctrl-B Tab unavailable; existing tmux binding preserved.", "warn")
+
+
+def test_windows_unavailable_status_clicks_warn_with_keyboard_fallback(
+        monkeypatch):
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = False
+    app = _bare_app(_tmux_binding_manager=manager)
+    app._status_navigation_warning_shown = False
+    app._set_status = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+
+    app._install_tmux_bindings()
+    app._install_tmux_bindings()
+
+    app._set_status.assert_called_once_with(
+        "Status clicks unavailable; use m for Mode and F8 for Layout.",
+        "warn",
+    )
+
+
+def test_finished_status_lease_repaints_left_and_current_copy_range():
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = True
+    manager.selection_isolation_available = False
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _selection_isolation_manager=None,
+        _tmux_status_enabled=False,
+        _tmux_error_bar=False,
+        _applied_tmux_bar_state=("stale",),
+        _rendered_status_text="Restored session safely",
+        _rendered_status_level="success",
+    )
+    app._apply_tmux_bar = MagicMock()
+    app._render_status_to_tmux = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    app._sync_termux_tap_route = MagicMock()
+
+    app._finish_tmux_bindings(True)
+
+    app._apply_tmux_bar.assert_not_called()
+    app._render_status_to_tmux.assert_not_called()
+    assert getattr(app, "_status_navigation_projected", False) is False
+
+    # The worker may finish before run() enables its session-local status bar.
+    # The first periodic reconciliation must project the same remembered text.
+    app._tmux_status_enabled = True
+    app._project_status_navigation()
+
+    assert app._applied_tmux_bar_state is None
+    assert app._status_navigation_projected is True
+    app._apply_tmux_bar.assert_called_once_with(False)
+    app._render_status_to_tmux.assert_called_once_with(
+        "Restored session safely", "success", remember=False,
+    )
+
+
+def test_finished_status_lease_does_not_invent_empty_copy_source():
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = True
+    manager.selection_isolation_available = False
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _selection_isolation_manager=None,
+        _tmux_status_enabled=True,
+        _tmux_error_bar=False,
+        _rendered_status_text="",
+    )
+    app._apply_tmux_bar = MagicMock()
+    app._render_status_to_tmux = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    app._sync_termux_tap_route = MagicMock()
+
+    app._finish_tmux_bindings(True)
+
+    app._apply_tmux_bar.assert_called_once_with(False)
+    app._render_status_to_tmux.assert_not_called()
+
+
+def test_slow_windows_startup_summary_mentions_read_only_cache():
+    import time
+
+    app = _bare_app(
+        _startup_started_at=time.monotonic() - 3.25,
+        _startup_project_scan_seconds=1.5,
+        _startup_recovery_seconds=0.75,
+    )
+    app._set_status = MagicMock()
+
+    app._report_windows_startup_summary(None, None)
+
+    message, level = app._set_status.call_args.args
+    assert "Restored in 3." in message
+    assert "index 1.5s, panes 0.8s" in message
+    assert "read-only" in message
+    assert "private cache" in message
+    assert level == "info"
+
+
+def test_windows_tmux_setup_defers_projection_until_worker_finishes(
+        monkeypatch):
+    wheel_started = threading.Event()
+    release_wheel = threading.Event()
+    wheel = MagicMock()
+    wheel.open.side_effect = (
+        lambda: wheel_started.set() or release_wheel.wait(2.0))
+    manager = MagicMock()
+    manager.open.return_value = True
+    app = _bare_app(
+        _root_wheel_manager=wheel,
+        _tmux_binding_manager=manager,
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+        _windows_tmux_setup_cancelled=False,
+    )
+    app._finish_tmux_bindings = MagicMock()
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+
+    app._start_windows_tmux_setup()
+    assert app._windows_tmux_setup_thread.daemon is False
+    assert wheel_started.wait(1.0)
+
+    # A layout/target action during setup must not start a second lease
+    # transaction. The completed worker projects the latest state once.
+    app._install_tmux_bindings()
+    manager.open.assert_not_called()
+    app._finish_tmux_bindings.assert_not_called()
+
+    release_wheel.set()
+    app._windows_tmux_setup_thread.join(timeout=2.0)
+    assert not app._windows_tmux_setup_thread.is_alive()
+    loop = MagicMock()
+    app._finish_windows_tmux_setup(loop, None)
+
+    wheel.open.assert_called_once_with()
+    manager.open.assert_called_once_with()
+    app._finish_tmux_bindings.assert_called_once_with(True)
+    loop.set_alarm_in.assert_not_called()
+
+
+def test_cancelled_windows_tmux_setup_stops_next_lease_before_cleanup(
+        monkeypatch):
+    wheel_started = threading.Event()
+    release_wheel = threading.Event()
+    wheel = MagicMock()
+    wheel.open.side_effect = (
+        lambda: wheel_started.set() or release_wheel.wait(2.0))
+    manager = MagicMock()
+    manager.open.return_value = True
+    app = _bare_app(
+        _root_wheel_manager=wheel,
+        _tmux_binding_manager=manager,
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+        _windows_tmux_setup_cancelled=False,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+
+    app._start_windows_tmux_setup()
+    assert wheel_started.wait(1.0)
+
+    cancel_done = threading.Event()
+
+    def cancel_and_close() -> None:
+        app._cancel_windows_tmux_setup()
+        manager.close()
+        wheel.close()
+        cancel_done.set()
+
+    cleanup = threading.Thread(target=cancel_and_close)
+    cleanup.start()
+    assert not cancel_done.wait(0.1)
+
+    release_wheel.set()
+    cleanup.join(timeout=2.0)
+    assert cancel_done.is_set()
+    assert not app._windows_tmux_setup_thread.is_alive()
+    manager.open.assert_not_called()
+    manager.close.assert_called_once_with()
+    wheel.close.assert_called_once_with()
+    assert app._windows_tmux_setup_result is None
+    assert app._windows_tmux_setup_done
+
+
+def test_windows_tmux_setup_cancelled_before_worker_does_not_install(
+        monkeypatch):
+    wheel = MagicMock()
+    manager = MagicMock()
+    app = _bare_app(
+        _root_wheel_manager=wheel,
+        _tmux_binding_manager=manager,
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+        _windows_tmux_setup_cancelled=True,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+
+    app._start_windows_tmux_setup()
+    app._windows_tmux_setup_thread.join(timeout=1.0)
+
+    assert app._windows_tmux_setup_done
+    assert app._windows_tmux_setup_result is None
+    wheel.open.assert_not_called()
+    manager.open.assert_not_called()
+
+
+def test_windows_tmux_setup_without_worker_falls_back_once():
+    app = _bare_app(
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+    )
+    app._install_tmux_bindings = MagicMock()
+    loop = MagicMock()
+
+    app._finish_windows_tmux_setup(loop, None)
+
+    app._install_tmux_bindings.assert_called_once_with()
+    loop.set_alarm_in.assert_not_called()
+
+
+def test_windows_tmux_setup_publishes_done_after_base_exception(
+        monkeypatch):
+    class SynchronousThread:
+        def __init__(self, *, target, name, daemon):
+            self._target = target
+            self.name = name
+            self.daemon = daemon
+            self._alive = False
+            self.error = None
+
+        def start(self):
+            self._alive = True
+            try:
+                self._target()
+            except BaseException as exc:
+                self.error = exc
+            finally:
+                self._alive = False
+
+        def is_alive(self):
+            return self._alive
+
+        def join(self, timeout=None):
+            return None
+
+    wheel = MagicMock()
+    wheel.open.return_value = True
+    manager = MagicMock()
+    manager.open.side_effect = KeyboardInterrupt
+    app = _bare_app(
+        _root_wheel_manager=wheel,
+        _tmux_binding_manager=manager,
+        _windows_tmux_setup_lock=threading.Lock(),
+        _windows_tmux_setup_thread=None,
+        _windows_tmux_setup_result=None,
+        _windows_tmux_setup_done=False,
+        _windows_tmux_setup_cancelled=False,
+    )
+    monkeypatch.setattr(
+        "railmux.ui.app.running_in_windows_wrapper", lambda: True)
+    monkeypatch.setattr("railmux.ui.app.threading.Thread", SynchronousThread)
+
+    app._start_windows_tmux_setup()
+
+    assert isinstance(app._windows_tmux_setup_thread.error, KeyboardInterrupt)
+    assert app._windows_tmux_setup_done
+    assert app._windows_tmux_setup_result is None
 
 
 def test_f8_dispatches_rotate_without_sidebar_action_lookup():
@@ -315,6 +618,30 @@ def test_teardown_releases_managed_function_bindings(monkeypatch):
     app._teardown_tmux()
 
     manager.close.assert_called_once_with()
+
+
+def test_teardown_cancels_worker_before_releasing_windows_leases(monkeypatch):
+    manager = MagicMock()
+    wheel = MagicMock()
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _root_wheel_manager=wheel,
+    )
+    events = []
+    app._cancel_windows_tmux_setup = MagicMock(
+        side_effect=lambda: events.append("cancel"))
+    manager.close.side_effect = lambda: events.append("bindings")
+    wheel.close.side_effect = lambda: events.append("wheel")
+    monkeypatch.setattr(
+        "railmux.ui.app.atomic_write_text", lambda *args, **kwargs: None)
+
+    app._teardown_tmux()
+
+    app._cancel_windows_tmux_setup.assert_called_once_with()
+    manager.close.assert_called_once_with()
+    wheel.close.assert_called_once_with()
+    assert events.index("cancel") < events.index("wheel")
+    assert events.index("cancel") < events.index("bindings")
 
 
 def test_reinstall_is_delegated_idempotently_to_manager():

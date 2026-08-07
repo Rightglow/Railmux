@@ -17,6 +17,8 @@ _CLEAN_EXIT_MAX_AGE = 30
 _SOFT_EXIT_SCHEMA_VERSION = 1
 _SOFT_EXIT_MAX_AGE = 30
 _INCIDENT_REASONS = {
+    "launcher-attach-rejected",
+    "launcher-relay-failed",
     "launcher-watchdog-timeout",
     "launcher-server-exit",
     "remote-display-watchdog-timeout",

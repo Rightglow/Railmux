@@ -1,10 +1,15 @@
 import os
+import signal
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from railmux import tmux_server
 from railmux.cli import (
+    _interactive_terminal_size,
+    _reset_terminal_modes,
     _run_tmux_client_with_watchdog,
     _show_startup_message,
     is_ssh_session,
@@ -12,6 +17,27 @@ from railmux.cli import (
 )
 from railmux.config import Config, ConfigError
 from railmux.tmux_server import TmuxServerTarget
+
+
+def test_interactive_terminal_size_uses_real_tty_dimensions(monkeypatch):
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    get_size = MagicMock(return_value=os.terminal_size((164, 46)))
+    monkeypatch.setattr("railmux.cli.os.get_terminal_size", get_size)
+
+    assert _interactive_terminal_size() == (164, 46)
+    get_size.assert_called_once_with(sys.stdout.fileno())
+
+
+def test_interactive_terminal_size_does_not_invent_non_tty_fallback(
+    monkeypatch,
+):
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: False)
+    get_size = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.get_terminal_size", get_size)
+
+    assert _interactive_terminal_size() is None
+    get_size.assert_not_called()
 
 
 @pytest.fixture(autouse=True)
@@ -171,6 +197,7 @@ def test_doctor_remote_dispatches_read_only_remote_preflight(monkeypatch):
         "example",
         ssh_args=["-J", "jump"],
         json_output=True,
+        remote_platform="auto",
     )
     preflight.assert_not_called()
 
@@ -194,28 +221,29 @@ def test_doctor_ssh_accepts_grouped_arguments(monkeypatch):
         "example",
         ssh_args=["-J", "jump", "-p", "2222"],
         json_output=False,
+        remote_platform="auto",
     )
 
 
-def test_doctor_legacy_ssh_alias_remains_compatible(monkeypatch):
+def test_doctor_remote_forwards_explicit_windows_platform(monkeypatch):
     remote_doctor = MagicMock(return_value=0)
     monkeypatch.setattr(
-        "railmux.ssh_doctor.run_remote_ssh_doctor",
-        remote_doctor,
-    )
+        "railmux.ssh_doctor.run_remote_ssh_doctor", remote_doctor)
 
-    result = main(["doctor", "--ssh", "example"])
-
-    assert result == 0
+    assert main([
+        "doctor", "--remote", "example",
+        "--remote-platform", "windows",
+    ]) == 0
     remote_doctor.assert_called_once_with(
         "example",
         ssh_args=[],
         json_output=False,
+        remote_platform="windows",
     )
 
 
 @pytest.mark.parametrize("help_flag", ["-h", "--help"])
-def test_doctor_help_hides_legacy_ssh_alias_and_exact_arg(help_flag, capsys):
+def test_doctor_help_exposes_only_remote_and_grouped_ssh_args(help_flag, capsys):
     with pytest.raises(SystemExit) as stopped:
         main(["doctor", help_flag])
 
@@ -471,6 +499,76 @@ def test_prelaunch_recovery_is_scoped_to_the_dedicated_server(monkeypatch):
     assert os.environ["TMUX_PANE"] == "%9"
 
 
+def test_managed_windows_precreates_missing_outer_session_for_bridge(
+    monkeypatch,
+):
+    target = TmuxServerTarget("/tmp/tmux-private/railmux", 789)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda: target)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.is_current_server", lambda _target: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.target_session_id", lambda *_a, **_kw: None)
+    monkeypatch.setattr("railmux.cli.sys.argv", ["/opt/railmux/bin/railmux"])
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "railmux.cli._interactive_terminal_size", lambda: (164, 46))
+    prepared = MagicMock(return_value="$9")
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.ensure_detached_launcher_session", prepared)
+    run_client = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.cli._run_tmux_client_with_watchdog", run_client)
+
+    assert main(["--project", "/work"]) == 0
+
+    client_env = tmux_server.exec_environment()
+    prepared.assert_called_once_with(
+        target,
+        ["/opt/railmux/bin/railmux"],
+        ["--project", "/work"],
+        env=client_env,
+        initial_size=(164, 46),
+    )
+    assert run_client.call_args.kwargs == {
+        "expected_target": target,
+        "expected_session_id": "$9",
+    }
+
+
+def test_posix_missing_outer_session_keeps_ordinary_new_session_path(
+    monkeypatch,
+):
+    target = TmuxServerTarget("/tmp/tmux-private/railmux", 789)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda: target)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.is_current_server", lambda _target: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.target_session_id", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: False,
+    )
+    prepared = MagicMock()
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.ensure_detached_launcher_session", prepared)
+    run_client = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.cli._run_tmux_client_with_watchdog", run_client)
+
+    assert main([]) == 0
+
+    prepared.assert_not_called()
+    assert run_client.call_args.kwargs == {
+        "expected_target": target,
+        "expected_session_id": None,
+    }
+
+
 def test_local_tmux_watchdog_exits_and_records_after_consecutive_failures(
     monkeypatch, capsys,
 ):
@@ -515,6 +613,80 @@ def test_local_tmux_watchdog_exits_and_records_after_consecutive_failures(
         consecutive_failures=3,
     )
     assert "stopped responding" in capsys.readouterr().err
+
+
+def test_managed_windows_direct_attach_notifies_height_only_resize(monkeypatch):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class DirectClient:
+        pid = 321
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    client = DirectClient()
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    sizes = [os.terminal_size((120, 40)), os.terminal_size((120, 55))]
+    monkeypatch.setattr(
+        "railmux.cli.os.get_terminal_size",
+        lambda _fd: sizes.pop(0) if len(sizes) > 1 else sizes[0],
+    )
+
+    def finish_after_poll(_seconds):
+        client.returncode = 0
+
+    monkeypatch.setattr("railmux.cli.time.sleep", finish_after_poll)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    notify = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.kill", notify)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], {}, expected_target=target,
+        expected_session_id="$7",
+    ) == 0
+    notify.assert_called_once_with(321, signal.SIGWINCH)
+
+
+def test_posix_direct_attach_does_not_poll_or_signal_resize(monkeypatch):
+    class DirectClient:
+        pid = 321
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    client = DirectClient()
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+
+    def finish_after_poll(_seconds):
+        client.returncode = 0
+
+    monkeypatch.setattr("railmux.cli.time.sleep", finish_after_poll)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: False,
+    )
+    get_size = MagicMock()
+    notify = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.get_terminal_size", get_size)
+    monkeypatch.setattr("railmux.cli.os.kill", notify)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], {},
+    ) == 0
+    get_size.assert_not_called()
+    notify.assert_not_called()
 
 
 def test_abrupt_tmux_client_exit_records_disappeared_server(monkeypatch):
@@ -572,6 +744,162 @@ def test_intentional_hard_quit_does_not_record_launcher_incident(monkeypatch):
     ) == 1
     consume.assert_called_once_with(server_pid=77, session_id="$7")
     record.assert_not_called()
+
+
+def test_posix_attach_rejection_does_not_record_windows_incident(monkeypatch):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class ExitedClient:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(
+        "railmux.cli.subprocess.Popen", lambda *_args, **_kwargs: ExitedClient())
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda **_kw: target)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket",
+        lambda: False,
+    )
+    record = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.cli.tmux_health.record_incident", record)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], {}, expected_target=target,
+        expected_session_id="$7",
+    ) == 1
+    record.assert_not_called()
+
+
+def test_terminal_recovery_resets_keyboard_focus_mouse_and_wrap(monkeypatch):
+    write = MagicMock()
+    monkeypatch.setattr("railmux.cli.os.write", write)
+
+    _reset_terminal_modes(12)
+
+    payload = write.call_args.args[1]
+    assert b"\x1b[?1l\x1b>" in payload
+    assert b"\x1b[?1004l" in payload
+    assert b"\x1b[?7h" in payload
+
+
+def test_managed_windows_fast_attach_rejection_uses_one_terminal_bridge(
+    monkeypatch, capsys,
+):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class ExitedClient:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    class SuccessfulRelay:
+        returncode = 0
+        closed = False
+
+        def poll(self):
+            return self.returncode
+
+        def close(self):
+            self.closed = True
+
+    relay = SuccessfulRelay()
+    popen = MagicMock(return_value=ExitedClient())
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
+    monkeypatch.setattr("railmux.cli.sys.stdout.fileno", lambda: 11)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    monkeypatch.setattr("railmux.cli.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("railmux.cli.tty.setraw", lambda _fd: None)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda **_kw: target)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    start = MagicMock(return_value=relay)
+    monkeypatch.setattr(
+        "railmux.windows_attach_relay.start_relay_client", start)
+    recover = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket", recover)
+    record = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.cli.tmux_health.record_incident", record)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"],
+        {"RAILMUX_WINDOWS_RUNTIME": "msys2"},
+        expected_target=target,
+        expected_session_id="$7",
+    ) == 0
+
+    start.assert_called_once_with(
+        target=target,
+        session_id="$7",
+        environ={"RAILMUX_WINDOWS_RUNTIME": "msys2"},
+        stdin_fd=10,
+        stdout_fd=11,
+    )
+    assert relay.closed
+    recover.assert_called_once_with()
+    record.assert_not_called()
+    assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
+    stderr = capsys.readouterr().err
+    assert "Windows terminal bridge" in stderr
+    assert "direct tmux attach was unavailable" not in stderr
+    assert "open terminal failed" not in stderr
+    assert "cleaned an abandoned" not in stderr
+
+
+def test_managed_windows_attach_without_bridge_is_actionable(
+    monkeypatch, capsys,
+):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class ExitedClient:
+        returncode = 1
+
+        def poll(self):
+            return self.returncode
+
+    popen = MagicMock(return_value=ExitedClient())
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda **_kw: target)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    record = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.cli.tmux_health.record_incident", record)
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"],
+        {"RAILMUX_WINDOWS_RUNTIME": "msys2"},
+        expected_target=target,
+        expected_session_id="$7",
+    ) == 1
+
+    assert popen.call_args.kwargs["stderr"] is subprocess.DEVNULL
+    record.assert_called_once_with(
+        component="launcher",
+        reason="launcher-attach-rejected",
+        consecutive_failures=1,
+    )
+    stderr = capsys.readouterr().err
+    assert "bridge was unavailable" in stderr
+    assert "run 'railmux doctor'" in stderr
 
 
 def test_invalid_config_is_actionable_without_traceback(

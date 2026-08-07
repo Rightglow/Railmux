@@ -2,6 +2,7 @@
 
 import time
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import urwid
@@ -271,6 +272,38 @@ def test_stale_running_registry_does_not_hide_stopped_preview(monkeypatch):
 
     assert attached == []
     assert previewed == [True]
+
+
+def test_session_row_click_paints_before_synchronous_preview(monkeypatch):
+    """Windows tmux work must not postpone the pointer acknowledgement."""
+    from railmux.ui.app import App
+
+    project = _project()
+    session = _session(project)
+    app = App.__new__(App)
+    events = []
+    app._sessions_pane = MagicMock()
+    app._sessions_pane.set_selected_session.side_effect = (
+        lambda value: events.append(("selected", value))
+    )
+    app._loop = MagicMock()
+    app._loop.draw_screen.side_effect = lambda: events.append(("draw", None))
+    monkeypatch.setattr(app, "_by_session_id", lambda _session_id: None)
+    monkeypatch.setattr(
+        app,
+        "_on_session_preview",
+        lambda _session: events.append(("preview", _session.session_id)),
+    )
+
+    app._on_session_row_preview(session)
+
+    assert events == [
+        ("selected", session.session_id),
+        ("draw", None),
+        ("preview", session.session_id),
+        ("selected", None),
+        ("draw", None),
+    ]
 
 
 def test_agent_session_liveness_uses_displayed_swap_pane(monkeypatch):

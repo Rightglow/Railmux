@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from railmux.fuzzy import fuzzy_match
 
@@ -18,21 +19,24 @@ from railmux.ui._widgets import (
 
 class _ProjectRow(ClickableRow):
     def __init__(self, project: Project, selected: bool = False,
+                 is_favorite: bool = False,
                  on_click: "Callable[[], None] | None" = None,
-                 on_double_click: "Callable[[], None] | None" = None) -> None:
+                 on_double_click: "Callable[[], None] | None" = None,
+                 on_right_click: "Callable[[], None] | None" = None) -> None:
         self.project = project
         # Keep the count in a fixed right-hand column.  An inline ``[12]``
         # makes project names jitter as counts change and becomes difficult to
         # scan once names have different lengths.
         count = str(project.session_count)
+        marker = "★ " if is_favorite else ""
         label = urwid.Columns([
-            urwid.Text(f"  {project.display_name}", wrap="ellipsis"),
+            urwid.Text(f"  {marker}{project.display_name}", wrap="ellipsis"),
             ("fixed", max(3, len(count) + 1),
              urwid.Text(f"{count} ", align="right", wrap="clip")),
         ], dividechars=0)
         attr = "selected" if selected else None
         super().__init__(urwid.AttrMap(label, attr, focus_map="focus"),
-                         on_click, on_double_click,
+                         on_click, on_double_click, on_right_click,
                          click_key=project.encoded_name,
                          immediate_click=True)
 
@@ -65,15 +69,20 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
                  on_select: Callable[[Project | None], None],
                  on_double_click: Callable[[Project | None], None] | None = None,
                  provider_label: str = "Agent",
-                 *, boxed: bool = True) -> None:
+                 *, on_context: Callable[[Project], None] | None = None,
+                 favorite_paths: set[Path] | None = None,
+                 boxed: bool = True) -> None:
         self._all_projects = projects
         self._on_select = on_select
         self._on_double_click = on_double_click
+        self._on_context = on_context
         self._provider_label = provider_label
         self._boxed = boxed
         self._filter = ""
         self._loading = False
         self._selected_encoded_name: str | None = None
+        self._context_encoded_name: str | None = None
+        self._favorite_paths = set(favorite_paths or ())
 
         self._new_row = _NewProjectRow(on_click=lambda: self._on_select(None))
         self._walker = urwid.SimpleFocusListWalker(self._build_rows(projects))
@@ -102,11 +111,18 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
 
     def _build_rows(self, projects: list[Project]) -> list:
         sel = self._selected_encoded_name
+        context = self._context_encoded_name
         rows = [
-            _ProjectRow(p, selected=(p.encoded_name == sel),
-                        on_click=lambda p=p: self._on_select(p),
-                        on_double_click=(lambda p=p: self._on_double_click(p))
-                                        if self._on_double_click else None)
+            _ProjectRow(
+                p,
+                selected=(p.encoded_name in {sel, context}),
+                is_favorite=p.real_path in self._favorite_paths,
+                on_click=lambda p=p: self._on_select(p),
+                on_double_click=(lambda p=p: self._on_double_click(p))
+                                if self._on_double_click else None,
+                on_right_click=(lambda p=p: self._on_context(p))
+                               if self._on_context else None,
+            )
             for p in self._visible_projects(projects)
         ]
         if not rows:
@@ -127,12 +143,19 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self, projects: list[Project] | None = None,
     ) -> list[Project]:
         needle = self._filter.lower()
-        return [
+        visible = [
             project for project in (
                 self._all_projects if projects is None else projects
             )
             if fuzzy_match(needle, str(project.real_path))
         ]
+        # Discovery already orders projects by recent activity. A stable sort
+        # moves favorites to the front without disturbing that order within
+        # either group.
+        return sorted(
+            visible,
+            key=lambda project: project.real_path not in self._favorite_paths,
+        )
 
     def set_provider_label(self, label: str) -> None:
         """Update provider-specific empty text, including empty-to-empty switches."""
@@ -158,6 +181,18 @@ class ProjectsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         if self._selected_encoded_name == encoded_name:
             return
         self._selected_encoded_name = encoded_name
+        self._refresh_rows()
+
+    def set_context_selected(self, encoded_name: str | None) -> None:
+        if self._context_encoded_name == encoded_name:
+            return
+        self._context_encoded_name = encoded_name
+        self._refresh_rows()
+
+    def set_favorite_paths(self, paths: set[Path]) -> None:
+        if self._favorite_paths == paths:
+            return
+        self._favorite_paths = set(paths)
         self._refresh_rows()
 
     def set_filter(self, needle: str) -> None:

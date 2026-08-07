@@ -23,6 +23,11 @@ Read the smallest relevant document before changing behavior:
 - [`BACKGROUND_SESSION_INDEX.md`](BACKGROUND_SESSION_INDEX.md) records the
   reproducible evidence behind the background Codex index. It supplements the
   immutable-generation rules in `ARCHITECTURE.md`.
+- [`WINDOWS_WRAPPER_PREVIEW.md`](WINDOWS_WRAPPER_PREVIEW.md) and its
+  machine-readable parity ledger preserve the managed-MSYS2 design, safety
+  boundaries, and real-platform evidence promoted into the 0.4 product line.
+  Despite the historical filename, the current contract is stable and lives on
+  `main`; historical preview-build narration is evidence, not branch policy.
 
 Related repository-level documents have different roles:
 

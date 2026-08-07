@@ -18,6 +18,7 @@ from railmux.setting_contracts import (
     bounds_for,
     choices_for,
 )
+from railmux.provider_paths import provider_path
 
 
 class ConfigError(ValueError):
@@ -47,7 +48,7 @@ class Config:
         and relative paths are made absolute before a launched Codex changes to
         its project cwd. The directory is not required to exist.
         """
-        path = Path(self.codex_home).expanduser()
+        path = provider_path(self.codex_home).expanduser()
         try:
             return path.resolve()
         except OSError:

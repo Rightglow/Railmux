@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from railmux.path_codec import encode, decode
+from railmux.path_codec import (
+    decode,
+    encode,
+    is_encoded_project_name,
+    normalize_encoded_project_name,
+)
 
 
 def test_encode_simple():
@@ -15,6 +20,17 @@ def test_encode_preserves_dashes_in_segments():
 
 def test_encode_trailing_slash_stripped():
     assert encode(Path("/home/user/project/")) == "-home-user-project"
+
+
+def test_native_windows_claude_project_name_maps_to_msys_mount():
+    assert is_encoded_project_name("C--Users-Alice-work")
+    assert normalize_encoded_project_name("C--Users-Alice-work") == (
+        "-c-Users-Alice-work"
+    )
+
+
+def test_non_provider_directory_name_is_rejected():
+    assert not is_encoded_project_name("cache")
 
 
 def test_decode_unambiguous_with_filesystem(tmp_path):

@@ -62,6 +62,111 @@ cannot be misreported or queried concurrently by its closing SSH views. These
 sentinels classify lifecycle only; they never authorize session mutation or
 recovery.
 
+On the managed Windows runtime, an OpenSSH login and an interactive desktop
+terminal can belong to different Windows Terminal Services sessions. The
+MSYS2 AF_UNIX control socket may remain queryable across that boundary even
+when tmux cannot transfer the later client's terminal handle. The launcher
+therefore tries the ordinary label-selected tmux client first. Soft Quit can
+leave detached provider sessions on that server after the outer `railmux`
+session exits. When managed Windows proves an existing server but no outer UI,
+the launcher creates only that missing session detached through the
+revalidated server. When stdin and stdout are real TTYs, the launcher reads
+their exact bounded dimensions and supplies them to that one `new-session`
+operation, before the child can paint its first frame. It never manufactures a
+fallback dimension or pre-resizes an existing session, which might belong to
+another attached view. It passes only the bounded managed-runtime kind,
+runtime ID, and app-layer ID into that pane with tmux `-e`; no provider
+credential or general caller environment is persisted, and the child still
+has to verify the matching same-owner on-disk markers. It then retains the
+ordinary direct-first order. It may make
+one transparent bridge attempt only when that client rejects the attach within
+five seconds, stdin/stdout are real terminals, and a new identity-pinned query
+proves that the same server PID and immutable Railmux session still exist.
+While the managed-Windows direct client is alive, the existing outer watchdog
+also compares the exact entry TTY dimensions. A changed width or height sends
+`SIGWINCH` only to that launcher-owned tmux client so MSYS2 re-reads native
+console geometry; it never resizes a tmux window directly or overrides the
+shared-window `smallest` policy. POSIX clients do not enter this path.
+
+The bridge creates a random, same-owner endpoint in Railmux's private runtime
+directory, then asks the pinned tmux server through `run-shell -b` to start an
+absolute, versioned helper in the server's Windows session. The helper
+revalidates the managed base/application markers, exact socket path, absolute
+tmux executable, server PID, socket label, and immutable session ID before
+attaching. It owns a new PTY and one additional tmux client; the entry process
+forwards only opaque terminal bytes, resize dimensions, heartbeats, and an exit
+status. It does not render through pyte,
+persist an origin choice, create a parallel workspace, detach another client,
+or mutate provider/session files. The endpoint name is independent from the
+random secret; a nonce challenge proves possession without sending that secret
+over the relay. The token remains visible only to processes running as the same
+Windows account through the fixed helper command, so that account is the trust
+boundary even where MSYS2 cannot provide peer credentials. Either side may
+stop only the bridge-owned attach client, and the endpoint creator removes
+only the unchanged endpoint it created. A later launcher may also sweep a
+bounded set of old, same-owner relay endpoints only after they fail a connect
+probe and their age and inode identity remain unchanged. A bridge failure
+leaves the existing tmux workspace running and records only a bounded
+diagnostic category. POSIX launches never enter this fallback.
+
+The managed launcher suppresses tmux's raw direct-attach error only on this
+Windows path. A completed fallback emits one terminal-capability-aware Railmux
+info line; a bridge that cannot start or later fails emits an actionable
+Railmux error and leaves the existing workspace running. POSIX stderr remains
+unchanged.
+
+MSYS2 tmux may leave its AF_UNIX pathname after the last session exits, causing
+the next client to wait on an endpoint without a listener. The Windows wrapper
+may arm one separate cleanup proof only after a server-wide snapshot shows the
+managed `railmux` session and its exact outer pane are the server's sole session
+and pane. Recovery requires the same safe label, same-user socket directory,
+exact socket and parent inode/time identity, a short exit-settle interval, and
+two failed connection probes; a live or replaced endpoint, malformed proof,
+extra pane/session, or incomplete enumeration fails closed. Cleanup removes
+only that abandoned socket pathname and its private proof. It never kills a
+process, opens provider history, or authorizes provider/session mutation.
+Routine proof-authorized cleanup after a normal last-session exit is silent;
+only a pre-launch recovery that affects the next startup is reported to the
+user.
+If an abrupt exit or older build left no such proof, the managed-Windows
+startup discovery alone allows a five-second bound for tmux to classify the
+endpoint as having no live server; the normal `new-session -A` path can then
+replace it. This fallback neither unlinks the socket itself nor changes the
+shorter explicit bounds used to monitor a server already believed to be live.
+
+Managed Windows app layers have a second identity boundary above the tmux
+server. The shared base marker remains compatible with released dev11-dev23
+apps, while a separate immutable content marker hashes the complete sorted
+pacman package inventory and records the required tmux/Python package versions.
+Every dev24+ app marker binds to that exact content identity. Startup trusts an
+app only when the runtime ID, versioned directory, app marker, executable, and
+base content identity all agree; `runtime status --verify` may compare the live
+package database read-only and report drift without rewriting the marker.
+An ordinary managed-Windows version upgrade may seed its unpublished venv from
+the newest marked app that still probes as its exact version, then copy the
+currently executing native Railmux package into that new layer. The copy is
+limited to the known pure-Python dependency roots, rejects links and reparse
+points, and has file-count and byte bounds. The new environment must pass
+`pip check`, import every runtime dependency, report the requested Railmux
+version, and later pass the ordinary app probe before its marker is published.
+Any absence, mismatch, or copy/validation failure removes that unpublished
+venv and recreates it through the existing private pip-cache path; it never
+changes the prior layer or grants authority to reinstall the shared base.
+
+An existing outer UI is never assumed to have changed merely because native
+pip installed a newer app layer. dev24+ controllers publish their exact app
+identity only after reaching the usable MainLoop boundary. A detached older
+controller receives a pane-local nonce request and private F19 wakeup, saves
+portable state, returns displayed provider panes to their owning sessions,
+releases UI-only tmux state, then `exec`s the validated absolute new app.
+Released dev11-dev23 controllers do not implement that save boundary and are
+therefore never respawned or killed for migration. They remain attachable and
+report an explicit Soft Quit instruction; the following launch creates the
+dev24 UI. Attached clients, ambiguous identity, races, or failed validation
+likewise leave the old UI running. No transition kills the
+tmux server, a provider session, or a provider process, and the transition lock
+is scoped to the exact server label and immutable outer-session ID.
+
 Independent tmux mutations that form one startup or status-bar transaction are
 sent through one tmux client, and an identical complete bar frame is not
 rewritten. This is a performance invariant on runtimes where spawning each tmux
@@ -69,6 +174,23 @@ client is expensive, but it does not weaken option restoration or the
 crash-safe binding leases. A compact terminal with only Railmux's sidebar has
 no agent page to select or zoom, so its logical compact presentation must not
 perform agent-page geometry probes.
+After a verified stable pane switch, the read-only transcript locator and the
+already-owned prefix-Tab Target projection may likewise share one tmux command
+queue. A failure retries their independent released helpers and never changes
+the successful display transaction into authority over provider history. The
+border-style cache is keyed by logical Target slot rather than the physical
+pane swapped through that slot, because an unchanged focus/layout has identical
+styles and must not spawn a redundant client.
+
+Explicit transcript Preview has one similarly bounded hot path. Once a slot is
+already in history mode with no displayed provider or pending swap identity, a
+new stopped-session Preview may respawn that same Railmux-owned pane directly.
+It does not repeat the return-home transaction, already-cleared transcript
+marker, unchanged border projection, or shared binding projection. The first
+transition from any live provider retains every identity-pinned return-home
+check, and a failed replacement never creates another pane or commits a new
+active target. The transcript renderer itself reads the final 2,000 UTF-8 JSONL
+records backwards; an external `tail` process is not part of the click path.
 
 Doctor collection has one versioned structured snapshot authority. Human text
 and `doctor --json` are renderers of that same snapshot, not independent probe
@@ -77,6 +199,10 @@ versions and counts, booleans, coarse incident age, home-relative paths, or the
 literal `<custom>`. Neither renderer may expose hostnames, usernames, session
 or pane IDs, transcripts, environment values, configured commands, socket
 paths, credentials, or raw custom paths.
+On the managed Windows wrapper the same snapshot adds only bounded runtime ID,
+installed/running app versions, content-identity digest, and transition status.
+It still omits the runtime path, server/socket identity, process IDs, session
+IDs, provider data, and environment values.
 The same snapshot includes one optional, local `railmux ssh` record from the
 private runtime directory. A stable lock file protects atomic replacement;
 the newest attach owns an opaque internal token, so an older client's final
@@ -252,6 +378,23 @@ The local upgrade uses its current Python environment and re-execs the original
 `railmux ssh` invocation only after pip succeeds and a fresh process using that
 same interpreter imports the requested exact version. Failure or an import
 mismatch leaves tmux untouched and prints a reproducible manual command.
+The managed Windows app venv is immutable application state owned by the native
+bootstrap, so this local-pip upgrade path is forbidden there. A newer remote
+instead produces native PowerShell pip plus `runtime install` instructions;
+the running versioned app never upgrades itself in place.
+
+Remote command discovery is shell-family aware without executing a local
+shell. The default path keeps the POSIX executable/private-venv/Python ladder;
+if that bounded handshake fails before attach, `auto` may retry the same argv
+as a shell-neutral direct `railmux remote-server` command accepted by Windows
+OpenSSH's PowerShell default shell. `--remote-platform windows` selects that
+direct form immediately, which also avoids a second authentication prompt on
+password-only hosts. Once either path returns a valid hello, its launch family
+is pinned for attach contention retries and automatic reconnect. A managed
+Windows server names `windows-msys2` in that hello. Railmux never sends the
+POSIX pip/private-venv installer to a direct or identified Windows server;
+version or runtime repair fails closed with native user-level pip plus managed
+runtime instructions, and provider session files remain outside that repair.
 
 Before that cooked-mode handshake begins, the local client paints the same
 terminal-native workspace-restoration surface as a direct launch. It is local
@@ -404,6 +547,16 @@ path policies. Public SSH-facing commands use grouped `--ssh-args` values with
 one ordered argv authority across both phases. Group parsing uses bounded
 POSIX quoting locally and never invokes a shell. The released singular
 `--ssh-arg` remains a hidden exact-argv compatibility input.
+Both config phases pin the same shell family returned by the common pre-attach
+probe. Explicit Windows mode requires a `windows-msys2` direct hello; automatic
+mode may also accept an authoritative POSIX hello reached through the
+shell-neutral fallback. Managed Windows remotes use that command in both
+phases and never receive POSIX installer commands. `doctor --remote` uses that same probe with
+`--existing-session-only`, stops before the attach token, and reports the
+bounded remote runtime plus selected launch family. `--remote-platform` is
+shared by config and doctor so explicit Windows mode avoids the incompatible
+POSIX probe. A missing or incompatible Windows runtime remains a native,
+user-level repair; remote automatic Windows installation is out of scope.
 
 The tmux executable is a process-wide authority. An absolute override must keep
 the conventional `tmux` basename; Railmux prepends only its directory for
@@ -463,6 +616,14 @@ The stable section name remains visible when dynamic title detail is truncated.
 Wheel input over any title rule or the bottom rule is routed by pointer position
 to that section's own `ListBox`.
 
+Project favorites are keyed by the discovered absolute project path and live
+in a separate atomic metadata file from UUID-keyed session favorites. They
+stably pin matching Projects rows ahead of the provider's existing recency
+order, without starring any session or changing provider history. A Projects
+row context menu acts on the exact disposable row identity and offers only
+copy-absolute-path, project star/unstar, project Info, and managed Term; closing
+it restores the independently selected project highlight.
+
 ## Restart state has two authorities
 
 Instance-local recovery state lives under `XDG_RUNTIME_DIR` (or the existing
@@ -485,7 +646,16 @@ bindings. It duplicates the current sidebar view so a shared portable
 last-writer never changes an exact instance restart. Files are atomically
 replaced as 0600 inside a verified user-owned 0700 runtime directory. Cleanup
 is bounded and removes only recognized owners proven dead; unknown/newer state
-and old but possibly-live private servers are retained.
+and old but possibly-live private servers are retained. MSYS2's `noacl`
+projection cannot represent those POSIX modes and reports the corresponding
+NTFS objects as 0644/0755. Only the real Cygwin/MSYS Python platform inside the
+managed Windows wrapper may accept this projection, after matching the
+same-owner on-disk runtime marker against its exact runtime and Railmux
+versions, and only for same-UID, non-symlink state with no group/world write
+bits. The user-owned managed runtime's Windows ACL remains the privacy
+boundary. This predicate is shared by restart coordination, startup caches,
+and tmux binding/lock state; ordinary POSIX permission checks are never
+relaxed.
 
 Portable state lives beside `config.toml` and contains an active mode,
 per-mode project/session selections and filters, plus an optional right-display

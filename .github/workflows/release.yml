@@ -34,8 +34,6 @@ jobs:
             main:refs/remotes/origin/main \
             archive/windows-conpty-deprecated:refs/remotes/origin/archive/windows-conpty-deprecated \
             archive/windows-wsl-delegation-deprecated:refs/remotes/origin/archive/windows-wsl-delegation-deprecated
-          git fetch --no-tags origin \
-            windows-preview:refs/remotes/origin/windows-preview || true
           [ "$(git rev-parse origin/archive/windows-conpty-deprecated)" = "$conpty_archive_tip" ] || {
             echo "::error::archived ConPTY branch moved from its frozen tip"
             exit 1
@@ -52,30 +50,21 @@ jobs:
             echo "::error::archived WSL-delegation history is not release-eligible"
             exit 1
           fi
-          if [[ "$tag" == *.dev* ]]; then
-            if git merge-base --is-ancestor "$commit" origin/main; then
-              [[ "$tag" =~ ^0\.3\.[0-9]+\.dev[0-9]+$ ]] || {
-                echo "::error::main development releases must use the 0.3.x.devN series"
-                exit 1
-              }
-              echo "POSIX/WSL development release from main"
-            elif git rev-parse --verify -q origin/windows-preview >/dev/null &&
-                 git merge-base --is-ancestor "$commit" origin/windows-preview; then
-              [[ "$tag" =~ ^0\.4\.0\.dev([0-9]+)$ ]] &&
-                (( BASH_REMATCH[1] >= 4 )) || {
-                echo "::error::Windows-wrapper releases must use 0.4.0.dev4 or later"
-                exit 1
-              }
-              echo "Windows-wrapper development release from windows-preview"
-            else
-              echo "::error::development releases must come from main or windows-preview"
-              exit 1
-            fi
+          integer='(0|[1-9][0-9]*)'
+          [[ "$tag" =~ ^${integer}\.${integer}\.${integer}(\.dev${integer}|rc${integer})?$ ]] || {
+            echo "::error::release tags must be canonical final, rcN, or .devN versions"
+            exit 1
+          }
+          git merge-base --is-ancestor "$commit" origin/main || {
+            echo "::error::all active releases must come from main"
+            exit 1
+          }
+          if [[ "$tag" =~ \.dev[0-9]+$ ]]; then
+            echo "development release from main"
+          elif [[ "$tag" =~ rc[0-9]+$ ]]; then
+            echo "release candidate from main"
           else
-            git merge-base --is-ancestor "$commit" origin/main || {
-              echo "::error::final releases must come from main"
-              exit 1
-            }
+            echo "final release from main"
           fi
 
       - name: Render curated release notes
@@ -137,7 +126,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           prerelease=()
-          if [[ "$GITHUB_REF_NAME" == *.dev* ]]; then
+          if [[ "$GITHUB_REF_NAME" =~ (\.dev|rc)[0-9]+$ ]]; then
             prerelease+=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" \

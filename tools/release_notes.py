@@ -9,7 +9,10 @@ import sys
 from pathlib import Path
 
 
-_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:\.dev\d+)?")
+_VERSION_RE = re.compile(
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    r"(?:rc(?:0|[1-9]\d*)|\.dev(?:0|[1-9]\d*))?"
+)
 _SECTION_RE = re.compile(r"^## \[([^]]+)](?:\s+-\s+.+)?\s*$")
 _LINK_RE = re.compile(r"^\[([^]]+)]\s*:\s*(\S+)\s*$")
 
@@ -66,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         "version",
         help=(
             "release version or tag, for example 0.2.3, v0.2.3, or "
-            "v0.2.4.dev1"
+            "v0.2.4.dev1, or v0.4.0rc1"
         ),
     )
     parser.add_argument(

@@ -103,6 +103,72 @@ def test_active_codex_pane_stamps_explicit_preview_transcript_source(
     assert len(observed) == 1
 
 
+def test_stable_attach_batches_preview_and_target_projection(
+    monkeypatch, tmp_path,
+):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    project = Project(tmp_path, "-tmp-project", tmp_path / "history", 1, 1.0)
+    running = _Running(
+        session_id,
+        "agent-session",
+        "Claude",
+        project=project,
+        session_type="claude",
+    )
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%8"
+    app._railmux_pane_id = "%1"
+    app._tmux_binding_manager = SimpleNamespace(
+        target_toggle_available=True)
+    app._by_tmux = lambda name: running if name == "agent-session" else None
+    app._projected_target_pane_id = "%7"
+    batches = []
+    fallback = MagicMock()
+    app._sync_slot_transcript_source = fallback
+    monkeypatch.setattr(tmux_ctl, "tmux_version", lambda: (3, 7))
+    monkeypatch.setattr(
+        tmux_ctl,
+        "run_command_queue",
+        lambda commands: batches.append(commands) or True,
+    )
+
+    app._sync_attached_slot_projection(
+        app._workspace.primary, "agent-session")
+
+    assert len(batches) == 1
+    assert batches[0][0][:4] == ("set-option", "-p", "-t", "%8")
+    assert batches[0][1] == (
+        "set-window-option", "-t", "%1",
+        tmux_ctl.RAILMUX_TARGET_OPTION, "%8",
+    )
+    assert app._projected_target_pane_id == "%8"
+    fallback.assert_not_called()
+
+
+def test_stable_attach_projection_batch_failure_preserves_both_fallbacks(
+    monkeypatch,
+):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%8"
+    app._railmux_pane_id = "%1"
+    app._tmux_binding_manager = SimpleNamespace(
+        target_toggle_available=True)
+    app._by_tmux = lambda _name: None
+    app._sync_slot_transcript_source = MagicMock()
+    app._sync_target_pane_option = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "tmux_version", lambda: (3, 7))
+    monkeypatch.setattr(tmux_ctl, "run_command_queue", lambda _commands: False)
+
+    app._sync_attached_slot_projection(
+        app._workspace.primary, "agent-session")
+
+    app._sync_slot_transcript_source.assert_called_once_with(
+        app._workspace.primary, None, "agent-session")
+    app._sync_target_pane_option.assert_called_once_with()
+
+
 def _canvas_attrs(canvas) -> list[str | None]:
     return [
         attr
@@ -556,6 +622,26 @@ def test_single_workspace_sidebar_focus_clears_old_dim_target_format(monkeypatch
     assert set_border.call_args.args == ("fg=colour240", "fg=colour240")
 
 
+def test_sidebar_focus_does_not_rewrite_border_when_swap_changes_pane_id(
+    monkeypatch,
+):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%2"
+    app._divider_active = None
+    set_border = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_border_styles", set_border)
+
+    app._set_divider_active(False)
+    app._workspace.primary.pane_id = "%8"
+    app._set_divider_active(False)
+
+    assert set_border.call_count == 1
+    assert app._divider_active == (
+        False, WorkspaceLayout.SINGLE, AgentWorkspace.PRIMARY)
+
+
 def test_failed_border_update_is_not_cached(monkeypatch):
     app = App.__new__(App)
     app._workspace = AgentWorkspace()
@@ -627,7 +713,7 @@ def test_refresh_retry_repairs_stale_style_cache_from_reconciled_focus(
     # A reconnect briefly painted sidebar focus, then tmux returned input to
     # P1 without the old process updating its cached style state.
     app._divider_active = (
-        False, WorkspaceLayout.SIDE_BY_SIDE, "%2")
+        False, WorkspaceLayout.SIDE_BY_SIDE, AgentWorkspace.PRIMARY)
     app._sync_border_indicators = MagicMock(return_value=True)
     set_border = MagicMock(return_value=True)
     monkeypatch.setattr(
@@ -842,6 +928,7 @@ def test_single_click_prepaints_sidebar_before_agent_transport_switch():
     app._redraw_focus_state_now = MagicMock()
     app._check_agent_slot_size = MagicMock()
     app._set_active_tmux_target = MagicMock()
+    app._sync_attached_slot_projection = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._schedule_scroll_acceleration = MagicMock()
     app._install_tmux_bindings = MagicMock()
@@ -868,7 +955,8 @@ def test_single_click_prepaints_sidebar_before_agent_transport_switch():
         assert slot.active_session_id == "old-session"
         assert slot.agent_tmux_name == "cc-old"
         slot.pane_id = "%2"
-        return AttachOutcome(True, DisplayTransportKind.SWAP)
+        return AttachOutcome(
+            True, DisplayTransportKind.SWAP, display_stable=True)
 
     transport.attach.side_effect = attach
     app._display_transport_manager = transport
@@ -877,6 +965,10 @@ def test_single_click_prepaints_sidebar_before_agent_transport_switch():
         slot, "cc-live", steal_focus=False)
     assert events[:4] == [
         "session:new-session", "running:cc-live", "draw", "attach"]
+    app._set_active_tmux_target.assert_called_once_with(
+        "cc-live", slot, sync_transcript_source=False)
+    app._sync_attached_slot_projection.assert_called_once_with(
+        slot, "cc-live")
 
 
 def test_stable_same_target_skips_geometry_chrome_and_binding_reprojection():
@@ -890,6 +982,7 @@ def test_stable_same_target_skips_geometry_chrome_and_binding_reprojection():
     app._redraw_focus_state_now = MagicMock()
     app._check_agent_slot_size = MagicMock()
     app._set_active_tmux_target = MagicMock()
+    app._sync_attached_slot_projection = MagicMock()
     app._set_railmux_focus = MagicMock()
     app._schedule_scroll_acceleration = MagicMock()
     app._apply_layout_profile = MagicMock()
@@ -915,6 +1008,7 @@ def test_stable_same_target_skips_geometry_chrome_and_binding_reprojection():
     app._check_agent_slot_size.assert_not_called()
     app._apply_layout_profile.assert_not_called()
     app._install_tmux_bindings.assert_not_called()
+    app._sync_attached_slot_projection.assert_not_called()
     app._set_railmux_focus.assert_called_once_with(True, force_border=False)
 
 
@@ -1295,6 +1389,7 @@ def test_preview_reports_info_status():
     app._show_transcript = MagicMock(return_value=True)
     app._set_active_target = MagicMock()
     app._set_status = MagicMock()
+    app._sessions_pane = MagicMock()
 
     session = MagicMock()
     session.display_title = "old chat"
@@ -1306,6 +1401,7 @@ def test_preview_reports_info_status():
     assert app._in_history_mode is True
     msg = app._set_status.call_args.args[0]
     assert "Previewing" in msg and "old chat" in msg
+    app._sessions_pane.set_selected_session.assert_not_called()
 
 
 def test_preview_targets_explicit_active_secondary_slot():
@@ -1339,6 +1435,14 @@ def test_preview_targets_explicit_active_secondary_slot():
         session_type="claude",
         slot=app._workspace.secondary,
     )
+    app._set_slot_active_target.assert_called_once_with(
+        app._workspace.secondary,
+        "preview-id",
+        None,
+        mode_key="claude",
+        project_key="project",
+        sync_transcript_source=False,
+    )
     assert app._workspace.secondary.in_history_mode is True
 
 
@@ -1369,7 +1473,111 @@ def test_codex_preview_resolves_newest_rewind_representative():
     app._show_transcript.assert_called_once_with(
         current.jsonl_path, session_type="codex")
     app._set_active_target.assert_called_once_with(
-        "current-id", None, mode_key="codex", project_key="project")
+        "current-id",
+        None,
+        mode_key="codex",
+        project_key="project",
+        sync_transcript_source=False,
+    )
+
+
+def test_repeat_preview_reuses_owned_pane_without_revalidating_chrome(
+    monkeypatch, tmp_path,
+):
+    """The stopped-preview hot path launches only the replacement viewer."""
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    slot = app._workspace.primary
+    slot.pane_id = "%2"
+    slot.in_history_mode = True
+    slot.agent_tmux_name = None
+    slot.swap_state = None
+    app._less_mouse_flag = ""
+    app._display_transport = MagicMock()
+    app._sync_slot_transcript_source = MagicMock()
+    app._set_divider_active = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._set_status = MagicMock()
+    commands = []
+    monkeypatch.setattr(
+        tmux_ctl,
+        "pane_alive",
+        lambda _pane: pytest.fail("repeat preview must not list every pane"),
+    )
+    monkeypatch.setattr(
+        tmux_ctl,
+        "respawn_pane",
+        lambda pane, command: commands.append((pane, command)) or True,
+    )
+
+    assert app._show_transcript(
+        tmp_path / "next.jsonl", session_type="claude")
+
+    assert len(commands) == 1
+    assert commands[0][0] == "%2"
+    app._display_transport.assert_not_called()
+    app._sync_slot_transcript_source.assert_not_called()
+    app._set_divider_active.assert_not_called()
+    app._install_tmux_bindings.assert_not_called()
+
+
+def test_repeat_preview_respawn_failure_keeps_safe_existing_state(
+    monkeypatch, tmp_path,
+):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    slot = app._workspace.primary
+    slot.pane_id = "%2"
+    slot.in_history_mode = True
+    slot.agent_tmux_name = None
+    slot.swap_state = None
+    app._less_mouse_flag = ""
+    app._display_transport = MagicMock()
+    app._sync_slot_transcript_source = MagicMock()
+    app._set_divider_active = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._set_status = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "respawn_pane", lambda *_args: False)
+
+    assert not app._show_transcript(
+        tmp_path / "missing.jsonl", session_type="claude")
+
+    assert slot.pane_id == "%2"
+    assert slot.in_history_mode is True
+    app._display_transport.assert_not_called()
+    app._sync_slot_transcript_source.assert_not_called()
+    app._set_status.assert_called_once_with(
+        "failed to respawn right pane for transcript")
+
+
+def test_repeat_preview_with_inconsistent_transport_uses_full_safety_path(
+    monkeypatch, tmp_path,
+):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    slot = app._workspace.primary
+    slot.pane_id = "%2"
+    slot.in_history_mode = True
+    slot.agent_tmux_name = None
+    slot.swap_state = None
+    slot.transport_kind = DisplayTransportKind.SWAP
+    app._less_mouse_flag = ""
+    transport = MagicMock()
+    transport.prepare_preview.return_value = True
+    app._display_transport = MagicMock(return_value=transport)
+    app._sync_slot_transcript_source = MagicMock()
+    app._set_divider_active = MagicMock()
+    app._install_tmux_bindings = MagicMock()
+    app._set_status = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "respawn_pane", lambda *_args: True)
+
+    assert app._show_transcript(
+        tmp_path / "next.jsonl", session_type="claude")
+
+    transport.prepare_preview.assert_called_once_with(slot)
+    app._sync_slot_transcript_source.assert_called_once_with(slot, None, None)
+    app._set_divider_active.assert_called_once_with(False, force=True)
+    app._install_tmux_bindings.assert_called_once_with()
 
 
 def test_private_history_restore_key_routes_exact_slot_before_modal_checks():
@@ -1394,8 +1602,9 @@ def test_live_transcript_viewer_exit_signals_exact_slot_restore(
     app._less_mouse_flag = ""
     app._railmux_pane_id = "%1"
     app._railmux_has_focus = True
-    app._display_transport = MagicMock(
-        return_value=SimpleNamespace(prepare_preview=lambda _slot: True))
+    transport = MagicMock()
+    transport.prepare_preview.return_value = True
+    app._display_transport = MagicMock(return_value=transport)
     app._sync_slot_transcript_source = MagicMock()
     app._set_divider_active = MagicMock()
     app._install_tmux_bindings = MagicMock()
@@ -1414,6 +1623,10 @@ def test_live_transcript_viewer_exit_signals_exact_slot_restore(
     assert "tmux send-keys -l -t %1" in commands[0][1]
     assert "\x1b[42~" in commands[0][1]
     assert slot.agent_tmux_name is None
+    transport.prepare_preview.assert_called_once_with(slot)
+    app._sync_slot_transcript_source.assert_called_once_with(slot, None, None)
+    app._set_divider_active.assert_called_once_with(False, force=True)
+    app._install_tmux_bindings.assert_called_once_with()
 
 
 def test_closed_live_history_restores_saved_agent_to_same_slot(monkeypatch):
@@ -1493,6 +1706,93 @@ def test_session_context_menu_copy_title_uses_provider_title():
     )
     copy_row._on_click()
     app._copy_session_title.assert_called_once_with("Review layout policy")
+
+
+def test_project_context_menu_has_only_requested_actions(tmp_path):
+    app = App.__new__(App)
+    project = MagicMock()
+    project.real_path = tmp_path / "project"
+    project.encoded_name = "-tmp-project"
+    app._railmux_pane_id = None
+    app._projects_pane = MagicMock()
+    app._project_favorites = MagicMock()
+    app._project_favorites.is_favorite.return_value = False
+    app._close_modal = MagicMock()
+    app._show_overlay = MagicMock()
+
+    app._open_project_context_menu(project)
+
+    app._projects_pane.set_context_selected.assert_called_once_with(
+        project.encoded_name)
+    menu = app._show_overlay.call_args.args[0]
+    labels = [row._wrapped_widget.base_widget.text for row in menu._walker]
+    assert [label.split()[0] for label in labels] == [
+        "Copy", "Star", "Info", "Term",
+    ]
+    assert all(
+        forbidden not in " ".join(labels)
+        for forbidden in ("Open", "Rename", "Kill", "Delete", "Preview")
+    )
+
+
+def test_project_context_menu_unstars_existing_favorite(tmp_path):
+    app = App.__new__(App)
+    project = MagicMock()
+    project.real_path = tmp_path / "project"
+    project.encoded_name = "-tmp-project"
+    project.display_name = "project"
+    app._railmux_pane_id = None
+    app._projects_pane = MagicMock()
+    app._project_favorites = MagicMock()
+    app._project_favorites.is_favorite.side_effect = [True, True]
+    app._project_favorites.get_paths.return_value = set()
+    app._close_modal = MagicMock()
+    app._show_overlay = MagicMock()
+    app._set_status = MagicMock()
+
+    app._open_project_context_menu(project)
+    menu = app._show_overlay.call_args.args[0]
+    unstar = next(
+        row for row in menu._walker
+        if "Unstar" in row._wrapped_widget.base_widget.text)
+    unstar._on_click()
+
+    app._project_favorites.set.assert_called_once_with(project.real_path, False)
+    app._projects_pane.set_favorite_paths.assert_called_once_with(set())
+
+
+def test_copy_project_path_uses_absolute_path(
+    monkeypatch, tmp_path,
+):
+    app = App.__new__(App)
+    app._set_status = MagicMock()
+    project = MagicMock(real_path=tmp_path / "project")
+    copied = []
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.copy_to_clipboard",
+        lambda value: copied.append(value) or True,
+    )
+
+    app._copy_project_path(project)
+
+    assert copied == [str(tmp_path / "project")]
+    app._set_status.assert_called_once_with(
+        f"Copied path: {tmp_path / 'project'}", "success")
+
+
+def test_copy_project_path_reports_clipboard_failure_without_other_action(
+    monkeypatch, tmp_path,
+):
+    app = App.__new__(App)
+    app._set_status = MagicMock()
+    project = MagicMock(real_path=tmp_path / "project")
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.copy_to_clipboard", lambda _value: False)
+
+    app._copy_project_path(project)
+
+    app._set_status.assert_called_once_with(
+        "Could not copy path; terminal clipboard is unavailable", "warn")
 
 
 def test_legacy_running_menu_copies_provider_title_without_project_prefix(

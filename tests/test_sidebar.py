@@ -157,6 +157,23 @@ def test_flat_sidebar_forwards_right_click_to_the_visible_session_row():
     assert calls == ["context"]
 
 
+def test_flat_sidebar_forwards_right_click_to_the_visible_project_row():
+    frame, _pile, (projects, _sessions, _running) = _sidebar()
+    calls: list[str] = []
+    project_row = next(
+        row for row in projects._walker
+        if hasattr(row, "project")
+    )
+    project_row._on_right_click = lambda: calls.append("project-context")
+
+    handled = frame.mouse_event(
+        (32, 18), "mouse press", 3, 5, 3, True
+    )
+
+    assert handled is True
+    assert calls == ["project-context"]
+
+
 def test_section_headers_expose_distinct_focus_chrome():
     frame, pile, _panes = _sidebar()
     size = (32, 18)

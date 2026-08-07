@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from railmux import restart_state, tmux_ctl
 from railmux.restart_state import OuterTmuxIdentity
 
@@ -198,6 +200,34 @@ def test_instance_write_rejects_insecure_runtime_directory(tmp_path):
     assert not restart_state.write_instance(
         identity, _instance_payload(identity), path)
     assert not path.exists()
+
+
+def test_msys_noacl_directory_requires_real_wrapper_and_no_write_bits(
+    monkeypatch, tmp_path,
+):
+    parent = tmp_path / "msys-private"
+    parent.mkdir(mode=0o755)
+    parent.chmod(0o755)
+    monkeypatch.setattr(
+        restart_state, "private_mode_is_safe",
+        lambda mode: not mode & 0o022,
+    )
+
+    restart_state._ensure_private_dir(parent)
+
+    parent.chmod(0o777)
+    with pytest.raises(OSError, match="not private"):
+        restart_state._ensure_private_dir(parent)
+
+
+def test_private_runtime_directory_rejects_final_symlink(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    link = tmp_path / "runtime-link"
+    link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(OSError, match="not private"):
+        restart_state._ensure_private_dir(link)
 
 
 def test_write_failures_are_bounded_for_read_only_or_full_storage(

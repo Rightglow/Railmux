@@ -9,6 +9,7 @@ import select
 import signal
 import shlex
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -30,6 +31,7 @@ from railmux import (
     tmux_health,
     tmux_server,
     tool_panes,
+    windows_attach_relay,
 )
 from railmux.display_transport import (
     AgentDisplayTransport,
@@ -46,6 +48,7 @@ from railmux.fast_display_protocol import (
     encode_input,
 )
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
+from railmux.tmux_server import TmuxServerTarget
 from railmux.selection_isolation import SelectionIsolationManager
 from railmux.modes import CODEX_MODE
 from railmux.models import Project
@@ -156,6 +159,144 @@ def _require_tmux(minimum: tuple[int, int], feature: str) -> None:
             f"{feature} requires tmux {minimum[0]}.{minimum[1]}+; "
             f"running {version[0]}.{version[1]}"
         )
+
+
+def test_real_transcript_preview_respawns_one_owned_pane(
+    isolated_tmux, tmp_path,
+):
+    """Exercise the no-tail viewer and its repeat-preview tmux primitive."""
+    if shutil.which("less") is None:
+        pytest.skip("less is not installed")
+    _session_name, controller_pane, socket_path = isolated_tmux
+    first = tmp_path / "first.jsonl"
+    second = tmp_path / "second.jsonl"
+    first.write_text(
+        '{"type":"user","message":{"role":"user",'
+        '"content":"first-preview"}}\n',
+        encoding="utf-8",
+    )
+    second.write_text(
+        '{"type":"user","message":{"role":"user",'
+        '"content":"second-preview"}}\n',
+        encoding="utf-8",
+    )
+
+    def viewer(path: Path) -> str:
+        producer = shlex.join((
+            sys.executable,
+            "-m",
+            "railmux.transcript",
+            "--format",
+            "claude",
+            "--preview-limit",
+            "2000",
+            str(path),
+        ))
+        return (
+            f"{producer} | LESSSECURE=1 LESSHISTFILE=- "
+            "LESSOPEN= LESSCLOSE= less -R +G"
+        )
+
+    pane_id = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "split-window", "-d", "-h",
+            "-P", "-F", "#{pane_id}", "-t", controller_pane,
+            viewer(first),
+        ],
+        text=True,
+    ).strip()
+
+    def pane_contains(value: str) -> bool:
+        capture = subprocess.run(
+            ["tmux", "-S", socket_path, "capture-pane", "-p", "-t", pane_id],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return capture.returncode == 0 and value in capture.stdout
+
+    assert _wait_until(lambda: pane_contains("first-preview"))
+    subprocess.run(
+        [
+            "tmux", "-S", socket_path, "respawn-pane", "-k", "-t", pane_id,
+            viewer(second),
+        ],
+        check=True,
+    )
+    assert _wait_until(lambda: pane_contains("second-preview"))
+    assert not pane_contains("first-preview")
+
+
+def test_real_transparent_windows_relay_attaches_and_detaches(isolated_tmux):
+    session_name, _pane_id, socket_path = isolated_tmux
+    target = TmuxServerTarget(
+        socket_path,
+        int(subprocess.check_output(
+            ["tmux", "-S", socket_path, "display-message", "-p", "#{pid}"],
+            text=True,
+        ).strip()),
+    )
+    session_id = tmux_server.target_session_id(target, session_name)
+    assert session_id is not None
+    client_socket, relay_socket = socket.socketpair()
+    relay_pid = os.fork()
+    if relay_pid == 0:  # pragma: no cover - exercised by the opt-in real smoke
+        client_socket.close()
+        try:
+            status = windows_attach_relay._relay_server_loop(
+                relay_socket,
+                target=target,
+                session_id=session_id,
+                tmux_path=shutil.which("tmux") or "tmux",
+                width=90,
+                height=28,
+                term="xterm-256color",
+                colorterm="truecolor",
+            )
+        except BaseException:
+            status = 127
+        relay_socket.close()
+        os._exit(status)
+
+    relay_socket.close()
+    client_socket.settimeout(0.1)
+    decoder = windows_attach_relay._FrameDecoder()
+    saw_output = False
+    output = bytearray()
+    detach_at = None
+    exit_status = None
+    try:
+        client_socket.sendall(windows_attach_relay._frame(
+            windows_attach_relay._TYPE_HEARTBEAT))
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and exit_status is None:
+            if detach_at is not None and time.monotonic() >= detach_at:
+                client_socket.sendall(windows_attach_relay._frame(
+                    windows_attach_relay._TYPE_INPUT, b"d"))
+                detach_at = None
+            try:
+                data = client_socket.recv(65536)
+            except socket.timeout:
+                continue
+            for kind, payload in decoder.feed(data):
+                if kind == windows_attach_relay._TYPE_OUTPUT and payload:
+                    output.extend(payload)
+                    if not saw_output:
+                        saw_output = True
+                        client_socket.sendall(windows_attach_relay._frame(
+                            windows_attach_relay._TYPE_INPUT, b"\x02"))
+                        detach_at = time.monotonic() + 0.2
+                elif kind == windows_attach_relay._TYPE_EXIT:
+                    exit_status = struct.unpack(">i", payload)[0]
+    finally:
+        client_socket.close()
+        _waited, raw_status = os.waitpid(relay_pid, 0)
+
+    assert saw_output
+    assert exit_status == 0
+    assert os.waitstatus_to_exitcode(raw_status) == 0
+    assert b"\x1b[?1049l" in output
+    assert tmux_server.target_has_session(target, session_id)
 
 
 def test_real_railmux_inside_tmux_reaches_first_interactive_frame(tmp_path):
@@ -2619,8 +2760,8 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     current_prefix_tab = tmux_ctl.read_prefix_target_binding()["Tab"]
     current_right_click = (
         tmux_ctl.read_root_right_click_binding()["MouseDown3Pane"])
-    current_status_click = (
-        tmux_ctl.read_root_status_click_binding()["MouseDown1Status"])
+    current_status_bindings = tmux_ctl.read_root_status_click_binding()
+    current_status_click = current_status_bindings["MouseDown1Status"]
     current_termux_tap = (
         tmux_ctl.read_root_termux_tap_binding()["MouseDown1Pane"])
     assert all(
@@ -2654,6 +2795,14 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
         assert "railmux-status-pane-v1-" in current_status_click
         assert "mouse_status_range" in current_status_click
         assert "select-pane -Z -t" in current_status_click
+        if tmux_ctl.tmux_version() >= (3, 7):
+            assert all(
+                binding is not None
+                and "railmux-status-pane-v1-" in binding
+                and tmux_ctl.RAILMUX_CONTROLLER_OPTION in binding
+                for key, binding in current_status_bindings.items()
+                if key.startswith("MouseDown1Control")
+            )
     else:
         assert not manager.status_navigation_available
         assert current_status_click == original_status_click["MouseDown1Status"]
@@ -3057,11 +3206,14 @@ def test_real_tmux_status_pane_range_selects_and_keeps_zoom(
         # enable sequence has arrived before the synthetic click.
         if b"\x1b[?1006h" in painted:
             click = f"\x1b[<0;2;{client_height}M".encode()
+            release = f"\x1b[<0;2;{client_height}m".encode()
         else:
             # tmux's legacy parser keeps coordinates zero-based after removing
             # the 32-byte protocol offset (unlike SGR, which it decrements).
             assert client_height <= 224
             click = b"\x1b[M" + bytes((32, 32 + 1, 32 + client_height - 1))
+            release = b"\x1b[M" + bytes(
+                (35, 32 + 1, 32 + client_height - 1))
         os.write(master_fd, click)
         assert _wait_until(
             lambda: tmux_ctl.active_pane_id(owner_pane) == other_pane)
@@ -3070,6 +3222,10 @@ def test_real_tmux_status_pane_range_selects_and_keeps_zoom(
              "#{window_zoomed_flag}"],
             text=True,
         ).strip() == "1"
+        # tmux 3.7 tracks status control presses separately. Finish the first
+        # synthetic click exactly as a real terminal does before changing the
+        # status range beneath the pointer.
+        os.write(master_fd, release)
 
         # Exercise a real action range too. A raw-mode reader in the controller
         # pane records the F5 generated by the Mode branch; this closes the

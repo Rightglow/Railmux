@@ -9,6 +9,7 @@ directory listings to recover segments with non-ASCII characters.
 from __future__ import annotations
 
 import functools
+import re
 from pathlib import Path
 
 
@@ -21,6 +22,20 @@ from pathlib import Path
 _exists_memo: dict[str, bool] = {}
 _is_dir_memo: dict[str, bool] = {}
 _iterdir_memo: dict[str, list[Path]] = {}
+_WINDOWS_PROJECT_NAME = re.compile(r"^([A-Za-z])--")
+
+
+def is_encoded_project_name(name: str) -> bool:
+    """Return whether *name* is a POSIX or native-Windows Claude project key."""
+    return name.startswith("-") or _WINDOWS_PROJECT_NAME.match(name) is not None
+
+
+def normalize_encoded_project_name(name: str) -> str:
+    """Map Claude's ``C--Users-...`` form to MSYS2's ``-c-Users-...`` form."""
+    match = _WINDOWS_PROJECT_NAME.match(name)
+    if match is None:
+        return name
+    return f"-{match.group(1).lower()}-{name[3:]}"
 
 
 def _m_exists(p: Path) -> bool:
@@ -200,6 +215,7 @@ def decode(encoded: str) -> Path:
     filesystem scan — see ``_scan_recover`` — to recover segments whose
     non-ASCII characters were replaced by dashes during encoding.
     """
+    encoded = normalize_encoded_project_name(encoded)
     if not encoded.startswith("-"):
         raise ValueError(f"encoded name must start with '-': {encoded!r}")
 

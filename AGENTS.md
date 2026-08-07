@@ -80,15 +80,21 @@ Follow [`CONTRIBUTING.md`](CONTRIBUTING.md) for verification and delivery.
 
 ## Branch and release scope
 
-`main` is the release-ready POSIX/WSL product line. It must not contain native
-Windows development code, native Windows dependencies, native Windows CI jobs,
-or support claims for running local Railmux or the local `railmux ssh` client
-from PowerShell/CMD/native Windows Python. Existing WSL integrations remain in
-`main` because Railmux runs inside the supported Linux runtime there. Publish
-POSIX/WSL development builds from this branch when a fix needs field testing.
-After the `v0.3.5` final release, the next stable-line preview series is
-`0.3.6.devN`, beginning at `0.3.6.dev1`; never append another `.devN` build to
-an already published final version.
+From `v0.4.0` onward, `main` is the single release-ready product line for
+macOS, Linux, WSL, and the native Windows managed-runtime adapter. Shared UI,
+provider, session, transport, and lifecycle behavior has one implementation;
+do not create a Windows-only copy. Native Windows Python may own only runtime
+discovery, consent, installation/update, path and argument translation, and
+handoff into the private managed MSYS2/tmux runtime. Providers remain the
+user's Windows-native Codex/Claude executables and keep their Windows-owned
+session/config directories.
+
+All active development, RC, and final tags must point to commits reachable
+from `main`. Use only canonical PEP 440 spellings supported by the release
+workflow: `MAJOR.MINOR.PATCH.devN`, `MAJOR.MINOR.PATCHrcN`, or the final
+`MAJOR.MINOR.PATCH`. Never append `.devN` to an already published final
+version. RCs are opt-in and must exercise the same app-layer transition that
+the final release will use.
 
 `archive/windows-conpty-deprecated` is the frozen, read-only archive of the
 abandoned native ConPTY compositor experiment. It ends at `v0.4.0.dev2`.
@@ -104,34 +110,19 @@ with a Linux provider runtime, so this is not a fallback or a base for new
 Windows work. Ordinary Railmux launched by a user from inside WSL remains part
 of the supported POSIX product line on `main`.
 
-`windows-preview` is the long-lived integration branch for the replacement
-Windows bootstrap/wrapper experiment. It must start from current `main` and
-must not inherit the archived ConPTY compositor, native provider hosting, or
-parallel UI implementation. Native Windows Python owns only discovery,
-consent, installation/update, path/argument translation, and handoff into a
-private managed MSYS2/tmux runtime. Railmux itself runs under MSYS2 while the
-providers remain the user's Windows-native Codex/Claude executables and use
-their existing Windows-owned session/config directories. The POSIX UI remains
-the one behavioral authority. Do not add a WSL delegation fallback: native
-Windows launch and ordinary user-initiated WSL launch are separate products.
-This branch may publish only PEP 440 development releases in the
-`0.4.0.devN` series, continuing at `0.4.0.dev4` after the archived ConPTY and
-WSL builds; do not use that series for `main` builds. Develop
-Windows changes on focused branches based on
-`windows-preview`, then merge them back into `windows-preview`; never merge
-that branch wholesale into `main`.
+`windows-preview` is frozen after the `v0.4.0.dev36` compatibility bridge. Its
+published `v0.4.0.dev4`–`v0.4.0.dev36` history remains reproducible, but no new
+features, fixes, tags, or merges belong there. The stable implementation was
+promoted as one reviewed squash onto `main`; never merge or rebase the preview
+history afterward. Consult it only to reproduce a released preview transition.
 
-Shared POSIX/provider fixes belong in `main` first and flow one way into
-`windows-preview`. If a bug is discovered while testing Windows, separate the
-provider-neutral fix from the Windows adapter change and land only the former
-in `main`. Keep commits separable so a future Windows promotion can be reviewed
-and merged deliberately instead of importing the preview branch's history.
+Do not add a WSL delegation fallback or revive a ConPTY compositor. Native
+Windows launch and a user independently launching Railmux inside WSL remain
+separate supported entry surfaces. Automatic installation of a Windows runtime
+over SSH and adoption of arbitrary user-owned MSYS2 trees remain out of scope.
 
-Before changing code or publishing, verify the current branch. Final
-`MAJOR.MINOR.PATCH` tags and POSIX/WSL `.devN` tags must point to commits
-reachable from `main`. Windows-wrapper preview tags must contain `.devN`, use
-`0.4.0.dev4` or later in the `0.4.0.devN` series, and point to commits reachable from
-`windows-preview` but not `main`. No commit reachable only from the archived
-ConPTY or WSL-delegation branch is release-eligible. Merge shared fixes from
-`main` before cutting the corresponding Windows preview build; never copy a
-Windows release commit or tag back to `main`.
+Before changing code or publishing, verify the current branch, inspect the
+complete diff, and keep platform-neutral behavior platform-neutral. A Windows
+bug may require an adapter fix, a shared fix, or both; test both the affected
+surface and the ordinary POSIX path. No commit reachable only from an archived
+Windows branch is release-eligible.

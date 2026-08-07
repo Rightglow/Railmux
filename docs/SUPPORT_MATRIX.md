@@ -38,21 +38,24 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux ssh HOST` | macOS | Linux | **Supported** | POSIX client path plus macOS CI; Terminal.app and common external-terminal launch behavior are covered. |
 | `railmux ssh HOST` | Windows WSL, rendered by Windows Terminal | Linux | **Supported** | Linux TTY/SSH implementation with tested `clip.exe`, `wt.exe`, and `wsl.exe` integration. Real Windows Terminal interaction remains a manual release check. |
 | `railmux ssh HOST` | Android Termux | Linux | **Field-validated** | Real phone use plus automated compact projection, SGR touch, soft-keyboard, cursor-focus, resize, and clipboard-fallback state tests. |
-| Either entry point | Native Windows Python in PowerShell, CMD, or Windows Terminal | — or Linux | **Not supported** | The `main` package has no native runtime adapter; use the supported WSL path. Installing the package does not yet provision or enter a delegated runtime. |
-| `railmux` or `railmux ssh HOST` | Native Windows bootstrap using managed MSYS2/tmux | — or Linux | **Planned** | The wrapper is developed only on `windows-preview`; the current `main` package does not install a runtime or claim native launch support. Railmux runs under MSYS2 while Windows-native providers retain the user's existing session/config directories. |
+| `railmux` or `railmux ssh HOST` | Native Windows Python bootstrap using managed MSYS2/tmux | — or Linux/macOS/Unix | **Supported** | Python 3.10+ owns a private verified runtime; Railmux runs under MSYS2 while Windows-native providers retain the user's existing session/config directories. Windows bootstrap, archive, runtime, and real-MSYS2 CI are unconditional; Windows Terminal behavior is field-validated. |
+| Ordinary `ssh USER@WINDOWS`, then `railmux` | Managed MSYS2/tmux on native Windows | — | **Supported** | Desktop and OpenSSH entry share the same private runtime, provider histories, and dedicated workspace. A one-attempt server-origin PTY bridge handles Windows Terminal Services boundaries; this is distinct from Railmux's display protocol. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
+| `railmux ssh --remote-platform windows HOST` | Linux or macOS | Native Windows managed MSYS2 | **Field-validated** | Real Linux-to-Windows protocol/config/doctor handshakes, attach, frame streaming, and clean local escape passed against Windows 10/OpenSSH. The matching Windows runtime must already be installed; updates are explicit user-level PowerShell operations, and `auto` can detect the same path at the cost of a second password prompt when public-key authentication is unavailable. Arbitrary Windows Python/MSYS2 installations are not adopted. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
 The ordinary `ssh HOST` followed by remote `railmux` path depends primarily on
-the local terminal and remote POSIX environment. It does not use Railmux's
+the local terminal and remote runtime. On POSIX it attaches normally; the
+managed Windows runtime may transparently bridge a healthy tmux workspace
+across Windows Terminal Services sessions. This path does not use Railmux's
 local latest-state client, local history cache, semantic link handling, or
-pane-bounded drag-to-copy.
+pane-bounded drag-to-copy and is not the same as `railmux ssh HOST`.
 
 ## Dependency and terminal capability floors
 
 | Capability | Contract |
 |---|---|
-| Python | 3.9 or newer on every machine running Railmux. |
+| Python | 3.9 or newer on POSIX/WSL. The native Windows bootstrap requires 3.10+; the managed MSYS2 process currently uses 3.12+. |
 | tmux core workspace | 2.7 or newer. CI compiles the checksum-pinned official tmux 2.7 release and boots a real Railmux frame. |
 | Managed shell/Vim and nested pane-local SSH history marker | tmux 3.0 or newer; older tmux fails closed with a warning. |
 | Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |
@@ -75,7 +78,7 @@ product capability.
 |---|---|---|---|---|
 | P01 | Detect installed Claude Code and Codex CLIs independently | Supported | Supported remotely | Selecting a missing provider warns without stopping the workspace. |
 | P02 | Discover resumable sessions created outside Railmux | Supported | Supported | One-shot `codex exec` and private Help sessions are filtered. |
-| P03 | Project list, project selection, and new project/directory creation | Supported | Supported | Creation is explicit and never inferred from an arbitrary failed match. |
+| P03 | Project list, selection, favorites, absolute-path copy, Info, Term, and new project/directory creation | Supported | Supported | Project favorites are Railmux path metadata, separate from session favorites; creation is explicit and never inferred from an arbitrary failed match. |
 | P04 | Read-only history preview with provider-aware formatting | Supported | Supported | Latest 2,000 saved records are projected onto the provider's current branch; rewound suffixes and internal/encrypted reasoning are hidden. |
 | P05 | Start a new session and resume an existing session | Supported | Supported | Starting, resuming, previewing, and switching never rewrite provider history; confirmed P09 deletion is the explicit exception. Shared provider roots use fail-closed per-session leases for both Claude Code and Codex so two hosts cannot resume one conversation concurrently. |
 | P06 | Live open on click/Enter; live scrolling on wheel; canonical history on Space or Preview | Supported | Supported | Direct wheel input remains tmux/provider-native; `railmux ssh` owns bounded per-pane scrolling, preserves batched local wheel distance with one final viewport paint, and normally uses styled raw pane capture. Only an exact open Codex child with a newer provider-emitted rollback count may mark that SSH history generation canonical; ordinary continuation/compaction and released heuristic markers remain raw. |
@@ -98,7 +101,7 @@ product capability.
 | W06 | Keyboard, button bar, context menus, Help, and persistent Options | Supported | Supported | Mouse alternatives exist for every required workflow. |
 | W07 | Safety-restricted Ask Railmux help agent | Supported | Supported | Read-only support workspace; no normal provider-history pollution. |
 | W08 | One reusable managed shell and Vim viewer per agent slot | Conditional | Conditional | Requires tmux 3.0+; tools park safely across layout changes. |
-| W09 | Detach one view, Soft Quit shared UI, and confirmed hard quit | Supported | Supported | Soft Quit leaves provider sessions alive; views of one UI are not independent workspaces. The first chooser has visible mouse buttons; its hard-quit button only opens a keyboard-only final confirmation, while both steps retain `y`/Enter semantics. |
+| W09 | Detach one view, Soft Quit shared UI, and confirmed hard quit | Supported | Supported | Soft Quit leaves provider sessions alive; managed Windows recreates a missing outer UI on the same revalidated dedicated server and exact available entry-TTY size before direct/bridged reattach. Views of one UI are not independent workspaces. The first chooser has visible mouse buttons; its hard-quit button only opens a keyboard-only final confirmation, while both steps retain `y`/Enter semantics. |
 | W10 | Soft restart and exact workspace/session recovery | Supported | Supported | Ambiguous identity becomes visible unresolved state rather than a guessed binding. |
 | W11 | Multiple attached terminals | Conditional | Conditional | Shared focus/layout and tmux `smallest` geometry; simultaneous input can interfere. |
 | W12 | Shared config file, standalone editor, and in-product persistent Options | Supported | Supported | `railmux config` works without tmux, uses a temporary interactive screen, validates program/locale overrides, and edits the same remote or local TOML authority; one-time confirmations stay action-local. |
@@ -109,9 +112,9 @@ product capability.
 
 | ID | Capability | Status | Important boundary |
 |---|---|---|---|
-| S01 | Pre-attach package/protocol/config/tmux compatibility handshake | Supported | Runs before tmux lookup, creation, lock, PTY allocation, or attach; invalid remote config and configured-tmux failures remain distinct. |
-| S02 | Consent-based remote user install or private venv repair | Supported | Exact compatible package; never `sudo`, system package installation, or shell-profile edits. |
-| S03 | Consent-based local upgrade when remote is newer | Supported on POSIX local runtimes | Re-execs only after the same interpreter imports the requested version. |
+| S01 | Pre-attach package/protocol/config/tmux compatibility handshake | Supported | Runs before tmux lookup, creation, lock, PTY allocation, or attach; invalid remote config and configured-tmux failures remain distinct. POSIX discovery remains the default; an explicit or detected managed Windows host uses a shell-neutral direct command. |
+| S02 | Consent-based remote user install or private venv repair | Supported | Exact compatible package; never `sudo`, system package installation, or shell-profile edits. Managed Windows remotes deliberately fail closed with manual user-level pip/runtime commands rather than receiving the POSIX installer. |
+| S03 | Consent-based local upgrade when remote is newer | Supported on POSIX local runtimes | Re-execs only after the same interpreter imports the requested version. Managed Windows app layers are immutable and instead show native PowerShell/runtime update instructions. |
 | S04 | Immediate restoring surface and bounded startup stages | Supported | First validated keyframe replaces it; setup prompts remain cooked-mode. |
 | S05 | Coalesced latest-state keyframes and row patches | Supported | Slow display output must not flow-control the real provider pane. |
 | S06 | Default-on bounded automatic reconnect | Supported | Only after a first frame; bottom-right retry status and display-only SSH keepalives bound silent outages; no install, takeover, session creation, detach, or provider mutation. |
@@ -128,7 +131,7 @@ product capability.
 | S17 | Bracketed paste and terminal focus-event projection | Supported | Only allowlisted modes cross the display protocol; modes are restored on every exit path. |
 | S18 | Termux soft-keyboard projection, touch recovery, and prompt cursor | Field-validated | Android-specific behavior is entered only from Termux environment evidence. |
 | S19 | Emergency local `Ctrl-]`, normal tmux detach, and lifecycle exit classification | Supported | Local escape never becomes provider input. |
-| S20 | Consent-based `railmux config --remote HOST` | Supported on POSIX local runtimes | Two SSH phases; the probe never sends the display start token or touches a tmux server, and the cooked editor preserves local-only history capacity. |
+| S20 | Consent-based `railmux config --remote HOST` | Supported on POSIX and managed-Windows local runtimes | Two SSH phases pin one POSIX/direct launch family; the probe never sends the display start token or touches a tmux server, the cooked editor preserves local-only history capacity, and Windows remotes require a preinstalled compatible managed runtime. |
 
 ## Terminal emulator validation
 
@@ -142,7 +145,7 @@ capabilities it exposes, then record unavoidable product differences.
 | VS Code/Cursor xterm.js | Supported | Right-click behavior and CJK composition focus are editor settings; test paste and mouse forwarding. |
 | kitty, WezTerm, Alacritty, foot | Compatible/conditional | SGR mouse, OSC 52 policy, function keys, colours, resize, and external launcher where applicable. |
 | Windows Terminal with WSL | Supported | WSL runtime, `clip.exe`, `wt.exe`, function-key conflicts, mouse, paste, resize, and OSC 52. |
-| Windows Terminal launched by the native Windows bootstrap | Planned | Must pass the delegated-runtime acceptance checklist below before this row changes. |
+| Windows Terminal launched by the native Windows bootstrap | Field-validated | Windows 10 and Windows 11 owner validation plus unconditional bootstrap/archive/runtime CI; keep resize, mouse, clipboard, IME, and terminal restoration in the release checklist. |
 | Termux | Field-validated | Compact navigation, keyboard open/close, cursor, post-keyboard touch, rotation boundary, history, and reconnect. |
 
 For every newly claimed terminal, manually verify alternate-screen entry/exit,
@@ -181,20 +184,42 @@ OpenCode is therefore **planned**, not currently supported.
 
 ## Adding a local operating system
 
-The Windows preview uses a native bootstrap to enter one POSIX Railmux runtime,
-not a second Console/ConPTY UI implementation. The remote helper can remain
-POSIX. Every item below must pass before the native Windows launch experience
-is labelled supported.
+Railmux for Windows uses a native bootstrap to enter one POSIX Railmux runtime,
+not a second Console/ConPTY UI implementation. The checklist below is the
+continuing release contract for that supported surface; every affected item
+must remain covered when the adapter, shared UI, or terminal behavior changes.
 
 1. `pip install`, package import, CLI parsing, bootstrap configuration, version
    check, update, and privacy-safe diagnostics work under supported Windows
-   Python without importing POSIX-only Railmux modules before handoff.
-2. Offer an explicit, cancellable managed-MSYS2 installation with pinned
-   sources, integrity verification, private ownership, and no system-wide PATH
+   Python without importing POSIX-only Railmux modules before handoff. An
+   AppX/MSIX-packaged Python must place executable runtime state where native
+   PowerShell and MSYS2 child processes see the same non-virtualized files;
+   traditional Python must retain its existing LocalAppData runtime.
+2. Offer an explicit, cancellable managed-MSYS2 installation with approved
+   pinned sources, one fixed integrity digest across safe source fallback,
+   bounded speed probes and exact-offset resume, visible bounded download
+   progress, fresh package-mirror selection, persistent verified download
+   caches, network-failure recovery, bounded phase progress/heartbeats,
+   complete UTF-8 diagnostic logs, private ownership, and no system-wide PATH
    or shell-profile edits. Never silently adopt or modify a user-owned MSYS2.
-3. Keep one versioned runtime authority and make interrupted installation or
-   upgrade transactional and recoverable. Never overwrite user-owned MSYS2
-   files.
+   A storage-location transition may reuse only a base archive that still
+   matches its pinned size and SHA-256; it must not migrate incomplete staging
+   or executable runtime trees across visibility boundaries.
+   Tar POSIX modes must never become NTFS read-only attributes on
+   package-owned paths; pacman must be able to replace every staged base file.
+   Run MSYS2's full upgrade from fresh Windows-launched processes at least
+   twice. Treat termination as a successful core-runtime handoff only after the
+   exact pacman restart announcement, bound the restart loop, and require a
+   final pass that does not request another restart before publishing the base.
+   Stop GnuPG daemons by the private pacman keyring home before staging
+   activation; never use a machine-wide process-name or loaded-module kill.
+3. Key one private shared base authority by the pinned MSYS2 compatibility
+   identifier, record an exact package-content identity for rolling repository
+   results, bind each new app marker to it, and keep Railmux application venvs
+   version-isolated beneath it.
+   Make base creation, released-runtime adoption, and app upgrades transactional
+   and recoverable; bump the base identifier whenever its contents must be
+   refreshed. Never adopt or overwrite user-owned MSYS2 files.
 4. Translate Windows paths, Unicode arguments, environment, exit status, and
    Ctrl-C exactly across the handoff without `shell=True` or command-string
    interpolation.
@@ -210,13 +235,31 @@ is labelled supported.
 8. Define clipboard, browser, and separate-terminal bridges for each runtime;
    keep bounded OSC 52 as a policy-dependent fallback and quote remote SSH/Vim
    commands without `shell=True` or command-string interpolation.
-9. Prove local session restore and `railmux ssh` to Linux/macOS/Unix hosts.
-   Running providers or an SSH server on native Windows remains out of scope.
-10. Add unconditional native Windows bootstrap/import/package CI plus a real
+9. Prove local session restore, `railmux ssh` to Linux/macOS/Unix hosts, and
+   ordinary OpenSSH login to the same Windows account followed by `railmux`.
+   Desktop and SSH entry surfaces must attach the same workspace even when
+   Windows assigns different Terminal Services sessions. A Linux/macOS
+   display client may run the remote server only through a preinstalled,
+   version-compatible managed Windows runtime; automatic Windows
+   install and arbitrary native runtimes remain out of scope. Remote config and
+   read-only doctor use the same pinned direct launch family once that runtime
+   is present.
+10. Add unconditional native Windows bootstrap/import/package CI, full pinned
+    archive extraction plus measured-mirror two-pass base-update and native
+    executable-loading CI, durable core-transaction restart evidence, and a real
     managed-MSYS2 runtime smoke. If hosted CI cannot exercise the runtime,
-    record a named and dated real Windows Terminal pass here for every release
-    that claims it. Mocked OS branches and ordinary WSL evidence cannot close
-    the managed-MSYS2 path.
+   record a named and dated real Windows Terminal pass here for every release
+   that changes the corresponding manual behavior. Mocked OS branches and
+   ordinary WSL evidence cannot close the managed-MSYS2 path.
+
+The release owner reported the complete dev35 Windows manual checklist passing
+on 2026-08-07, including the final click/Preview/running-session performance
+changes. The dedicated Windows 10 host then completed the exact version-boundary
+transition (`dev35` → `dev36` → `rc1`), reused its verified 96-package base,
+attached and detached both new layers, reported the rc1 UI ready through
+`doctor`, matched its content verification, and retained dev35/dev36/rc1 in a
+non-mutating prune dry-run. Unchanged terminal interactions were not repeated
+mechanically.
 
 ## Release closure checklist
 

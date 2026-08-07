@@ -39,17 +39,17 @@ mode. It currently inherits `mkstemp`'s private `0600` mode, including for the
 explicit Claude-history deletion path; changing that behavior needs targeted
 permission semantics rather than a repository-wide chmod guess.
 
-### Windows bootstrap into a managed MSYS2 Railmux runtime
+### Managed Windows runtime follow-ups
 
 Windows Terminal running a WSL distribution already uses Railmux's supported
 Linux path, but it is not the native-Windows product: its Linux providers do
 not naturally share the user's Windows Codex/Claude installation, credentials,
-paths, and histories. The native experiment therefore uses a thin bootstrap
+paths, and histories. The shipped native adapter uses a thin bootstrap
 that provisions a private managed MSYS2/tmux runtime and hands local Railmux or
 the local side of `railmux ssh` to the unchanged POSIX application. Providers
 remain Windows-native and keep using the existing Windows user directories.
 
-The bootstrap may own consent, downloads, integrity checks, updates, path and
+The bootstrap owns consent, downloads, integrity checks, updates, path and
 argument translation, and terminal handoff. It must not grow another terminal
 emulator, compositor, provider host, or independent copy of Railmux UI state.
 The earlier ConPTY implementation is frozen at `v0.4.0.dev2` on
@@ -59,6 +59,13 @@ WSL-delegation experiment is frozen at `v0.4.0.dev3` on
 complete functional baseline and acceptance checklist live in
 `docs/SUPPORT_MATRIX.md`; mocked Windows branches and ordinary WSL evidence are
 not sufficient to claim the managed-MSYS2 launch experience.
+
+Remaining work is bounded maintenance evidence: exercise a genuinely
+non-ASCII Windows profile path, revalidate the fail-closed pacman core-restart
+handoff when a real host next has a pending core update, and decide whether a
+future runtime generation should snapshot repository package versions rather
+than retaining signed rolling repositories plus an exact installed-content
+identity. None of these changes the shipped ownership model.
 
 ### Dual-agent workspace follow-ups
 

@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import subprocess
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
-from railmux import tmux_server
+from railmux import __version__, tmux_server
 
 
 @pytest.mark.parametrize(
@@ -35,6 +36,176 @@ def test_launcher_argv_preserves_multi_argument_python_module_prefix():
         "/usr/bin/python3", "-m", "railmux", "--inside-tmux",
         "--mode", "codex",
     ]
+
+
+def test_detached_launcher_session_is_pinned_before_and_after_create(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    live = []
+    session_ids = iter((None, "$7"))
+    # Another launcher can win after our initial absence check. tmux then
+    # rejects this duplicate create, while the exact resulting session is the
+    # safe shared outcome.
+    run = SimpleNamespace(returncode=1)
+    launched = []
+
+    def target_is_live(candidate, **kwargs):
+        live.append((candidate, kwargs))
+        return True
+
+    monkeypatch.setattr(tmux_server, "target_is_live", target_is_live)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: launched.append((argv, kwargs)) or run,
+    )
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target,
+        ["/opt/railmux/bin/python", "-m", "railmux"],
+        ["--mode", "codex"],
+        env={"PATH": "/usr/bin"},
+    ) == "$7"
+
+    assert len(live) == 2
+    assert launched[0][0] == [
+        "tmux", "-S", "/tmp/private",
+        "new-session", "-d", "-s", "railmux",
+        "/opt/railmux/bin/python", "-m", "railmux", "--inside-tmux",
+        "--mode", "codex",
+    ]
+    assert launched[0][1]["env"] == {"PATH": "/usr/bin"}
+
+
+def test_detached_managed_windows_session_receives_only_runtime_identity(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_ids = iter((None, "$7"))
+    launched = []
+    monkeypatch.setattr(tmux_server, "target_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: launched.append((argv, kwargs))
+        or SimpleNamespace(returncode=0),
+    )
+    env = {
+        "RAILMUX_WINDOWS_RUNTIME": "msys2",
+        "RAILMUX_MSYS2_RUNTIME_ID": "msys2-2026-03-22",
+        "RAILMUX_MSYS2_APP_ID": f"railmux-{__version__}",
+        "CODEX_API_KEY": "must-not-enter-tmux",
+    }
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target,
+        ["/opt/railmux/bin/railmux"],
+        [],
+        env=env,
+        initial_size=(164, 46),
+    ) == "$7"
+
+    argv = launched[0][0]
+    assert argv == [
+        "tmux", "-S", "/tmp/private", "new-session", "-d", "-s",
+        "railmux",
+        "-x", "164", "-y", "46",
+        "-e", "RAILMUX_WINDOWS_RUNTIME=msys2",
+        "-e", "RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22",
+        "-e", f"RAILMUX_MSYS2_APP_ID=railmux-{__version__}",
+        "/opt/railmux/bin/railmux", "--inside-tmux",
+    ]
+    assert all("CODEX_API_KEY" not in value for value in argv)
+
+
+@pytest.mark.parametrize(
+    "initial_size",
+    [None, (0, 24), (80, 0), (-1, 24), (80, 65536), (True, 24)],
+)
+def test_detached_session_does_not_invent_or_forward_invalid_size(
+    monkeypatch, initial_size,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_ids = iter((None, "$7"))
+    launched = []
+    monkeypatch.setattr(tmux_server, "target_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **_kwargs: launched.append(argv)
+        or SimpleNamespace(returncode=0),
+    )
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target, ["railmux"], [], initial_size=initial_size,
+    ) == "$7"
+
+    assert "-x" not in launched[0]
+    assert "-y" not in launched[0]
+
+
+def test_detached_session_rejects_unbounded_runtime_identity(monkeypatch):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_ids = iter((None, "$7"))
+    launched = []
+    monkeypatch.setattr(tmux_server, "target_is_live", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        tmux_server,
+        "target_session_id",
+        lambda *_args, **_kwargs: next(session_ids),
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda argv, **kwargs: launched.append(argv)
+        or SimpleNamespace(returncode=0),
+    )
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target,
+        ["railmux"],
+        [],
+        env={
+            "RAILMUX_WINDOWS_RUNTIME": "msys2",
+            "RAILMUX_MSYS2_APP_ID": "bad=value",
+        },
+    ) == "$7"
+
+    assert "RAILMUX_WINDOWS_RUNTIME=msys2" in launched[0]
+    assert all("bad=value" not in value for value in launched[0])
+
+
+def test_detached_launcher_session_refuses_changed_server_identity(
+    monkeypatch,
+):
+    target = tmux_server.TmuxServerTarget("/tmp/private", 44)
+    session_id = MagicMock(return_value=None)
+    monkeypatch.setattr(tmux_server, "target_session_id", session_id)
+    monkeypatch.setattr(
+        tmux_server, "target_is_live", MagicMock(side_effect=(True, False)))
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=SimpleNamespace(returncode=0)))
+
+    assert tmux_server.ensure_detached_launcher_session(
+        target, ["railmux"], [],
+    ) is None
+    session_id.assert_called_once_with(target, "railmux", timeout=0.5)
 
 
 def test_current_socket_parser_allows_commas_in_the_path():
@@ -100,6 +271,32 @@ def test_discover_target_uses_explicit_label_and_times_out(monkeypatch):
             "#{socket_path} #{pid}",
         ],
         "timeout": 0.25,
+    }
+
+
+@pytest.mark.parametrize(
+    ("env", "expected_timeout"),
+    [
+        ({}, 2.0),
+        ({"RAILMUX_WINDOWS_RUNTIME": "msys2"}, 5.0),
+    ],
+)
+def test_discover_target_allows_managed_msys_stale_socket_settle(
+    monkeypatch, env, expected_timeout,
+):
+    observed = {}
+
+    def discover(label, *, timeout, env):
+        observed.update(label=label, timeout=timeout, env=env)
+        return None
+
+    monkeypatch.setattr(tmux_server, "_discover_label_target", discover)
+
+    assert tmux_server.discover_target(env=env) is None
+    assert observed == {
+        "label": "railmux",
+        "timeout": expected_timeout,
+        "env": env,
     }
 
 

@@ -26,6 +26,7 @@ from railmux import (
     tmux_ctl,
     tmux_health,
     tmux_server,
+    windows_tmux_lifecycle,
 )
 from railmux.atomic_file import atomic_write_text
 from railmux.background_index import BackgroundCodexIndex
@@ -36,11 +37,13 @@ from railmux.display_transport import (
 )
 from railmux.discovery import invalidate_session, list_projects
 from railmux.favorites import Favorites
+from railmux.project_favorites import ProjectFavorites
 from railmux.fast_display_input import is_termux_environment
 from railmux.help_workspace import (
     is_help_workspace,
     materialize_help_workspace,
 )
+from railmux.provider_paths import running_in_windows_wrapper
 from railmux.settings import LayoutProfile, Settings
 from railmux.tool_panes import ToolPaneManager, manager_for_session
 from railmux.launcher import (
@@ -585,6 +588,7 @@ class App:
     _tip_index: int = 0
     _tip_since: float = 0.0
     _managed_tool_panes: ToolPaneManager | None = None
+    _ui_upgrade_request: object | None = None
     # railmux's status line is rendered into the OUTER tmux status bar (full
     # terminal width) — there is no in-pane status widget. Off until run() wires
     # it up; session-scoped so it never touches the user's global tmux config.
@@ -759,11 +763,19 @@ class App:
 
     def __init__(self, claude_home: Path, config: Config,
                  auto_launched: bool = False,
-                 scroll_coalescing: bool = True) -> None:
+                 scroll_coalescing: bool = True,
+                 startup_progress: Callable[[str], None] | None = None) -> None:
+        self._startup_started_at = time.monotonic()
+        self._startup_project_scan_seconds = 0.0
+        self._startup_recovery_seconds = 0.0
+        self._startup_progress = startup_progress
         # Capture before any pane may be split or moved. The server-lifetime
         # digest plus immutable pane id namespaces local recovery state across
         # windows, sessions, and private tmux servers.
         self._restart_identity = restart_state.capture_outer_identity()
+        # A newly live UI revokes any cleanup proof from the preceding
+        # lifecycle before it can create provider sessions.
+        windows_tmux_lifecycle.clear_empty_server_exit()
         self._claude_home = claude_home
         self._config = config
         self._auto_launched = auto_launched
@@ -802,6 +814,7 @@ class App:
         self._renames = Renames()
         self._session_cache = SessionCache(self._renames)
         self._favorites = Favorites()
+        self._project_favorites = ProjectFavorites()
         self._settings = Settings()
         self._layout_profile = self._settings.layout_profile
         self._active_sidebar_permille = (
@@ -872,6 +885,16 @@ class App:
                 identity.server_digest, identity.pane_id)
             if identity is not None else None
         )
+        # MSYS2 pays tens of milliseconds for every tmux client process. The
+        # crash-safe global wheel/function leases are independent from provider
+        # discovery and the first sidebar frame, so Windows prepares them on a
+        # background worker while the UI becomes interactive. Teardown joins
+        # that worker before restoring any lease.
+        self._windows_tmux_setup_lock = threading.Lock()
+        self._windows_tmux_setup_thread: threading.Thread | None = None
+        self._windows_tmux_setup_result: tuple[bool, bool] | None = None
+        self._windows_tmux_setup_done = False
+        self._windows_tmux_setup_cancelled = False
         self._termux_local_touch = bool(
             identity is not None
             and is_termux_environment()
@@ -887,6 +910,8 @@ class App:
         )
         self._projected_target_pane_id: str | None = None
         self._target_toggle_warning_shown = False
+        self._status_navigation_warning_shown = False
+        self._status_navigation_projected = False
         self._teardown_core_done: bool = False
         self._outer_teardown_done: bool = False
         self._exit_in_progress: bool = False
@@ -966,7 +991,12 @@ class App:
         self._delete_thread: threading.Thread | None = None
         self._delete_result: _DeleteResult | None = None
 
+        self._notify_startup_progress(
+            "Indexing local agent sessions (read-only)…")
+        project_scan_started = time.monotonic()
         projects = list_projects(claude_home)
+        self._startup_project_scan_seconds = (
+            time.monotonic() - project_scan_started)
         self._project_snapshot = projects
         self._project_snapshot_at = time.monotonic()
         initial_mode = self._active_mode()
@@ -974,7 +1004,9 @@ class App:
             projects,
             on_select=self._on_project_select,
             on_double_click=self._on_project_double_click,
+            on_context=self._open_project_context_menu,
             provider_label=initial_mode.label,
+            favorite_paths=self._project_favorites.get_paths(),
             boxed=False,
         )
         self._sessions_pane = SessionsPane(
@@ -1049,6 +1081,9 @@ class App:
         # audits the explicitly targeted dedicated server before
         # ``new-session -A`` so a stale outer session cannot prevent a new App
         # process from launching.
+        self._notify_startup_progress(
+            "Reconnecting tmux panes (session files stay untouched)…")
+        recovery_started = time.monotonic()
         if tmux_ctl.in_tmux():
             recover_interrupted_swaps()
         state = self._load_state()
@@ -1058,6 +1093,7 @@ class App:
         # reconstruct the real session id on platforms without procfs.
         recovery_ok, recovery_generation = self._discover_orphans_consistent(state)
         self._discover_legacy_running(force=True)
+        self._startup_recovery_seconds = time.monotonic() - recovery_started
         if recovery_generation == 0 and self._codex_recovery_candidates_seen:
             self._codex_recovery_pending = True
             self._codex_recovery_state = state
@@ -1115,6 +1151,28 @@ class App:
             and workspace_state.get("focus")
             in {AgentWorkspace.PRIMARY, AgentWorkspace.SECONDARY}
         )
+    def _notify_startup_progress(self, detail: str) -> None:
+        callback = getattr(self, "_startup_progress", None)
+        if callback is None:
+            return
+        try:
+            callback(detail)
+        except Exception:
+            # Startup feedback is cosmetic and must not obstruct recovery.
+            pass
+
+    def _report_windows_startup_summary(self, _loop, _user_data) -> None:
+        """Explain a slow Windows restore without exposing provider content."""
+        elapsed = time.monotonic() - self._startup_started_at
+        if elapsed < 2.0:
+            return
+        self._set_status(
+            f"Restored in {elapsed:.1f}s (index "
+            f"{self._startup_project_scan_seconds:.1f}s, panes "
+            f"{self._startup_recovery_seconds:.1f}s) · histories are read-only; "
+            "unchanged files use Railmux's private cache.",
+            "info",
+        )
 
     def _set_slot_active_target(
         self,
@@ -1124,6 +1182,7 @@ class App:
         *,
         mode_key: str | None = None,
         project_key: str | None = None,
+        sync_transcript_source: bool = True,
     ) -> None:
         """Update one slot, painting sidebar highlights only for the Target."""
         slot.active_session_id = session_id
@@ -1149,7 +1208,8 @@ class App:
             )
         elif session_id is None:
             slot.project_key = None
-        self._sync_slot_transcript_source(slot, session_id, tmux_name)
+        if sync_transcript_source:
+            self._sync_slot_transcript_source(slot, session_id, tmux_name)
         self._paint_slot_active_target(slot, session_id, tmux_name)
 
     def _sync_slot_transcript_source(
@@ -1162,6 +1222,19 @@ class App:
         pane_id = slot.pane_id
         if pane_id is None or not pane_id.startswith("%"):
             return
+        marker = self._transcript_source_marker(session_id, tmux_name)
+        tmux_ctl.set_pane_user_option(
+            pane_id,
+            tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            marker,
+        )
+
+    def _transcript_source_marker(
+        self,
+        session_id: str | None,
+        tmux_name: str | None,
+    ) -> str | None:
+        """Build the bounded read-only Preview locator for one live target."""
         marker = None
         running = self._by_tmux(tmux_name) if tmux_name else None
         logical_id = (
@@ -1192,11 +1265,78 @@ class App:
                     representative.session_id,
                     representative.jsonl_path,
                 )
-        tmux_ctl.set_pane_user_option(
-            pane_id,
-            tmux_server.TRANSCRIPT_SOURCE_OPTION,
-            marker,
+        return marker
+
+    def _sync_attached_slot_projection(
+        self,
+        slot: AgentSlot,
+        tmux_name: str,
+    ) -> None:
+        """Publish non-authoritative pane projections with one tmux client.
+
+        The display transport has already verified and committed the pane
+        ownership transaction.  These options advertise the explicit Preview
+        source and the prefix-Tab Target; neither grants authority to move,
+        resume, or kill a provider.  Batching them removes one deterministic
+        MSYS2 process startup while retaining the established helpers as a
+        fail-safe fallback.
+        """
+        pane_id = slot.pane_id
+        if (
+            pane_id is None
+            or not pane_id.startswith("%")
+            or tmux_ctl.tmux_version() < (3, 0)
+        ):
+            self._sync_slot_transcript_source(
+                slot,
+                self._session_id_for_tmux_target(tmux_name),
+                tmux_name,
+            )
+            return
+
+        session_id = self._session_id_for_tmux_target(tmux_name)
+        marker = self._transcript_source_marker(session_id, tmux_name)
+        if marker is None:
+            transcript_command = (
+                "set-option", "-p", "-t", pane_id,
+                "-u", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            )
+        else:
+            transcript_command = (
+                "set-option", "-p", "-t", pane_id,
+                tmux_server.TRANSCRIPT_SOURCE_OPTION, marker,
+            )
+        commands: list[tuple[str, ...]] = [transcript_command]
+
+        manager = getattr(self, "_tmux_binding_manager", None)
+        owner = getattr(self, "_railmux_pane_id", None)
+        desired_target: str | None = None
+        if (
+            slot.key == self._agent_workspace().target_slot_key
+            and owner is not None
+            and getattr(manager, "target_toggle_available", False)
+        ):
+            desired_target = pane_id
+            commands.append((
+                "set-window-option", "-t", owner,
+                tmux_ctl.RAILMUX_TARGET_OPTION, desired_target,
+            ))
+
+        if tmux_ctl.run_command_queue(tuple(commands)):
+            if desired_target is not None:
+                self._projected_target_pane_id = desired_target
+            return
+
+        # A presentation-only batch failure must not turn a verified attach
+        # into a provider/session failure. Retry each released helper so one
+        # unsupported option cannot suppress the other projection.
+        self._sync_slot_transcript_source(
+            slot,
+            session_id,
+            tmux_name,
         )
+        if desired_target is not None:
+            self._sync_target_pane_option()
 
     def _paint_slot_active_target(
         self,
@@ -1243,7 +1383,8 @@ class App:
     def _set_active_target(self, session_id: str | None,
                            tmux_name: str | None, *,
                            mode_key: str | None = None,
-                           project_key: str | None = None) -> None:
+                           project_key: str | None = None,
+                           sync_transcript_source: bool = True) -> None:
         """Compatibility entry point for the currently exposed primary slot."""
         self._set_slot_active_target(
             self._primary_slot,
@@ -1251,16 +1392,22 @@ class App:
             tmux_name,
             mode_key=mode_key,
             project_key=project_key,
+            sync_transcript_source=sync_transcript_source,
         )
 
     def _set_active_tmux_target(
-        self, tmux_name: str, slot: AgentSlot | None = None,
+        self,
+        tmux_name: str,
+        slot: AgentSlot | None = None,
+        *,
+        sync_transcript_source: bool = True,
     ) -> None:
         slot = slot or self._primary_slot
         self._set_slot_active_target(
             slot,
             self._session_id_for_tmux_target(tmux_name),
             tmux_name,
+            sync_transcript_source=sync_transcript_source,
         )
 
     def _sync_border_indicators(self, arrows: bool) -> bool:
@@ -1323,8 +1470,13 @@ class App:
         """
         workspace = self._agent_workspace()
         layout = workspace.layout
-        target_pane = None if active else workspace.target.pane_id
-        state = (active, layout, target_pane)
+        # Border formats depend on focus, layout, and the logical Target slot,
+        # not on the physical pane ID currently swapped into that slot.  Using
+        # the pane ID here rewrote identical gray borders after every
+        # live-session switch, which is especially visible on MSYS2 where each
+        # tmux client startup is comparatively expensive.
+        target_slot = None if active else workspace.target.key
+        state = (active, layout, target_slot)
         if not force and self._divider_active == state:
             return
         gray = "fg=colour240"
@@ -1358,7 +1510,7 @@ class App:
         desired_state = (
             active,
             workspace.layout,
-            None if active else workspace.target.pane_id,
+            None if active else workspace.target.key,
         )
         state = getattr(self, "_divider_active", None)
         if state != desired_state:
@@ -1379,7 +1531,7 @@ class App:
         if now - getattr(self, "_last_border_verify_at", 0.0) < 2.0:
             return
         self._last_border_verify_at = now
-        active, layout, _target_pane = state
+        active, layout, _target_slot = state
         gray = "fg=colour240"
         green = f"fg={_GRASS_GREEN}"
         if not active:
@@ -1982,21 +2134,35 @@ class App:
 
     # --- history preview (display pane shows a transcript, not an agent session) ---
 
+    def _paint_session_row_click_now(self, session_id: str | None) -> None:
+        """Acknowledge a pointer selection before synchronous tmux work."""
+        pane = getattr(self, "_sessions_pane", None)
+        if pane is None:
+            return
+        pane.set_selected_session(session_id)
+        loop = getattr(self, "_loop", None)
+        if loop is not None:
+            loop.draw_screen()
+
     def _on_session_row_preview(self, session: SessionMeta) -> None:
         """Apply click semantics after rechecking whether the row is live."""
-        running = self._by_session_id(session.session_id)
-        if (running is not None
-                and self._agent_session_alive(running.tmux_name)):
-            self._on_running_select(
-                RunningEntry(
-                    tmux_name=running.tmux_name,
-                    label=running.label,
-                    status=running.status,
-                ),
-                steal_focus=False,
-            )
-            return
-        self._on_session_preview(session)
+        self._paint_session_row_click_now(session.session_id)
+        try:
+            running = self._by_session_id(session.session_id)
+            if (running is not None
+                    and self._agent_session_alive(running.tmux_name)):
+                self._on_running_select(
+                    RunningEntry(
+                        tmux_name=running.tmux_name,
+                        label=running.label,
+                        status=running.status,
+                    ),
+                    steal_focus=False,
+                )
+                return
+            self._on_session_preview(session)
+        finally:
+            self._paint_session_row_click_now(None)
 
     def _on_session_preview(self, session: SessionMeta) -> None:
         """Show the provider's canonical current-branch history.
@@ -2037,10 +2203,19 @@ class App:
             }
             if slot is self._primary_slot:
                 self._set_active_target(
-                    session.session_id, None, **target_kwargs)
+                    session.session_id,
+                    None,
+                    sync_transcript_source=False,
+                    **target_kwargs,
+                )
             else:
                 self._set_slot_active_target(
-                    slot, session.session_id, None, **target_kwargs)
+                    slot,
+                    session.session_id,
+                    None,
+                    sync_transcript_source=False,
+                    **target_kwargs,
+                )
             if not self._show_attention_status(session.attention):
                 self._set_status(
                     f"≡ Previewing {session.display_title} (current history)")
@@ -2151,6 +2326,12 @@ class App:
                 f"{shlex.quote(controller)} -- "
                 f"{shlex.quote(restore_sequence)}"
             )
+        # A preview-to-preview switch keeps the same Railmux-owned outer pane,
+        # whose provider and SSH transcript markers were already cleared by
+        # the first transition.  ``respawn-pane`` is itself the bounded
+        # liveness check, so do not launch redundant tmux clients on this hot
+        # path.  Entering preview from a live agent still uses the complete
+        # return-home identity transaction below.
         replacing_preview = bool(
             slot.in_history_mode
             and slot.pane_id
@@ -2165,7 +2346,8 @@ class App:
                 return False
         else:
             # In swap mode ``slot.pane_id`` is the real provider pane. Return
-            # it home before replacing only the inert display placeholder.
+            # it home before the destructive ``respawn-pane -k`` below; only
+            # the display placeholder may be replaced by the viewer.
             if not self._display_transport().prepare_preview(slot):
                 self._set_status(
                     "failed to return the agent home before transcript preview",
@@ -2173,17 +2355,18 @@ class App:
                 )
                 return False
             self._sync_slot_transcript_source(slot, None, None)
+            # prepare_preview already proved an existing pane immediately
+            # before this mutation.  A race now fails in respawn-pane rather
+            # than paying for a second process-wide list-panes query.
             if slot.pane_id:
                 if not tmux_ctl.respawn_pane(slot.pane_id, cmd):
-                    self._set_status(
-                        "failed to respawn right pane for transcript")
+                    self._set_status("failed to respawn right pane for transcript")
                     return False
             else:
                 new_id = tmux_ctl.split_window_h(
                     cmd, size_percent=70, detached=True)
                 if not new_id:
-                    self._set_status(
-                        "failed to create right pane for transcript")
+                    self._set_status("failed to create right pane for transcript")
                     return False
                 slot.pane_id = new_id
                 self._set_railmux_focus(
@@ -2388,7 +2571,13 @@ class App:
         slot.agent_tmux_name = agent_tmux_name
         mode = self._modes().for_tmux_name(agent_tmux_name)
         slot.mode_key = mode.key if mode is not None else None
-        self._set_active_tmux_target(agent_tmux_name, slot)
+        self._set_active_tmux_target(
+            agent_tmux_name,
+            slot,
+            sync_transcript_source=not outcome.display_stable,
+        )
+        if outcome.display_stable and not outcome.target_unchanged:
+            self._sync_attached_slot_projection(slot, agent_tmux_name)
         self._set_railmux_focus(
             not steal_focus and not self._double_focus_visual_pending,
             force_border=not outcome.display_stable,
@@ -2463,8 +2652,26 @@ class App:
 
     def _install_tmux_bindings(self) -> None:
         """Ensure global forwarding and the current Target projection exist."""
+        worker = getattr(self, "_windows_tmux_setup_thread", None)
+        if worker is not None and worker.is_alive():
+            return
         manager = getattr(self, "_tmux_binding_manager", None)
+        target_was_available = bool(
+            manager is not None and manager.target_toggle_available)
         opened = manager is not None and manager.open()
+        self._finish_tmux_bindings(
+            opened,
+            force_target=not target_was_available,
+        )
+
+    def _finish_tmux_bindings(
+        self,
+        opened: bool,
+        *,
+        force_target: bool = True,
+    ) -> None:
+        """Project pane-local state after the shared lease is prepared."""
+        manager = getattr(self, "_tmux_binding_manager", None)
         selection = getattr(self, "_selection_isolation_manager", None)
         if selection is not None:
             selection.sync(
@@ -2474,7 +2681,7 @@ class App:
             )
         if opened:
             if manager.target_toggle_available:
-                self._sync_target_pane_option(force=True)
+                self._sync_target_pane_option(force=force_target)
             elif not getattr(self, "_target_toggle_warning_shown", False):
                 self._target_toggle_warning_shown = True
                 self._set_status(
@@ -2482,12 +2689,135 @@ class App:
                     "warn",
                 )
             if manager.status_navigation_available:
-                # The initial bar is painted before the shared binding lease is
-                # acquired. Repaint once ownership is known so its wide
-                # Mode/Layout ranges (and compact page ranges) are immediately
-                # live rather than waiting for the next unrelated transition.
-                self._apply_tmux_bar(self._tmux_error_bar)
+                self._project_status_navigation()
+            elif (running_in_windows_wrapper()
+                  and not self._status_navigation_warning_shown):
+                self._status_navigation_warning_shown = True
+                self._set_status(
+                    "Status clicks unavailable; use m for Mode and F8 for "
+                    "Layout.",
+                    "warn",
+                )
             self._sync_termux_tap_route()
+
+    def _project_status_navigation(self) -> None:
+        """Publish clickable ranges after both lease and status bar exist.
+
+        The Windows worker can finish before ``run`` enables the session-local
+        bar. Its immediate projection is then intentionally a no-op, so the
+        periodic caller retries until the first live bar has received both its
+        left navigation and unchanged right-side Copy range.
+        """
+        if getattr(self, "_status_navigation_projected", False):
+            return
+        manager = getattr(self, "_tmux_binding_manager", None)
+        if (not getattr(self, "_tmux_status_enabled", False)
+                or getattr(manager, "status_navigation_available", False)
+                is not True):
+            return
+        # The initial bar is painted before the shared binding lease is
+        # acquired. Invalidate its cache so the same visible labels are still
+        # rewritten with the newly available range metadata.
+        self._applied_tmux_bar_state = None
+        self._apply_tmux_bar(self._tmux_error_bar)
+        status_text = getattr(self, "_rendered_status_text", "")
+        if status_text:
+            self._render_status_to_tmux(
+                status_text,
+                getattr(self, "_rendered_status_level", "info"),
+                remember=False,
+            )
+        self._status_navigation_projected = True
+
+    def _start_windows_tmux_setup(self) -> None:
+        """Prepare expensive shared tmux leases without delaying first paint."""
+        if not running_in_windows_wrapper():
+            return
+        current = getattr(self, "_windows_tmux_setup_thread", None)
+        if current is not None:
+            return
+        wheel = getattr(self, "_root_wheel_manager", None)
+        manager = getattr(self, "_tmux_binding_manager", None)
+
+        def cancelled() -> bool:
+            with self._windows_tmux_setup_lock:
+                return self._windows_tmux_setup_cancelled
+
+        def prepare() -> None:
+            try:
+                if cancelled():
+                    return
+                try:
+                    wheel_ok = wheel is None or wheel.open()
+                except Exception:
+                    # These leases improve mouse/status routing but are not
+                    # authority for provider discovery or history. Degrade to
+                    # the existing keyboard paths if an unexpected adapter
+                    # error escapes a fail-closed manager.
+                    wheel_ok = False
+                if cancelled():
+                    return
+                try:
+                    bindings_opened = manager is not None and manager.open()
+                except Exception:
+                    bindings_opened = False
+                with self._windows_tmux_setup_lock:
+                    if not self._windows_tmux_setup_cancelled:
+                        self._windows_tmux_setup_result = (
+                            wheel_ok, bindings_opened)
+            finally:
+                # Publish terminal completion even for a BaseException so the
+                # Urwid callback cannot poll a dead worker forever.
+                with self._windows_tmux_setup_lock:
+                    self._windows_tmux_setup_done = True
+
+        worker = threading.Thread(
+            target=prepare,
+            name="railmux-windows-tmux-setup",
+            daemon=False,
+        )
+        self._windows_tmux_setup_thread = worker
+        worker.start()
+
+    def _finish_windows_tmux_setup(self, loop, _user_data) -> None:
+        """Consume background lease setup on the Urwid thread."""
+        with self._windows_tmux_setup_lock:
+            result = self._windows_tmux_setup_result
+            done = self._windows_tmux_setup_done
+            if result is not None:
+                self._windows_tmux_setup_result = None
+        if result is None:
+            worker = getattr(self, "_windows_tmux_setup_thread", None)
+            if not done and worker is not None and worker.is_alive():
+                loop.set_alarm_in(0.05, self._finish_windows_tmux_setup)
+            elif not done:
+                # No worker was created, or it died before publishing its
+                # terminal state. Preserve the pre-deferral one-shot setup
+                # without leaving a 20 Hz alarm behind.
+                self._install_tmux_bindings()
+            return
+        wheel_ok, bindings_opened = result
+        if not wheel_ok:
+            self._set_status(
+                "Mouse-wheel forwarding unavailable; tmux may have custom "
+                "root wheel bindings.",
+                "warn",
+            )
+        self._finish_tmux_bindings(bindings_opened)
+
+    def _cancel_windows_tmux_setup(self) -> None:
+        """Stop starting leases and wait before main-thread cleanup."""
+        worker = getattr(self, "_windows_tmux_setup_thread", None)
+        if worker is None:
+            return
+        with self._windows_tmux_setup_lock:
+            self._windows_tmux_setup_cancelled = True
+        # Waiting here gives teardown sole cleanup ownership and prevents a
+        # late worker write from reinstalling bindings after their originals
+        # were restored. These same manager operations ran synchronously before
+        # deferral; a non-daemon worker keeps that cleanup guarantee if a later
+        # teardown phase raises.
+        worker.join()
 
     def _set_workspace_target(self, slot_key: str) -> AgentSlot:
         """Apply one Target transition and refresh its tmux projection."""
@@ -7667,12 +7997,30 @@ class App:
     def _close_modal(self) -> None:
         if self._loop is not None:
             self._loop.widget = self._frame
+        self._projects_pane.set_context_selected(None)
         self._sessions_pane.set_selected_session(None)
         self._running_pane.set_selected(None)
 
     # --- key handling ---
 
     def _on_input(self, key: str) -> None:
+        # F19 is private to the managed Windows app-layer handoff.  The
+        # launcher places a signed-by-local-state request in this exact pane's
+        # tmux option before sending the key; arbitrary F19 input is a no-op.
+        if key == "f19" and running_in_windows_wrapper():
+            from railmux.windows_ui_transition import consume_upgrade_request
+
+            request = consume_upgrade_request()
+            if request is None:
+                return
+            self._save_state(portable_right=True)
+            self._publish_managed_restart_handoff()
+            self._soft_quit_flag = True
+            self._ui_upgrade_request = request
+            # Return every displayed provider pane to its owning session and
+            # release UI-owned tmux state before the process image changes.
+            self._teardown_tmux(defer_outer=True)
+            raise urwid.ExitMainLoop()
         # F20 is private to the SSH display helper. It reaches the controller
         # pane before that helper applies a compact-size TIOCSWINSZ, giving us
         # a bounded opportunity to park hidden real agent panes first.
@@ -8210,6 +8558,7 @@ class App:
             if isinstance(index, BackgroundCodexIndex):
                 index.close(timeout_s=0.2)
             self._teardown_scroll_acceleration()
+            self._cancel_windows_tmux_setup()
             selection = getattr(self, "_selection_isolation_manager", None)
             if selection is not None:
                 selection.close()
@@ -8276,10 +8625,26 @@ class App:
         if defer_outer or getattr(self, "_outer_teardown_done", False):
             return
         self._outer_teardown_done = True
+        identity = getattr(self, "_restart_identity", None)
+        if (
+            self._auto_launched
+            and identity is not None
+            and running_in_windows_wrapper()
+            and self._ui_upgrade_request is None
+            and tmux_ctl.current_session_name() == "railmux"
+            and tmux_ctl.current_session_id() == identity.session_id
+        ):
+            # MSYS2 can retain an AF_UNIX pathname after its last session
+            # exits. Arm cleanup only when the server-wide immutable-ID
+            # inventory proves that no provider or unknown session exists.
+            windows_tmux_lifecycle.arm_empty_server_exit(
+                server_pid=identity.server_pid,
+                session_id=identity.session_id,
+                pane_id=identity.pane_id,
+            )
         if not self._soft_quit_flag and self._auto_launched:
             session_name = tmux_ctl.current_session_name()
             if session_name == "railmux":
-                identity = getattr(self, "_restart_identity", None)
                 current_id = tmux_ctl.current_session_id()
                 intent = bool(
                     identity is not None
@@ -8295,6 +8660,7 @@ class App:
                     killed = False
                 if intent and not killed:
                     tmux_health.clear_clean_exit()
+                    windows_tmux_lifecycle.clear_empty_server_exit()
 
     def _enter_filter_mode(self) -> None:
         # Borrow the button row (footer index 1) for a filter Edit — both are a
@@ -10203,6 +10569,61 @@ class App:
 
     # --- context menu (right-click) ---
 
+    def _open_project_context_menu(self, project: Project) -> None:
+        """Open actions for the exact Projects row that was right-clicked."""
+        if self._railmux_pane_id:
+            tmux_ctl.select_pane(self._railmux_pane_id)
+        self._projects_pane.set_context_selected(project.encoded_name)
+        is_starred = self._project_favorites.is_favorite(project.real_path)
+        items: list[tuple[str, Callable[[], None]]] = [
+            (_context_menu_label("Copy path", "c"),
+             lambda p=project: self._copy_project_path(p)),
+            (_context_menu_label("Unstar" if is_starred else "Star", "s"),
+             lambda p=project: self._do_context_project_star(p)),
+            (_context_menu_label("Info", "i"),
+             lambda p=project: self._do_context_project_info(p)),
+            (_context_menu_label("Term", "t"),
+             lambda p=project: self._open_terminal_for_project(p)),
+        ]
+        menu = ContextMenu(items, on_close=self._close_modal)
+        self._show_overlay(
+            menu,
+            width=36,
+            height=10,
+            click_outside_to_close=True,
+            fixed_width=True,
+            fixed_height=True,
+        )
+
+    def _copy_project_path(self, project: Project) -> None:
+        path = project.real_path
+        absolute = path if path.is_absolute() else path.absolute()
+        text = str(absolute)
+        if tmux_ctl.copy_to_clipboard(text):
+            self._set_status(f"Copied path: {text}", "success")
+        else:
+            self._set_status(
+                "Could not copy path; terminal clipboard is unavailable",
+                "warn",
+            )
+
+    def _do_context_project_star(self, project: Project) -> None:
+        now_star = not self._project_favorites.is_favorite(project.real_path)
+        self._project_favorites.set(project.real_path, now_star)
+        self._projects_pane.set_favorite_paths(
+            self._project_favorites.get_paths())
+        label = "★" if now_star else "unstarred"
+        self._set_status(f"{label} {project.display_name}")
+
+    def _do_context_project_info(self, project: Project) -> None:
+        modal = ProjectInfoModal(project=project, on_close=self._close_modal)
+        self._show_overlay(
+            modal,
+            width=60,
+            height=40,
+            click_outside_to_close=True,
+        )
+
     def _on_running_context_menu(self, entry: RunningEntry) -> None:
         r = self._by_tmux(entry.tmux_name)
         if r is None:
@@ -11172,6 +11593,7 @@ class App:
 
     def _on_tick(self, loop, _user_data) -> None:
         self._refresh()
+        self._project_status_navigation()
         if self._pending_restore_state is not None:
             # A portable Codex preview may have been waiting for the first
             # immutable history generation even when no live recovery
@@ -11224,13 +11646,20 @@ class App:
                 # copies to the *local* system clipboard (works over SSH / nested
                 # tmux on OSC-52-capable terminals). Pairs with set-clipboard on.
                 tmux_ctl.enable_clipboard_passthrough()
-                wheel = getattr(self, "_root_wheel_manager", None)
-                if wheel is not None and not wheel.open():
-                    self._set_status(
-                        "Mouse-wheel forwarding unavailable; tmux may have "
-                        "custom root wheel bindings.",
-                        "warn",
-                    )
+                if running_in_windows_wrapper():
+                    # Root-table lease discovery is particularly expensive in
+                    # MSYS2 because each tmux query launches a Windows process.
+                    # It is independent of provider/session restoration, so
+                    # finish it after the first interactive frame.
+                    self._start_windows_tmux_setup()
+                else:
+                    wheel = getattr(self, "_root_wheel_manager", None)
+                    if wheel is not None and not wheel.open():
+                        self._set_status(
+                            "Mouse-wheel forwarding unavailable; tmux may "
+                            "have custom root wheel bindings.",
+                            "warn",
+                        )
             self._railmux_pane_id = tmux_ctl.current_pane_id()
             if (self._railmux_pane_id is not None
                     and tmux_ctl.current_session_name() == "railmux"
@@ -11246,7 +11675,8 @@ class App:
                 # a saved agent-focused workspace will replace that temporary
                 # topology shortly. Do not expose its misleading row focus.
                 self._frame.set_window_active(False)
-            self._install_tmux_bindings()
+            if getattr(self, "_windows_tmux_setup_thread", None) is None:
+                self._install_tmux_bindings()
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
             # not text input.
@@ -11312,6 +11742,20 @@ class App:
             if self._pending_restore_state is not None:
                 self._loop.set_alarm_in(
                     0, self._restore_pending_right_pane)
+            if running_in_windows_wrapper():
+                self._loop.set_alarm_in(
+                    0.05, self._report_windows_startup_summary)
+                # Leave one bounded initial-paint interval before consuming
+                # the lease result. Even if the worker completed immediately,
+                # its status/bar projection cannot delay the first frame.
+                if self._windows_tmux_setup_thread is not None:
+                    self._loop.set_alarm_in(
+                        0.1, self._finish_windows_tmux_setup)
+                # This is the cooperative upgrade readiness boundary.  The
+                # outer launcher trusts only an exact app identity published
+                # by a controller that reached a usable MainLoop.
+                from railmux.windows_ui_transition import publish_current_app_ready
+                publish_current_app_ready()
             self._loop.run()
         except KeyboardInterrupt:
             # Ctrl-C / SIGINT — fall through to teardown.

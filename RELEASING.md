@@ -17,24 +17,25 @@ Before 1.0, a MINOR release may also establish a documented product-maturity
 baseline for compatible capabilities delivered across earlier releases. Keep
 that milestone narrative in `CHANGELOG.md`; this file remains process-only.
 
-Field-test builds for the next patch may use the PEP 440 form
+Field-test builds for the next release may use the PEP 440 form
 `MAJOR.MINOR.PATCH.devN`, where `N` is a monotonically increasing numeric
 identifier. A development tag is published to PyPI normally and marked as a
 GitHub pre-release; pip excludes it from ordinary stable upgrades unless the
 version is explicitly requested or pre-releases are enabled. Never append
 `.devN` to an already released final version: `0.2.10.devN` sorts before
 `0.2.10`, so development builds after 0.2.10 must target `0.2.11.devN`.
-After the final `v0.3.5`, the POSIX/WSL field-test line therefore starts at
-`0.3.6.dev1` and continues as `0.3.6.devN`.
+Release candidates use `MAJOR.MINOR.PATCHrcN`. They are also GitHub
+pre-releases and opt-in on pip. Use an RC for the final artifact/upgrade path;
+do not change user-visible CLI or runtime behavior between the last RC and the
+final release without another RC.
 
-Final releases are cut only from `main`, whose product scope is POSIX/WSL.
-The delegated-runtime Windows bootstrap experiment lives on `windows-preview`
-and continues the unreleased `0.4.0` preview line at `0.4.0.dev3`; it may
-publish only later `0.4.0.devN` builds until that work is explicitly promoted.
+All active development, RC, and final releases are cut only from `main`.
+Native Windows joined that product line in 0.4 through one reviewed squash of
+the managed-MSYS2 preview tree. The `windows-preview` branch freezes at
+`v0.4.0.dev36`; do not publish or merge from it after promotion.
 The abandoned ConPTY experiment is frozen at `v0.4.0.dev2` on
 `archive/windows-conpty-deprecated`; it is not release-eligible. Shared fixes
-land on `main` first and are merged into the active preview branch; never merge
-the complete preview branch into `main`.
+and platform adapters now land together on focused branches from `main`.
 
 The already-published `0.4.0.dev1` and `0.4.0.dev2` artifacts are historical
 validation builds, not the active preview. Yank them on PyPI after the archive
@@ -90,8 +91,10 @@ credential and publishes only after its build and test job succeeds.
    python tools/release_notes.py X.Y.Z
    ```
 
-4. Commit and push the release preparation. Wait for every Python 3.9–3.13
-   GitHub Actions job to pass.
+4. Commit and push the release preparation. Wait for every Python 3.9–3.13,
+   native-Windows wheel/bootstrap, full-archive, real-MSYS2, mirror-health,
+   tmux-floor, build, and website job to complete. Mirror health is advisory;
+   every product-behavior gate is required.
 5. Create and push only the intended annotated tag. Pushing it starts the
    publishing workflow, so do not tag until the release commit is ready:
 
@@ -112,6 +115,11 @@ credential and publishes only after its build and test job succeeds.
    /tmp/railmux-verify/bin/railmux --version
    rm -rf /tmp/railmux-verify
    ```
+
+   For an RC/final that changes the managed Windows app identity, also verify
+   the exact previous-app → candidate → final transition on one real Windows
+   runtime. Confirm base reuse, attach, `doctor`, `runtime status --verify`, and
+   `runtime prune --dry-run` before pruning anything.
 
 Do not use `git push --follow-tags`: push the exact release tag so unrelated
 local tags can never trigger a publication accidentally.

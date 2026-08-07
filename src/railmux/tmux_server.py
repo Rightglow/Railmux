@@ -22,6 +22,8 @@ _SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,256}\Z")
 _HISTORY_SOURCE_SCHEMA = 1
 _TRANSCRIPT_SOURCE_SCHEMA = 1
 _MAX_TRANSCRIPT_SOURCE_BYTES = 8192
+_DEFAULT_DISCOVERY_TIMEOUT = 2.0
+_WINDOWS_DISCOVERY_TIMEOUT = 5.0
 
 
 class TmuxServerError(RuntimeError):
@@ -179,10 +181,25 @@ def current_target(
 
 def discover_target(
     *,
-    timeout: float = 2.0,
+    timeout: float | None = None,
     env: Mapping[str, str] | None = None,
 ) -> TmuxServerTarget | None:
-    """Resolve the live dedicated server without starting a new server."""
+    """Resolve the live dedicated server without starting a new server.
+
+    MSYS2 tmux can need slightly more than two seconds to classify an
+    abandoned AF_UNIX pathname as having no live server.  Give only the
+    managed Windows wrapper enough time to receive that authoritative result;
+    explicit watchdog probes retain their caller-selected bounds.
+    """
+    if timeout is None:
+        from railmux.provider_paths import running_in_windows_wrapper
+
+        source = os.environ if env is None else env
+        timeout = (
+            _WINDOWS_DISCOVERY_TIMEOUT
+            if running_in_windows_wrapper(source)
+            else _DEFAULT_DISCOVERY_TIMEOUT
+        )
     return _discover_label_target(socket_label(env), timeout=timeout, env=env)
 
 
@@ -628,3 +645,108 @@ def launcher_argv(
         "--inside-tmux",
         *forwarded_args,
     )
+
+
+_MANAGED_WINDOWS_SESSION_ENV = (
+    "RAILMUX_WINDOWS_RUNTIME",
+    "RAILMUX_MSYS2_RUNTIME_ID",
+    "RAILMUX_MSYS2_APP_ID",
+)
+_MANAGED_WINDOWS_SESSION_VALUE_RE = re.compile(
+    r"[A-Za-z0-9_.-]{1,128}\Z"
+)
+
+
+def _managed_windows_session_environment_args(
+    env: Mapping[str, str] | None,
+) -> list[str]:
+    """Return bounded, non-secret tmux ``new-session -e`` arguments.
+
+    A detached outer session can be created by an existing dedicated server
+    whose inherited environment belongs to an older Railmux app layer. Pass
+    only the three independently verified managed-runtime identity hints to
+    the new pane; provider credentials and the rest of the caller environment
+    must remain outside tmux metadata.
+    """
+    if env is None or env.get("RAILMUX_WINDOWS_RUNTIME") != "msys2":
+        return []
+    result: list[str] = []
+    for name in _MANAGED_WINDOWS_SESSION_ENV:
+        value = env.get(name)
+        if (not isinstance(value, str)
+                or _MANAGED_WINDOWS_SESSION_VALUE_RE.fullmatch(value) is None):
+            continue
+        result.extend(["-e", f"{name}={value}"])
+    return result
+
+
+def _initial_session_size_args(
+    initial_size: tuple[int, int] | None,
+) -> list[str]:
+    """Return bounded tmux dimensions for a newly created detached window."""
+    if not isinstance(initial_size, tuple) or len(initial_size) != 2:
+        return []
+    width, height = initial_size
+    if (
+        isinstance(width, bool)
+        or isinstance(height, bool)
+        or not isinstance(width, int)
+        or not isinstance(height, int)
+        or not 0 < width <= 65535
+        or not 0 < height <= 65535
+    ):
+        return []
+    return ["-x", str(width), "-y", str(height)]
+
+
+def ensure_detached_launcher_session(
+    target: TmuxServerTarget,
+    launch_prefix: Sequence[str],
+    forwarded_args: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    initial_size: tuple[int, int] | None = None,
+    timeout: float = 5.0,
+) -> str | None:
+    """Create the outer UI detached on one already-proven server.
+
+    Managed Windows uses this only when a proven existing server has no outer
+    UI, commonly because Soft Quit left provider sessions alive in another
+    Terminal Services session.  A new tmux client can then reject
+    ``new-session -A`` before the outer session exists, so the server-origin
+    terminal bridge has no immutable session to attach.
+
+    An exact pre/post server-PID check fences the mutation.  A concurrent
+    launcher may win the create race; resolving one exact resulting session is
+    success regardless of this client's ``new-session`` return code.
+    """
+    existing = target_session_id(target, "railmux", timeout=0.5)
+    if existing is not None:
+        return existing
+    if not launch_prefix or not target_is_live(target, timeout=1.0, env=env):
+        return None
+    try:
+        subprocess.run(
+            target_argv(
+                target,
+                "new-session",
+                "-d",
+                "-s",
+                "railmux",
+                *_initial_session_size_args(initial_size),
+                *_managed_windows_session_environment_args(env),
+                *launch_prefix,
+                "--inside-tmux",
+                *forwarded_args,
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            env=None if env is None else dict(env),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if not target_is_live(target, timeout=1.0, env=env):
+        return None
+    return target_session_id(target, "railmux", timeout=1.0)

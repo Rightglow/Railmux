@@ -915,6 +915,11 @@ def test_status_action_range_requires_tmux_34_and_known_action():
             tmux_ctl.STATUS_ACTION_LAYOUT, "◨") == (
             "#[range=user|railmux-layout]◨#[norange]"
         )
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 7)):
+        assert tmux_ctl.status_action_range(
+            tmux_ctl.STATUS_ACTION_LAYOUT, "◨") == (
+            "#[range=control|1]◨#[norange]"
+        )
         try:
             tmux_ctl.status_action_range("railmux-arbitrary", "unsafe")
         except ValueError:
@@ -927,6 +932,9 @@ def test_root_status_click_scopes_ranges_and_dispatches_actions():
     backup = {
         "MouseDown1Status":
         "bind-key -T root MouseDown1Status select-window -t =",
+        "MouseDown1Control0": None,
+        "MouseDown1Control1": None,
+        "MouseDown1Control2": None,
     }
     with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
             _mock_check_call() as call:
@@ -951,6 +959,34 @@ def test_root_status_click_scopes_ranges_and_dispatches_actions():
     assert "railmux-copy) tmux send-keys" in argv[8]
     assert "' F6 ;;" in argv[8]
     assert argv[-1] == "select-window -t ="
+
+
+def test_tmux_37_status_controls_receive_dedicated_mouse_bindings():
+    backup = {
+        "MouseDown1Status": None,
+        "MouseDown1Control0": None,
+        "MouseDown1Control1": None,
+        "MouseDown1Control2": None,
+    }
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 7)), \
+            _mock_check_call() as call:
+        assert tmux_ctl.set_root_status_click_forwarding(
+            backup, "owner123")
+
+    calls = [entry.args[0] for entry in call.call_args_list]
+    assert [argv[4] for argv in calls] == [
+        "MouseDown1Status",
+        "MouseDown1Control0",
+        "MouseDown1Control1",
+        "MouseDown1Control2",
+    ]
+    assert "send-keys" in calls[1][8] and " F5" in calls[1][8]
+    assert "send-keys" in calls[2][8] and " F7" in calls[2][8]
+    assert "send-keys" in calls[3][8] and " F6" in calls[3][8]
+    assert all(
+        "railmux-status-pane-v1-owner123" in argv[7]
+        for argv in calls[1:]
+    )
 
 
 def test_root_status_click_declines_old_tmux_and_preserves_user_reload():

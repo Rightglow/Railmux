@@ -113,9 +113,9 @@ export default function Home() {
                 </a>
               </div>
               <div className="platform-line">
-                <span>LOCAL</span> macOS · Linux · WSL
+                <span>LOCAL</span> macOS · Linux · Windows · WSL
                 <i />
-                <span>REMOTE</span> Linux / Unix
+                <span>REMOTE</span> Linux · macOS · Windows
               </div>
             </div>
             <div className="hero-note">
@@ -634,16 +634,23 @@ export default function Home() {
                   Give them a better station.
                 </h2>
                 <p>
-                  Railmux requires Python 3.9+, tmux, and at least one supported
-                  agent CLI. Install locally for ordinary use and for the fast
-                  SSH client.
+                  On macOS, Linux, and WSL, Railmux requires Python 3.9+, tmux,
+                  and at least one supported agent CLI. Native Windows uses
+                  Python 3.10+ and provisions its own private managed
+                  MSYS2/tmux runtime on first launch.
+                </p>
+                <p>
+                  The first Windows setup is roughly 700 MB. Later Railmux
+                  updates reuse that verified base, while native Codex and
+                  Claude Code keep the same Windows sessions and credentials.
                 </p>
                 <aside className="install-remote-note">
                   <span>REMOTE WORK</span>
                   <p>
                     If ordinary SSH cannot keep up with full-screen redraws,
-                    use <code>railmux ssh</code> from macOS, Linux, or Windows
-                    through WSL.
+                    use <code>railmux ssh</code> from macOS, Linux, WSL, or
+                    native Windows. A Windows remote must already have its
+                    matching managed runtime installed locally.
                   </p>
                 </aside>
               </div>

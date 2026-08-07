@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc1] - 2026-08-07
+
+### Added
+
+- Add supported native Windows launch from Python 3.10+ through a private,
+  integrity-checked managed MSYS2/tmux runtime. Codex and Claude Code remain
+  Windows-native and continue using the user's existing `.codex` and `.claude`
+  data, credentials, and session histories.
+- Add native Windows `railmux ssh` clients for Linux/macOS/Unix targets, plus
+  Linux/macOS clients for already-installed compatible Railmux for Windows
+  hosts. Local and remote `config`/`doctor` forms share the same platform-aware
+  launch negotiation; remote Windows runtime installation remains explicit and
+  local to the Windows account.
+- Add transactional Windows runtime installation, verified multi-source
+  downloads, measured pacman mirror selection, visible progress and UTF-8 logs,
+  reusable content-bound bases, isolated application layers, cooperative UI
+  upgrades, read-only status/verification, and process-safe pruning.
+- Add Projects-row favorites and a right-click menu for absolute-path copy,
+  Info, managed Term, and star/unstar without sharing session-favorite metadata.
+
+### Changed
+
+- Keep one POSIX Railmux UI as the behavioral authority on every platform.
+  Windows terminal bridging, resize supervision, provider-path projection, and
+  native-provider launch are narrow runtime adapters rather than a second UI.
+- Reduce managed-Windows restore, Preview, and running-session switch latency
+  with background indexing, bounded direct transcript reads, seekable Preview
+  rendering, coherent tmux snapshots, guarded command batches, and immediate
+  row feedback while retaining every identity, lease, and history safety gate.
+- Include the complete Railmux 0.3.6 POSIX/WSL maintenance baseline.
+
+### Fixed
+
+- Preserve UTF-8 on Chinese and other non-English Windows locales, keep MSIX
+  Store-Python runtime files outside AppData virtualization, handle safe MSYS2
+  core-update restarts, and keep package-owned extracted files writable.
+- Select the exact installed native package when stale metadata from an older
+  Railmux wheel is still present, so a local app-layer update cannot silently
+  fall back to the network or copy the wrong version.
+- Keep canonical app-version parsing on the dependency-free native Windows
+  bootstrap path in the standard library, so a clean Windows wheel works
+  before the private MSYS2 app layer supplies Railmux's POSIX dependencies.
+- Restore resize/reflow, mouse/history ownership, status controls, dialogs,
+  terminal cleanup, missing-outer recovery, and same-account desktop/OpenSSH
+  attachment across Windows Terminal Services sessions.
+- Preserve 256-colour palette indices across `railmux ssh` live and history
+  rendering, so scrolling older rows continues to use the local terminal's
+  palette instead of switching to pyte's more saturated fixed xterm RGB values.
+- Allow a detached managed UI enough time to complete its cooperative,
+  state-preserving app-layer handoff before reporting that a Soft Quit is
+  required.
+
+## [0.4.0.dev36] - 2026-08-07
+
+### Changed
+
+- Prepare the managed Windows runtime for the stable 0.4 release sequence by
+  accepting one canonical `0.4.0rcN` app-layer identity alongside existing
+  `.devN` and final identities. Version ordering now follows PEP 440, and
+  pruning retains an in-use RC layer exactly like an in-use development or
+  final layer. Unsupported aliases, local versions, post releases, and epochs
+  remain rejected.
+
+## [0.4.0.dev35] - 2026-08-07
+
+### Added
+
+- Add a Projects-row right-click menu with absolute-path copy, independently
+  persisted project star/unstar, project Info, and managed Term. Favorite
+  projects are visibly starred and stably pinned without changing session
+  favorites or provider history.
+
+### Changed
+
+- Batch the read-only Preview locator with the existing prefix-Tab Target
+  projection after a verified stable pane switch, and stop rewriting identical
+  border styles when only the physical pane inside one logical slot changed.
+  Every pane-identity snapshot, guarded swap, recovery marker, and provider
+  lease remains unchanged.
+
+## [0.4.0.dev34] - 2026-08-06
+
 ### Changed
 
 - Render read-only Preview into an anonymous seekable file before opening its
@@ -17,6 +99,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   journaled command queues on modern tmux. Identity, independent-client,
   marker, post-move verification, and fail-closed recovery gates remain in
   force while process-start amplification is substantially reduced on MSYS2.
+
+## [0.4.0.dev33] - 2026-08-06
+
+### Fixed
+
+- Reuse an already-owned transcript pane when switching between stopped
+  session previews, avoiding redundant pane inventories, marker writes,
+  border/binding projection, and display-transport preparation. Entering
+  Preview from a live provider still performs the complete identity-pinned
+  return-home transaction, and a failed replacement leaves the prior workspace
+  state intact.
+- Read the final 2,000 JSONL records backwards inside the existing transcript
+  renderer instead of launching a separate `tail` process. This preserves the
+  bounded, read-only provider-aware view while reducing Windows/MSYS2 process
+  startup on every preview.
 
 ## [0.3.6] - 2026-08-05
 
@@ -30,24 +127,175 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessions, while making every choice in the first quit dialog visibly
   clickable and preserving its existing keyboard shortcuts.
 
+## [0.4.0.dev32] - 2026-08-06
+
 ### Fixed
 
-- Keep SSH history continuous and faithful under live repainting: unaligned
-  captures are never spliced, accepted deep pages replace their timeline
-  atomically, cross-row terminal styles remain intact, and batched wheel input
-  preserves its full distance with one final paint.
-- Keep ordinary Codex resume, continuation, and context-compaction children on
-  styled raw pane history. Canonical transcript fallback now requires an exact
-  live rollout plus an explicit provider rollback increment, and released
-  heuristic markers safely downgrade without changing provider data.
-- Reduce startup and status-bar latency by batching independent tmux commands,
-  suppressing unchanged bar frames and unnecessary compact-layout probes, and
-  publishing shared binding capabilities only after their complete state is
-  ready.
-- Flush cross-host session-lease owner metadata before a claim returns, so a
-  second NFS client can report the owning host as soon as it observes the lock.
+- Build ordinary managed-Windows app upgrades from the current native Railmux
+  package and the previous verified app layer's pure-Python dependencies,
+  avoiding PyPI when the copied layer passes bounded path checks, `pip check`,
+  dependency imports, and exact version validation. Any mismatch deletes the
+  unpublished venv and retains the existing cached online fallback.
+- Report the effective managed-Windows data and install-log directories from
+  `runtime status`, including JSON output, and write installation logs with a
+  UTF-8 signature so Windows PowerShell 5 does not decode punctuation through
+  CP936/another ANSI code page.
+- Paint a clicked session row before synchronous tmux attach/preview work, then
+  commit or roll back the highlight with the operation result, so Windows
+  process startup latency no longer delays pointer feedback.
 
-## [0.3.6.dev6] - 2026-08-05
+## [0.4.0.dev31] - 2026-08-06
+
+### Fixed
+
+- Supervise the managed-Windows direct tmux client for native terminal-size
+  changes and notify that exact client when MSYS2 misses a width or height
+  resize, without changing POSIX attach behavior or tmux's shared-window
+  `smallest` policy.
+- Measure bounded real package transfers before phase 5, exclude package paths
+  that are reachable but too slow when another approved source works, and
+  report the resolved package count before the first transfer starts.
+
+## [0.4.0.dev30] - 2026-08-06
+
+### Fixed
+
+- Keep managed MSYS2 executables, package caches, and UTF-8 installation logs
+  outside AppData write virtualization when Railmux is launched by a Microsoft
+  Store or other MSIX-packaged Python. Packaged interpreters now use the
+  non-virtualized `%USERPROFILE%\.railmux\windows` tree, so PowerShell and the
+  MSYS2 loader resolve the same physical files; traditional Python installs
+  retain `%LOCALAPPDATA%\Railmux` and existing runtimes unchanged.
+- Reuse a pre-dev30 AppData cache only when its pinned MSYS2 archive still
+  matches the exact expected size and SHA-256. Incomplete runtime staging,
+  unverified downloads, provider histories, and user-owned MSYS2 trees are
+  never migrated or removed.
+
+## [0.4.0.dev29] - 2026-08-06
+
+### Fixed
+
+- Continue an MSYS2 core update when Windows terminates the updating shell
+  before pacman's final restart announcement reaches Railmux's output pipe.
+  The fallback accepts `0xC0000135` only when newly appended, bounded pacman
+  journal records prove a completed core transaction and the matching local
+  package database proves the same core package changed from the recorded old
+  version to the recorded new version; a fresh shell must still finish a clean
+  update pass before the staged runtime can be published.
+- Preserve the active UTF-8 installation log while rotating older logs, so a
+  failure path printed to the console cannot name the file currently selected
+  for retention cleanup. Wrapped/interleaved forms of pacman's explicit restart
+  announcement are also recognized as corroborating evidence.
+- Make the native full-archive smoke test perform production mirror selection
+  before both update passes and allow maintainers to select an exact approved
+  mirror when reproducing repository-specific core updates.
+
+## [0.4.0.dev28] - 2026-08-06
+
+### Fixed
+
+- Follow MSYS2's supported unattended update procedure by running the full
+  `pacman -Syuu` upgrade in fresh processes at least twice. When a successful
+  core-runtime transaction explicitly announces that it will close its own
+  process, accept that termination and continue from a newly launched shell;
+  dev27 could instead report the resulting Windows `0xC0000135` termination as
+  a phase-four failure.
+- Fail closed on the same process status when the exact MSYS2 core-restart
+  announcement is absent, retain the bounded mirror/cache recovery path for
+  each pass, and cap repeated restart requests at three passes.
+- Extend the native Windows full-archive gate through the real two-pass base
+  update before loading `bash`, `cygpath`, and `pacman`; explicitly stop only
+  the private pacman-key GnuPG agents so their executable handles cannot block
+  staging cleanup or activation.
+
+## [0.4.0.dev27] - 2026-08-06
+
+### Fixed
+
+- Keep every package-owned file and directory writable when the official
+  MSYS2 tar archive is extracted on native Windows. dev26 incorrectly mapped
+  POSIX `0444`/`0555` modes through Windows `chmod`, which sets the NTFS
+  read-only attribute and could prevent the first pacman base update from
+  replacing package-owned files; the reported process then exited with
+  `0xC0000135`.
+- Add a native Windows CI gate that downloads and extracts the complete pinned
+  archive, proves an upstream read-only-mode file can be updated, and launches
+  the extracted `bash`, `cygpath`, and `pacman` executables.
+
+## [0.4.0.dev26] - 2026-08-06
+
+### Fixed
+
+- Replace execution of the official MSYS2 self-extracting archive with bounded,
+  in-process extraction of the equivalent pinned official `tar.xz` artifact.
+  This fixes fresh Windows installation on systems where the 7-Zip SFX exited
+  with `cannot find sfx`, rejects unsafe paths, links, special files, duplicate
+  members, and unexpected archive inventories, and never publishes a partial
+  base.
+- Show file-count progress while the private MSYS2 base is extracted, retain
+  exact size and SHA-256 verification across the approved source fallback, and
+  continue reusing verified dev24/dev25 base installations without downloading
+  or rebuilding them.
+
+## [0.4.0.dev25] - 2026-08-05
+
+### Added
+
+- Add fail-closed managed-Windows app-layer transitions. dev24+ UIs save state,
+  return displayed provider panes, and exec an exact content-bound new app;
+  released dev11-dev23 UIs are never killed for migration and instead remain
+  available until the user chooses Soft Quit before the next launch.
+- Record the exact private MSYS2 package inventory in a content-identity marker,
+  bind new app layers to it, expose read-only verification through
+  `railmux runtime status --verify`, and add explicit process-aware
+  `railmux runtime prune` cleanup with dry-run and optional cache removal.
+- Support `railmux config --remote` and `railmux doctor --remote` against an
+  already-installed managed Windows preview. Both commands share and pin the
+  POSIX/direct launch-family probe; `--remote-platform windows` skips the POSIX
+  attempt, while remote Windows runtime installation remains deliberately
+  manual.
+- Extend privacy-safe local doctor output with bounded managed runtime, content,
+  installed/running app, and transition status fields.
+
+### Changed
+
+- Include the complete POSIX/WSL `0.3.6` maintenance baseline.
+- Make native Windows `doctor` and all noninteractive missing-runtime commands
+  read-only: they report the explicit `runtime install` next step and never
+  create even an app layer implicitly. Managed app venvs also refuse the POSIX
+  self-upgrade path and direct users to the native PowerShell owner.
+- Expand native Windows and real-MSYS2 CI coverage for runtime identity/drift,
+  cooperative transitions, safe pruning, provider-path projection, config/doctor
+  forwarding, direct Windows remote probing, and privacy contracts.
+
+## [0.4.0.dev24] - 2026-08-05
+
+### Fixed
+
+- Mark the unpublished dev24 candidate whose release gate correctly stopped
+  before packaging when the real-MSYS2 job tried to build the unrelated Ruff
+  developer tool from source. Dev25 keeps the candidate code unchanged and
+  narrows that runtime job to its actual SSH and pytest dependencies.
+
+## [0.4.0.dev23] - 2026-08-05
+
+### Added
+
+- Allow a Linux or macOS `railmux ssh` client to enter a Windows preview host
+  whose user-level managed MSYS2 runtime is already installed. Automatic mode
+  retains the POSIX discovery ladder first and retries a shell-neutral direct
+  launch; `--remote-platform windows` skips the incompatible POSIX probe and
+  avoids a second password prompt on password-authenticated hosts.
+
+### Changed
+
+- Pin the detected remote launch family across attach retries and automatic
+  reconnects. Windows preview servers identify their managed runtime in the
+  bounded compatibility hello, and incompatible Windows versions now fail
+  closed with PowerShell app-layer/runtime update commands instead of ever
+  running the POSIX user-site or private-venv installers.
+
+## [0.4.0.dev22] - 2026-08-05
 
 ### Fixed
 
@@ -57,13 +305,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fallback now requires an explicit provider `thread_rolled_back` increment;
   released heuristic markers safely downgrade without changing provider data.
 
-## [0.3.6.dev5] - 2026-08-05
+## [0.4.0.dev21] - 2026-08-05
 
 ### Changed
 
-- Render the first quit chooser as visible terminal buttons and allow its hard
-  quit choice to open the final warning by mouse. The final destructive action
-  remains keyboard-only, and all existing keyboard shortcuts are unchanged.
+- Include the POSIX/WSL changes released in Railmux 0.3.6.dev5: the first quit
+  chooser now exposes visible mouse buttons, while the final destructive
+  confirmation remains keyboard-only and existing keyboard shortcuts are
+  unchanged.
 
 ### Fixed
 
@@ -72,45 +321,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   painting only the final local viewport once. Forwarded sidebar/modal wheel
   bursts retain their existing bound.
 
-## [0.3.6.dev4] - 2026-08-05
-
-### Fixed
-
-- Preserve tmux's cross-row SGR state while encoding `railmux ssh` history, so
-  inherited code-diff backgrounds continue through the line-number gutter and
-  explicit resets still return ordinary output to the terminal default.
-
-## [0.3.6.dev3] - 2026-08-05
+## [0.4.0.dev20] - 2026-08-05
 
 ### Changed
 
-- Enter `railmux ssh` history immediately from its coherent 300-line routing
-  cache, then fetch cumulative deep pages asynchronously near the cached top;
-  validated pages replace the cache atomically to preserve continuity and
-  terminal styling.
-
-## [0.3.6.dev2] - 2026-08-05
-
-### Changed
-
-- Require a second warning before hard quit can stop all live agent sessions;
-  both confirmation steps retain `y`/Enter, while `n`/`Esc` returns from the
-  final warning to the original Soft Quit choice.
+- Include the POSIX/WSL fixes released through Railmux 0.3.6.dev4: a second
+  hard-quit confirmation, coherent warm/deep SSH history transitions, and
+  preserved cross-row terminal styles.
 
 ### Fixed
 
-- Enter `railmux ssh` history atomically from one cumulative deep capture when
-  the routing cache is incomplete, preventing occasional gaps and mixed text
-  or diff-background styling that previously disappeared only after returning
-  to the bottom and scrolling up again.
-- Keep ordinary Codex resumes in styled raw `railmux ssh` history when a newer
-  Codex creates a child rollout during startup. Only a child whose parent is
-  proved active in the same pane generation can enable canonical transcript
-  history; older over-broad markers safely downgrade to raw history. Branch
-  detection no longer resets the live terminal, avoiding an all-blank Codex
-  pane when an idle TUI ignores a same-size redraw signal.
+- Create a missing managed-Windows outer UI at the exact interactive entry
+  terminal size, so the first frame no longer starts in tmux's detached
+  80x24 default and visibly expands after direct or bridged attachment. A
+  missing/non-TTY/invalid size retains the safe default, and existing sessions
+  are never pre-resized.
 
-## [0.3.6.dev1] - 2026-08-05
+## [0.4.0.dev19] - 2026-08-05
+
+### Fixed
+
+- Preserve the current managed-runtime identity when Soft Quit recreates the
+  outer Windows UI on an older dedicated tmux server. The new pane can now
+  revalidate its private state directory, reclaim an exactly marked unresolved
+  provider, and install status-bar mouse bindings without weakening provider
+  history or immutable-tmux identity checks. Only three bounded, non-secret
+  Railmux runtime identifiers enter the tmux session environment. Completion
+  of the deferred lease now also reprojects both left navigation and the
+  current right-side Copy range, so the first visible status is clickable.
+- Hide tmux's raw `open terminal failed: not a terminal` implementation detail
+  when the Windows terminal bridge succeeds. A successful fallback now emits
+  one terminal-aware Railmux info line; unavailable or failed bridges retain
+  an actionable error and leave the workspace running.
+
+## [0.4.0.dev18] - 2026-08-05
+
+### Fixed
+
+- Restore the managed Windows UI after Soft Quit when detached Codex or Claude
+  sessions keep the dedicated tmux server alive in another Windows Terminal
+  Services session. Railmux now creates the missing outer UI session detached
+  on the same revalidated server before trying direct attach and its existing
+  terminal bridge; provider processes and history files remain untouched.
+
+## [0.4.0.dev17] - 2026-08-05
 
 ### Fixed
 
@@ -122,9 +376,307 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewrites, and skip compact-page geometry probes when only the sidebar exists.
   This removes Windows/MSYS2 process-spawn amplification without changing the
   provider/session discovery path.
+- On the managed Windows runtime, prepare crash-safe wheel and shared
+  function/status binding leases after the first interactive frame. Provider
+  indexing and pane restoration remain synchronous and read-only; keyboard
+  Mode/Layout controls remain available while mouse/status ownership finishes
+  in the background.
+
+## [0.4.0.dev16] - 2026-08-05
+
+### Added
+
+- Prevent concurrent writers when Claude Code or Codex history is shared
+  between hosts: resume and confirmed delete use fail-closed provider-session
+  leases, Codex rewind aliases are fenced as one lineage, remote ownership is
+  shown as `running on HOST`, and detached providers retain their lease across
+  Railmux Soft Quit.
+- Revalidate live leases from operating-system lock state and keep an explicit
+  warning on a Running row until lost protection is restored. Both providers,
+  stopped-session deletion, mode-masking shared filesystems, stale holders, and
+  multi-alias conflicts have regression coverage.
+
+### Fixed
+
+- Repaint only rows touched by SSH URL/path hover, drag selection, and click
+  feedback instead of clearing the whole alternate screen, eliminating visible
+  Windows Terminal flashes.
+- Change the SSH client's hardware-cursor mode only when its actual visibility
+  changes, preventing live 20 fps patches from repeatedly restarting terminal
+  cursor animation after focus moves to an agent pane.
 - Flush cross-host session-lease owner metadata before returning a claim, so a
   second NFS client that already observes the lock can immediately identify the
   owning host instead of showing the conservative `another host` fallback.
+- Include the POSIX/WSL fixes released through Railmux 0.3.5 while preserving
+  the managed-Windows runtime, native provider paths, and preview-only support
+  boundary.
+
+## [0.4.0.dev15] - 2026-08-04
+
+### Added
+
+- Allow the managed-Windows preview to reach one dedicated tmux workspace from
+  both an interactive desktop terminal and an ordinary OpenSSH login to the
+  same Windows account. Railmux keeps direct tmux attachment as the fast path;
+  after a quick terminal-only rejection it may make one server-origin PTY
+  bridge attempt pinned to the unchanged server and immutable session.
+- Forward opaque terminal bytes, resize, heartbeat, and exit frames through a
+  random same-user private endpoint. The bridge is an additional tmux client,
+  never a second UI or workspace, and can stop only its own attach process.
+  Failures leave Codex, Claude, and the existing tmux workspace running and add
+  a privacy-safe `railmux doctor` incident category.
+
+### Changed
+
+- Keep routine proof-authorized Windows socket cleanup after normal exit
+  silent. A pre-launch recovery remains visible and now describes the recovered
+  unresponsive socket without implying that provider session files were read.
+
+## [0.4.0.dev14] - 2026-08-04
+
+### Fixed
+
+- Apply the managed-MSYS2 abandoned-socket settle allowance to
+  `railmux doctor` as well as the ordinary launcher. Windows diagnostics now
+  report the authoritative `not running` result instead of a false
+  `unresponsive` state;
+  the POSIX doctor retains its existing one-second probe bound.
+
+## [0.4.0.dev13] - 2026-08-04
+
+### Fixed
+
+- Allow managed-MSYS2 startup discovery five seconds to classify an abandoned
+  tmux socket as having no live server. MSYS2 3.7b can return that authoritative
+  result just after the previous two-second bound; Railmux now continues into
+  tmux's normal safe `new-session` replacement instead of reporting a false
+  unresponsive-server failure. POSIX discovery and explicit watchdog bounds
+  are unchanged.
+
+## [0.4.0.dev12] - 2026-08-04
+
+### Fixed
+
+- Keep managed-MSYS2 application wheels in a shared Railmux-private pip cache
+  instead of discarding every completed download after an app-layer install.
+  Preview upgrades now use a 60-second read timeout and, if installation does
+  not complete, retry once in the same launch with the same cache and a
+  120-second timeout. This fixes app-only upgrades failing on transient
+  `files.pythonhosted.org` read timeouts without reinstalling the shared MSYS2,
+  tmux, or Python base.
+
+### Security
+
+- Keep the new pip cache outside provider-owned directories and retain the
+  existing marker-gated application publication: a failed retry leaves only an
+  unpublished Railmux app directory for bounded cleanup on the next launch,
+  while existing Codex/Claude session files and older app layers remain
+  untouched.
+
+## [0.4.0.dev11] - 2026-08-04
+
+### Changed
+
+- Reuse one verified private MSYS2/tmux/Python base across Windows preview
+  upgrades while its pinned runtime identifier remains unchanged. Each Railmux
+  build keeps a separate application venv published by an atomic validity
+  marker, so normal preview upgrades no longer repeat the roughly 700 MB base
+  installation.
+- Adopt a complete dev4-dev10 Railmux-managed runtime in place after exact
+  validation, preserving its legacy app for rollback and showing a compact
+  three-phase app-layer upgrade instead of the seven-phase base install. A
+  matching base upgrade continues without a redundant confirmation; the
+  roughly 700 MB first installation still asks once unless `--yes` was given.
+
+### Security
+
+- Keep user-selected MSYS2 roots read-only and limit adoption to an exact
+  Railmux-owned legacy directory, marker, runtime identifier, version, and
+  executable probe. Provider histories remain outside the installation path
+  and are never opened or modified by base reuse.
+- Constrain confirmation-free upgrades to a `reuse_only` installer path that
+  fails instead of escalating to a full base download if the candidate changes
+  or cannot be validated.
+- Validate separate same-owner base and versioned-application markers before
+  granting MSYS2's narrow `noacl` permission exception.
+- Treat the adopted base marker as the lasting discovery authority while
+  retaining the old runtime marker only for rollback, so later rollback-state
+  cleanup cannot orphan the shared base and trigger a duplicate installation.
+
+## [0.4.0.dev10] - 2026-08-03
+
+### Fixed
+
+- Recover from the abandoned AF_UNIX pathname that MSYS2 tmux 3.7b can leave
+  after the final Railmux session exits, so a subsequent Windows launch no
+  longer reports an unresponsive server.
+- Allow exact-owner restart state to persist under MSYS2's `noacl` permission
+  projection, and make the same verified exception available to Railmux's
+  startup caches and tmux binding/lock state so restore speed and clickable
+  status controls do not silently degrade. Linux and macOS remain strict.
+
+### Security
+
+- Authorize Windows socket cleanup only when immutable server-wide inventories
+  prove the managed outer UI is the sole session and pane, then require an
+  unchanged same-user socket identity, an exit-settle interval, and two failed
+  connection probes plus proof that the recorded tmux PID is gone. Provider
+  histories are never opened or modified, and any live PID, provider, or
+  unknown tmux session denies cleanup.
+- Keep the MSYS2 permission exception limited to the real Cygwin/MSYS managed
+  wrapper with an exact same-owner on-disk runtime marker, same-UID non-symlink
+  state, and no group/world write bits; the user-owned managed runtime's
+  Windows ACL remains the privacy boundary.
+
+## [0.4.0.dev9] - 2026-08-03
+
+### Added
+
+- Add terminal-aware color and hierarchy to the Windows installer while
+  retaining plain UTF-8 evidence logs and honoring `NO_COLOR`.
+- Show read-only provider-index and tmux-recovery stages during Windows startup,
+  then report slow restore timing in the status bar.
+- Persist a private Windows-only Claude session-validity cache so unchanged
+  histories do not need to be reopened on every Railmux process start.
+
+### Changed
+
+- Validate up to twelve evenly distributed packages from pacman's actual
+  resolved transaction on every active mirror, catching sources that serve the
+  database but return 403 for only some dependencies before the install starts.
+- Explain that pacman fallback is per package and that completed, signature-
+  checked downloads remain in Railmux's private cache across a retry.
+- Use tmux 3.7's dedicated status control ranges and safely leased
+  `MouseDown1ControlN` bindings for Mode, Layout, and status-copy actions.
+
+### Fixed
+
+- Make the Mode and Layout controls clickable under the tmux 3.7b runtime
+  bundled by the Windows preview, while retaining `m` and `F8` fallbacks and an
+  explicit warning if safe binding ownership is unavailable.
+
+### Security
+
+- Never write, migrate, truncate, or repair provider session JSONL files. The
+  Windows validity cache contains only relative provider coordinates, exact
+  file signatures, and a validity bit; it is atomically written with private
+  permissions, can be deleted safely, and never authorizes agent restoration.
+- Capture and durably persist every affected tmux control binding before
+  replacement, and restore only bindings still bearing Railmux's exact lease.
+
+## [0.4.0.dev8] - 2026-08-03
+
+### Added
+
+- Surface bounded extraction percentages, pacman repository/package milestones,
+  and a 15-second heartbeat for every otherwise-silent installer subprocess.
+- Retain the hash-verified MSYS2 base and signature-checked pacman package cache
+  outside transactional staging so a failed attempt does not redownload
+  completed artifacts.
+
+### Changed
+
+- Generate a Railmux-private pacman configuration containing only the `msys`
+  repository required by tmux and Python, avoiding five unused mingw/clang
+  database synchronizations.
+- Re-measure package mirrors after the base upgrade and keep only approved,
+  successfully measured candidates active; stale measured sources remain last-
+  resort fallbacks, while every other official entry remains visible but
+  inactive in the private mirrorlist.
+- Update the Windows consent estimate to about 700 MB or more of private disk
+  after measuring a 561 MB runtime plus retained verified caches, and explain
+  that this footprint is the complete private MSYS2 compatibility wrapper,
+  including tmux and Python, rather than the Railmux Python package alone.
+
+### Fixed
+
+- Recover automatically when package mirrors return HTTP 403/404 or pacman's
+  low-speed timeout: exclude hard-failing hosts, reuse completed packages, and
+  retry once with relaxed low-speed handling so a slow working source can
+  finish instead of discarding the entire installation.
+
+### Security
+
+- Keep mirror activation limited to exact approved HTTPS URLs present in the
+  official private mirrorlist; cached archives retain pinned SHA-256 checks and
+  cached packages retain pacman signature verification.
+
+## [0.4.0.dev7] - 2026-08-03
+
+### Added
+
+- Measure fresh MSYS package databases from a bounded approved subset of the
+  private runtime's official mirrorlist and promote a materially faster source
+  before pacman runs, while retaining every official fallback.
+- Present Windows runtime installation as seven stable phases, retain complete
+  redacted UTF-8 subprocess logs, show a bounded failure tail, and add
+  `railmux runtime install --verbose` for raw live output.
+
+### Changed
+
+- Clarify that the initial 50 MB base download is followed by required private
+  MSYS2 updates and packages, and that pacman's printed confirmation needs no
+  keyboard input.
+- Bound both the number and displayed length of failure-tail lines while
+  preserving the complete line in the diagnostic log.
+- Extend advisory Windows-preview mirror CI to exercise the approved pacman
+  database endpoints as well as the pinned base archive transports.
+
+### Security
+
+- Reorder only a staged Railmux-owned mirrorlist, require exact approved
+  official HTTPS URLs and a fresh bounded Zstandard database sample, retain
+  pacman signature verification, redact credentials from logs, and preserve
+  the original official order whenever selection cannot be proven safe.
+
+## [0.4.0.dev6] - 2026-08-03
+
+### Changed
+
+- Sample the preferred managed-MSYS2 archive source and, when its projected
+  remaining time exceeds one minute, concurrently compare the other approved
+  transports. Switch only for a material measured speedup; if all are slow,
+  continue the best available download instead of failing.
+- Reuse sampled bytes, preserve the exact partial offset across approved-source
+  transfer failures, and make Windows-preview CI check Range-resume capability.
+
+### Security
+
+- Require exact HTTPS `206` and `Content-Range` responses for adaptive transfer,
+  retain the pinned final size and SHA-256 checks, and fall back to ordinary
+  verified full downloads when Range resume is unavailable.
+
+## [0.4.0.dev5] - 2026-08-03
+
+### Added
+
+- Show bounded byte/total/percentage progress while the managed Windows MSYS2
+  archive downloads, including useful byte milestones in redirected logs.
+
+### Security
+
+- Fall back across the official GitHub release, MSYS2 repository, TUNA, and
+  NJU transports only after discarding the failed partial archive, and require
+  every source to match the same pinned SHA-256 before extraction.
+
+## [0.4.0.dev4] - 2026-08-03
+
+### Added
+
+- Replace the archived native-to-WSL experiment with an explicit,
+  consent-based native Windows bootstrap into a private managed MSYS2/tmux
+  runtime, keeping the established POSIX Railmux UI as the sole implementation.
+- Share native Codex and Claude Code executables, credentials, configuration,
+  and histories through the Windows user profile; translate native drive paths
+  and Claude project keys when indexing existing sessions from MSYS2.
+- Add Windows package dispatch and managed-runtime tests, a real-MSYS2 CI
+  smoke, and a parity ledger that keeps unverified terminal behavior visible.
+
+### Security
+
+- Pin and hash-verify the official MSYS2 base archive, serialize and stage
+  installs before atomic activation, use explicit UTF-8 for runtime state, and
+  never modify system PATH, shell profiles, or a user-owned MSYS2 tree.
 
 ## [0.3.5] - 2026-08-04
 
@@ -2037,7 +2589,41 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc1...HEAD
+[0.4.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev36...v0.4.0rc1
+[0.4.0.dev36]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev35...v0.4.0.dev36
+[0.4.0.dev35]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev34...v0.4.0.dev35
+[0.4.0.dev34]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev33...v0.4.0.dev34
+[0.4.0.dev33]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev32...v0.4.0.dev33
+[0.4.0.dev32]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev31...v0.4.0.dev32
+[0.4.0.dev31]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev30...v0.4.0.dev31
+[0.4.0.dev30]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev29...v0.4.0.dev30
+[0.4.0.dev29]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev28...v0.4.0.dev29
+[0.4.0.dev28]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev27...v0.4.0.dev28
+[0.4.0.dev27]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev26...v0.4.0.dev27
+[0.4.0.dev26]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev25...v0.4.0.dev26
+[0.4.0.dev25]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev25
+[0.4.0.dev24]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev23...v0.4.0.dev24
+[0.4.0.dev23]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev22...v0.4.0.dev23
+[0.4.0.dev22]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev21...v0.4.0.dev22
+[0.4.0.dev21]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev20...v0.4.0.dev21
+[0.4.0.dev20]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev19...v0.4.0.dev20
+[0.4.0.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev18...v0.4.0.dev19
+[0.4.0.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev17...v0.4.0.dev18
+[0.4.0.dev17]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev16...v0.4.0.dev17
+[0.4.0.dev16]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev15...v0.4.0.dev16
+[0.4.0.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev14...v0.4.0.dev15
+[0.4.0.dev14]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev13...v0.4.0.dev14
+[0.4.0.dev13]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev12...v0.4.0.dev13
+[0.4.0.dev12]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev11...v0.4.0.dev12
+[0.4.0.dev11]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev10...v0.4.0.dev11
+[0.4.0.dev10]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev9...v0.4.0.dev10
+[0.4.0.dev9]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev8...v0.4.0.dev9
+[0.4.0.dev8]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev7...v0.4.0.dev8
+[0.4.0.dev7]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev6...v0.4.0.dev7
+[0.4.0.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev5...v0.4.0.dev6
+[0.4.0.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev4...v0.4.0.dev5
+[0.4.0.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev3...v0.4.0.dev4
 [0.3.6]: https://github.com/Rightglow/Railmux/compare/v0.3.5...v0.3.6
 [0.3.6.dev6]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev5...v0.3.6.dev6
 [0.3.6.dev5]: https://github.com/Rightglow/Railmux/compare/v0.3.6.dev4...v0.3.6.dev5

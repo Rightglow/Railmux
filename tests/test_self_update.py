@@ -79,6 +79,17 @@ def test_never_policy_skips_network(monkeypatch):
     check.assert_not_called()
 
 
+def test_managed_windows_runtime_leaves_updates_to_bootstrap(monkeypatch):
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    settings = MagicMock(update_policy="always")
+    check = MagicMock()
+    monkeypatch.setattr(self_update, "latest_release", check)
+
+    self_update.maybe_upgrade_before_launch(("ssh", "example"), settings)
+
+    check.assert_not_called()
+
+
 def test_ask_no_skips_only_this_launch(monkeypatch):
     settings = MagicMock(update_policy="ask")
     install = MagicMock()

@@ -248,6 +248,11 @@ def _emit_remote_hello(
             "config_status": config_status,
             "tmux_configured": tmux_configured,
             "config_protocol": REMOTE_CONFIG_PROTOCOL,
+            "platform": (
+                "windows-msys2"
+                if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2"
+                else "posix"
+            ),
             "version": __version__,
         },
         separators=(",", ":"),
@@ -335,6 +340,52 @@ class _ExtendedScreenMixin:
         if kwargs.get("private"):
             return
         super().report_device_status(mode)
+
+    def select_graphic_rendition(self, *attrs: int) -> None:
+        """Retain 256-colour indices instead of baking in pyte's palette.
+
+        pyte 0.8.2 expands ``38/48;5;N`` into its fixed xterm RGB table.  If
+        Railmux serializes that value as true colour, a locally customised
+        terminal palette is bypassed and history can look noticeably more
+        saturated than the provider's live output.  The symbolic value stays
+        private to the headless model and :func:`_colour_codes` restores the
+        original indexed SGR on the wire.
+        """
+        super().select_graphic_rendition(*attrs)
+        values = list(attrs)
+        indexed: dict[str, int] = {}
+        index = 0
+        while index < len(values):
+            attr = values[index]
+            index += 1
+            if attr == 0:
+                indexed.clear()
+                continue
+            if 30 <= attr <= 37 or attr == 39 or 90 <= attr <= 97:
+                indexed.pop("fg", None)
+                continue
+            if 40 <= attr <= 47 or attr == 49 or 100 <= attr <= 107:
+                indexed.pop("bg", None)
+                continue
+            if attr not in (38, 48):
+                continue
+            key = "fg" if attr == 38 else "bg"
+            indexed.pop(key, None)
+            if index >= len(values):
+                continue
+            mode = values[index]
+            index += 1
+            if mode == 5 and index < len(values):
+                colour = values[index]
+                index += 1
+                if 0 <= colour <= 255:
+                    indexed[key] = colour
+            elif mode == 2:
+                index = min(len(values), index + 3)
+        if indexed:
+            self.cursor.attrs = self.cursor.attrs._replace(**{
+                key: f"ansi256:{colour}" for key, colour in indexed.items()
+            })
 
 
 @lru_cache(maxsize=4)
@@ -1545,7 +1596,7 @@ def _acquire_display_lock(
         if (
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
-            or info.st_mode & 0o077
+            or not restart_state.private_mode_is_safe(info.st_mode)
         ):
             raise OSError("unsafe display lock")
         deadline = time.monotonic() + max(0.0, timeout)
@@ -1916,6 +1967,9 @@ def _colour_codes(value: str, *, foreground: bool) -> list[str]:
     named = _ANSI_FG if foreground else _ANSI_BG
     if value in named:
         return [str(named[value])]
+    indexed = re.fullmatch(r"ansi256:([0-9]{1,3})", value)
+    if indexed is not None and int(indexed.group(1)) <= 255:
+        return ["38" if foreground else "48", "5", indexed.group(1)]
     if len(value) == 6:
         try:
             red, green, blue = (

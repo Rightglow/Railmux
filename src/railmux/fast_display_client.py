@@ -281,6 +281,7 @@ class RemoteHello:
     config_status: str = "valid"
     tmux_configured: bool = False
     config_protocol: int = 0
+    platform: str = "posix"
 
 
 @dataclass(frozen=True)
@@ -296,6 +297,11 @@ class RemoteStartKind(Enum):
     TIMEOUT = "timeout"
 
 
+class RemoteLaunchMode(Enum):
+    POSIX = "posix"
+    DIRECT = "direct"
+
+
 class RemoteAttachKind(Enum):
     ACCEPTED = "accepted"
     BUSY = "busy"
@@ -308,6 +314,15 @@ class RemoteStartup:
     kind: RemoteStartKind
     hello: RemoteHello | None = None
     returncode: int | None = None
+
+
+@dataclass(frozen=True)
+class RemoteProbe:
+    """One cooked-mode launch-family probe before any attach mutation."""
+
+    process: subprocess.Popen
+    startup: RemoteStartup
+    launch_mode: RemoteLaunchMode
 
 
 def await_remote_attach_status(
@@ -369,6 +384,7 @@ def parse_remote_hello(line: bytes) -> RemoteHello:
     config_status = value.get("config_status", "valid")
     tmux_configured = value.get("tmux_configured", False)
     config_protocol = value.get("config_protocol", 0)
+    platform = value.get("platform", "posix")
     if (
         not isinstance(version, str)
         or not version
@@ -383,6 +399,7 @@ def parse_remote_hello(line: bytes) -> RemoteHello:
         or not isinstance(config_protocol, int)
         or isinstance(config_protocol, bool)
         or not 0 <= config_protocol <= 65535
+        or platform not in {"posix", "windows-msys2"}
     ):
         raise ValueError("invalid Railmux remote hello")
     try:
@@ -397,6 +414,7 @@ def parse_remote_hello(line: bytes) -> RemoteHello:
         config_status,
         tmux_configured,
         config_protocol,
+        platform,
     )
 
 
@@ -1540,12 +1558,18 @@ def _remote_launch_command(server_args: Sequence[str]) -> str:
     return "; ".join(branches)
 
 
+def _remote_direct_launch_command(server_args: Sequence[str]) -> str:
+    """Build a shell-neutral command accepted by Windows OpenSSH PowerShell."""
+    return shlex.join(["railmux", *server_args])
+
+
 def build_remote_command_argv(
     destination: str,
     *,
     remote_args: Sequence[str],
     ssh_args: Sequence[str],
     force_tty: bool = False,
+    launch_mode: RemoteLaunchMode = RemoteLaunchMode.POSIX,
 ) -> list[str]:
     """Build SSH argv through the shared remote Railmux discovery ladder."""
     return [
@@ -1556,8 +1580,81 @@ def build_remote_command_argv(
         # user arguments so a copied -t/-T flag cannot invert the transport.
         "-tt" if force_tty else "-T",
         destination,
-        _remote_launch_command(remote_args),
+        (
+            _remote_direct_launch_command(remote_args)
+            if launch_mode is RemoteLaunchMode.DIRECT
+            else _remote_launch_command(remote_args)
+        ),
     ]
+
+
+def probe_remote_launch(
+    destination: str,
+    *,
+    remote_args: Sequence[str],
+    ssh_args: Sequence[str],
+    remote_platform: str = "auto",
+    force_tty: bool = False,
+    timeout: float = _REMOTE_HELLO_TIMEOUT,
+) -> RemoteProbe:
+    """Probe one remote Railmux command and pin its shell launch family.
+
+    ``auto`` preserves the POSIX discovery ladder, then makes one direct
+    shell-neutral attempt only after a non-SSH launch failure.  Each shell
+    family receives the full bounded startup timeout.  Explicit Windows mode
+    requires a managed Windows hello; auto mode accepts an authoritative POSIX
+    hello reached through a shell-neutral direct command.
+    """
+    if remote_platform not in {"auto", "posix", "windows"}:
+        raise ValueError("invalid remote platform")
+    launch_mode = (
+        RemoteLaunchMode.DIRECT
+        if remote_platform == "windows"
+        else RemoteLaunchMode.POSIX
+    )
+    effective_ssh_args = (
+        *ssh_args,
+        "-o",
+        "ServerAliveInterval=5",
+        "-o",
+        "ServerAliveCountMax=3",
+    )
+
+    def start(mode: RemoteLaunchMode) -> tuple[subprocess.Popen, RemoteStartup]:
+        argv = build_remote_command_argv(
+            destination,
+            remote_args=remote_args,
+            ssh_args=effective_ssh_args,
+            force_tty=force_tty,
+            launch_mode=mode,
+        )
+        process = _spawn_remote(argv)
+        startup = await_remote_startup(process, timeout=timeout)
+        return process, startup
+
+    process, startup = start(launch_mode)
+    if (
+        remote_platform == "auto"
+        and launch_mode is RemoteLaunchMode.POSIX
+        and startup.kind is RemoteStartKind.FAILED
+        and startup.returncode != 255
+    ):
+        _stop_unstarted_remote(process)
+        launch_mode = RemoteLaunchMode.DIRECT
+        process, startup = start(launch_mode)
+
+    if (
+        startup.kind is RemoteStartKind.HELLO
+        and startup.hello is not None
+        and remote_platform == "windows"
+        and startup.hello.platform != "windows-msys2"
+    ):
+        _stop_unstarted_remote(process)
+        raise ProbeError(
+            "the direct remote launcher answered from a non-Windows Railmux "
+            "runtime; use --remote-platform posix for that host"
+        )
+    return RemoteProbe(process, startup, launch_mode)
 
 
 def build_ssh_argv(
@@ -1570,6 +1667,7 @@ def build_ssh_argv(
     ssh_args: Sequence[str],
     replace_existing_client: bool = False,
     existing_session_only: bool = False,
+    launch_mode: RemoteLaunchMode = RemoteLaunchMode.POSIX,
 ) -> list[str]:
     server_args = _remote_server_args(
         session=session,
@@ -1592,6 +1690,7 @@ def build_ssh_argv(
             "-o",
             "ServerAliveCountMax=3",
         ),
+        launch_mode=launch_mode,
     )
 
 
@@ -1757,6 +1856,55 @@ def remote_install_help(destination: str, version: str) -> str:
     )
 
 
+def remote_windows_install_help(destination: str, version: str) -> str:
+    return (
+        f"Update the user-level Railmux for Windows on {destination} from "
+        "PowerShell, then retry:\n"
+        f"  py -m pip install --upgrade railmux=={version}\n"
+        "  railmux runtime install --yes\n"
+        "The runtime command installs only the matching Railmux app layer and "
+        "reuses a verified managed MSYS2 base when its pinned version is "
+        "unchanged. It does not modify Codex or Claude session files. If 'py' "
+        "is unavailable, use the same Windows Python executable that installed "
+        "the Railmux command."
+    )
+
+
+def local_windows_update_help(version: str) -> str:
+    """Return the native-owner update path for a managed Windows client."""
+    return (
+        "Update this Windows Railmux installation from PowerShell, then "
+        "retry:\n"
+        f"  py -m pip install --upgrade railmux=={version}\n"
+        "  railmux runtime install --yes\n"
+        "Do not update the versioned MSYS2 app environment with its private "
+        "pip; the native bootstrap owns application-layer installation."
+    )
+
+
+def _remote_launch_mode(args: argparse.Namespace) -> RemoteLaunchMode:
+    selected = getattr(args, "_selected_remote_launch_mode", None)
+    if isinstance(selected, RemoteLaunchMode):
+        return selected
+    if getattr(args, "remote_platform", "auto") == "windows":
+        return RemoteLaunchMode.DIRECT
+    return RemoteLaunchMode.POSIX
+
+
+def _remember_remote_launch_mode(
+    args: argparse.Namespace, mode: RemoteLaunchMode
+) -> None:
+    args._selected_remote_launch_mode = mode
+
+
+def _remote_uses_windows_runtime(
+    args: argparse.Namespace, hello: RemoteHello | None = None
+) -> bool:
+    if hello is not None:
+        return hello.platform == "windows-msys2"
+    return _remote_launch_mode(args) is RemoteLaunchMode.DIRECT
+
+
 def remote_tmux_help(destination: str) -> str:
     return (
         f"tmux is not installed or not on PATH on {destination}. Install it "
@@ -1823,7 +1971,11 @@ def _upgrade_local_and_restart(
     *,
     subcommand: str = "ssh",
 ) -> NoReturn:
+    from railmux.provider_paths import running_in_windows_wrapper
     from railmux.self_update import installed_version_matches
+
+    if running_in_windows_wrapper():
+        raise ProbeError(local_windows_update_help(version))
 
     argv = _local_upgrade_argv(version)
     command_label = f"railmux {subcommand}"
@@ -1989,6 +2141,7 @@ def _reconnect_remote_attach(
         ssh_args=ssh_args,
         replace_existing_client=replace_existing_client,
         existing_session_only=existing_session_only,
+        launch_mode=_remote_launch_mode(args),
     )
     process = (
         _spawn_remote(argv, suppress_stderr=True)
@@ -2215,18 +2368,55 @@ def prepare_remote_process(
         if before_interaction is not None:
             before_interaction()
 
-    argv = build_ssh_argv(
-        args.destination,
+    if on_stage is not None:
+        on_stage("Connecting to remote host…")
+    remote_args = _remote_server_args(
         session=args.session,
         width=current_size.columns,
         height=current_size.lines,
         fps=args.fps,
-        ssh_args=args.ssh_arg,
     )
-    if on_stage is not None:
-        on_stage("Connecting to remote host…")
-    process = _spawn_remote(argv)
-    startup = await_remote_startup(process)
+    probe = probe_remote_launch(
+        args.destination,
+        remote_args=remote_args,
+        ssh_args=args.ssh_arg,
+        remote_platform=getattr(args, "remote_platform", "auto"),
+    )
+    process = probe.process
+    startup = probe.startup
+    launch_mode = probe.launch_mode
+    if startup.kind is RemoteStartKind.HELLO:
+        _remember_remote_launch_mode(args, launch_mode)
+    elif (
+        getattr(args, "remote_platform", "auto") == "auto"
+        and launch_mode is RemoteLaunchMode.DIRECT
+    ):
+        _stop_unstarted_remote(process)
+        if startup.returncode == 255:
+            raise ProbeError("ssh could not connect to the remote host")
+        if startup.kind is RemoteStartKind.TIMEOUT:
+            raise ProbeError(
+                "timed out while checking the remote host's direct Railmux launcher"
+            )
+        raise ProbeError(
+            "the remote shell did not accept the POSIX discovery command, "
+            "and a direct Railmux launch did not complete. If this is a "
+            "managed Windows host:\n"
+            f"{remote_windows_install_help(args.destination, __version__)}"
+        )
+
+    if (
+        getattr(args, "remote_platform", "auto") == "windows"
+        and startup.kind is not RemoteStartKind.HELLO
+    ):
+        _stop_unstarted_remote(process)
+        if startup.returncode == 255:
+            raise ProbeError("ssh could not connect to the remote host")
+        if startup.kind is RemoteStartKind.TIMEOUT:
+            raise ProbeError(
+                "timed out waiting for the Windows Railmux compatibility handshake"
+            )
+        raise ProbeError(remote_windows_install_help(args.destination, __version__))
     install_version = __version__
     install_reason: str | None = None
     if startup.kind is RemoteStartKind.MISSING:
@@ -2281,6 +2471,12 @@ def prepare_remote_process(
             if decision.action == "prompt" and decision.prompt == "remote_install":
                 assert decision.reason is not None
                 assert decision.install_version is not None
+                if _remote_uses_windows_runtime(args, hello):
+                    _stop_unstarted_remote(process)
+                    raise ProbeError(
+                        f"{decision.reason}\n"
+                        f"{remote_windows_install_help(args.destination, decision.install_version)}"
+                    )
                 consents["remote_install"] = _confirm_remote_install(
                     args,
                     decision.reason,
@@ -2295,9 +2491,14 @@ def prepare_remote_process(
                 _stop_unstarted_remote(process)
                 message = decision.reason or "incompatible remote Railmux"
                 if decision.install_version is not None:
+                    install_help = (
+                        remote_windows_install_help
+                        if _remote_uses_windows_runtime(args, hello)
+                        else remote_install_help
+                    )
                     message = (
                         f"{message}\n"
-                        f"{remote_install_help(args.destination, decision.install_version)}"
+                        f"{install_help(args.destination, decision.install_version)}"
                     )
                 raise ProbeError(message)
             if decision.warning is not None:
@@ -2320,6 +2521,14 @@ def prepare_remote_process(
             raise AssertionError(f"unknown compatibility action: {decision.action}")
 
     assert install_reason is not None
+    if _remote_uses_windows_runtime(
+        args, startup.hello if startup.kind is RemoteStartKind.HELLO else None
+    ):
+        _stop_unstarted_remote(process)
+        raise ProbeError(
+            f"{install_reason}\n"
+            f"{remote_windows_install_help(args.destination, install_version)}"
+        )
     if startup.kind is not RemoteStartKind.HELLO and not _confirm_remote_install(
         args,
         install_reason,
@@ -2429,6 +2638,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=float,
         default=20.0,
         help="maximum coalesced display update rate, 1-60 (default: 20)",
+    )
+    parser.add_argument(
+        "--remote-platform",
+        choices=("auto", "posix", "windows"),
+        default="auto",
+        help=(
+            "remote shell family: auto tries POSIX discovery then direct "
+            "Windows launch; windows avoids the failed POSIX probe and an "
+            "extra password prompt (default: auto)"
+        ),
     )
     parser.add_argument(
         "--no-mouse",

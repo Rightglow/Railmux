@@ -4,9 +4,10 @@ import io
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from railmux import remote_config
+from railmux import fast_display_client, remote_config
 from railmux.fast_display_client import (
     RemoteHello,
+    RemoteLaunchMode,
     RemoteStartKind,
     RemoteStartup,
     build_remote_command_argv,
@@ -51,7 +52,8 @@ def test_compatible_probe_stops_before_start_token(monkeypatch):
     monkeypatch.setattr(
         remote_config,
         "_start_probe",
-        lambda *_args, **_kwargs: (process, _hello()),
+        lambda *_args, **_kwargs: (
+            process, _hello(), RemoteLaunchMode.POSIX),
     )
     monkeypatch.setattr(
         remote_config,
@@ -80,7 +82,8 @@ def test_remote_editor_can_repair_invalid_remote_config(monkeypatch):
     monkeypatch.setattr(
         remote_config,
         "_start_probe",
-        lambda *_args, **_kwargs: (process, startup),
+        lambda *_args, **_kwargs: (
+            process, startup, RemoteLaunchMode.POSIX),
     )
     stopped = []
     monkeypatch.setattr(
@@ -94,6 +97,60 @@ def test_remote_editor_can_repair_invalid_remote_config(monkeypatch):
     assert stopped == [process]
 
 
+def test_windows_probe_pins_direct_config_launch(monkeypatch):
+    process = MagicMock()
+    startup = RemoteStartup(
+        RemoteStartKind.HELLO,
+        RemoteHello(
+            "0.4.0.dev24",
+            PROTOCOL_VERSION,
+            True,
+            config_protocol=REMOTE_CONFIG_PROTOCOL,
+            platform="windows-msys2",
+        ),
+    )
+    monkeypatch.setattr(
+        remote_config,
+        "_start_probe",
+        lambda *_args, **_kwargs: (
+            process, startup, RemoteLaunchMode.DIRECT),
+    )
+    monkeypatch.setattr(
+        remote_config, "_stop_unstarted_remote", lambda _process: None)
+
+    mode = remote_config._ensure_remote_config_cli(
+        "work", (), ("--remote", "work"), remote_platform="windows")
+
+    assert mode is RemoteLaunchMode.DIRECT
+
+
+def test_windows_missing_runtime_never_runs_posix_installer(monkeypatch):
+    process = MagicMock()
+    monkeypatch.setattr(
+        remote_config,
+        "_start_probe",
+        lambda *_args, **_kwargs: (
+            process,
+            RemoteStartup(RemoteStartKind.MISSING, returncode=127),
+            RemoteLaunchMode.DIRECT,
+        ),
+    )
+    monkeypatch.setattr(
+        remote_config, "_stop_unstarted_remote", lambda _process: None)
+    confirm = MagicMock(return_value=True)
+    monkeypatch.setattr(remote_config, "_confirm", confirm)
+
+    try:
+        remote_config._ensure_remote_config_cli(
+            "work", (), ("--remote", "work"), remote_platform="windows")
+    except remote_config.ProbeError as exc:
+        assert "PowerShell" in str(exc)
+        assert "runtime install --yes" in str(exc)
+    else:
+        raise AssertionError("missing Windows runtime was not rejected")
+    confirm.assert_not_called()
+
+
 def test_missing_remote_can_install_without_tmux_attach(monkeypatch):
     calls = []
     processes = [MagicMock(), MagicMock()]
@@ -102,9 +159,13 @@ def test_missing_remote_can_install_without_tmux_attach(monkeypatch):
         _hello(),
     ]
 
-    def start(_destination, _ssh_args, *, install=None):
+    def start(_destination, _ssh_args, *, install=None, remote_platform="auto"):
         calls.append(install)
-        return processes[len(calls) - 1], startups[len(calls) - 1]
+        return (
+            processes[len(calls) - 1],
+            startups[len(calls) - 1],
+            RemoteLaunchMode.POSIX,
+        )
 
     monkeypatch.setattr(remote_config, "_start_probe", start)
     monkeypatch.setattr(remote_config, "_confirm", lambda _question: True)
@@ -153,6 +214,25 @@ def test_remote_context_upgrade_restarts_config_subcommand(monkeypatch):
     }
 
 
+def test_managed_windows_local_upgrade_never_mutates_versioned_app_venv(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_windows_wrapper", lambda: True)
+    upgrade = MagicMock()
+    monkeypatch.setattr(fast_display_client, "_local_upgrade_argv", upgrade)
+
+    try:
+        fast_display_client._upgrade_local_and_restart(
+            "0.4.0.dev99", ("--remote", "work"), subcommand="config")
+    except fast_display_client.ProbeError as exc:
+        assert "PowerShell" in str(exc)
+        assert "runtime install --yes" in str(exc)
+    else:
+        raise AssertionError("managed app venv upgrade was not rejected")
+    upgrade.assert_not_called()
+
+
 def test_run_remote_config_launches_cooked_editor(monkeypatch):
     monkeypatch.setattr(remote_config.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr(remote_config.sys.stdout, "isatty", lambda: True)
@@ -181,6 +261,32 @@ def test_run_remote_config_launches_cooked_editor(monkeypatch):
     assert observed["argv"][:5] == ["ssh", "-p", "2222", "-tt", "work"]
     assert "config --remote-context" in observed["argv"][-1]
     assert observed["check"] is False
+
+
+def test_run_remote_config_uses_direct_windows_command(monkeypatch):
+    monkeypatch.setattr(remote_config.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(remote_config.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(remote_config.shutil, "which", lambda _name: "/usr/bin/ssh")
+    monkeypatch.setattr(
+        remote_config,
+        "_ensure_remote_config_cli",
+        lambda *_args, **_kwargs: RemoteLaunchMode.DIRECT,
+    )
+    observed = {}
+
+    def run(argv, *, check):
+        observed["argv"] = argv
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(remote_config.subprocess, "run", run)
+
+    assert remote_config.run_remote_config(
+        "work",
+        ssh_args=(),
+        raw_argv=("--remote", "work"),
+        remote_platform="windows",
+    ) == 0
+    assert observed["argv"][-1] == "railmux config --remote-context"
 
 
 def test_remote_config_progress_is_transient(monkeypatch):
@@ -223,7 +329,8 @@ def test_remote_config_clears_progress_before_install_prompt(monkeypatch):
     monkeypatch.setattr(
         remote_config,
         "_start_probe",
-        lambda *_args, **_kwargs: (process, startup),
+        lambda *_args, **_kwargs: (
+            process, startup, RemoteLaunchMode.POSIX),
     )
     monkeypatch.setattr(remote_config, "_stop_unstarted_remote", lambda _process: None)
     monkeypatch.setattr(remote_config, "_confirm", lambda _question: False)

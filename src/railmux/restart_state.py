@@ -17,6 +17,7 @@ from pathlib import Path
 from railmux import tmux_ctl
 from railmux.atomic_file import atomic_write_text
 from railmux.config import default_config_path
+from railmux.provider_paths import private_mode_is_safe
 
 
 SCHEMA_VERSION = 1
@@ -164,10 +165,15 @@ def legacy_state_path() -> Path:
 def _ensure_private_dir(path: Path) -> None:
     """Create and verify a Railmux-owned 0700 runtime directory."""
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    info = path.stat()
+    info = path.lstat()
+    # MSYS2's default noacl projection reports user-owned NTFS directories as
+    # 0755 even after chmod(0700). The managed runtime itself lives below the
+    # Windows user's LocalAppData ACL. Accept that projection only on the real
+    # Cygwin/MSYS Python platform, and still reject symlinks, foreign owners,
+    # and any group/world-writable directory. POSIX platforms retain 0700.
     if (not stat.S_ISDIR(info.st_mode)
             or info.st_uid != os.getuid()
-            or info.st_mode & 0o077):
+            or not private_mode_is_safe(info.st_mode)):
         raise OSError("Railmux runtime state directory is not private")
 
 

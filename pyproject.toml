@@ -20,6 +20,7 @@ classifiers = [
   "Intended Audience :: Developers",
   "Operating System :: POSIX :: Linux",
   "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
@@ -31,15 +32,15 @@ classifiers = [
   "Topic :: Utilities",
 ]
 dependencies = [
-  "packaging>=23.0",
-  "tomlkit>=0.13.2,<1",
-  "urwid>=2.6.16",
-  "tomli>=2.0.1; python_version < '3.11'",
+  "packaging>=23.0; sys_platform != 'win32'",
+  "tomlkit>=0.13.2,<1; sys_platform != 'win32'",
+  "urwid>=2.6.16; sys_platform != 'win32'",
+  "tomli>=2.0.1; python_version < '3.11' and sys_platform != 'win32'",
 ]
 
 [project.optional-dependencies]
 ssh = [
-  "pyte>=0.8.2,<0.9",
+  "pyte>=0.8.2,<0.9; sys_platform != 'win32'",
 ]
 dev = [
   "pytest>=8.0",
@@ -50,7 +51,7 @@ dev = [
 ]
 
 [project.scripts]
-railmux = "railmux.cli:main"
+railmux = "railmux.entrypoint:main"
 
 [project.urls]
 Homepage = "https://rightglow.github.io/Railmux/"

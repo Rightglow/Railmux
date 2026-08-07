@@ -613,24 +613,29 @@ def test_main_preview_banner_and_footer(tmp_path, capsys):
     assert "/ search" in output and "q close" in output
 
 
-def test_tail_utf8_lines_keeps_complete_final_records_across_blocks(tmp_path):
+def test_tail_utf8_lines_reads_complete_final_records_across_blocks(tmp_path):
     jsonl = tmp_path / "large.jsonl"
+    long_line = "older-" + "x" * 70_000
     jsonl.write_text(
-        "\n".join(("older-" + "x" * 70_000, "保留一", "保留二", "保留三")),
+        "\n".join((long_line, "保留一", "保留二", "保留三")),
         encoding="utf-8",
     )
 
-    assert _tail_utf8_lines(jsonl, 3).read().splitlines() == [
-        "保留一", "保留二", "保留三"]
+    stream = _tail_utf8_lines(jsonl, 3)
+
+    assert stream.read().splitlines() == ["保留一", "保留二", "保留三"]
 
 
-def test_main_preview_limit_bounds_direct_file_without_external_tail(
+def test_main_preview_limit_bounds_a_direct_file_without_external_tail(
     tmp_path, capsys,
 ):
     jsonl = tmp_path / "claude.jsonl"
     _write_jsonl(jsonl, [
-        {"type": "user", "message": {"role": "user", "content": f"m{n}"}}
-        for n in range(5)
+        {
+            "type": "user",
+            "message": {"role": "user", "content": f"message-{index}"},
+        }
+        for index in range(5)
     ])
 
     main([
@@ -639,8 +644,10 @@ def test_main_preview_limit_bounds_direct_file_without_external_tail(
     ])
 
     output = capsys.readouterr().out
-    assert "m0" not in output and "m2" not in output
-    assert "m3" in output and "m4" in output
+    assert "message-0" not in output
+    assert "message-2" not in output
+    assert "message-3" in output
+    assert "message-4" in output
 
 
 def test_main_rejects_bad_preview_limit(capsys):
