@@ -38,6 +38,22 @@ def test_launcher_argv_preserves_multi_argument_python_module_prefix():
     ]
 
 
+def test_launcher_argv_can_add_one_validated_client_feature():
+    assert tmux_server.launcher_argv(
+        ["/usr/bin/python3", "-m", "railmux"],
+        [],
+        client_features=("sync",),
+    )[:7] == [
+        "tmux", "-L", "railmux", "-T", "sync", "start-server", ";",
+    ]
+
+
+@pytest.mark.parametrize("feature", ["-L", "sync,focus", "", "非ascii"])
+def test_launcher_argv_rejects_untrusted_client_features(feature):
+    with pytest.raises(tmux_server.TmuxServerError):
+        tmux_server.launcher_argv(["railmux"], [], client_features=(feature,))
+
+
 def test_detached_launcher_session_is_pinned_before_and_after_create(
     monkeypatch,
 ):

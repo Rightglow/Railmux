@@ -656,16 +656,17 @@ def main(argv: list[str] | None = None) -> int:
             else [sys.argv[0]]
         )
         client_env = tmux_server.exec_environment()
+        from railmux.provider_paths import (
+            running_in_managed_windows_wrapper,
+        )
+        managed_windows = running_in_managed_windows_wrapper()
         dedicated_session_id = (
             tmux_server.target_session_id(dedicated_target, "railmux")
             if dedicated_target is not None else None
         )
         created_detached_session = False
         if dedicated_target is not None and dedicated_session_id is None:
-            from railmux.provider_paths import (
-                running_in_managed_windows_wrapper,
-            )
-            if running_in_managed_windows_wrapper():
+            if managed_windows:
                 dedicated_session_id = (
                     tmux_server.ensure_detached_launcher_session(
                         dedicated_target,
@@ -681,9 +682,7 @@ def main(argv: list[str] | None = None) -> int:
             and dedicated_session_id is not None
             and not created_detached_session
         ):
-            from railmux.provider_paths import running_in_managed_windows_wrapper
-
-            if running_in_managed_windows_wrapper():
+            if managed_windows:
                 from railmux.windows_ui_transition import ensure_current_ui
 
                 runtime_id = os.environ.get("RAILMUX_MSYS2_RUNTIME_ID", "")
@@ -703,7 +702,22 @@ def main(argv: list[str] | None = None) -> int:
                         "'railmux' again to finish it.",
                         file=sys.stderr,
                     )
-        cmd = tmux_server.launcher_argv(launch_prefix, raw_args)
+        # Windows Terminal 1.23+ implements DEC synchronized output, but TERM
+        # remains the generic xterm-256color and tmux cannot infer that fact.
+        # Without ``sync``, Codex's active-turn redraw exposes intermediate
+        # hardware-cursor coordinates. Unknown private modes are ignored by
+        # older Windows Terminal builds, while non-WT/conhost entry remains
+        # unchanged.
+        client_features = (
+            ("sync",)
+            if managed_windows and client_env.get("WT_SESSION")
+            else ()
+        )
+        cmd = tmux_server.launcher_argv(
+            launch_prefix,
+            raw_args,
+            client_features=client_features,
+        )
         return _run_tmux_client_with_watchdog(
             cmd,
             client_env,

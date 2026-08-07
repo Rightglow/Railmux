@@ -514,6 +514,13 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
         "railmux.provider_paths.running_in_managed_windows_wrapper",
         lambda: True,
     )
+    client_env = {
+        "RAILMUX_WINDOWS_RUNTIME": "msys2",
+        "WT_SESSION": "opaque-terminal-identity",
+    }
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.exec_environment", lambda: client_env
+    )
     monkeypatch.setattr(
         "railmux.cli._interactive_terminal_size", lambda: (164, 46))
     prepared = MagicMock(return_value="$9")
@@ -525,7 +532,6 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
 
     assert main(["--project", "/work"]) == 0
 
-    client_env = tmux_server.exec_environment()
     prepared.assert_called_once_with(
         target,
         ["/opt/railmux/bin/railmux"],
@@ -537,6 +543,10 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
         "expected_target": target,
         "expected_session_id": "$9",
     }
+    assert run_client.call_args.args[0][:7] == [
+        "tmux", "-L", "railmux", "-T", "sync", "start-server", ";",
+    ]
+    assert "opaque-terminal-identity" not in run_client.call_args.args[0]
 
 
 def test_posix_missing_outer_session_keeps_ordinary_new_session_path(
@@ -553,6 +563,10 @@ def test_posix_missing_outer_session_keeps_ordinary_new_session_path(
         "railmux.provider_paths.running_in_managed_windows_wrapper",
         lambda: False,
     )
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.exec_environment",
+        lambda: {"WT_SESSION": "must-not-enable-windows-features"},
+    )
     prepared = MagicMock()
     monkeypatch.setattr(
         "railmux.cli.tmux_server.ensure_detached_launcher_session", prepared)
@@ -567,6 +581,7 @@ def test_posix_missing_outer_session_keeps_ordinary_new_session_path(
         "expected_target": target,
         "expected_session_id": None,
     }
+    assert "-T" not in run_client.call_args.args[0]
 
 
 def test_local_tmux_watchdog_exits_and_records_after_consecutive_failures(

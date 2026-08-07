@@ -147,6 +147,24 @@ def tmux_argv(*args: str, env: Mapping[str, str] | None = None) -> list[str]:
     return ["tmux", "-L", socket_label(env), *args]
 
 
+def client_feature_args(features: Sequence[str]) -> list[str]:
+    """Return a bounded tmux client ``-T`` feature override.
+
+    Features are selected only from Railmux-owned terminal evidence.  Keep
+    validation here because this fragment is inserted before the tmux command,
+    where an accidental option-shaped value would otherwise change parsing.
+    """
+    if not features:
+        return []
+    if any(
+        not isinstance(feature, str)
+        or re.fullmatch(r"[a-z][a-z0-9-]{0,31}", feature) is None
+        for feature in features
+    ):
+        raise TmuxServerError("invalid tmux client feature")
+    return ["-T", ",".join(dict.fromkeys(features))]
+
+
 def current_socket_path(env: Mapping[str, str] | None = None) -> str | None:
     """Parse the exact socket path from tmux's ``TMUX`` environment value."""
     source = os.environ if env is None else env
@@ -620,6 +638,8 @@ def scoped_target_environment(
 def launcher_argv(
     launch_prefix: Sequence[str],
     forwarded_args: Sequence[str],
+    *,
+    client_features: Sequence[str] = (),
 ) -> list[str]:
     """Build the only supported entry into the dedicated Railmux workspace.
 
@@ -630,6 +650,7 @@ def launcher_argv(
     clean without requiring a child process to repair partially-started UI.
     """
     return tmux_argv(
+        *client_feature_args(client_features),
         "start-server",
         ";",
         "set-option",

@@ -109,6 +109,17 @@ probe and their age and inode identity remain unchanged. A bridge failure
 leaves the existing tmux workspace running and records only a bounded
 diagnostic category. POSIX launches never enter this fallback.
 
+Windows Terminal exposes an opaque `WT_SESSION` marker but keeps the generic
+`xterm-256color` terminal name, so tmux cannot infer its synchronized-output
+support. Managed direct clients add tmux's per-client `sync` feature when that
+marker is present. A fallback bridge carries only the resulting capability bit
+into its server-session PTY—never the opaque marker—and applies the same
+per-client feature before attach. This makes tmux wrap each completed frame in
+DEC synchronized output, preventing Codex's active-turn redraw coordinates
+from becoming visible as roaming hardware cursors. No server-global terminal
+option is changed; conhost, POSIX, and terminals without the marker retain
+their existing behavior.
+
 The managed launcher suppresses tmux's raw direct-attach error only on this
 Windows path. A completed fallback emits one terminal-capability-aware Railmux
 info line; a bridge that cannot start or later fails emits an actionable

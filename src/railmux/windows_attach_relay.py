@@ -241,6 +241,7 @@ def _spawn_tmux_client(
     height: int,
     term: str,
     colorterm: str | None,
+    synchronized_output: bool,
 ) -> tuple[int, int]:
     master_fd, slave_fd = os.openpty()
     _set_winsize(slave_fd, width, height)
@@ -263,7 +264,14 @@ def _spawn_tmux_client(
             else:
                 env.pop("COLORTERM", None)
             argv = tmux_server.target_argv(
-                target, "attach-session", "-t", session_id)
+                target,
+                *tmux_server.client_feature_args(
+                    ("sync",) if synchronized_output else ()
+                ),
+                "attach-session",
+                "-t",
+                session_id,
+            )
             argv[0] = tmux_path
             os.execve(tmux_path, argv, env)
         except BaseException:
@@ -369,6 +377,7 @@ def _relay_server_loop(
     height: int,
     term: str,
     colorterm: str | None,
+    synchronized_output: bool,
 ) -> int:
     pid, master_fd = _spawn_tmux_client(
         target,
@@ -378,6 +387,7 @@ def _relay_server_loop(
         height=height,
         term=term,
         colorterm=colorterm,
+        synchronized_output=synchronized_output,
     )
     decoder = _FrameDecoder()
     selector = selectors.DefaultSelector()
@@ -473,6 +483,7 @@ def _relay_server_main(argv: Sequence[str]) -> int:
     parser.add_argument("--height", required=True, type=int)
     parser.add_argument("--term", required=True)
     parser.add_argument("--colorterm", default="")
+    parser.add_argument("--synchronized-output", action="store_true")
     try:
         args = parser.parse_args(list(argv))
     except (SystemExit, ValueError):
@@ -532,6 +543,7 @@ def _relay_server_main(argv: Sequence[str]) -> int:
             height=args.height,
             term=args.term,
             colorterm=args.colorterm or None,
+            synchronized_output=args.synchronized_output,
         )
     except (OSError, WindowsAttachRelayError):
         return 2
@@ -713,6 +725,11 @@ def start_relay_client(
             "--colorterm",
             colorterm,
         ]
+        if environ.get("WT_SESSION"):
+            # The helper runs in the tmux server's Terminal Services session,
+            # so carry only this capability bit from the actual entry client;
+            # never persist or transmit the opaque WT_SESSION identifier.
+            helper.append("--synchronized-output")
         command = (
             "exec env -u PYTHONPATH "
             + " ".join(shlex.quote(argument) for argument in helper)

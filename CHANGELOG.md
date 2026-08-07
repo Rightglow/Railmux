@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Tell managed Windows Terminal tmux clients—including the server-session PTY
+  bridge—to use DEC synchronized output. Codex active-turn redraws now present
+  only completed frames instead of exposing transient hardware-cursor
+  positions; conhost and non-Windows launch paths remain unchanged.
+
 ## [0.4.0rc2] - 2026-08-07
 
 ### Fixed

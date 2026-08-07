@@ -107,6 +107,7 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
                 "RAILMUX_WINDOWS_RUNTIME": "msys2",
                 "RAILMUX_TMUX_LABEL": "railmux-test",
                 "TERM": "xterm-256color",
+                "WT_SESSION": "opaque-and-never-forwarded",
             },
             stdin_fd=read_fd,
             stdout_fd=write_fd,
@@ -123,6 +124,8 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
         helper = shlex.split(observed["argv"][-1])
         assert helper[helper.index("--socket-path") + 1] == target.socket_path
         assert os.path.isabs(helper[helper.index("--tmux-path") + 1])
+        assert "--synchronized-output" in helper
+        assert "opaque-and-never-forwarded" not in helper
         assert observed["kwargs"]["env"]["RAILMUX_TMUX_LABEL"] == (
             "railmux-test"
         )
@@ -161,6 +164,42 @@ def test_relay_server_rejects_non_managed_runtime(monkeypatch):
 
 def test_normalized_wait_status_uses_shell_signal_convention():
     assert windows_attach_relay._normalized_wait_status(15) == 143
+
+
+def test_relay_tmux_client_adds_sync_before_attach(monkeypatch):
+    target = TmuxServerTarget("/tmp/private/railmux", 77)
+    monkeypatch.setattr(windows_attach_relay.os, "openpty", lambda: (10, 11))
+    monkeypatch.setattr(windows_attach_relay, "_set_winsize", lambda *_a: None)
+    monkeypatch.setattr(windows_attach_relay.os, "fork", lambda: 0)
+    monkeypatch.setattr(windows_attach_relay.os, "close", lambda _fd: None)
+    monkeypatch.setattr(windows_attach_relay.os, "setsid", lambda: None)
+    monkeypatch.setattr(windows_attach_relay.fcntl, "ioctl", lambda *_a: None)
+    monkeypatch.setattr(windows_attach_relay.os, "dup2", lambda *_a: None)
+    observed = MagicMock(side_effect=RuntimeError("stop before exec"))
+    monkeypatch.setattr(windows_attach_relay.os, "execve", observed)
+    monkeypatch.setattr(
+        windows_attach_relay.os,
+        "_exit",
+        MagicMock(side_effect=RuntimeError("child stopped")),
+    )
+
+    with pytest.raises(RuntimeError, match="child stopped"):
+        windows_attach_relay._spawn_tmux_client(
+            target,
+            "$5",
+            tmux_path="/usr/bin/tmux",
+            width=100,
+            height=35,
+            term="xterm-256color",
+            colorterm="truecolor",
+            synchronized_output=True,
+        )
+
+    argv = observed.call_args.args[1]
+    assert argv == [
+        "/usr/bin/tmux", "-S", target.socket_path, "-T", "sync",
+        "attach-session", "-t", "$5",
+    ]
 
 
 def test_pty_input_write_has_a_deadline(monkeypatch):

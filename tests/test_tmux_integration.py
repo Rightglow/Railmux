@@ -252,6 +252,7 @@ def test_real_transparent_windows_relay_attaches_and_detaches(isolated_tmux):
                 height=28,
                 term="xterm-256color",
                 colorterm="truecolor",
+                synchronized_output=True,
             )
         except BaseException:
             status = 127
