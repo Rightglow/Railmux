@@ -556,6 +556,18 @@ started an isolated-label empty workspace through the Windows terminal bridge,
 reported a 2.6-second restore with 0.4 seconds in pane recovery, and detached
 normally; the isolated server and transfer files were removed afterwards.
 
+Dev35 removes two remaining presentation-only clients from the successful
+dev34 live-switch path. The explicit Preview locator and the already-owned
+prefix-Tab Target projection share one command queue, with the established
+independent helpers retained as failure fallback, while an unchanged logical
+focus/layout no longer rewrites identical border styles merely because swap
+changed the physical pane ID. The three identity snapshots, journaled
+return-home, guarded move/commit queues, immutable-pane verification, provider
+leases, and history read-only boundary are unchanged. Project rows also gain
+an exact-row right-click menu for absolute-path copy, separately persisted
+project star/unstar, Info, and managed Term; session-favorite metadata and
+provider histories are not reused or modified.
+
 Only `0.4.0.dev4+` development releases may be cut from `windows-preview`.
 This document is not a stable-support claim, and the repository README and
 website remain unchanged until the manual checklist is complete.

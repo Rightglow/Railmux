@@ -39,6 +39,28 @@ def test_project_row_stores_project():
     assert row.project is p
 
 
+def test_project_row_right_click_fires_exact_project_callback():
+    calls = []
+    project = _project()
+    pane = ProjectsPane(
+        [project],
+        on_select=lambda _project: None,
+        on_context=lambda selected: calls.append(selected),
+    )
+    row = next(w for w in pane._walker if isinstance(w, _ProjectRow))
+
+    handled = row.mouse_event((30,), "mouse press", 3, 4, 0, False)
+
+    assert handled is True
+    assert calls == [project]
+
+
+def test_project_row_without_context_preserves_native_right_click():
+    row = _ProjectRow(_project())
+
+    assert row.mouse_event((30,), "mouse press", 3, 4, 0, False) is False
+
+
 def test_empty_state_updates_on_empty_to_empty_provider_switch():
     pane = ProjectsPane(
         [], on_select=lambda _project: None, provider_label="Claude Code")
@@ -195,6 +217,49 @@ def test_set_projects_unchanged_preserves_rows():
     pane.set_projects([project])
 
     assert pane._walker[0] is row
+
+
+def test_favorite_projects_are_starred_and_stably_pinned():
+    recent = _project("recent")
+    favorite_one = _project("favorite-one")
+    favorite_two = _project("favorite-two")
+    pane = ProjectsPane(
+        [recent, favorite_one, favorite_two],
+        on_select=lambda _project: None,
+        favorite_paths={favorite_one.real_path, favorite_two.real_path},
+    )
+
+    rows = [row for row in pane._walker if isinstance(row, _ProjectRow)]
+
+    assert [row.project for row in rows] == [favorite_one, favorite_two, recent]
+    assert "★ favorite-one" in rows[0].render((30,), False).text[0].decode()
+    assert "★ favorite-two" in rows[1].render((30,), False).text[0].decode()
+    assert "★ recent" not in rows[2].render((30,), False).text[0].decode()
+
+
+def test_context_highlight_does_not_replace_selected_project():
+    first = _project("first")
+    second = _project("second")
+    pane = ProjectsPane([first, second], on_select=lambda _project: None)
+    pane.set_selected(first.encoded_name)
+
+    pane.set_context_selected(second.encoded_name)
+    selected = {
+        row.project.encoded_name
+        for row in pane._walker
+        if isinstance(row, _ProjectRow)
+        and row._wrapped_widget.attr_map == {None: "selected"}
+    }
+    assert selected == {first.encoded_name, second.encoded_name}
+
+    pane.set_context_selected(None)
+    selected = {
+        row.project.encoded_name
+        for row in pane._walker
+        if isinstance(row, _ProjectRow)
+        and row._wrapped_widget.attr_map == {None: "selected"}
+    }
+    assert selected == {first.encoded_name}
 
 
 # ── set_filter ──────────────────────────────────────────────────────────

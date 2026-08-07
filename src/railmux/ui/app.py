@@ -37,6 +37,7 @@ from railmux.display_transport import (
 )
 from railmux.discovery import invalidate_session, list_projects
 from railmux.favorites import Favorites
+from railmux.project_favorites import ProjectFavorites
 from railmux.fast_display_input import is_termux_environment
 from railmux.help_workspace import (
     is_help_workspace,
@@ -813,6 +814,7 @@ class App:
         self._renames = Renames()
         self._session_cache = SessionCache(self._renames)
         self._favorites = Favorites()
+        self._project_favorites = ProjectFavorites()
         self._settings = Settings()
         self._layout_profile = self._settings.layout_profile
         self._active_sidebar_permille = (
@@ -1002,7 +1004,9 @@ class App:
             projects,
             on_select=self._on_project_select,
             on_double_click=self._on_project_double_click,
+            on_context=self._open_project_context_menu,
             provider_label=initial_mode.label,
+            favorite_paths=self._project_favorites.get_paths(),
             boxed=False,
         )
         self._sessions_pane = SessionsPane(
@@ -1218,6 +1222,19 @@ class App:
         pane_id = slot.pane_id
         if pane_id is None or not pane_id.startswith("%"):
             return
+        marker = self._transcript_source_marker(session_id, tmux_name)
+        tmux_ctl.set_pane_user_option(
+            pane_id,
+            tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            marker,
+        )
+
+    def _transcript_source_marker(
+        self,
+        session_id: str | None,
+        tmux_name: str | None,
+    ) -> str | None:
+        """Build the bounded read-only Preview locator for one live target."""
         marker = None
         running = self._by_tmux(tmux_name) if tmux_name else None
         logical_id = (
@@ -1248,11 +1265,78 @@ class App:
                     representative.session_id,
                     representative.jsonl_path,
                 )
-        tmux_ctl.set_pane_user_option(
-            pane_id,
-            tmux_server.TRANSCRIPT_SOURCE_OPTION,
-            marker,
+        return marker
+
+    def _sync_attached_slot_projection(
+        self,
+        slot: AgentSlot,
+        tmux_name: str,
+    ) -> None:
+        """Publish non-authoritative pane projections with one tmux client.
+
+        The display transport has already verified and committed the pane
+        ownership transaction.  These options advertise the explicit Preview
+        source and the prefix-Tab Target; neither grants authority to move,
+        resume, or kill a provider.  Batching them removes one deterministic
+        MSYS2 process startup while retaining the established helpers as a
+        fail-safe fallback.
+        """
+        pane_id = slot.pane_id
+        if (
+            pane_id is None
+            or not pane_id.startswith("%")
+            or tmux_ctl.tmux_version() < (3, 0)
+        ):
+            self._sync_slot_transcript_source(
+                slot,
+                self._session_id_for_tmux_target(tmux_name),
+                tmux_name,
+            )
+            return
+
+        session_id = self._session_id_for_tmux_target(tmux_name)
+        marker = self._transcript_source_marker(session_id, tmux_name)
+        if marker is None:
+            transcript_command = (
+                "set-option", "-p", "-t", pane_id,
+                "-u", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            )
+        else:
+            transcript_command = (
+                "set-option", "-p", "-t", pane_id,
+                tmux_server.TRANSCRIPT_SOURCE_OPTION, marker,
+            )
+        commands: list[tuple[str, ...]] = [transcript_command]
+
+        manager = getattr(self, "_tmux_binding_manager", None)
+        owner = getattr(self, "_railmux_pane_id", None)
+        desired_target: str | None = None
+        if (
+            slot.key == self._agent_workspace().target_slot_key
+            and owner is not None
+            and getattr(manager, "target_toggle_available", False)
+        ):
+            desired_target = pane_id
+            commands.append((
+                "set-window-option", "-t", owner,
+                tmux_ctl.RAILMUX_TARGET_OPTION, desired_target,
+            ))
+
+        if tmux_ctl.run_command_queue(tuple(commands)):
+            if desired_target is not None:
+                self._projected_target_pane_id = desired_target
+            return
+
+        # A presentation-only batch failure must not turn a verified attach
+        # into a provider/session failure. Retry each released helper so one
+        # unsupported option cannot suppress the other projection.
+        self._sync_slot_transcript_source(
+            slot,
+            session_id,
+            tmux_name,
         )
+        if desired_target is not None:
+            self._sync_target_pane_option()
 
     def _paint_slot_active_target(
         self,
@@ -1312,13 +1396,18 @@ class App:
         )
 
     def _set_active_tmux_target(
-        self, tmux_name: str, slot: AgentSlot | None = None,
+        self,
+        tmux_name: str,
+        slot: AgentSlot | None = None,
+        *,
+        sync_transcript_source: bool = True,
     ) -> None:
         slot = slot or self._primary_slot
         self._set_slot_active_target(
             slot,
             self._session_id_for_tmux_target(tmux_name),
             tmux_name,
+            sync_transcript_source=sync_transcript_source,
         )
 
     def _sync_border_indicators(self, arrows: bool) -> bool:
@@ -1381,8 +1470,13 @@ class App:
         """
         workspace = self._agent_workspace()
         layout = workspace.layout
-        target_pane = None if active else workspace.target.pane_id
-        state = (active, layout, target_pane)
+        # Border formats depend on focus, layout, and the logical Target slot,
+        # not on the physical pane ID currently swapped into that slot.  Using
+        # the pane ID here rewrote identical gray borders after every
+        # live-session switch, which is especially visible on MSYS2 where each
+        # tmux client startup is comparatively expensive.
+        target_slot = None if active else workspace.target.key
+        state = (active, layout, target_slot)
         if not force and self._divider_active == state:
             return
         gray = "fg=colour240"
@@ -1416,7 +1510,7 @@ class App:
         desired_state = (
             active,
             workspace.layout,
-            None if active else workspace.target.pane_id,
+            None if active else workspace.target.key,
         )
         state = getattr(self, "_divider_active", None)
         if state != desired_state:
@@ -1437,7 +1531,7 @@ class App:
         if now - getattr(self, "_last_border_verify_at", 0.0) < 2.0:
             return
         self._last_border_verify_at = now
-        active, layout, _target_pane = state
+        active, layout, _target_slot = state
         gray = "fg=colour240"
         green = f"fg={_GRASS_GREEN}"
         if not active:
@@ -2477,7 +2571,13 @@ class App:
         slot.agent_tmux_name = agent_tmux_name
         mode = self._modes().for_tmux_name(agent_tmux_name)
         slot.mode_key = mode.key if mode is not None else None
-        self._set_active_tmux_target(agent_tmux_name, slot)
+        self._set_active_tmux_target(
+            agent_tmux_name,
+            slot,
+            sync_transcript_source=not outcome.display_stable,
+        )
+        if outcome.display_stable and not outcome.target_unchanged:
+            self._sync_attached_slot_projection(slot, agent_tmux_name)
         self._set_railmux_focus(
             not steal_focus and not self._double_focus_visual_pending,
             force_border=not outcome.display_stable,
@@ -2556,10 +2656,20 @@ class App:
         if worker is not None and worker.is_alive():
             return
         manager = getattr(self, "_tmux_binding_manager", None)
+        target_was_available = bool(
+            manager is not None and manager.target_toggle_available)
         opened = manager is not None and manager.open()
-        self._finish_tmux_bindings(opened)
+        self._finish_tmux_bindings(
+            opened,
+            force_target=not target_was_available,
+        )
 
-    def _finish_tmux_bindings(self, opened: bool) -> None:
+    def _finish_tmux_bindings(
+        self,
+        opened: bool,
+        *,
+        force_target: bool = True,
+    ) -> None:
         """Project pane-local state after the shared lease is prepared."""
         manager = getattr(self, "_tmux_binding_manager", None)
         selection = getattr(self, "_selection_isolation_manager", None)
@@ -2571,7 +2681,7 @@ class App:
             )
         if opened:
             if manager.target_toggle_available:
-                self._sync_target_pane_option(force=True)
+                self._sync_target_pane_option(force=force_target)
             elif not getattr(self, "_target_toggle_warning_shown", False):
                 self._target_toggle_warning_shown = True
                 self._set_status(
@@ -7887,6 +7997,7 @@ class App:
     def _close_modal(self) -> None:
         if self._loop is not None:
             self._loop.widget = self._frame
+        self._projects_pane.set_context_selected(None)
         self._sessions_pane.set_selected_session(None)
         self._running_pane.set_selected(None)
 
@@ -10457,6 +10568,61 @@ class App:
         self._set_status(f"{label} {session.display_title}")
 
     # --- context menu (right-click) ---
+
+    def _open_project_context_menu(self, project: Project) -> None:
+        """Open actions for the exact Projects row that was right-clicked."""
+        if self._railmux_pane_id:
+            tmux_ctl.select_pane(self._railmux_pane_id)
+        self._projects_pane.set_context_selected(project.encoded_name)
+        is_starred = self._project_favorites.is_favorite(project.real_path)
+        items: list[tuple[str, Callable[[], None]]] = [
+            (_context_menu_label("Copy path", "c"),
+             lambda p=project: self._copy_project_path(p)),
+            (_context_menu_label("Unstar" if is_starred else "Star", "s"),
+             lambda p=project: self._do_context_project_star(p)),
+            (_context_menu_label("Info", "i"),
+             lambda p=project: self._do_context_project_info(p)),
+            (_context_menu_label("Term", "t"),
+             lambda p=project: self._open_terminal_for_project(p)),
+        ]
+        menu = ContextMenu(items, on_close=self._close_modal)
+        self._show_overlay(
+            menu,
+            width=36,
+            height=10,
+            click_outside_to_close=True,
+            fixed_width=True,
+            fixed_height=True,
+        )
+
+    def _copy_project_path(self, project: Project) -> None:
+        path = project.real_path
+        absolute = path if path.is_absolute() else path.absolute()
+        text = str(absolute)
+        if tmux_ctl.copy_to_clipboard(text):
+            self._set_status(f"Copied path: {text}", "success")
+        else:
+            self._set_status(
+                "Could not copy path; terminal clipboard is unavailable",
+                "warn",
+            )
+
+    def _do_context_project_star(self, project: Project) -> None:
+        now_star = not self._project_favorites.is_favorite(project.real_path)
+        self._project_favorites.set(project.real_path, now_star)
+        self._projects_pane.set_favorite_paths(
+            self._project_favorites.get_paths())
+        label = "★" if now_star else "unstarred"
+        self._set_status(f"{label} {project.display_name}")
+
+    def _do_context_project_info(self, project: Project) -> None:
+        modal = ProjectInfoModal(project=project, on_close=self._close_modal)
+        self._show_overlay(
+            modal,
+            width=60,
+            height=40,
+            click_outside_to_close=True,
+        )
 
     def _on_running_context_menu(self, entry: RunningEntry) -> None:
         r = self._by_tmux(entry.tmux_name)

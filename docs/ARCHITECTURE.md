@@ -174,6 +174,13 @@ client is expensive, but it does not weaken option restoration or the
 crash-safe binding leases. A compact terminal with only Railmux's sidebar has
 no agent page to select or zoom, so its logical compact presentation must not
 perform agent-page geometry probes.
+After a verified stable pane switch, the read-only transcript locator and the
+already-owned prefix-Tab Target projection may likewise share one tmux command
+queue. A failure retries their independent released helpers and never changes
+the successful display transaction into authority over provider history. The
+border-style cache is keyed by logical Target slot rather than the physical
+pane swapped through that slot, because an unchanged focus/layout has identical
+styles and must not spawn a redundant client.
 
 Explicit transcript Preview has one similarly bounded hot path. Once a slot is
 already in history mode with no displayed provider or pending swap identity, a
@@ -608,6 +615,14 @@ deterministic for a given terminal size and must not change when focus moves.
 The stable section name remains visible when dynamic title detail is truncated.
 Wheel input over any title rule or the bottom rule is routed by pointer position
 to that section's own `ListBox`.
+
+Project favorites are keyed by the discovered absolute project path and live
+in a separate atomic metadata file from UUID-keyed session favorites. They
+stably pin matching Projects rows ahead of the provider's existing recency
+order, without starring any session or changing provider history. A Projects
+row context menu acts on the exact disposable row identity and offers only
+copy-absolute-path, project star/unstar, project Info, and managed Term; closing
+it restores the independently selected project highlight.
 
 ## Restart state has two authorities
 

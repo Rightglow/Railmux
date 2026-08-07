@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev35] - 2026-08-07
+
+### Added
+
+- Add a Projects-row right-click menu with absolute-path copy, independently
+  persisted project star/unstar, project Info, and managed Term. Favorite
+  projects are visibly starred and stably pinned without changing session
+  favorites or provider history.
+
+### Changed
+
+- Batch the read-only Preview locator with the existing prefix-Tab Target
+  projection after a verified stable pane switch, and stop rewriting identical
+  border styles when only the physical pane inside one logical slot changed.
+  Every pane-identity snapshot, guarded swap, recovery marker, and provider
+  lease remains unchanged.
+
 ## [0.4.0.dev34] - 2026-08-06
 
 ### Changed

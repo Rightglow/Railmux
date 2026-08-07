@@ -72,6 +72,25 @@ def test_install_skips_without_tmux_binding_manager():
     app._install_tmux_bindings()  # must not raise
 
 
+def test_registered_binding_manager_does_not_force_unchanged_target_projection():
+    manager = MagicMock()
+    manager.target_toggle_available = True
+    manager.status_navigation_available = False
+    manager.selection_isolation_available = False
+    manager.termux_tap_available = False
+    manager.open.return_value = True
+    app = _bare_app(
+        _tmux_binding_manager=manager,
+        _selection_isolation_manager=None,
+    )
+    app._sync_target_pane_option = MagicMock(return_value=True)
+    app._sync_termux_tap_route = MagicMock()
+
+    app._install_tmux_bindings()
+
+    app._sync_target_pane_option.assert_called_once_with(force=False)
+
+
 def test_unavailable_target_toggle_warns_once_without_projection():
     manager = MagicMock()
     manager.target_toggle_available = False
