@@ -109,6 +109,31 @@ raise SystemExit(main(['--version'], version_info=(3, 10)))
     assert result.stdout.startswith("railmux 0.4.0")
 
 
+def test_transition_version_metadata_import_does_not_require_fcntl():
+    code = f"""
+import importlib.abc
+import sys
+sys.path.insert(0, {str(ROOT / 'src')!r})
+class BlockFcntl(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == 'fcntl':
+            raise ModuleNotFoundError(fullname)
+        return None
+sys.meta_path.insert(0, BlockFcntl())
+from railmux.windows_ui_transition import _APP_RE
+assert _APP_RE.fullmatch('railmux-0.4.0rc1')
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_in_use_inventory_retains_an_rc_app_layer(tmp_path):
     output = (
         b"/opt/railmux/apps/railmux-0.4.0rc1/venv/bin/railmux\0"

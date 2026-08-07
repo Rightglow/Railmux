@@ -8,7 +8,6 @@ Quit before the next app layer starts.
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import re
@@ -444,6 +443,14 @@ def upgrade_exec_argv(request: UpgradeRequest, argv: Sequence[str]) -> list[str]
 
 @contextmanager
 def _transition_lock(label: str, session_id: str) -> Iterator[bool]:
+    try:
+        import fcntl
+    except ImportError:
+        # This coordinator runs inside the private MSYS2 runtime.  Keep
+        # metadata-only imports safe on native Windows and fail closed if a
+        # caller ever reaches the lock path outside a POSIX environment.
+        yield False
+        return
     try:
         root = restart_state.runtime_state_dir()
     except (OSError, RuntimeError):
