@@ -115,6 +115,30 @@ application synchronized-output support, and the existing swap transport.
 Any workaround must remain opt-in until its history tradeoff and Codex
 version compatibility are clear.
 
+### SSH drag-selection edge autoscroll
+
+Consider adding edge-triggered autoscroll when a pointer drag selection reaches
+the top or bottom of the local `railmux ssh` viewport. This is a candidate for
+a post-0.4.0 maintenance release, not a 0.4.0 release requirement. Ordinary
+local/tmux selection and live scrolling must remain unchanged; the SSH client
+must not switch into remote tmux copy mode to implement it.
+
+The selection must be an immutable client-side snapshot established at mouse
+down. The remote agent and PTY may continue producing output, and the client
+must continue draining new frames, but post-snapshot output must not enter the
+selection or make a downward drag chase a moving tail. Historical pages may be
+added only when they align uniquely with the frozen pane, geometry, history
+generation, visible anchor, and mouse-down tail. Ambiguous alignment or
+truncated history must stop scrolling rather than copy unrelated text.
+
+Resize, reconnect, pane replacement, layout/geometry changes, keyboard input,
+and a lost mouse-release watchdog must cancel the snapshot and repaint the
+latest live screen. A future implementation needs focused protocol and model
+tests for output arriving during selection, both scroll directions, bounded
+history exhaustion, cancellation paths, and release-time repaint, followed by
+real Windows, macOS, Linux, and touch-terminal checks. Do not treat simple
+coordinate clamping or a timer-driven scroll loop as sufficient evidence.
+
 ### Provider adapters
 
 The mode registry now supports a third stable mode and independent view state.
