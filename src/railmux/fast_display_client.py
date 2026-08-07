@@ -89,6 +89,7 @@ from railmux.ssh_display_diagnostics import SshDisplayRecorder, SshDisplayStats
 LOCAL_ESCAPE = b"\x1d"  # Ctrl-]
 _SGR_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
 _HISTORY_PREFETCH_INTERVAL = 3.0
+_LOCAL_HISTORY_PAINT_INTERVAL = 1.0 / 60.0
 _CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_INFO_SECONDS = 2.0
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
@@ -1443,14 +1444,29 @@ class TerminalSurface:
 
 @dataclass
 class _DeferredHistoryPaint:
-    """Collapse one local-input batch into its final history viewport paint."""
+    """Collapse adjacent local-history wheel reads into one bounded paint."""
 
     render_history: bool = False
-    restore_live: bool = False
+    deadline: float | None = None
+    interval: float = _LOCAL_HISTORY_PAINT_INTERVAL
 
-    def defer(self, action: HistoryAction) -> None:
-        self.render_history = self.render_history or action.render_history
-        self.restore_live = self.restore_live or action.restore_live
+    def defer(self, action: HistoryAction, *, now: float | None = None) -> None:
+        if not action.render_history:
+            return
+        self.render_history = True
+        if self.deadline is None:
+            requested_at = time.monotonic() if now is None else now
+            self.deadline = requested_at + self.interval
+
+    def next_timeout(self, maximum: float = 0.1, *, now: float | None = None) -> float:
+        if self.deadline is None:
+            return maximum
+        checked_at = time.monotonic() if now is None else now
+        return max(0.0, min(maximum, self.deadline - checked_at))
+
+    def discard(self) -> None:
+        self.render_history = False
+        self.deadline = None
 
     def flush(
         self,
@@ -1458,25 +1474,35 @@ class _DeferredHistoryPaint:
         screen: AppliedScreen | None,
         overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
         selection: tuple[SelectionSegment, ...],
-    ) -> None:
+        *,
+        now: float | None = None,
+        force: bool = False,
+    ) -> bool:
+        checked_at = time.monotonic() if now is None else now
+        if (
+            not self.render_history
+            or (
+                not force
+                and self.deadline is not None
+                and checked_at < self.deadline
+            )
+        ):
+            return False
         if screen is not None:
-            if self.restore_live:
-                # A viewport may have reached the live bottom and another may
-                # still be frozen. Restore the authoritative frame and compose
-                # only the final overlays in one terminal write.
-                surface.paint(full_repaint(screen), overlays, selection)
-            elif self.render_history:
-                surface.paint_overlays(screen, overlays, selection)
-        self.render_history = False
-        self.restore_live = False
+            surface.paint_overlays(screen, overlays, selection)
+        self.discard()
+        return True
 
 
 class _LocalInputBatch:
     """Preserve local wheel distance while bounding forwarded wheel bursts."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        history_paint: _DeferredHistoryPaint | None = None,
+    ) -> None:
         self._forwarded_wheel_directions: set[int] = set()
-        self._history_paint = _DeferredHistoryPaint()
+        self._history_paint = history_paint or _DeferredHistoryPaint()
 
     def prepare(
         self,
@@ -1492,11 +1518,18 @@ class _LocalInputBatch:
             ):
                 return None, None
             return action, None
-        # Every locally owned history tick has already advanced the viewport.
-        # Defer only its terminal paint so a Windows/RDP read containing
-        # several SGR packets preserves the complete distance without issuing
-        # one synchronous pane repaint per packet.
-        return action, self._history_paint
+        if action.restore_live:
+            # Reaching the live bottom must restore every old overlay row
+            # immediately; an older deferred overlay is now superseded.
+            self._history_paint.discard()
+            return action, None
+        if action.render_history:
+            # Every locally owned history tick has already advanced the
+            # viewport. Defer only its terminal paint across adjacent stdin
+            # reads, so Windows Terminal/RDP cannot make one synchronous pane
+            # repaint per SGR packet while no wheel distance is discarded.
+            return action, self._history_paint
+        return action, None
 
     def flush(
         self,
@@ -1504,8 +1537,18 @@ class _LocalInputBatch:
         screen: AppliedScreen | None,
         overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
         selection: tuple[SelectionSegment, ...],
-    ) -> None:
-        self._history_paint.flush(surface, screen, overlays, selection)
+        *,
+        now: float | None = None,
+        force: bool = False,
+    ) -> bool:
+        return self._history_paint.flush(
+            surface,
+            screen,
+            overlays,
+            selection,
+            now=now,
+            force=force,
+        )
 
 
 def _remote_server_args(
@@ -2776,6 +2819,7 @@ def run(args: argparse.Namespace) -> int:
     model = ScreenModel()
     terminal_input = TerminalInputDecoder()
     history = LocalHistoryView(history_limit)
+    history_paint = _DeferredHistoryPaint()
     selection = LocalTextSelection()
     touch_keyboard = TermuxTouchKeyboard(
         enabled=not args.no_mouse and termux_touch
@@ -2899,20 +2943,24 @@ def run(args: argparse.Namespace) -> int:
         nonlocal history_info_until, claude_history_prompt_input
         overlays = history.overlays()
         if deferred_paint is not None:
-            deferred_paint.defer(action)
+            deferred_paint.defer(action, now=time.monotonic())
         else:
-            if action.restore_live and latest_screen is not None:
-                surface.paint(
-                    full_repaint(latest_screen),
-                    overlays,
-                    selection.segments(),
-                )
-            elif action.render_history and latest_screen is not None:
-                surface.paint_overlays(
-                    latest_screen,
-                    overlays,
-                    selection.segments(),
-                )
+            if action.restore_live:
+                history_paint.discard()
+                if latest_screen is not None:
+                    surface.paint(
+                        full_repaint(latest_screen),
+                        overlays,
+                        selection.segments(),
+                    )
+            elif action.render_history:
+                history_paint.discard()
+                if latest_screen is not None:
+                    surface.paint_overlays(
+                        latest_screen,
+                        overlays,
+                        selection.segments(),
+                    )
         if action.protocol_frame:
             send_protocol_frame(action.protocol_frame)
         if action.forwarded_input:
@@ -3347,6 +3395,7 @@ def run(args: argparse.Namespace) -> int:
             while True:
                 observed_size = os.get_terminal_size(sys.stdout.fileno())
                 if observed_size != local_size:
+                    history_paint.discard()
                     selection.cancel()
                     selection_clear_at = None
                     if _terminal_size_exceeds_limits(observed_size):
@@ -3431,7 +3480,10 @@ def run(args: argparse.Namespace) -> int:
                         )
                         current_size = observed_size
                         awaiting_keyframe = True
-                events = selector.select(timeout=terminal_input.next_timeout())
+                events = selector.select(timeout=min(
+                    terminal_input.next_timeout(),
+                    history_paint.next_timeout(),
+                ))
                 for key, _mask in events:
                     if key.data == "remote":
                         chunk = os.read(process.stdout.fileno(), 65536)
@@ -3622,7 +3674,7 @@ def run(args: argparse.Namespace) -> int:
                         data, emergency_exit = split_local_escape(data)
                         if emergency_exit:
                             local_exit = True
-                        input_batch = _LocalInputBatch()
+                        input_batch = _LocalInputBatch(history_paint)
                         for part in terminal_input.feed(data):
                             if isinstance(part, bytes):
                                 for key_part in split_page_key_input(part):
@@ -3634,12 +3686,13 @@ def run(args: argparse.Namespace) -> int:
                             latest_screen,
                             history.overlays(),
                             selection.segments(),
+                            now=time.monotonic(),
                         )
                         if local_exit:
                             break
                 if not local_exit:
                     for part in terminal_input.flush_pending():
-                        input_batch = _LocalInputBatch()
+                        input_batch = _LocalInputBatch(history_paint)
                         for key_part in split_page_key_input(part):
                             handle_terminal_part(key_part, input_batch)
                         input_batch.flush(
@@ -3647,8 +3700,16 @@ def run(args: argparse.Namespace) -> int:
                             latest_screen,
                             history.overlays(),
                             selection.segments(),
+                            now=time.monotonic(),
                         )
                 now = time.monotonic()
+                history_paint.flush(
+                    surface,
+                    latest_screen,
+                    history.overlays(),
+                    selection.segments(),
+                    now=now,
+                )
                 keyboard_projected = touch_keyboard.keyboard_projected
                 if touch_keyboard.expire(now):
                     surface.resume_mouse(reassert=keyboard_projected)
@@ -3789,6 +3850,7 @@ def run(args: argparse.Namespace) -> int:
                         model = ScreenModel()
                         terminal_input = TerminalInputDecoder()
                         history.mark_reconnected()
+                        history_paint.discard()
                         # The retained pixels and history cache are useful as
                         # reconnect feedback, but neither is input authority
                         # for the replacement helper.  Do not route a wheel

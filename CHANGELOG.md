@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc2] - 2026-08-07
+
+### Fixed
+
+- Keep every locally owned `railmux ssh` history-wheel tick while coalescing
+  viewport painting across adjacent terminal reads on one non-sliding 60 Hz
+  deadline. Windows Terminal precision-touchpad input over RDP can no longer
+  queue one complete pane repaint per SGR packet and continue visibly catching
+  up after the gesture ends; reaching the live bottom, keyboard input, resize,
+  and reconnect retain their immediate fail-closed restoration paths.
+
 ## [0.4.0rc1] - 2026-08-07
 
 ### Added
@@ -2589,7 +2600,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc2...HEAD
+[0.4.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc1...v0.4.0rc2
 [0.4.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev36...v0.4.0rc1
 [0.4.0.dev36]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev35...v0.4.0.dev36
 [0.4.0.dev35]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev34...v0.4.0.dev35

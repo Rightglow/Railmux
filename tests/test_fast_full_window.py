@@ -4226,13 +4226,13 @@ def test_local_history_wheel_batch_preserves_distance_with_one_paint():
     screen = MagicMock(spec=AppliedScreen)
     overlays = view.overlays()
 
-    batch.flush(surface, screen, overlays, ())
+    batch.flush(surface, screen, overlays, (), force=True)
 
     surface.paint_overlays.assert_called_once_with(screen, overlays, ())
     surface.paint.assert_not_called()
 
 
-def test_local_history_wheel_batch_restores_live_once_at_bottom():
+def test_local_history_wheel_batch_restores_live_immediately_at_bottom():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
     request_id, _limit = decode_history_prefetch(prefetch.data)
@@ -4251,14 +4251,24 @@ def test_local_history_wheel_batch_restores_live_once_at_bottom():
         view.pointer_event(up)
     assert view.viewports["%8"].offset == 3
 
-    batch = fast_display_client._LocalInputBatch()
+    history_paint = fast_display_client._DeferredHistoryPaint(interval=0.02)
+    batch = fast_display_client._LocalInputBatch(history_paint)
     down = SgrMouseEvent(b"down", 65, 5, 2, True)
-    for _ in range(5):
+    restore = None
+    for index in range(5):
         action, deferred_paint = batch.prepare(down, view.pointer_event(down))
         assert action is not None
-        assert deferred_paint is not None
-        deferred_paint.defer(action)
+        if action.restore_live:
+            assert index == 2
+            assert deferred_paint is None
+            restore = action
+            break
+        assert deferred_paint is history_paint
+        deferred_paint.defer(action, now=1.0 + index * 0.001)
     assert not view.active
+    assert restore is not None
+    assert restore.restore_live
+    assert not history_paint.render_history
 
     screen = ScreenModel().apply(
         ClientScreenUpdateDecoder().feed(
@@ -4268,10 +4278,64 @@ def test_local_history_wheel_batch_restores_live_once_at_bottom():
     )
     assert screen is not None
     surface = MagicMock(spec=TerminalSurface)
-    batch.flush(surface, screen, view.overlays(), ())
+    batch.flush(surface, screen, view.overlays(), (), now=2.0)
 
-    surface.paint.assert_called_once()
+    surface.paint.assert_not_called()
     surface.paint_overlays.assert_not_called()
+
+
+def test_local_history_wheel_reads_share_one_bounded_paint_deadline():
+    view = LocalHistoryView()
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    route = HistorySnapshot(
+        request_id,
+        "%8",
+        0,
+        0,
+        30,
+        3,
+        tuple(f"line-{index}".encode() for index in range(40)),
+    )
+    view.accept_prefetch(HistoryBatch(request_id, (route,)))
+    history_paint = fast_display_client._DeferredHistoryPaint(interval=0.016)
+    event = SgrMouseEvent(b"up", 64, 5, 2, True)
+    surface = MagicMock(spec=TerminalSurface)
+    initial_screen = MagicMock(spec=AppliedScreen)
+    latest_screen = MagicMock(spec=AppliedScreen)
+
+    for index in range(8):
+        # Windows Terminal/RDP may deliver one SGR packet per stdin read.
+        batch = fast_display_client._LocalInputBatch(history_paint)
+        action, deferred_paint = batch.prepare(event, view.pointer_event(event))
+        assert action is not None
+        assert deferred_paint is history_paint
+        deferred_paint.defer(action, now=1.0 + index * 0.001)
+        assert not batch.flush(
+            surface,
+            initial_screen,
+            view.overlays(),
+            (),
+            now=1.0 + index * 0.001,
+        )
+
+    assert view.viewports["%8"].offset == 8
+    assert history_paint.next_timeout(now=1.008) == pytest.approx(0.008)
+    assert history_paint.flush(
+        surface,
+        latest_screen,
+        view.overlays(),
+        (),
+        now=1.016,
+    )
+    # A remote screen update may arrive while the gesture is being coalesced;
+    # the deadline paint must compose onto the newest authoritative frame.
+    surface.paint_overlays.assert_called_once_with(
+        latest_screen,
+        view.overlays(),
+        (),
+    )
+    assert history_paint.deadline is None
 
 
 def test_forwarded_wheel_batch_remains_bounded_without_local_paint():

@@ -2269,7 +2269,7 @@ def test_prune_retains_running_rc_beyond_current_and_previous_layers(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
     assert root is not None
-    make_runtime(root, managed=True, shared=True)
+    make_runtime(root, managed=True, shared=True, version="0.4.0rc1")
     old_dev = add_marked_app(root, "0.4.0.dev36")
     running_rc = add_marked_app(root, "0.4.0rc1")
     final = add_marked_app(root, "0.4.0")
