@@ -23,6 +23,7 @@ from typing import Iterator, Mapping, Sequence
 from packaging.version import InvalidVersion, Version
 
 from railmux import restart_state, tmux_server
+from railmux.release_version import PROJECT_VERSION_PATTERN
 from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256
 
 
@@ -31,7 +32,7 @@ REQUESTED_APP_OPTION = "@railmux_requested_app_v1"
 TRANSITION_STATUS_OPTION = "@railmux_app_transition_status_v1"
 UPGRADE_WAKE_SEQUENCE = "\x1b[33~"
 _APP_RE = re.compile(
-    r"railmux-([0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)\Z"
+    rf"railmux-({PROJECT_VERSION_PATTERN})\Z"
 )
 _CONTENT_RE = re.compile(r"[0-9a-f]{64}\Z")
 _PANE_RE = re.compile(r"%[0-9]+\Z")
@@ -557,7 +558,7 @@ def _pane_app_version(
         pass
     pattern = re.compile(
         r"/opt/railmux/apps/railmux-"
-        r"([0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)/venv/bin/railmux"
+        rf"({PROJECT_VERSION_PATTERN})/venv/bin/railmux"
     )
     for candidate in candidates:
         match = pattern.search(candidate)
@@ -663,7 +664,7 @@ def ensure_current_ui(
     runtime: str,
     target_app: str,
     target_version: str,
-    timeout: float = 8.0,
+    timeout: float = 15.0,
 ) -> TransitionOutcome:
     """Converge a detached managed outer UI without touching providers."""
     content_id = _base_identity(runtime)

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0.dev36] - 2026-08-07
+
+### Changed
+
+- Prepare the managed Windows runtime for the stable 0.4 release sequence by
+  accepting one canonical `0.4.0rcN` app-layer identity alongside existing
+  `.devN` and final identities. Version ordering now follows PEP 440, and
+  pruning retains an in-use RC layer exactly like an in-use development or
+  final layer. Unsupported aliases, local versions, post releases, and epochs
+  remain rejected.
+- Select the exact current native package metadata when an old Windows
+  `dist-info` directory remains present, avoiding an unnecessary network
+  fallback without deleting or trusting the stale metadata.
+
 ## [0.4.0.dev35] - 2026-08-07
 
 ### Added
@@ -2526,7 +2540,9 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev34...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev36...HEAD
+[0.4.0.dev36]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev35...v0.4.0.dev36
+[0.4.0.dev35]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev34...v0.4.0.dev35
 [0.4.0.dev34]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev33...v0.4.0.dev34
 [0.4.0.dev33]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev32...v0.4.0.dev33
 [0.4.0.dev32]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev31...v0.4.0.dev32

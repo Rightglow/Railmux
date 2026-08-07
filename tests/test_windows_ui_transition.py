@@ -165,7 +165,7 @@ def test_detached_cooperative_ui_requests_exact_upgrade(monkeypatch, tmp_path):
         "target_app": TARGET_APP,
         "target_version": TARGET_VERSION,
         "base_content_id": CONTENT,
-        "timeout": 8.0,
+        "timeout": 15.0,
     }]
 
 

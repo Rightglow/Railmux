@@ -47,6 +47,13 @@ from railmux.windows_paths import (
     legacy_local_app_data_root,
     managed_windows_data_root,
 )
+from railmux.release_version import (
+    PROJECT_VERSION_PATTERN,
+    PROJECT_VERSION_RE,
+    ProjectVersion,
+    is_project_version,
+    parse_project_version,
+)
 from railmux.terminal_status import STYLE_ACCENT, STYLE_MUTED, styled
 
 
@@ -108,7 +115,7 @@ _DOWNLOAD_PROBE_TIMEOUT = 10.0
 _DOWNLOAD_SLOW_REMAINING_SECONDS = 60.0
 _DOWNLOAD_SWITCH_RATIO = 1.25
 _CONTENT_RANGE_RE = re.compile(r"bytes (\d+)-(\d+)/(\d+)\Z")
-_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z")
+_VERSION_RE = PROJECT_VERSION_RE
 
 _PACMAN_CONFIG = "/etc/railmux-pacman.conf"
 _PACMAN_PACKAGES = "tmux python python-pip"
@@ -1077,10 +1084,8 @@ def _app_marker_matches(root: Path, *, app_name: str, version: str) -> bool:
     )
 
 
-def _version_key(version: str) -> tuple[tuple[int, ...], int]:
-    base, separator, dev = version.partition(".dev")
-    numbers = tuple(int(part) for part in base.split("."))
-    return numbers, int(dev) if separator else sys.maxsize
+def _version_key(version: str) -> ProjectVersion:
+    return parse_project_version(version)
 
 
 def _marked_app_versions(root: Path) -> dict[str, Path] | None:
@@ -1113,7 +1118,7 @@ def _marked_app_versions(root: Path) -> dict[str, Path] | None:
             continue
         version = candidate.name[len(prefix):]
         if (
-            _VERSION_RE.fullmatch(version)
+            is_project_version(version)
             and _app_marker_matches(
                 root, app_name=candidate.name, version=version)
         ):
@@ -1144,8 +1149,8 @@ def _in_use_app_names(
     except UnicodeDecodeError:
         return None
     pattern = re.compile(
-        r"(?:^|/)opt/railmux/apps/"
-        r"(railmux-[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)(?:/|$)"
+        rf"(?:^|/)opt/railmux/apps/"
+        rf"(railmux-{PROJECT_VERSION_PATTERN})(?:/|$)"
     )
     return frozenset(match.group(1) for match in pattern.finditer(text))
 
@@ -1158,7 +1163,7 @@ def plan_managed_runtime_prune(
     probe: Probe = _probe,
 ) -> RuntimePrunePlan:
     """Build a fail-closed plan without deleting any file."""
-    if not _VERSION_RE.fullmatch(version):
+    if not is_project_version(version):
         raise RuntimeInstallError("the Railmux package version is invalid")
     if environ.get(_RUNTIME_OVERRIDE, "").strip():
         raise RuntimeInstallError(
@@ -1277,7 +1282,7 @@ def _find_shared_root(base: Path) -> Path | None:
     if _base_marker_matches(canonical):
         return canonical
     legacy_parent = base / MSYS2_RUNTIME_ID
-    candidates: list[tuple[tuple[tuple[int, ...], int], Path]] = []
+    candidates: list[tuple[ProjectVersion, Path]] = []
     try:
         paths = list(legacy_parent.glob("railmux-*"))
     except OSError:
@@ -1288,7 +1293,7 @@ def _find_shared_root(base: Path) -> Path | None:
         if (
             not candidate.is_symlink()
             and _base_marker_matches(candidate)
-            and _VERSION_RE.fullmatch(version)
+            and is_project_version(version)
         ):
             candidates.append((_version_key(version), candidate))
     if candidates:
@@ -2332,7 +2337,7 @@ def _write_app_marker(app_root: Path, *, version: str) -> None:
 
 def _legacy_candidates(base: Path) -> list[tuple[Path, str]]:
     parent = base / MSYS2_RUNTIME_ID
-    candidates: list[tuple[tuple[tuple[int, ...], int], Path, str]] = []
+    candidates: list[tuple[ProjectVersion, Path, str]] = []
     try:
         paths = list(parent.glob("railmux-*"))
     except OSError:
@@ -2346,7 +2351,7 @@ def _legacy_candidates(base: Path) -> list[tuple[Path, str]]:
         version = payload.get("railmux")
         if (
             not isinstance(version, str)
-            or not _VERSION_RE.fullmatch(version)
+            or not is_project_version(version)
             or payload
             != {
                 "schema": RUNTIME_SCHEMA,
@@ -2492,11 +2497,21 @@ def _venv_site_packages(application: Path) -> Path | None:
 def _native_application_payload(version: str) -> tuple[Path, Path] | None:
     """Locate the currently executing pure-Python package and dist-info."""
     try:
-        distribution = importlib_metadata.distribution("railmux")
-    except importlib_metadata.PackageNotFoundError:
+        matches = [
+            distribution
+            for distribution in importlib_metadata.distributions(name="railmux")
+            if distribution.version == version
+        ]
+    except (OSError, ValueError):
         return None
-    if distribution.version != version:
+    # A long-lived Windows test/user environment can retain an old dist-info
+    # directory even though pip installed the current package code. Selecting
+    # ``distribution("railmux")`` would then be order-dependent and could
+    # force an unnecessary network fallback. Never delete metadata here; use
+    # the unique distribution whose version exactly matches the imported app.
+    if len(matches) != 1:
         return None
+    distribution = matches[0]
     package = Path(__file__).resolve().parent
     if not package.is_dir():
         return None
@@ -2965,7 +2980,7 @@ def install_managed_runtime(
     reuse_only: bool = False,
 ) -> Msys2Runtime:
     """Install a fresh private runtime and activate it only after verification."""
-    if not _VERSION_RE.fullmatch(version):
+    if not is_project_version(version):
         raise RuntimeInstallError("the Railmux package version is invalid")
     if environ.get(_RUNTIME_OVERRIDE, "").strip():
         raise RuntimeInstallError(

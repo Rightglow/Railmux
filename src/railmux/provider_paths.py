@@ -9,13 +9,15 @@ import sys
 from collections.abc import Mapping
 from pathlib import Path
 
+from railmux.release_version import PROJECT_VERSION_PATTERN
+
 
 _DRIVE_PATH = re.compile(r"^(?:\\\\\?\\)?([A-Za-z]):[\\/](.*)\Z")
 _MANAGED_BASE_MARKER = Path("/railmux-base.json")
 _MANAGED_BASE_CONTENT_MARKER = Path("/railmux-base-content-v1.json")
 _MANAGED_APP_ROOT = Path("/opt/railmux/apps")
 _MANAGED_APP_ID = re.compile(
-    r"railmux-[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?\Z"
+    rf"railmux-{PROJECT_VERSION_PATTERN}\Z"
 )
 
 

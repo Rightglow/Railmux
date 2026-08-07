@@ -2200,6 +2200,49 @@ def test_runtime_status_distinguishes_reusable_base_from_current_app(tmp_path):
     assert snapshot["current_app"] is False
 
 
+def test_native_payload_selects_exact_version_among_stale_dist_info(
+    tmp_path, monkeypatch,
+):
+    current_info = tmp_path / "railmux-0.4.0rc1.dist-info"
+    stale_info = tmp_path / "railmux-0.4.0.dev33.dist-info"
+    current_info.mkdir()
+    stale_info.mkdir()
+
+    def distribution(version, info):
+        return SimpleNamespace(
+            version=version,
+            files=(Path(info.name) / "METADATA",),
+            locate_file=lambda relative: tmp_path / relative,
+        )
+
+    monkeypatch.setattr(
+        windows_msys2.importlib_metadata,
+        "distributions",
+        lambda **_kwargs: iter((
+            distribution("0.4.0.dev33", stale_info),
+            distribution("0.4.0rc1", current_info),
+        )),
+    )
+
+    payload = windows_msys2._native_application_payload("0.4.0rc1")
+
+    assert payload is not None
+    assert payload[1] == current_info
+
+
+def test_native_payload_rejects_duplicate_exact_metadata(tmp_path, monkeypatch):
+    info = tmp_path / "railmux-0.4.0rc1.dist-info"
+    info.mkdir()
+    distribution = SimpleNamespace(version="0.4.0rc1")
+    monkeypatch.setattr(
+        windows_msys2.importlib_metadata,
+        "distributions",
+        lambda **_kwargs: iter((distribution, distribution)),
+    )
+
+    assert windows_msys2._native_application_payload("0.4.0rc1") is None
+
+
 def test_prune_retains_current_previous_and_process_proven_layers(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
@@ -2222,6 +2265,29 @@ def test_prune_retains_current_previous_and_process_proven_layers(tmp_path):
     assert f"railmux-{VERSION}" in plan.retained_apps
 
 
+def test_prune_retains_running_rc_beyond_current_and_previous_layers(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    old_dev = add_marked_app(root, "0.4.0.dev36")
+    running_rc = add_marked_app(root, "0.4.0rc1")
+    final = add_marked_app(root, "0.4.0")
+    current = add_marked_app(root, "0.4.1.dev1")
+    in_use = b"/opt/railmux/apps/railmux-0.4.0rc1/venv/bin/railmux\0"
+
+    plan = windows_msys2.plan_managed_runtime_prune(
+        version="0.4.1.dev1",
+        environ=environ,
+        probe=lambda argv, **_kwargs: completed(argv, stdout=in_use),
+    )
+
+    assert plan.remove_apps == (old_dev,)
+    assert running_rc.name in plan.retained_apps
+    assert final.name in plan.retained_apps
+    assert current.name in plan.retained_apps
+
+
 def test_prune_ignores_unmarked_directories_and_fails_closed_on_process_probe(
     tmp_path,
 ):
@@ -2241,6 +2307,23 @@ def test_prune_ignores_unmarked_directories_and_fails_closed_on_process_probe(
         )
 
     assert unmarked.is_dir()
+
+
+def test_prune_ignores_marked_noncanonical_version_directory(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    noncanonical = add_marked_app(root, "0.04.0")
+
+    plan = windows_msys2.plan_managed_runtime_prune(
+        version=VERSION,
+        environ=environ,
+        probe=lambda argv, **_kwargs: completed(argv, stdout=b""),
+    )
+
+    assert noncanonical not in plan.remove_apps
+    assert noncanonical.is_dir()
 
 
 def test_prune_refuses_linked_application_parent(tmp_path):
