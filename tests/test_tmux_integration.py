@@ -252,7 +252,10 @@ def test_real_transparent_windows_relay_attaches_and_detaches(isolated_tmux):
                 height=28,
                 term="xterm-256color",
                 colorterm="truecolor",
-                synchronized_output=True,
+                # The managed Windows runtime is tmux 3.7b. Keep this generic
+                # relay smoke usable as the POSIX tmux 2.7 compatibility gate,
+                # while exercising the new client feature on modern tmux.
+                synchronized_output=tmux_ctl.tmux_version() >= (3, 4),
             )
         except BaseException:
             status = 127
