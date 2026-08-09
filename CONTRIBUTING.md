@@ -38,15 +38,19 @@ RAILMUX_RUN_TMUX_INTEGRATION=1 pytest -q tests/test_tmux_integration.py
 railmux
 ```
 
-The entry point is `railmux.cli:main`. Source lives under `src/railmux/`.
+The public entry point is `railmux.entrypoint:main`, which dispatches native
+Windows before importing the POSIX CLI. The managed runtime then hands off to
+the shared `railmux.cli:main` implementation. Source lives under
+`src/railmux/`.
 
 ## Architecture and design notes
 
 Before changing providers, recovery state, session indexing, tmux pane
 ownership, preview/restore behavior, or multi-agent layout, read the relevant
-entry in [`docs/README.md`](docs/README.md). Keep durable invariants and runtime
-evidence there; completed task prompts and generated diffs should not become
-parallel sources of truth.
+entry in [`docs/CODE_MAP.md`](docs/CODE_MAP.md), then follow it to the affected
+authority in [`docs/README.md`](docs/README.md). Keep durable invariants and
+runtime evidence there; completed task prompts and generated diffs should not
+become parallel sources of truth.
 
 Changes that add a provider, operating system, terminal integration, or
 user-visible capability must also update the stable inventory and applicable

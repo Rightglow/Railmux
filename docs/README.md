@@ -8,6 +8,10 @@ issues already preserve those artifacts.
 
 Read the smallest relevant document before changing behavior:
 
+- [`CODE_MAP.md`](CODE_MAP.md) is the non-authoritative navigation index from
+  symptoms and feature areas to production symbols, focused tests, platform
+  evidence, and the relevant authority below. Start here when the code owner is
+  not already obvious; do not copy behavioral facts from it.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) is the authoritative set of invariants
   for providers, restart and orphan recovery, session indexing, agent
   workspaces, display transports, layout, focus colours, lifecycle state, and
@@ -23,11 +27,11 @@ Read the smallest relevant document before changing behavior:
 - [`BACKGROUND_SESSION_INDEX.md`](BACKGROUND_SESSION_INDEX.md) records the
   reproducible evidence behind the background Codex index. It supplements the
   immutable-generation rules in `ARCHITECTURE.md`.
-- [`WINDOWS_WRAPPER_PREVIEW.md`](WINDOWS_WRAPPER_PREVIEW.md) and its
-  machine-readable parity ledger preserve the managed-MSYS2 design, safety
-  boundaries, and real-platform evidence promoted into the 0.4 product line.
-  Despite the historical filename, the current contract is stable and lives on
-  `main`; historical preview-build narration is evidence, not branch policy.
+- [`WINDOWS_RUNTIME.md`](WINDOWS_RUNTIME.md) and its machine-readable parity
+  ledger preserve the managed-MSYS2 design, safety boundaries, and real-platform
+  evidence promoted into the 0.4 product line. The current contract is stable
+  and lives on `main`; historical preview-build narration is evidence, not
+  branch policy.
 
 Related repository-level documents have different roles:
 
@@ -49,6 +53,9 @@ Related repository-level documents have different roles:
   evidence.
 - Prefer updating an existing authoritative document over adding overlapping
   design notes.
+- Keep `CODE_MAP.md` short and navigational. It may link a task to an authority,
+  symbol, test slice, or CI surface, but must not restate defaults, timeouts,
+  protocol rules, or compatibility semantics.
 - Move a proven roadmap item into the appropriate architecture/evidence
   document; leave only genuine follow-up questions in the roadmap.
 - Delete completed task prompts, generated diffs, and temporary review reports

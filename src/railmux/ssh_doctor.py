@@ -67,9 +67,9 @@ def collect_remote_ssh_snapshot(
             detail="ssh is not installed or not on PATH",
         )
 
-    # Import lazily so ordinary local diagnostics do not load the interactive
-    # display client or create a dependency cycle.
-    from railmux.fast_display_client import (
+    # Import lazily so ordinary local diagnostics do not load SSH process
+    # helpers unless a remote probe was requested.
+    from railmux.ssh_preflight import (
         ProbeError,
         RemoteStartKind,
         _stop_unstarted_remote,

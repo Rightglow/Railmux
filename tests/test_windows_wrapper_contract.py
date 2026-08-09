@@ -72,3 +72,15 @@ def test_ledger_retains_high_risk_real_terminal_scenarios():
         if disposition == "runtime-bridge"
     }
     assert runtime_bridges <= scenario_features
+
+
+def test_ledger_automation_references_existing_tests():
+    ledger = _ledger()
+    automation = {
+        path
+        for scenario in ledger["scenarios"]
+        for path in scenario["automation"]
+    }
+
+    assert automation
+    assert sorted(path for path in automation if not (ROOT / path).is_file()) == []

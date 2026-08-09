@@ -36,6 +36,10 @@ the managed-MSYS2 preview tree. The `windows-preview` branch freezes at
 The abandoned ConPTY experiment is frozen at `v0.4.0.dev2` on
 `archive/windows-conpty-deprecated`; it is not release-eligible. Shared fixes
 and platform adapters now land together on focused branches from `main`.
+The abandoned native-Windows-to-WSL bootstrap is frozen at `v0.4.0.dev3` on
+`archive/windows-wsl-delegation-deprecated`; it is also not release-eligible.
+Do not move either archive branch/tag boundary. Consult an archive only for a
+bounded lesson that is independently reimplemented and reviewed on `main`.
 
 The already-published `0.4.0.dev1` and `0.4.0.dev2` artifacts are historical
 validation builds, not the active preview. Yank them on PyPI after the archive

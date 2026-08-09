@@ -5,9 +5,11 @@ starting with repository context only.
 
 Before planning a non-trivial behavior or architecture change:
 
-1. Read [`docs/README.md`](docs/README.md) to locate the authoritative source.
-2. Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for every affected
-   invariant, then read the relevant evidence document when one is listed.
+1. Use [`docs/CODE_MAP.md`](docs/CODE_MAP.md) to identify the owning symbols,
+   focused tests, and authority. It is a navigation index, not a specification.
+2. Read [`docs/README.md`](docs/README.md), then only the affected sections of
+   [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and any evidence document it
+   names. Do not load unrelated platform or transport history by default.
 3. For a provider, operating-system, terminal-emulator, or product-capability
    change, identify the affected stable feature IDs and acceptance checklist in
    [`docs/SUPPORT_MATRIX.md`](docs/SUPPORT_MATRIX.md).
@@ -90,31 +92,9 @@ user's Windows-native Codex/Claude executables and keep their Windows-owned
 session/config directories.
 
 All active development, RC, and final tags must point to commits reachable
-from `main`. Use only canonical PEP 440 spellings supported by the release
-workflow: `MAJOR.MINOR.PATCH.devN`, `MAJOR.MINOR.PATCHrcN`, or the final
-`MAJOR.MINOR.PATCH`. Never append `.devN` to an already published final
-version. RCs are opt-in and must exercise the same app-layer transition that
-the final release will use.
-
-`archive/windows-conpty-deprecated` is the frozen, read-only archive of the
-abandoned native ConPTY compositor experiment. It ends at `v0.4.0.dev2`.
-Never base new work on it, merge it, publish another release from it, or move
-the branch/tag references. Consult it only for bounded lessons or
-platform-neutral changes that are independently reimplemented and reviewed.
-
-`archive/windows-wsl-delegation-deprecated` is the frozen, read-only archive
-of the abandoned native-Windows-to-WSL bootstrap experiment. It ends at
-`v0.4.0.dev3`. Native Windows users could not naturally share their existing
-Windows Codex/Claude installation, credentials, paths, and provider history
-with a Linux provider runtime, so this is not a fallback or a base for new
-Windows work. Ordinary Railmux launched by a user from inside WSL remains part
-of the supported POSIX product line on `main`.
-
-`windows-preview` is frozen after the `v0.4.0.dev36` compatibility bridge. Its
-published `v0.4.0.dev4`–`v0.4.0.dev36` history remains reproducible, but no new
-features, fixes, tags, or merges belong there. The stable implementation was
-promoted as one reviewed squash onto `main`; never merge or rebase the preview
-history afterward. Consult it only to reproduce a released preview transition.
+from `main`. Canonical version grammar, the frozen preview/archive branch
+boundaries, publication checks, and transition evidence live in
+[`RELEASING.md`](RELEASING.md); do not duplicate that history in task context.
 
 Do not add a WSL delegation fallback or revive a ConPTY compositor. Native
 Windows launch and a user independently launching Railmux inside WSL remain

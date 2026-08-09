@@ -4,8 +4,8 @@ import io
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from railmux import fast_display_client, remote_config
-from railmux.fast_display_client import (
+from railmux import remote_config, ssh_preflight
+from railmux.ssh_preflight import (
     RemoteHello,
     RemoteLaunchMode,
     RemoteStartKind,
@@ -220,12 +220,12 @@ def test_managed_windows_local_upgrade_never_mutates_versioned_app_venv(
     monkeypatch.setattr(
         "railmux.provider_paths.running_in_windows_wrapper", lambda: True)
     upgrade = MagicMock()
-    monkeypatch.setattr(fast_display_client, "_local_upgrade_argv", upgrade)
+    monkeypatch.setattr(ssh_preflight, "_local_upgrade_argv", upgrade)
 
     try:
-        fast_display_client._upgrade_local_and_restart(
+        ssh_preflight._upgrade_local_and_restart(
             "0.4.0.dev99", ("--remote", "work"), subcommand="config")
-    except fast_display_client.ProbeError as exc:
+    except ssh_preflight.ProbeError as exc:
         assert "PowerShell" in str(exc)
         assert "runtime install --yes" in str(exc)
     else:

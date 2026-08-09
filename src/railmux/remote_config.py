@@ -10,7 +10,7 @@ from collections.abc import Sequence
 from packaging.version import InvalidVersion, Version
 
 from railmux import __version__
-from railmux.fast_display_client import (
+from railmux.ssh_preflight import (
     ProbeError,
     RemoteHello,
     RemoteLaunchMode,

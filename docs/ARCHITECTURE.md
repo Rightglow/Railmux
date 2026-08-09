@@ -1,11 +1,28 @@
 # Railmux architecture invariants
 
 This document records constraints that should survive implementation changes.
-It is intentionally separate from the user-facing README. Read it before
-changing providers, mode switching, outer tmux panes, previews, or restore
-state.
+It is intentionally separate from the user-facing README. Start with the
+symptom map in [`CODE_MAP.md`](CODE_MAP.md), then read only the sections whose
+authority the change affects.
+
+## Contents
+
+- [Dedicated tmux server and platform runtime](#railmux-owns-a-dedicated-tmux-server)
+- [Provider modes](#modes-are-registered-providers-not-a-boolean)
+- [Sidebar and configuration projections](#sidebar-rows-are-disposable-views)
+- [Restart and recovery state](#restart-state-has-two-authorities)
+- [Provider session indexes](#session-indexes-publish-immutable-generations)
+- [Agent workspace](#the-agent-workspace-is-independent-of-the-sidebar-mode)
+- [Display transports](#agent-display-transports-preserve-one-ownership-model)
+- [Focus and Target interaction](#dual-agent-interaction-target)
+- [Global tmux bindings](#global-bindings-preserve-user-tmux-configuration)
+- [Size and attach](#size-and-attach-invariants)
+- [Focus colours](#focus-colour-semantics)
+- [Liveness and attention](#liveness-activity-and-attention-are-separate-axes)
 
 ## Railmux owns a dedicated tmux server
+
+### Dedicated socket and internal command scope
 
 Every production launcher and remote display helper addresses the non-default
 `railmux` tmux socket explicitly. Starting Railmux from a foreign tmux client
@@ -23,6 +40,8 @@ temporarily scoped to the already-proven dedicated socket before
 `new-session -A`; it must never inspect or mutate the caller's/default server.
 Tests use a randomized non-default socket and may kill only that exact private
 server. Socket migration never edits provider rollouts or session files.
+
+### Legacy default-server compatibility
 
 Upgrade compatibility is deliberately asymmetric. New sessions are created
 only on the dedicated server, while pre-isolation sessions on tmux's `default`
@@ -43,6 +62,8 @@ Remove `legacy_sessions.py`, the `_Running` legacy fields, and their routing
 branches together after a documented compatibility window and after supported
 installations no longer report default-server candidates through `doctor`.
 
+### Health supervision and lifecycle classification
+
 The ordinary launcher retains a thin parent outside the attached tmux client,
 and the SSH display server is already outside its private attach client. Each
 performs one low-frequency, identity-pinned health probe and requires three
@@ -61,6 +82,8 @@ consult it before any post-exit tmux query, so destroying the managed session
 cannot be misreported or queried concurrently by its closing SSH views. These
 sentinels classify lifecycle only; they never authorize session mutation or
 recovery.
+
+### Managed Windows direct attach and relay
 
 On the managed Windows runtime, an OpenSSH login and an interactive desktop
 terminal can belong to different Windows Terminal Services sessions. The
@@ -109,6 +132,8 @@ probe and their age and inode identity remain unchanged. A bridge failure
 leaves the existing tmux workspace running and records only a bounded
 diagnostic category. POSIX launches never enter this fallback.
 
+### Windows terminal capabilities and stale-socket recovery
+
 Supported Windows Terminal 1.24.10621+ builds expose an opaque `WT_SESSION`
 marker but keep the generic `xterm-256color` terminal name, so tmux cannot
 infer synchronized-output support from `TERM`. Managed direct clients add
@@ -150,6 +175,8 @@ endpoint as having no live server; the normal `new-session -A` path can then
 replace it. This fallback neither unlinks the socket itself nor changes the
 shorter explicit bounds used to monitor a server already believed to be live.
 
+### Managed Windows app identity and UI transition
+
 Managed Windows app layers have a second identity boundary above the tmux
 server. The shared base marker remains compatible with released dev11-dev23
 apps, while a separate immutable content marker hashes the complete sorted
@@ -183,6 +210,8 @@ likewise leave the old UI running. No transition kills the
 tmux server, a provider session, or a provider process, and the transition lock
 is scoped to the exact server label and immutable outer-session ID.
 
+### Tmux mutation and Preview performance boundaries
+
 Independent tmux mutations that form one startup or status-bar transaction are
 sent through one tmux client, and an identical complete bar frame is not
 rewritten. This is a performance invariant on runtimes where spawning each tmux
@@ -208,6 +237,8 @@ check, and a failed replacement never creates another pane or commits a new
 active target. The transcript renderer itself reads the final 2,000 UTF-8 JSONL
 records backwards; an external `tail` process is not part of the click path.
 
+### Diagnostics privacy authority
+
 Doctor collection has one versioned structured snapshot authority. Human text
 and `doctor --json` are renderers of that same snapshot, not independent probe
 paths. Stable JSON fields contain only bounded status/category values, numeric
@@ -228,6 +259,8 @@ destination, arguments, session/pane identity, content, paths, or raw errors.
 An `in_progress` record is not treated as a lifecycle authority: it may denote
 a live connection or one that ended before recording its outcome.
 
+### SSH terminal model
+
 The SSH display's headless terminal must implement every screen-content
 operation that its private tmux client advertises through `TERM`; sending a
 new keyframe cannot repair divergence already present in that server-side
@@ -236,6 +269,8 @@ parameterized scroll-up, scroll-down, and repeat-character (`CSI S/T/b`) and
 uses the same model for live frames and styled history. Tests against a real
 isolated tmux PTY must compare the reconstructed pane with tmux's own captured
 state whenever that advertised capability boundary changes.
+
+### SSH local history and rewind generations
 
 Local SSH history is an overlay, not a pause in the live screen model. Each
 visible agent pane may own one immutable snapshot and offset; incoming live
@@ -301,6 +336,8 @@ layer owns agent wheel input. Ordinary `ssh` followed by `railmux` retains the
 copy-mode coalescer, and attaching to an existing Railmux session never changes
 that session's setting.
 
+### SSH on Termux
+
 The local SSH client recognizes Termux only from its local environment, never
 from terminal dimensions or the remote host. Termux uses DECSET 1002 button
 tracking plus SGR coordinates because its emulator does not implement DECSET
@@ -337,6 +374,8 @@ desktop focus semantics or exposing a focus sequence to applications that did
 not request one.
 Desktop terminals never enter this path.
 
+### Direct local Railmux on Termux
+
 A native/local Railmux process on Termux has a different boundary: input over
 an agent pane reaches tmux's root mouse table and never passes through the
 sidebar's Python/Urwid input loop. On tmux 3.0+, the shared crash-safe binding
@@ -363,6 +402,8 @@ fresh DEC ownership. Route options are window-scoped; the tmux `mouse` option
 is session-scoped, so the handoff is deliberately short and always restores to
 the `on` state Railmux requires for the rest of that session.
 
+### Claude history policy over SSH
+
 Managed Claude Code panes may advertise a verified transcript source without
 using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,
 or `native`: `ask` makes the first upward wheel gesture open a local-only
@@ -378,6 +419,8 @@ bounded; on timeout the client refreshes the authoritative remote policy
 without clearing another pane's frozen viewport. The dialog, paired
 mouse press/release suppression, and status never enter tmux or alter another
 attached client.
+
+### SSH compatibility and installation handshake
 
 The SSH compatibility handshake precedes every tmux lookup, session creation,
 lock, PTY allocation, or attach. The remote reports a bounded package version,
@@ -404,6 +447,8 @@ bootstrap, so this local-pip upgrade path is forbidden there. A newer remote
 instead produces native PowerShell pip plus `runtime install` instructions;
 the running versioned app never upgrades itself in place.
 
+### Remote platform discovery
+
 Remote command discovery is shell-family aware without executing a local
 shell. The default path keeps the POSIX executable/private-venv/Python ladder;
 if that bounded handshake fails before attach, `auto` may retry the same argv
@@ -417,11 +462,15 @@ POSIX pip/private-venv installer to a direct or identified Windows server;
 version or runtime repair fails closed with native user-level pip plus managed
 runtime instructions, and provider session files remain outside that repair.
 
+### SSH startup presentation
+
 Before that cooked-mode handshake begins, the local client paints the same
 terminal-native workspace-restoration surface as a direct launch. It is local
 feedback only: it grants no protocol authority and is replaced by the first
 validated display keyframe. Authentication, compatibility, installation, and
 attach prompts remain cooked-mode interactions.
+
+### SSH attach contention and helper leases
 
 Protocol v15 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
@@ -437,6 +486,8 @@ pane, or provider process.
 One BUSY status is treated as ordinary v8 attach contention: the local client
 starts one fresh non-replacement helper before offering takeover. Only a second
 BUSY is persistent enough to justify the destructive-sounding consent prompt.
+
+### SSH automatic reconnect
 
 Default-on automatic reconnect is a narrower post-attach path. It becomes eligible
 only after at least one valid screen frame and only for an unexpected reaped

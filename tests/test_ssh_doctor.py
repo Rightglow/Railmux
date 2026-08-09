@@ -3,9 +3,9 @@ from __future__ import annotations
 import io
 from unittest.mock import MagicMock
 
-from railmux import __version__, fast_display_client
+from railmux import __version__, ssh_preflight
 from railmux.fast_display_protocol import PROTOCOL_VERSION
-from railmux.fast_display_client import RemoteLaunchMode, RemoteProbe
+from railmux.ssh_preflight import RemoteLaunchMode, RemoteProbe
 from railmux.ssh_doctor import (
     RemoteSshDoctorSnapshot,
     collect_remote_ssh_snapshot,
@@ -23,8 +23,8 @@ class _TTYBuffer(io.StringIO):
 def _patch_probe(monkeypatch, process, startup, *, mode=RemoteLaunchMode.POSIX):
     probe = MagicMock(return_value=RemoteProbe(process, startup, mode))
     stopped = MagicMock()
-    monkeypatch.setattr(fast_display_client, "probe_remote_launch", probe)
-    monkeypatch.setattr(fast_display_client, "_stop_unstarted_remote", stopped)
+    monkeypatch.setattr(ssh_preflight, "probe_remote_launch", probe)
+    monkeypatch.setattr(ssh_preflight, "_stop_unstarted_remote", stopped)
     return probe, stopped
 
 
@@ -37,9 +37,9 @@ def test_remote_ssh_doctor_reads_hello_without_attaching_or_leaking_host(
     probe, stopped = _patch_probe(
         monkeypatch,
         process,
-        fast_display_client.RemoteStartup(
-            fast_display_client.RemoteStartKind.HELLO,
-            fast_display_client.RemoteHello(
+        ssh_preflight.RemoteStartup(
+            ssh_preflight.RemoteStartKind.HELLO,
+            ssh_preflight.RemoteHello(
                 __version__, PROTOCOL_VERSION, True, True),
         ),
     )
@@ -64,8 +64,8 @@ def test_remote_ssh_doctor_json_failure_is_scriptable_and_private(monkeypatch):
     _patch_probe(
         monkeypatch,
         process,
-        fast_display_client.RemoteStartup(
-            fast_display_client.RemoteStartKind.FAILED,
+        ssh_preflight.RemoteStartup(
+            ssh_preflight.RemoteStartKind.FAILED,
             returncode=255,
         ),
     )
@@ -92,9 +92,9 @@ def test_remote_ssh_doctor_treats_same_protocol_version_drift_as_usable(
     _patch_probe(
         monkeypatch,
         process,
-        fast_display_client.RemoteStartup(
-            fast_display_client.RemoteStartKind.HELLO,
-            fast_display_client.RemoteHello(
+        ssh_preflight.RemoteStartup(
+            ssh_preflight.RemoteStartKind.HELLO,
+            ssh_preflight.RemoteHello(
                 "0.1.0",
                 PROTOCOL_VERSION,
                 True,
@@ -115,9 +115,9 @@ def test_remote_ssh_doctor_reports_invalid_remote_config(monkeypatch):
     _patch_probe(
         monkeypatch,
         process,
-        fast_display_client.RemoteStartup(
-            fast_display_client.RemoteStartKind.HELLO,
-            fast_display_client.RemoteHello(
+        ssh_preflight.RemoteStartup(
+            ssh_preflight.RemoteStartKind.HELLO,
+            ssh_preflight.RemoteHello(
                 __version__,
                 PROTOCOL_VERSION,
                 True,
@@ -141,9 +141,9 @@ def test_remote_doctor_reports_windows_runtime_and_direct_family(monkeypatch):
     _patch_probe(
         monkeypatch,
         process,
-        fast_display_client.RemoteStartup(
-            fast_display_client.RemoteStartKind.HELLO,
-            fast_display_client.RemoteHello(
+        ssh_preflight.RemoteStartup(
+            ssh_preflight.RemoteStartKind.HELLO,
+            ssh_preflight.RemoteHello(
                 __version__,
                 PROTOCOL_VERSION,
                 True,

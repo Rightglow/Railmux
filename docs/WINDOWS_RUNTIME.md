@@ -319,262 +319,34 @@ restore, preview, resize, mouse, menus, clipboard/browser bridges, and
 `railmux ssh` remain release-specific manual checks and are not inferred from
 that spike.
 
-On the same host, the dev10 candidate reproduced MSYS2 3.7b leaving an
-unresponsive AF_UNIX pathname after both hard and soft quit with zero provider
-sessions. The guarded sole-session/sole-pane cleanup removed the unchanged
-pathname, reported its read-only provider-data boundary, and the same isolated
-label launched again successfully. A separate live label and the pre-existing
-default server were left untouched.
 
-dev11 automation proves that a complete dev10-owned runtime is adopted in
-place, its legacy marker is byte-for-byte unchanged, only the two app-install
-commands target the final versioned POSIX path, interrupted markerless app
-layers recover without touching provider data, dev10 rollback remains
-discoverable, and later discovery selects the versioned dev11 app. Real
-Windows validation must still cover the exact dev10 upgrade on the user's
-machine.
+### Historical preview evidence
 
-On 2026-08-04 the dedicated Windows 10 19045 / PowerShell 5.1 / Python 3.12.10
-host upgraded its installed dev9 runtime through the three-phase dev11 path.
-The first deliberately offline package lookup left a markerless app layer; the
-next run removed only that unpublished directory, reused the same base without
-archive, extraction, pacman, copy, or relocation, and completed successfully
-from the locally supplied wheel. `runtime status` and the real MSYS `doctor`
-handoff reported dev11, tmux 3.7b, native Codex 0.146.0, and native Claude Code
-2.1.220. The complete adopted tree measured 584.4 MiB, of which the dev11 app
-layer was 22.4 MiB, and the legacy dev9 marker remained unchanged.
+The published dev10-dev36 preview series established the released migration
+boundaries represented by the current markers and parity ledger. In summary:
 
-dev12 automation reproduces the field-reported app-layer PyPI read timeout
-after successful dev11 base reuse. It proves that venv creation runs once, the
-package command retries once with the same external pip cache and a longer
-timeout, the dev11 app marker remains byte-for-byte unchanged, and dev12 is
-published only after its exact executable probe succeeds. On 2026-08-04 the
-dedicated Windows 10 host then installed the local dev12 candidate through the
-three-phase shared-base path with the real MSYS `cygpath` cache conversion and
-without archive, extraction, or pacman work. Its MSYS doctor reported dev12,
-Python 3.12.13, tmux 3.7b, and both native providers; the classified retry
-itself remains to be field-validated on the affected user network.
+- dev10-dev19 exercised abandoned-socket recovery, shared-base app layers,
+  bounded pip retry, slow stale-socket classification, the cross-terminal
+  relay, session leases, startup batching, Soft Quit recreation, and exact
+  provider-marker recovery.
+- dev24 added immutable package-content identity, cooperative app-layer
+  transition, process-aware pruning, native local/remote config and doctor, and
+  Windows-origin SSH coverage.
+- dev26-dev32 replaced executable archive extraction with bounded in-process
+  extraction, kept package paths writable, added restart-journal authority for
+  pacman core transactions, moved packaged-Python state outside virtualized
+  AppData, measured mirrors, and made verified local app-layer reuse the normal
+  version-only upgrade path.
+- dev33-dev35 removed avoidable Preview and live-switch process amplification
+  while retaining the identity-pinned swap transaction and independent
+  transcript authority.
+- dev36 bridged the historical preview version grammar into the app identity
+  used by the 0.4 release-candidate line.
 
-The same host later reproduced a dev12 launch failure with an abandoned
-dedicated socket but no live managed-runtime tmux process. A direct tmux
-identity probe returned the authoritative `no server running` result after
-2.09 seconds, just beyond Railmux's former 2.0-second startup bound; an isolated
-label then proved that `new-session` safely replaced the same endpoint in 4.20
-seconds. The released dev13 launcher gives only managed-Windows default startup
-discovery a five-second bound and successfully entered the real TUI across the
-same field-shaped abandoned endpoint before a normal `C-b d` detach. That
-validation also exposed `doctor`'s separate explicit one-second probe; dev14
-routes only the managed-Windows doctor through the same settle allowance.
-Explicit health/watchdog probes, POSIX launcher and doctor bounds, and the
-proof-gated socket unlink authority remain unchanged.
-
-The dev15 candidate was installed on the same Windows 10 host through exact
-shared-base reuse. An ordinary OpenSSH login followed by `railmux` entered and
-detached the existing dedicated workspace. A separate forced bridge smoke used
-the released app layout and real MSYS2 AF_UNIX/tmux paths: the pinned server
-started the versioned helper, completed the nonce/HMAC handshake, attached an
-additional PTY client, transported the live UI, detached with `C-b d`, drained
-terminal restoration, and returned zero. `doctor` still reported the same
-healthy server afterward. The automatic fallback from an interactive Windows
-Terminal session to an SSH-origin server (and the reverse origin) remains a
-manual dev15 check because SSH access alone cannot create the desktop Terminal
-Services side of that boundary.
-
-The dev16 candidate reused that base and installed only its versioned app
-layer. Both the native bootstrap and managed-MSYS2 executable reported dev16;
-the real MSYS process-birth probe, advisory-lock holder transfer, owner lookup,
-and automatic release after provider-process exit all passed. An ordinary
-OpenSSH login entered the existing dedicated workspace through the dev15 bridge
-and detached normally, after which `doctor` still reported the same healthy
-tmux server. A separate two-host test on the shared scratch filesystem held the
-lease on `ipp2-1773`, identified that host immediately from `computelab-304`,
-and rejected the second claim. This proves the tested filesystem's cross-host
-`flock` behavior and the owner-record flush, not arbitrary NFS/CIFS mount
-semantics. End-to-end Windows-origin `railmux ssh` mouse motion and authenticated
-provider resume remain manual dev16 checks.
-
-The dev17 candidate was installed into a new isolated tmux label on the same
-Windows 10 19045 / managed-MSYS2 host. Subprocess profiling proved an empty
-provider set (`index 0.0s`) and immutable pane recovery of 0.6s; repeated tmux
-client process creation, not provider-history parsing, dominated the older
-startup. Batching independent mutations and preparing only crash-safe
-wheel/function/status leases after first paint reduced the controlled app
-restore measurement from 9.4s before batching, through 4.6s after batching, to
-2.3s for the final candidate. The resulting live root table contained the
-owned F8/F9, status-control, right-click, and wheel bindings, and detaching left
-the isolated workspace healthy. This measures an empty-session SSH-origin
-terminal on that host; desktop Windows Terminal pointer behavior and
-authenticated provider restore remain manual checks.
-
-The dev18 candidate reproduced the field failure on the same Windows 10 host:
-Soft Quit removed the outer `railmux` session while a detached provider tmux
-session kept the dedicated server alive. The next candidate launch created
-only the missing outer UI detached through that unchanged server, resolved its
-immutable session ID, entered it from OpenSSH, and detached normally. The
-provider tmux session survived both launches and no provider/session file was
-opened for mutation. Automatic bridge selection from the desktop Windows
-Terminal side of the Terminal Services boundary remains a manual check.
-
-The dev19 candidate reused that live provider and dedicated server after the
-outer UI had disappeared. The detached create carried only the exact managed
-runtime/app IDs, the new process revalidated its NTFS-projected private state,
-and the unresolved Codex marker moved from the proven-dead outer pane to the
-new immutable pane without reading or changing provider history. The first
-interactive status bar contained current tmux 3.7 control ranges; F6 copied the
-full status source into tmux's clipboard buffer and produced its transient
-acknowledgement. The provider survived repeated outer recreation and the final
-view detached normally. Automated tests cover raw direct-error suppression,
-terminal-aware bridge status, and the unavailable-bridge error; desktop-side
-Windows Terminal clipboard receipt remains manual.
-
-dev24 automation adds fail-closed cooperative app-layer transition tests,
-exact package identity/drift tests, process-aware prune tests, native forwarding
-of every local/remote config and doctor form, and POSIX/direct remote probe
-coverage. A real Windows 10 candidate then verified the exact 96-package base
-identity, schema-4 local doctor, local config, a 2.9-second empty-workspace
-restore, detach/reattach, Linux-to-Windows SSH/config/doctor, and native
-Windows-to-Windows SSH/config/doctor through OpenSSH. These checks do not
-promote the preview to stable support: the exact dev23-to-dev24 Soft Quit
-boundary, Windows Terminal visual/input checklist, Windows-to-POSIX endpoints,
-and macOS-origin remote paths remain release-specific manual checks.
-
-dev26 replaces the MSYS2 SFX execution path after a fresh Windows 11/Python
-3.12 install reproduced the SFX's `cannot find sfx` exit despite an exact
-size/SHA-verified cache. Automation exercises real `tar.xz` decoding, bounded
-inventory and progress, traversal/backslash rejection, link rejection, and
-the no-archive-execution boundary. The full pinned official archive was also
-extracted on Linux with the production extractor and matched all 16,485
-members and 289,361,533 regular-file bytes. The production dev26 wheel then
-repeated that exact full extraction under native Windows 10/Python 3.12,
-produced `usr/bin/bash.exe`, and reported bounded 5% file-count milestones.
-A separate isolated Windows 10 dev26 installation subsequently completed all
-seven package/app phases when its selected repository reported no pending base
-updates.
-
-The first external dev26 fresh-install report reached phase four but exited
-with Windows `0xC0000135`, consistent with an incomplete executable dependency
-set. Investigation showed that Python's Windows `chmod` had converted the tar's
-POSIX `0444`/`0555` modes into NTFS read-only attributes; the same tree produced
-`Access denied` when a package-owned `usr/bin/bashbug` file was removed. This
-can prevent pacman from replacing package-owned files whenever the selected
-rolling repository has newer core packages. dev27 keeps package-owned paths
-writable and adds a native Windows full-archive gate that mutates an upstream
-read-only-mode file before launching the extracted bash, cygpath, and pacman.
-A real field retry against a repository with newer core packages remains
-required.
-
-That retry on dev27 again reached phase four and returned Windows
-`0xC0000135`, disproving the read-only mapping as the complete explanation.
-The bootstrap had also collapsed MSYS2's supported unattended upgrade into one
-shell process: pacman can successfully replace `msys2-runtime`, bash, and
-pacman, announce that all MSYS2 processes will close, and then deliberately
-terminate the updating shell. dev28 recognized only that exact announcement as
-a successful handoff, but a terminated MSYS2 process can lose the final
-fully-buffered stdout block before it reaches the native Python pipe. dev29
-therefore also accepts Windows `0xC0000135` only when bytes newly appended to
-the bounded, identity-pinned private pacman journal prove a completed core
-transaction and the matching local package database independently proves the
-same package changed from the logged old version to the logged new version.
-Prior journal entries, incomplete transactions, non-core changes, arbitrary
-process statuses, and package-database mismatches grant no restart authority.
-Railmux then launches a fresh shell for another full `pacman -Syuu` pass,
-always performs at least two passes, caps restart handoffs at three, and
-requires a final clean pass before the staged base can be published. The native
-full-archive gate now performs this real update sequence before executable
-loading. Its first candidate run proved both update passes and executable
-loading, then caught a private pacman-key `gpg-agent.exe` handle blocking
-immediate staging cleanup. The bootstrap now asks `gpgconf` to stop daemons for
-the private `/etc/pacman.d/gnupg` home after package transactions; it never uses
-the broader MSYS2 CI workaround that kills every process with `msys-2.0.dll`
-loaded. The second Windows Server 2025 candidate run completed both real update
-passes, executable loading, agent shutdown, and immediate recursive cleanup.
-That repository had no pending core packages, so the explicit core-restart
-branch remains regression-covered plus a field check on the originally affected
-host. The archive smoke now performs the same measured mirror selection as a
-production install and can pin one exact approved mirror for repository-specific
-reproduction. The active UTF-8 reporter log is excluded from bounded retention
-while it is open, so the printed failure path remains available after staging
-cleanup.
-
-A fresh Windows 11 / Microsoft Store Python field report against dev29 showed
-that the bootstrap could read its own `%LOCALAPPDATA%\Railmux` staging while
-PowerShell saw no `Railmux\runtimes` or `Railmux\logs` directory at that
-logical path. The phase-four child then returned `0xC0000135` before any
-confirmed pacman core transaction. This matches Windows packaged-app AppData
-write virtualization: the parent sees a merged package-private view while the
-executable loader resolves a different physical directory and cannot find the
-staged DLL set. Dev30 selects one non-virtualized profile root before creating
-the log, lock, cache, or staging tree and regression-protects both the packaged
-and traditional-Python location contracts. A fresh Store-Python field install
-on 2026-08-06 then completed with dev30 from that non-virtualized root, closing
-the cross-process visibility failure. Its phase-five package transaction still
-spent more than 300 seconds before the first visible transfer; dev31 therefore
-measures bounded real package prefixes and excludes reachable-but-slow sources
-when another approved source passes.
-A subsequent upgrade on that Store-Python host confirmed dev31 local resize
-reflow, including height changes, but measured 91 seconds in the three-phase
-app-layer step. Its retained log showed that venv creation was immediate,
-cached dependency payloads were present, and roughly 75 seconds were spent on
-PyPI metadata plus the 503 KiB Railmux wheel transfer before local unpacking.
-That evidence is the dev32 boundary: version-only upgrades take the bounded
-local dependency/payload path above, while the online installer remains a
-validated fallback rather than the default.
-
-Dev33 removes the remaining deterministic process amplification from repeated
-stopped-session Preview. After the first identity-pinned live-to-preview
-transition, the same Railmux-owned pane is replaced directly without repeated
-pane inventories, marker writes, or unchanged chrome/binding projection. The
-Python renderer reads the final 2,000 UTF-8 JSONL records backwards instead of
-starting a separate `tail` process. Unit coverage protects both the repeat
-fast path and the ordinary live-provider boundary; a real isolated tmux smoke
-respawns two different previews in the same pane and observes no stale first
-transcript. Windows Terminal click-to-first-preview timing remains a manual
-perceptual check.
-
-Dev34 addresses the corresponding live-session switch and first-preview paint
-without weakening pane ownership. A read-only probe on the dedicated Windows
-10 managed-MSYS2 host measured an otherwise trivial tmux client invocation at
-roughly 26--27 ms, versus roughly 2.6--2.8 ms on the contemporary Linux host;
-MSYS2 process startup is therefore a real platform floor, not SSH emulation.
-The older Railmux path amplified that floor with many independent identity,
-marker, geometry, and mutation clients. On tmux 3.1 or newer, an exact swap
-switch now uses one coherent server snapshot, a journaled old-pane return, a
-guarded marker handoff, and verified commit: three snapshots and three command
-queues in the successful case. The old provider must be proven at its immutable
-home before the new provider moves, each move is verified from immutable pane,
-process, session, window, keeper, and client-count identities, and a concurrent
-marker/topology change falls back or fails closed with recovery metadata
-retained. Older or ineligible topologies retain the established stepwise path.
-Clicking the already displayed target performs one coherent revalidation and
-does not resize or rewrite it. Preview now finishes its bounded read-only render
-into an anonymous seekable temporary file before starting `less +G`, so the
-first visible frame is the final bottom page rather than an upward pipe fill;
-the provider JSONL is never modified and no reusable transcript cache exists.
-Real Windows Terminal perceptual timing and authenticated-provider behavior
-remain manual release checks. The candidate wheel also upgraded the dedicated
-Windows 10 host from dev33 without network access by reusing the exact
-96-package base and verified prior dependencies. An ordinary OpenSSH PTY then
-started an isolated-label empty workspace through the Windows terminal bridge,
-reported a 2.6-second restore with 0.4 seconds in pane recovery, and detached
-normally; the isolated server and transfer files were removed afterwards.
-
-Dev35 removes two remaining presentation-only clients from the successful
-dev34 live-switch path. The explicit Preview locator and the already-owned
-prefix-Tab Target projection share one command queue, with the established
-independent helpers retained as failure fallback, while an unchanged logical
-focus/layout no longer rewrites identical border styles merely because swap
-changed the physical pane ID. The three identity snapshots, journaled
-return-home, guarded move/commit queues, immutable-pane verification, provider
-leases, and history read-only boundary are unchanged. Project rows also gain
-an exact-row right-click menu for absolute-path copy, separately persisted
-project star/unstar, Info, and managed Term; session-favorite metadata and
-provider histories are not reused or modified.
-
-The historical `windows-preview` line ends with the dev36 version-grammar
-bridge. The implementation is promoted to `main`; subsequent development,
-release candidates, and final releases use the ordinary main release process.
-The repository README, support matrix, and website are the user-facing support
-contract, while this document retains detailed ownership and evidence.
+The full chronological investigation remains available in Git history and the
+published preview tags; it is not required context for ordinary maintenance.
+The structured parity ledger retains each feature disposition, automated gate,
+and manual evidence requirement.
 
 On 2026-08-07 the dedicated Windows 10 host completed the exact
 dev35-to-dev36-to-rc1 transition without replacing its verified 96-package
