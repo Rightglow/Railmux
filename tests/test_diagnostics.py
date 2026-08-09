@@ -318,7 +318,7 @@ def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
     ) == 0
 
     payload = json.loads(output.getvalue())
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert payload["managed_windows"] is None
     assert payload["locale_configured"] is False
     assert set(payload["ssh_display"]) == {

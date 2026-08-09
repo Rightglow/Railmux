@@ -163,7 +163,7 @@ def main() -> int:
             cwd=root,
             env=env,
         ))
-        if doctor.get("schema_version") != 4:
+        if doctor.get("schema_version") != 5:
             raise RuntimeError("wheel doctor emitted an unexpected schema")
     return 0
 

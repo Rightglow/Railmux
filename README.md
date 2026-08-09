@@ -81,6 +81,13 @@ Python—not because the Railmux package itself is that large. Later Railmux
 versions reuse the same verified base while its pinned MSYS2 release is
 unchanged and install only a version-isolated application layer.
 
+Railmux's tmux core requirement remains 2.7+ on every platform. On native
+Windows, tmux 3.7+ is recommended for full synchronized-redraw fidelity; an
+older managed base remains supported, but cursor movement and a provider's
+full-history redraw can be more visible. `railmux doctor` and
+`railmux runtime status` report this distinction. Railmux does not update a
+live private base in place or disturb detached agent sessions to obtain it.
+
 The managed runtime does not replace Git Bash, adopt an existing MSYS2, edit
 the system `PATH`, or move provider data. Codex and Claude Code remain native
 Windows programs and continue using the same `%USERPROFILE%\.codex` and

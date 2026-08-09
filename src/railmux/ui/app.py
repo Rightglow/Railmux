@@ -64,6 +64,7 @@ from railmux.modes import (
 )
 from railmux.models import AttentionState, Project, SessionMeta
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
+from railmux.tmux_capabilities import TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED
 from railmux.mouse_manager import RootWheelForwardingManager
 from railmux.renames import Renames
 from railmux import restart_state
@@ -142,7 +143,7 @@ class _SynchronizedOutputScreen(urwid.raw_display.Screen):
     between those changes.  Windows Terminal can make those intermediate
     coordinates visible during a streaming Codex turn.
 
-    tmux 3.6+ understands DEC mode 2026 from an application.  Holding the mode
+    tmux 3.7+ consumes DEC mode 2026 from an application.  Holding the mode
     around one complete Urwid draw makes tmux publish the inactive sidebar as
     one frame.  The matching tmux *client* capability remains per-terminal and
     is selected by the launcher; this class changes neither provider output
@@ -176,7 +177,8 @@ def _reduce_codex_motion_for_terminal() -> bool:
     """Avoid exposing Codex's animated partial frames through tmux before 3.7."""
     return (
         running_in_managed_windows_wrapper()
-        and tmux_ctl.tmux_version() < (3, 7)
+        and tmux_ctl.tmux_version()
+        < TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED
     )
 
 

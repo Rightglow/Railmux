@@ -15,6 +15,7 @@ from typing import TextIO
 from railmux import __version__
 from railmux import legacy_sessions, tmux_health, tmux_server
 from railmux.config import Config, ConfigError, default_config_path, load_config
+from railmux.diagnostic_contract import DOCTOR_SCHEMA_VERSION
 from railmux.provider_paths import running_in_windows_wrapper
 from railmux.runtime_config import normalized_command, runtime_environment
 from railmux.ssh_display_diagnostics import (
@@ -38,7 +39,6 @@ from railmux.terminal_status import (
 _VERSION_RE = re.compile(
     r"(?<![A-Za-z0-9])v?(\d+(?:\.\d+){1,3}(?:[A-Za-z]|[-+][0-9A-Za-z.-]+)?)"
 )
-DOCTOR_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -86,6 +86,7 @@ class ManagedWindowsDiagnostic:
     base_content_id: str | None
     running_ui_version: str | None
     transition_status: str | None
+    tmux_capability: dict[str, str | None]
 
 
 @dataclass(frozen=True)
@@ -544,6 +545,17 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
     ]
     if snapshot.managed_windows is not None:
         managed = snapshot.managed_windows
+        capability = managed.tmux_capability
+        fidelity = capability.get("windows_visual_fidelity") or "unknown"
+        version = capability.get("version") or "unknown"
+        recommended = (
+            capability.get("windows_visual_fidelity_recommended") or "unknown"
+        )
+        fidelity_detail = (
+            "; new Codex panes use conservative reduced motion"
+            if fidelity == "unknown"
+            else ""
+        )
         identity = (
             managed.base_content_id[:12]
             if managed.base_content_id is not None
@@ -555,6 +567,10 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
             f"Windows app layer: installed={managed.app_version or 'unavailable'}, "
             f"running={managed.running_ui_version or 'not running'}, "
             f"transition={managed.transition_status or 'none'}",
+            "Windows tmux visual fidelity: "
+            f"{fidelity}; tmux={version}, recommended={recommended}+; "
+            f"source={capability.get('source') or 'unknown'}"
+            f"{fidelity_detail}",
         ))
     lines.extend((
         (

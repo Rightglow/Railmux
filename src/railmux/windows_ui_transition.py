@@ -21,8 +21,9 @@ from typing import Iterator, Mapping, Sequence
 
 from packaging.version import InvalidVersion, Version
 
-from railmux import restart_state, tmux_server
+from railmux import restart_state, tmux_ctl, tmux_server
 from railmux.release_version import PROJECT_VERSION_PATTERN
+from railmux.tmux_capabilities import classify_tmux_version
 from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256
 
 
@@ -84,18 +85,23 @@ class TransitionOutcome:
 
 def diagnostic_status(
     environ: Mapping[str, str] | None = None,
-) -> dict[str, str | None]:
+) -> dict[str, object]:
     """Return bounded managed-UI identity without paths, PIDs, or session IDs."""
     env = os.environ if environ is None else environ
     runtime = env.get("RAILMUX_MSYS2_RUNTIME_ID", "")
     app = env.get("RAILMUX_MSYS2_APP_ID", "")
     app_match = _APP_RE.fullmatch(app)
-    result: dict[str, str | None] = {
+    capability = classify_tmux_version(tmux_ctl.tmux_version())
+    result: dict[str, object] = {
         "runtime_id": runtime or None,
         "app_version": app_match.group(1) if app_match is not None else None,
         "base_content_id": _base_identity(runtime),
         "running_ui_version": None,
         "transition_status": None,
+        "tmux_capability": capability.payload(
+            source="effective_tmux",
+            verification="effective",
+        ),
     }
     try:
         target = tmux_server.discover_target(timeout=None)

@@ -157,9 +157,17 @@ therefore cannot make a complete provider frame atomic even when the outer
 Windows Terminal client advertises `sync`. Railmux detects that bounded
 compatibility case at provider launch and supplies the process-local Codex
 override `tui.animations=false`; it never edits the user's Codex config or
-history. tmux 3.7+ keeps the user's normal Codex motion setting. The base's
-exact tmux package remains visible in `railmux runtime status --json`, so this
-gap is diagnosable rather than inferred from visual reports.
+history. tmux 3.7+ keeps the user's normal Codex motion setting. This is a
+Windows visual-fidelity threshold, not a change to Railmux's shared tmux 2.7
+core floor. The base's recorded package and the effective tmux classification
+are exposed by `railmux runtime status` and `railmux doctor`; direct managed
+Windows launch also emits one warning for a known supported version below 3.7.
+Already-running provider panes retain their current process settings.
+
+The verified base is immutable after publication. Railmux never runs an
+in-place `pacman -Syu`, replaces a live tmux binary, or kills a server merely
+to improve rendering. A fresh staged base can receive current tmux packages;
+an older safe base remains usable with the explicit degraded classification.
 
 The managed launcher suppresses tmux's raw direct-attach error only on this
 Windows path. A completed fallback emits one terminal-capability-aware Railmux

@@ -57,6 +57,7 @@ pane-bounded drag-to-copy and is not the same as `railmux ssh HOST`.
 |---|---|
 | Python | 3.9 or newer on POSIX/WSL. The native Windows bootstrap requires 3.10+; the managed MSYS2 process currently uses 3.12+. |
 | tmux core workspace | 2.7 or newer. CI compiles the checksum-pinned official tmux 2.7 release and boots a real Railmux frame. |
+| Native Windows synchronized provider redraw | tmux 3.7 or newer is recommended for full visual fidelity. tmux 2.7-3.6 remains core-supported, but application synchronized frames are unavailable and cursor/full-history repaint movement may be visible. Railmux reports this as `degraded` rather than silently raising the cross-platform minimum. |
 | Managed shell/Vim and nested pane-local SSH history marker | tmux 3.0 or newer; older tmux fails closed with a warning. |
 | Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |
 | Native Windows full-screen renderer | Windows Terminal 1.24.10621 or newer. This is a host requirement, not a `pip` dependency. `WT_SESSION` is the conservative 0.4 capability gate; `TERM=xterm-256color` alone does not identify a terminal product or synchronized-output support. conhost, IDE terminals, and third-party native Windows terminals are best effort until separately field-validated. |

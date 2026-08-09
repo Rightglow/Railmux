@@ -170,7 +170,15 @@ opens a WSL shell and runs the ordinary POSIX product there.
   consuming them in 3.7. On tmux older than 3.7, Railmux therefore disables
   Codex animations only for the launched process to avoid rapid intermediate
   cursor positions; it does not edit Codex configuration or session files.
-  `railmux runtime status --verify --json` exposes the recorded tmux package.
+  `railmux runtime status` and `railmux doctor` classify that base as supported
+  with degraded Windows visual fidelity, while direct launch prints one
+  bounded warning. The global tmux requirement stays at 2.7. Already-running
+  Codex panes retain their original settings.
+- A published base is never upgraded in place. A pacman core transition can
+  temporarily replace DLLs needed by the updater itself, so mutating the base
+  that owns a live detached tmux server would turn a visual improvement into a
+  session-availability risk. Fresh installations use a disposable staging tree
+  and publish only after verification; an existing older base remains intact.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
   run archive download, extraction, pacman update, or package installation.

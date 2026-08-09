@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc6] - 2026-08-09
+
+### Changed
+
+- Keep tmux 2.7 as the shared Linux/macOS/Windows core requirement while
+  classifying tmux 3.7+ as the managed-Windows full-visual-fidelity path.
+  `railmux doctor` and `railmux runtime status` now report that capability in
+  structured output, and direct Windows launch warns when a supported older
+  base may still expose cursor movement or full-history redraws.
+- Preserve immutable Windows runtime and provider-session safety: rc6 never
+  runs an in-place MSYS2/tmux upgrade, kills the existing server, or rewrites
+  Codex/Claude state to obtain the newer rendering capability. Fresh managed
+  bases receive the current repository tmux; older bases remain supported and
+  new Codex panes retain the process-local reduced-motion compatibility path.
+
+### Fixed
+
+- Correct the synchronized-output implementation note to reflect that tmux
+  began consuming application DEC synchronized-output frames in 3.7, not 3.6.
+
 ## [0.4.0rc5] - 2026-08-09
 
 ### Fixed
@@ -2663,7 +2683,9 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc4...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc6...HEAD
+[0.4.0rc6]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc5...v0.4.0rc6
+[0.4.0rc5]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc4...v0.4.0rc5
 [0.4.0rc4]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc3...v0.4.0rc4
 [0.4.0rc3]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc2...v0.4.0rc3
 [0.4.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc1...v0.4.0rc2

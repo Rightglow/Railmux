@@ -72,6 +72,27 @@ def _validated_tree(monkeypatch, tmp_path: Path) -> Path:
     return executable
 
 
+def test_diagnostic_status_reports_effective_tmux_visual_fidelity(monkeypatch):
+    monkeypatch.setattr(transition, "_base_identity", lambda _runtime: CONTENT)
+    monkeypatch.setattr(transition.tmux_ctl, "tmux_version", lambda: (3, 6))
+    monkeypatch.setattr(transition.tmux_server, "discover_target", lambda **_kw: None)
+
+    status = transition.diagnostic_status({
+        "RAILMUX_MSYS2_RUNTIME_ID": RUNTIME,
+        "RAILMUX_MSYS2_APP_ID": TARGET_APP,
+    })
+
+    assert status["tmux_capability"] == {
+        "minimum_supported": "2.7",
+        "source": "effective_tmux",
+        "support": "supported",
+        "verification": "effective",
+        "version": "3.6",
+        "windows_visual_fidelity": "degraded",
+        "windows_visual_fidelity_recommended": "3.7",
+    }
+
+
 def test_upgrade_exec_requires_exact_content_bound_app(monkeypatch, tmp_path):
     executable = _validated_tree(monkeypatch, tmp_path)
     request = transition.UpgradeRequest(

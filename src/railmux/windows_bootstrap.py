@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 
 from railmux import __version__
+from railmux.diagnostic_contract import DOCTOR_SCHEMA_VERSION
 from railmux.windows_msys2 import (
     MSYS2_RELEASE,
     Msys2Runtime,
@@ -97,6 +98,37 @@ def _runtime_status(
     verification = snapshot.get("content_verification")
     if isinstance(verification, str):
         print(f"Base verification: {verification}")
+    capability = snapshot.get("tmux_capability")
+    if isinstance(capability, dict):
+        tmux_version = capability.get("version")
+        fidelity = capability.get("windows_visual_fidelity")
+        recommended = capability.get("windows_visual_fidelity_recommended")
+        capability_verification = capability.get("verification")
+        if isinstance(tmux_version, str):
+            detail = (
+                f"tmux {tmux_version} (recorded base marker; "
+                f"verification={capability_verification}); "
+                f"Windows visual fidelity={fidelity}"
+            )
+            if fidelity == "degraded" and isinstance(recommended, str):
+                detail += f" (tmux {recommended}+ recommended)"
+            print(f"Terminal rendering: {detail}")
+            if fidelity == "degraded":
+                print(
+                    "Visual note: this runtime remains supported, but cursor "
+                    "movement and full-history redraws may be more visible. "
+                    "New Codex panes use reduced motion; existing panes keep "
+                    "their current settings."
+                )
+        elif runtime is not None:
+            print(
+                "Terminal rendering: tmux unknown; "
+                "Windows visual fidelity=unknown"
+            )
+            print(
+                "Visual note: new Codex panes use conservative reduced motion "
+                "until the effective tmux version can be determined."
+            )
     return 0 if runtime is not None else 1
 
 
@@ -111,7 +143,7 @@ def _native_doctor_missing_runtime(
     if json_output:
         json.dump(
             {
-                "schema_version": 4,
+                "schema_version": DOCTOR_SCHEMA_VERSION,
                 "status": "runtime_not_installed",
                 "railmux_version": __version__,
                 "managed_windows": runtime,

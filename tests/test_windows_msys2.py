@@ -2197,9 +2197,47 @@ def test_runtime_status_verifies_exact_package_identity(tmp_path):
     )
 
     assert snapshot["status"] == "ready"
+    assert snapshot["schema"] == 2
     assert snapshot["current_app"] is True
     assert snapshot["content_identity"] == _TEST_CONTENT_ID
     assert snapshot["content_verification"] == "match"
+    assert snapshot["tmux_capability"] == {
+        "minimum_supported": "2.7",
+        "source": "recorded_base_marker",
+        "support": "supported",
+        "version": "3.7.b-1",
+        "verification": "match",
+        "windows_visual_fidelity": "full",
+        "windows_visual_fidelity_recommended": "3.7",
+    }
+
+
+def test_runtime_status_reports_supported_legacy_tmux_as_visually_degraded(
+    tmp_path,
+):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    marker_path = root / "railmux-base-content-v1.json"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["core_packages"]["tmux"] = "3.6.a-1"
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+
+    snapshot = windows_msys2.managed_runtime_status(
+        version=VERSION, environ=environ)
+
+    assert snapshot["tmux_capability"]["support"] == "supported"
+    assert snapshot["tmux_capability"]["windows_visual_fidelity"] == "degraded"
+
+
+def test_runtime_status_missing_base_has_stable_unknown_capability(tmp_path):
+    snapshot = windows_msys2.managed_runtime_status(
+        version=VERSION, environ={"LOCALAPPDATA": str(tmp_path)})
+
+    assert snapshot["schema"] == 2
+    assert snapshot["tmux_capability"]["version"] is None
+    assert snapshot["tmux_capability"]["support"] == "unknown"
 
 
 def test_runtime_status_reports_package_drift_without_mutating(tmp_path):
@@ -2219,6 +2257,10 @@ def test_runtime_status_reports_package_drift_without_mutating(tmp_path):
     )
 
     assert snapshot["content_verification"] == "drift"
+    assert snapshot["tmux_capability"]["version"] == "3.7.b-1"
+    assert snapshot["tmux_capability"]["verification"] == "drift"
+    assert snapshot["tmux_capability"]["support"] == "unknown"
+    assert snapshot["tmux_capability"]["windows_visual_fidelity"] == "unknown"
     marker = json.loads(
         (root / "railmux-base-content-v1.json").read_text(encoding="utf-8")
     )

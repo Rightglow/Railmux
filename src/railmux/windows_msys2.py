@@ -55,6 +55,7 @@ from railmux.release_version import (
     parse_project_version,
 )
 from railmux.terminal_status import STYLE_ACCENT, STYLE_MUTED, styled
+from railmux.tmux_capabilities import classify_tmux_text
 
 
 MSYS2_RELEASE = "2026-03-22"
@@ -842,9 +843,13 @@ def managed_runtime_status(
     root = managed_root(environ)
     if root is None or not root.exists():
         return {
-            "schema": 1,
+            "schema": 2,
             "runtime": MSYS2_RUNTIME_ID,
             "status": "not_installed",
+            "tmux_capability": classify_tmux_text(None).payload(
+                source="recorded_base_marker",
+                verification="unavailable",
+            ),
             "current_app": False,
             "layers": [],
         }
@@ -859,7 +864,7 @@ def managed_runtime_status(
     else:
         status = "incomplete"
     result: dict[str, object] = {
-        "schema": 1,
+        "schema": 2,
         "runtime": MSYS2_RUNTIME_ID,
         "status": status,
         "base_marker": "valid" if base_valid else "invalid",
@@ -871,6 +876,14 @@ def managed_runtime_status(
         ),
         "core_packages": (
             dict(identity.core_packages) if identity is not None else None
+        ),
+        "tmux_capability": classify_tmux_text(
+            identity.core_packages.get("tmux")
+            if identity is not None
+            else None
+        ).payload(
+            source="recorded_base_marker",
+            verification="not_requested",
         ),
         "current_app": current_app,
         "layers": sorted(layers or (), key=_version_key, reverse=True),
@@ -887,6 +900,13 @@ def managed_runtime_status(
                 if observed.content_id == identity.content_id
                 else "drift"
             )
+        capability = result["tmux_capability"]
+        if isinstance(capability, dict):
+            verification = result["content_verification"]
+            capability["verification"] = verification
+            if verification != "match":
+                capability["support"] = "unknown"
+                capability["windows_visual_fidelity"] = "unknown"
     return result
 
 

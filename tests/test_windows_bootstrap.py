@@ -130,6 +130,40 @@ def test_runtime_status_labels_user_owned_override(capsys, tmp_path):
     assert "Managed location:" not in output
 
 
+def test_runtime_status_explains_supported_degraded_tmux(capsys, tmp_path, monkeypatch):
+    runtime = Msys2Runtime(tmp_path / "managed", managed=True)
+    monkeypatch.setattr(
+        windows_bootstrap,
+        "managed_runtime_status",
+        lambda **_kwargs: {
+            "schema": 2,
+            "runtime": MSYS2_RUNTIME_ID,
+            "status": "ready",
+            "current_app": True,
+            "layers": [__version__],
+            "tmux_capability": {
+                "version": "3.6.a-1",
+                "minimum_supported": "2.7",
+                "source": "recorded_base_marker",
+                "support": "supported",
+                "verification": "not_requested",
+                "windows_visual_fidelity": "degraded",
+                "windows_visual_fidelity_recommended": "3.7",
+            },
+        },
+    )
+
+    assert windows_bootstrap._runtime_status(
+        runtime, environ={"LOCALAPPDATA": str(tmp_path)}
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "tmux 3.6.a-1 (recorded base marker" in output
+    assert "Windows visual fidelity=degraded" in output
+    assert "tmux 3.7+ recommended" in output
+    assert "existing panes keep their current settings" in output
+
+
 def test_runtime_install_accepts_verbose_and_yes_in_either_order(
     tmp_path, monkeypatch
 ):
@@ -280,9 +314,9 @@ def test_missing_runtime_doctor_json_keeps_doctor_schema(capsys):
     ) == 2
 
     snapshot = json.loads(capsys.readouterr().out)
-    assert snapshot["schema_version"] == 4
+    assert snapshot["schema_version"] == 5
     assert snapshot["status"] == "runtime_not_installed"
-    assert snapshot["managed_windows"]["schema"] == 1
+    assert snapshot["managed_windows"]["schema"] == 2
     assert "schema" not in snapshot
 
 
