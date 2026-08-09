@@ -723,10 +723,13 @@ If Railmux is missing remotely, the client can install the matching version
 into the remote user environment. It never uses `sudo`; when user-site installs
 are blocked, it can offer an isolated private environment. Compatible package
 versions may connect directly, while an incompatible or newer remote version
-produces a guided update prompt.
+produces a guided update prompt. The normal compatibility check waits at most
+60 seconds; after explicit install consent, package download plus handshake may
+use up to 300 seconds and reports timeout separately from an installer exit.
 
-The default remote workspace starts automatically when absent. Use `Ctrl-B d`
-to detach normally or `Ctrl-]` for an emergency local disconnect.
+The default remote workspace starts automatically when absent. During an
+established display, `Ctrl-C` is input for the remote agent. Use `Ctrl-B d` to
+detach normally or `Ctrl-]` for an emergency local disconnect.
 
 #### Reconnect and startup
 
@@ -748,7 +751,10 @@ non-interactive and asks you to rerun the command when authentication changes.
 Mouse-wheel and `Page Up` / `Page Down` browsing use a responsive local cache
 in agent panes. Each pane keeps its own position; scroll to the bottom, press
 `Esc`, or type to return that pane to live output. The default cap is 10000
-lines and the supported range is 2000-20000:
+lines and the supported range is 2000-20000. POSIX/macOS clients move one row
+per decoded terminal wheel event; native Windows clients use the same common
+three-row step as local tmux/provider scrolling. Precision touchpads retain
+every event while adjacent paints are coalesced:
 
 ```bash
 railmux ssh --history-lines 10000 your-server

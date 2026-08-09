@@ -139,6 +139,47 @@ def test_local_history_wheel_events_remain_one_row_during_a_burst():
     assert view.viewports["%8"].offset == 9
 
 
+def test_windows_history_wheel_distance_matches_native_three_row_step():
+    view = LocalHistoryView(wheel_lines=3)
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
+    prefetch_id, _limit = decode_history_prefetch(prefetch.data)
+    view.accept_prefetch(
+        HistoryBatch(
+            prefetch_id,
+            (
+                HistorySnapshot(
+                    prefetch_id,
+                    "%8",
+                    30,
+                    0,
+                    30,
+                    3,
+                    tuple(f"line-{index}".encode() for index in range(40)),
+                ),
+            ),
+        )
+    )
+
+    view.wheel(SgrMouseEvent(b"up", 64, 40, 2, True), now=1.0)
+
+    assert view.viewports["%8"].offset == 3
+
+
+def test_posix_history_wheel_distance_remains_one_row():
+    assert LocalHistoryView().wheel_lines == 1
+
+
+@pytest.mark.parametrize(("windows", "expected"), ((False, 1), (True, 3)))
+def test_client_selects_platform_history_wheel_distance(
+    monkeypatch, windows, expected
+):
+    monkeypatch.setattr(
+        fast_display_client, "running_in_windows_wrapper", lambda: windows
+    )
+
+    assert fast_display_client._local_history_wheel_lines() == expected
+
+
 def test_local_history_page_keys_move_one_visible_page_and_restore():
     view = LocalHistoryView()
     prefetch = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]

@@ -43,7 +43,10 @@ from railmux.help_workspace import (
     is_help_workspace,
     materialize_help_workspace,
 )
-from railmux.provider_paths import running_in_windows_wrapper
+from railmux.provider_paths import (
+    running_in_managed_windows_wrapper,
+    running_in_windows_wrapper,
+)
 from railmux.settings import LayoutProfile, Settings
 from railmux.tool_panes import ToolPaneManager, manager_for_session
 from railmux.launcher import (
@@ -167,6 +170,14 @@ def _screen_class_for_platform():
     if running_in_windows_wrapper():
         return _SynchronizedOutputScreen
     return urwid.raw_display.Screen
+
+
+def _reduce_codex_motion_for_terminal() -> bool:
+    """Avoid exposing Codex's animated partial frames through tmux before 3.7."""
+    return (
+        running_in_managed_windows_wrapper()
+        and tmux_ctl.tmux_version() < (3, 7)
+    )
 
 
 def _tmux_batch_argv(commands: list[list[str]]) -> list[str]:
@@ -5268,6 +5279,7 @@ class App:
                 session_id=session_meta.session_id,
                 cwd=cwd,
                 yolo=self._codex_yolo_enabled(),
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5337,6 +5349,7 @@ class App:
                 codex_binary=self._config.codex_binary,
                 cwd=proj.real_path,
                 yolo=self._codex_yolo_enabled(),
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5377,6 +5390,7 @@ class App:
                 codex_binary=self._config.codex_binary,
                 cwd=path,
                 yolo=self._codex_yolo_enabled(),
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5531,7 +5545,12 @@ class App:
         """Build a provider command with conservative support-only defaults."""
         binary = self._configured_mode_binary(mode)
         if mode.project_source == ProjectSource.CODEX:
-            command = build_codex_new_command(binary, workspace, yolo=False)
+            command = build_codex_new_command(
+                binary,
+                workspace,
+                yolo=False,
+                reduce_motion=_reduce_codex_motion_for_terminal(),
+            )
             # Keep the dedicated help workspace out of Codex's normal history,
             # and never inherit Railmux's optional YOLO choice.
             command[1:1] = [

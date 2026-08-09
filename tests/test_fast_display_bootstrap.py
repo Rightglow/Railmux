@@ -217,6 +217,48 @@ def test_private_remote_install_creates_managed_venv_without_sudo():
     assert "sudo" not in command
 
 
+@pytest.mark.parametrize(
+    ("installer", "builder_name", "status_fragment"),
+    (
+        (
+            fast_display_client._install_remote_and_start,
+            "build_ssh_install_argv",
+            "remote user environment",
+        ),
+        (
+            fast_display_client._install_remote_private_venv_and_start,
+            "build_ssh_private_venv_install_argv",
+            "isolated remote environment",
+        ),
+    ),
+)
+def test_remote_install_waits_300_seconds_and_reports_the_bounded_stage(
+    monkeypatch, capsys, installer, builder_name, status_fragment
+):
+    process = _PreflightProcess()
+    monkeypatch.setattr(
+        fast_display_client, builder_name, lambda *_args, **_kwargs: ["ssh"]
+    )
+    monkeypatch.setattr(fast_display_client, "_spawn_remote", lambda _argv: process)
+    awaited = MagicMock(return_value=RemoteStartup(RemoteStartKind.TIMEOUT))
+    monkeypatch.setattr(fast_display_client, "await_remote_startup", awaited)
+
+    selected, startup = installer(
+        parse_client_args(["server"]),
+        os.terminal_size((120, 40)),
+        "1.2.3",
+    )
+
+    assert selected is process
+    assert startup.kind is RemoteStartKind.TIMEOUT
+    awaited.assert_called_once_with(
+        process, timeout=fast_display_client._REMOTE_INSTALL_TIMEOUT
+    )
+    stderr = capsys.readouterr().err
+    assert status_fragment in stderr
+    assert "up to 300 seconds" in stderr
+
+
 def test_remote_install_help_is_exact_and_has_source_fallback():
     help_text = remote_install_help("server", "1.2.3")
 
@@ -1968,5 +2010,40 @@ def test_failed_user_site_install_can_fall_back_to_private_venv(
 
     assert selected is installed
     assert failed.poll() == 1
-    assert "Remote user-site installation failed or timed out" in questions[1]
+    expected = (
+        "Remote user-site installation timed out after 300 seconds"
+        if install_kind is RemoteStartKind.TIMEOUT
+        else "Remote user-site installation failed with exit code 1"
+    )
+    assert expected in questions[1]
     assert installed.stdin.getvalue() == REMOTE_START
+
+
+@pytest.mark.parametrize(
+    ("startup", "expected"),
+    (
+        (
+            RemoteStartup(RemoteStartKind.TIMEOUT),
+            "timed out after 300 seconds before the Railmux compatibility handshake",
+        ),
+        (
+            RemoteStartup(RemoteStartKind.FAILED, returncode=23),
+            "failed with exit code 23",
+        ),
+        (
+            RemoteStartup(RemoteStartKind.MISSING, returncode=127),
+            "completed, but Railmux was not discoverable afterward",
+        ),
+        (
+            RemoteStartup(
+                RemoteStartKind.HELLO,
+                RemoteHello("0.0.0", 1, False),
+            ),
+            "completed, but did not provide a compatible Railmux",
+        ),
+    ),
+)
+def test_remote_install_failure_keeps_outcomes_distinct(startup, expected):
+    assert expected in fast_display_client._remote_install_failure(
+        startup, environment="user-site"
+    )

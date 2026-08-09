@@ -642,6 +642,44 @@ def test_runtime_probe_retries_one_transient_cold_start_failure(tmp_path):
     assert probe.call_count == 2
 
 
+def test_transient_discovery_failure_reuses_exact_app_without_reinstalling(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    runtime = make_runtime(root, managed=True, shared=True)
+    attempts = 0
+
+    def probe(argv, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            return completed(argv, returncode=1)
+        return completed(argv, stdout=f"railmux {VERSION}\n".encode())
+
+    @contextmanager
+    def unlocked(_base):
+        yield
+
+    selected = install_managed_runtime(
+        version=VERSION,
+        environ=environ,
+        runner=lambda *_args, **_kwargs: pytest.fail(
+            "an exact app layer must not be installed again"
+        ),
+        probe=probe,
+        lock_factory=unlocked,
+        mirror_optimizer=lambda _root: pytest.fail("pacman must not run"),
+    )
+
+    assert selected == runtime
+    log = next(
+        (Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log")
+    ).read_text(encoding="utf-8-sig")
+    assert "[2/3] Preparing Railmux" in log
+    assert "exact Railmux app layer is already ready" in log
+    assert "no files were installed or replaced" in log
+
+
 def test_preview_versions_share_one_base_but_use_separate_app_layers(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
 

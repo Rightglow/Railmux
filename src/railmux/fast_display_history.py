@@ -121,10 +121,15 @@ class LocalHistoryView:
     def __init__(
         self,
         history_limit: int = SSH_HISTORY_DEFAULT_LINES,
+        *,
+        wheel_lines: int = _HISTORY_SCROLL_BASE_LINES,
     ) -> None:
         if not SSH_HISTORY_MIN_LINES <= history_limit <= SSH_HISTORY_MAX_LINES:
             raise ValueError("invalid local history limit")
+        if not 1 <= wheel_lines <= 100:
+            raise ValueError("invalid local history wheel distance")
         self.history_limit = history_limit
+        self.wheel_lines = wheel_lines
         self.viewports: dict[str, _HistoryViewport] = {}
         self._deep_pending: dict[int, _PendingHistory] = {}
         self.prefetch_pending_id: int | None = None
@@ -726,7 +731,7 @@ class LocalHistoryView:
             route,
             event,
             direction,
-            _HISTORY_SCROLL_BASE_LINES,
+            self.wheel_lines,
             now=now,
         )
 

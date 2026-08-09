@@ -38,6 +38,12 @@ it is not the size of the Railmux Python code. This is a one-base cost rather
 than a cost repeated for every Railmux app layer. A measured dev8 runtime used
 561 MiB and its reusable verified base/package caches used about 119 MiB. The
 private pacman configuration enables only `msys`, not mingw/clang SDK repos.
+An app layer is the much smaller version-isolated Railmux virtual environment:
+the Railmux package plus its Python dependencies and marker. A native launch
+whose exact app marker and executable probe already pass enters that layer
+directly; it does not invoke the installer again. A newly installed Railmux
+version creates one new app layer so an older running UI can transition or
+roll back without mutating its files.
 
 Codex and Claude Code remain the user's Windows-native executables. The child
 `HOME` is explicitly mapped to `%USERPROFILE%`, the inherited Windows `PATH` is
@@ -158,6 +164,13 @@ opens a WSL shell and runs the ordinary POSIX product there.
   never falls back to reinstalling the base, and never opens or modifies
   Codex/Claude histories. The pip cache is disposable and may be deleted while
   no Railmux installation is running.
+- Because MSYS2 repositories roll forward, an older otherwise valid private
+  base can record tmux 3.6a while a newly prepared base records tmux 3.7b.
+  Codex emits synchronized application frames, but tmux gained support for
+  consuming them in 3.7. On tmux older than 3.7, Railmux therefore disables
+  Codex animations only for the launched process to avoid rapid intermediate
+  cursor positions; it does not edit Codex configuration or session files.
+  `railmux runtime status --verify --json` exposes the recorded tmux package.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
   run archive download, extraction, pacman update, or package installation.

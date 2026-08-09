@@ -921,6 +921,45 @@ def test_ctrl_right_bracket_is_consumed_locally_with_trailing_data():
     assert split_local_escape(b"ordinary") == (b"ordinary", False)
 
 
+def test_active_windows_ctrl_c_signal_becomes_bounded_remote_input(monkeypatch):
+    installed = []
+    restored = []
+    previous = object()
+    monkeypatch.setattr(
+        fast_display_client.signal,
+        "getsignal",
+        lambda _sig: previous,
+    )
+
+    def set_handler(_sig, handler):
+        if handler is previous:
+            restored.append(handler)
+        else:
+            installed.append(handler)
+
+    monkeypatch.setattr(fast_display_client.signal, "signal", set_handler)
+
+    with fast_display_client._ActiveWindowsInterruptForwarder(True) as forwarder:
+        assert installed
+        for _index in range(20):
+            installed[0](fast_display_client.signal.SIGINT, None)
+        assert forwarder.consume() == 16
+        assert forwarder.consume() == 0
+
+    assert restored == [previous]
+
+
+def test_non_windows_active_interrupt_forwarder_never_changes_signal(monkeypatch):
+    monkeypatch.setattr(
+        fast_display_client.signal,
+        "signal",
+        lambda *_args: pytest.fail("signal handler must remain unchanged"),
+    )
+
+    with fast_display_client._ActiveWindowsInterruptForwarder(False) as forwarder:
+        assert forwarder.consume() == 0
+
+
 def test_initial_terminal_size_waits_for_soft_keyboard_to_close(
     monkeypatch,
     capsys,

@@ -16,6 +16,7 @@ import re
 import select
 import selectors
 import shutil
+import signal
 import subprocess
 import sys
 import termios
@@ -78,6 +79,7 @@ from railmux.fast_display_protocol import (
     encode_resize,
 )
 from railmux.pane_surface import render_startup_surface
+from railmux.provider_paths import running_in_windows_wrapper
 from railmux.ssh_compat import CompatibilityFacts, decide as decide_compatibility
 from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
 from railmux.ssh_display_diagnostics import SshDisplayRecorder, SshDisplayStats
@@ -113,11 +115,13 @@ _HISTORY_PREFETCH_INTERVAL = 3.0
 _LOCAL_HISTORY_PAINT_INTERVAL = 1.0 / 60.0
 _CLAUDE_HISTORY_SAVE_TIMEOUT = 5.0
 _HISTORY_INFO_SECONDS = 2.0
+_WINDOWS_HISTORY_WHEEL_LINES = 3
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
 _CLICK_FLASH_SECONDS = 0.18
 _PATH_OPEN_TIMEOUT = 5.0
 _TERMUX_TOUCH_HINT = "Tap the prompt again to open the keyboard"
 _REMOTE_ATTACH_TIMEOUT = 30.0
+_REMOTE_INSTALL_TIMEOUT = 300.0
 _FIRST_FRAME_TIMEOUT = 30.0
 _REMOTE_ATTACH_RETRY_DELAY = 0.2
 _HEARTBEAT_INTERVAL = 5.0
@@ -134,6 +138,10 @@ _KNOWN_REMOTE_EXITS = {
     int(RemoteExit.SOFT_QUIT): "soft-quit; agent sessions were left running",
     int(RemoteExit.HARD_QUIT): "hard-quit; the managed Railmux session ended",
 }
+
+
+def _local_history_wheel_lines() -> int:
+    return _WINDOWS_HISTORY_WHEEL_LINES if running_in_windows_wrapper() else 1
 
 
 @dataclass(frozen=True)
@@ -494,6 +502,39 @@ class RawTerminal:
         if self.saved is not None:
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
             self.saved = None
+
+
+class _ActiveWindowsInterruptForwarder:
+    """Turn native Windows Ctrl-C signals into active remote input bytes."""
+
+    def __init__(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self._pending = 0
+        self._previous: object | None = None
+
+    def __enter__(self) -> "_ActiveWindowsInterruptForwarder":
+        if not self.enabled:
+            return self
+        try:
+            self._previous = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, self._capture)
+        except (OSError, RuntimeError, ValueError):
+            self.enabled = False
+            self._previous = None
+        return self
+
+    def _capture(self, _signum: int, _frame: object) -> None:
+        self._pending = min(16, self._pending + 1)
+
+    def consume(self) -> int:
+        pending = self._pending
+        self._pending = 0
+        return pending
+
+    def __exit__(self, *_exc: object) -> None:
+        if self.enabled and self._previous is not None:
+            signal.signal(signal.SIGINT, self._previous)
+        self._previous = None
 
 
 class TerminalSurface:
@@ -1553,6 +1594,12 @@ def _install_remote_and_start(
     current_size: os.terminal_size,
     version: str,
 ) -> tuple[subprocess.Popen, RemoteStartup]:
+    print(
+        f"Installing Railmux {version} in the remote user environment "
+        f"(up to {int(_REMOTE_INSTALL_TIMEOUT)} seconds for installation and "
+        "the compatibility handshake)...",
+        file=sys.stderr,
+    )
     install_argv = build_ssh_install_argv(
         args.destination,
         version=version,
@@ -1563,7 +1610,7 @@ def _install_remote_and_start(
         ssh_args=args.ssh_arg,
     )
     process = _spawn_remote(install_argv)
-    startup = await_remote_startup(process)
+    startup = await_remote_startup(process, timeout=_REMOTE_INSTALL_TIMEOUT)
     return process, startup
 
 
@@ -1572,6 +1619,12 @@ def _install_remote_private_venv_and_start(
     current_size: os.terminal_size,
     version: str,
 ) -> tuple[subprocess.Popen, RemoteStartup]:
+    print(
+        f"Installing Railmux {version} in the isolated remote environment "
+        f"~/{_REMOTE_VENV} (up to {int(_REMOTE_INSTALL_TIMEOUT)} seconds for "
+        "installation and the compatibility handshake)...",
+        file=sys.stderr,
+    )
     install_argv = build_ssh_private_venv_install_argv(
         args.destination,
         version=version,
@@ -1582,7 +1635,7 @@ def _install_remote_private_venv_and_start(
         ssh_args=args.ssh_arg,
     )
     process = _spawn_remote(install_argv)
-    startup = await_remote_startup(process)
+    startup = await_remote_startup(process, timeout=_REMOTE_INSTALL_TIMEOUT)
     return process, startup
 
 
@@ -1604,16 +1657,43 @@ def _confirm_remote_install(
 def _confirm_remote_private_venv_install(
     args: argparse.Namespace,
     version: str,
+    failure: str,
     *,
     before_interaction: Callable[[], None] | None = None,
 ) -> bool:
     if before_interaction is not None:
         before_interaction()
     return _confirm(
-        "Remote user-site installation failed or timed out. Create the isolated "
+        f"{failure} Create the isolated "
         f"~/{_REMOTE_VENV} environment and install Railmux {version} there? "
         "This does not use sudo or modify the system Python."
     )
+
+
+def _remote_install_failure(startup: RemoteStartup, *, environment: str) -> str:
+    """Describe an install/start failure without conflating exit and timeout."""
+    if startup.kind is RemoteStartKind.TIMEOUT:
+        return (
+            f"Remote {environment} installation timed out after "
+            f"{int(_REMOTE_INSTALL_TIMEOUT)} seconds before the Railmux "
+            "compatibility handshake completed."
+        )
+    if startup.kind is RemoteStartKind.MISSING:
+        return (
+            f"Remote {environment} installation completed, but Railmux was "
+            "not discoverable afterward."
+        )
+    if startup.kind is RemoteStartKind.HELLO:
+        return (
+            f"Remote {environment} installation completed, but did not provide "
+            "a compatible Railmux."
+        )
+    if startup.returncode is not None:
+        return (
+            f"Remote {environment} installation failed with exit code "
+            f"{startup.returncode}."
+        )
+    return f"Remote {environment} installation failed before the handshake."
 
 
 def _send_start(process: subprocess.Popen) -> None:
@@ -2054,6 +2134,7 @@ def prepare_remote_process(
         raise ProbeError(remote_install_help(args.destination, install_version))
     _stop_unstarted_remote(process)
     process, startup = _install_remote_and_start(args, current_size, install_version)
+    install_environment = "user-site"
     if (
         startup.kind is RemoteStartKind.HELLO
         and startup.hello is not None
@@ -2078,18 +2159,23 @@ def prepare_remote_process(
         RemoteStartKind.TIMEOUT,
     ):
         _stop_unstarted_remote(process)
+        user_install_failure = _remote_install_failure(
+            startup, environment="user-site"
+        )
         if not _confirm_remote_private_venv_install(
             args,
             install_version,
+            user_install_failure,
             before_interaction=before_interaction,
         ):
             raise ProbeError(
-                "remote user-site installation failed or timed out.\n"
+                f"{user_install_failure}\n"
                 f"{remote_install_help(args.destination, install_version)}"
             )
         process, startup = _install_remote_private_venv_and_start(
             args, current_size, install_version
         )
+        install_environment = "private-environment"
         if (
             startup.kind is RemoteStartKind.HELLO
             and startup.hello is not None
@@ -2117,9 +2203,12 @@ def prepare_remote_process(
         or not startup.hello.tmux
     ):
         _stop_unstarted_remote(process)
+        install_failure = _remote_install_failure(
+            startup, environment=install_environment
+        )
         raise ProbeError(
-            "automatic remote installation did not produce a compatible "
-            f"Railmux.\n{remote_install_help(args.destination, install_version)}"
+            f"{install_failure}\n"
+            f"{remote_install_help(args.destination, install_version)}"
         )
     return _finish_remote_attach(
         args,
@@ -2290,7 +2379,10 @@ def run(args: argparse.Namespace) -> int:
     decoder = ServerMessageDecoder()
     model = ScreenModel()
     terminal_input = TerminalInputDecoder()
-    history = LocalHistoryView(history_limit)
+    history = LocalHistoryView(
+        history_limit,
+        wheel_lines=_local_history_wheel_lines(),
+    )
     history_paint = _DeferredHistoryPaint()
     selection = LocalTextSelection()
     touch_keyboard = TermuxTouchKeyboard(
@@ -2863,8 +2955,22 @@ def run(args: argparse.Namespace) -> int:
     )
     history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
     try:
-        with RawTerminal(sys.stdin.fileno()):
+        with RawTerminal(sys.stdin.fileno()), _ActiveWindowsInterruptForwarder(
+            running_in_windows_wrapper()
+        ) as windows_interrupts:
             while True:
+                pending_interrupts = windows_interrupts.consume()
+                if pending_interrupts:
+                    input_batch = _LocalInputBatch(history_paint)
+                    for _index in range(pending_interrupts):
+                        handle_terminal_part(b"\x03", input_batch)
+                    input_batch.flush(
+                        surface,
+                        latest_screen,
+                        history.overlays(),
+                        selection.segments(),
+                        now=time.monotonic(),
+                    )
                 observed_size = os.get_terminal_size(sys.stdout.fileno())
                 if observed_size != local_size:
                     history_paint.discard()

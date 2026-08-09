@@ -2797,6 +2797,11 @@ def _install_application(
             if probe_runtime(
                 candidate, version=version, environ=environ, probe=probe
             ):
+                reporter.note(
+                    "The exact Railmux app layer is already ready; no files "
+                    "were installed or replaced.",
+                    level="muted",
+                )
                 return candidate
             raise RuntimeInstallError(
                 "the published Railmux app has an exact marker but did not "
@@ -3066,7 +3071,7 @@ def install_managed_runtime(
                         level="muted",
                     )
 
-                    reporter.phase(2, 3, f"Installing Railmux {version} app layer")
+                    reporter.phase(2, 3, f"Preparing Railmux {version} app layer")
                     _install_application(
                         shared_root,
                         version=version,

@@ -150,6 +150,17 @@ terminal option is changed; conhost and unvalidated third-party Windows hosts
 remain best effort, while POSIX and terminals without the marker retain their
 existing client behavior.
 
+Codex independently brackets its own TUI paints in application-side
+synchronized output, but tmux learned to consume application frames only in
+3.7. A managed base whose recorded package inventory contains an older tmux
+therefore cannot make a complete provider frame atomic even when the outer
+Windows Terminal client advertises `sync`. Railmux detects that bounded
+compatibility case at provider launch and supplies the process-local Codex
+override `tui.animations=false`; it never edits the user's Codex config or
+history. tmux 3.7+ keeps the user's normal Codex motion setting. The base's
+exact tmux package remains visible in `railmux runtime status --json`, so this
+gap is diagnosable rather than inferred from visual reports.
+
 The managed launcher suppresses tmux's raw direct-attach error only on this
 Windows path. A completed fallback emits one terminal-capability-aware Railmux
 info line; a bridge that cannot start or later fails emits an actionable
@@ -295,7 +306,9 @@ style generations. Additional wheel-up ticks received during an initial
 bounded request accumulate into its eventual offset. An existing frozen
 viewport retains its immutable snapshot while that mutable cache changes.
 Once routing identifies an agent-history gesture, every wheel tick contributes
-to the viewport distance. The client paints only the final viewport on a
+to the viewport distance. POSIX/macOS clients use one row per tick; the managed
+Windows client uses the common native three-row wheel step. The client paints
+only the final viewport on a
 non-sliding 60 Hz deadline shared by adjacent local stdin reads, so a terminal
 that delivers one SGR packet per read cannot build a synchronous repaint
 backlog. The first tick fixes the deadline: continuing input cannot postpone
@@ -437,7 +450,11 @@ commands but must never run `sudo`, edit shell startup files, or install tmux.
 When a remote Python rejects user-site installation, a second explicit consent
 may create the fixed `~/.local/share/railmux/ssh-venv` and install there. The
 bootstrap probes that path without PATH changes; failed setup never deletes or
-replaces an existing environment.
+replaces an existing environment. An ordinary compatibility hello is bounded
+at 60 seconds. Once the user explicitly approves a package installation, pip
+download plus the resulting hello receive one 300-second bound and a visible
+stage message; timeout, nonzero exit, and a missing post-install command remain
+separate recovery reasons.
 The local upgrade uses its current Python environment and re-execs the original
 `railmux ssh` invocation only after pip succeeds and a fresh process using that
 same interpreter imports the requested exact version. Failure or an import
@@ -509,6 +526,11 @@ explicit user override. Railmux's protocol-critical `-T` (or remote config's
 cooked transport. Reconnect similarly keeps its safety-critical `BatchMode=yes`
 before user options while placing its bounded `ConnectTimeout` afterward, which
 prevents prompting in raw mode without overriding an explicit user timeout.
+While a display is established, Windows may deliver a console `Ctrl-C` signal
+despite the MSYS raw terminal. The local client captures it only inside that
+active-display boundary and forwards byte `0x03` through the ordinary input
+protocol. Setup and reconnect continue to treat `Ctrl-C` as a local cancel,
+and `Ctrl-]` remains the explicit emergency disconnect.
 Only frames painted by the current helper qualify another automatic retry. The
 last valid frame and bounded history cache may remain
 painted with a local reconnect status, but their cursor and pointer geometry

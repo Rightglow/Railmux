@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc5] - 2026-08-09
+
+### Fixed
+
+- Forward a native Windows console `Ctrl-C` received during an established
+  `railmux ssh` display as byte `0x03` to the remote tmux/agent instead of
+  terminating the local client. Pre-attach installation, handshake, reconnect,
+  and `Ctrl-]` retain their local cancellation boundaries.
+- Give an explicitly approved remote pip installation up to 300 seconds,
+  report that bound before work begins, and distinguish timeout, process exit,
+  and a still-undiscoverable package in the recovery prompt and final error.
+  The ordinary compatibility handshake remains bounded at 60 seconds.
+- Describe same-version Windows app-layer validation as preparation/reuse and
+  state when no files were installed or replaced. A transient first probe can
+  no longer make safe reuse look like a repeated application installation.
+- Reduce Codex motion only on managed Windows bases whose tmux predates 3.7.
+  Those tmux builds cannot consume Codex's application-side synchronized
+  frames, so animated Working/status paints could expose the hardware cursor
+  at intermediate text cells even after the rc4 sidebar-frame fix. The
+  compatibility override is process-local, does not edit Codex configuration
+  or histories, and leaves POSIX, Claude, and tmux 3.7+ unchanged.
+- Match the native Windows three-row wheel step in the Windows `railmux ssh`
+  history cache while preserving every decoded event and the non-sliding 60 Hz
+  paint coalescing. POSIX/macOS clients remain one row per event.
+
 ## [0.4.0rc4] - 2026-08-09
 
 ### Fixed
