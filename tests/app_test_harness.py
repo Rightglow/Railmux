@@ -1,5 +1,7 @@
 """Explicit legal baseline for focused white-box App tests."""
 
+from __future__ import annotations
+
 from pathlib import Path
 from unittest.mock import MagicMock
 
