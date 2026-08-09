@@ -702,8 +702,9 @@ def main(argv: list[str] | None = None) -> int:
                         "'railmux' again to finish it.",
                         file=sys.stderr,
                     )
-        # Windows Terminal 1.23+ implements DEC synchronized output, but TERM
-        # remains the generic xterm-256color and tmux cannot infer that fact.
+        # Supported Windows Terminal 1.24+ builds implement DEC synchronized
+        # output, but TERM remains the generic xterm-256color and tmux cannot
+        # infer that fact.
         # Without ``sync``, Codex's active-turn redraw exposes intermediate
         # hardware-cursor coordinates. Unknown private modes are ignored by
         # older Windows Terminal builds, while non-WT/conhost entry remains

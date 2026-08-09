@@ -61,6 +61,12 @@ Windows-native Claude Code or Codex; Railmux manages its own private
 MSYS2/tmux/Python runtime. The two agent CLIs are independent, so either one is
 enough to start.
 
+The supported native-Windows full-screen renderer is Windows Terminal
+1.24.10621 or newer. It is a terminal-host requirement, not a package that
+`pip` installs. Other ConPTY/xterm-compatible Windows terminals may work, but
+their mouse, IME, clipboard, and synchronized-redraw behavior is best effort;
+see the [support matrix](https://github.com/Rightglow/Railmux/blob/main/docs/SUPPORT_MATRIX.md).
+
 ```bash
 pip install railmux
 # or: pip3 install railmux

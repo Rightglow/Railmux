@@ -549,6 +549,36 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
     assert "opaque-terminal-identity" not in run_client.call_args.args[0]
 
 
+def test_managed_windows_without_wt_marker_keeps_ordinary_client_features(
+    monkeypatch,
+):
+    target = TmuxServerTarget("/tmp/tmux-private/railmux", 789)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.discover_target", lambda: target)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.is_current_server", lambda _target: False)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.target_session_id", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    client_env = {"RAILMUX_WINDOWS_RUNTIME": "msys2"}
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.exec_environment", lambda: client_env)
+    monkeypatch.setattr(
+        "railmux.cli.tmux_server.ensure_detached_launcher_session",
+        MagicMock(return_value="$9"),
+    )
+    run_client = MagicMock(return_value=0)
+    monkeypatch.setattr(
+        "railmux.cli._run_tmux_client_with_watchdog", run_client)
+
+    assert main([]) == 0
+
+    assert "-T" not in run_client.call_args.args[0]
+
+
 def test_posix_missing_outer_session_keeps_ordinary_new_session_path(
     monkeypatch,
 ):

@@ -126,6 +126,47 @@ _STATUS_RED = "#ff5f5f"
 _TERMINAL_COLORS = 2**24
 _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
 _SESSION_LEASE_PROBE_TTL_S = 2.0
+_SYNC_OUTPUT_BEGIN = "\x1b[?2026h"
+_SYNC_OUTPUT_END = "\x1b[?2026l"
+
+
+class _SynchronizedOutputScreen(urwid.raw_display.Screen):
+    """Commit one Urwid paint as one tmux synchronized update.
+
+    The managed Windows UI and the agent occupy different tmux panes.  Urwid's
+    ordinary incremental painter writes a frame as many cursor-addressed row
+    changes; while the agent pane owns focus, tmux restores that pane's cursor
+    between those changes.  Windows Terminal can make those intermediate
+    coordinates visible during a streaming Codex turn.
+
+    tmux 3.6+ understands DEC mode 2026 from an application.  Holding the mode
+    around one complete Urwid draw makes tmux publish the inactive sidebar as
+    one frame.  The matching tmux *client* capability remains per-terminal and
+    is selected by the launcher; this class changes neither provider output
+    nor session/lease polling.
+    """
+
+    def draw_screen(self, size, canvas) -> None:
+        # Match RawScreen's identity fast path without emitting an otherwise
+        # empty synchronized update on every periodic application tick.
+        if self.screen_buf and canvas is self._screen_buf_canvas:
+            return
+        self.write(_SYNC_OUTPUT_BEGIN)
+        try:
+            super().draw_screen(size, canvas)
+        finally:
+            # Always release tmux's application-side hold if rendering raises;
+            # tmux also has its own bounded timeout, but normal failures should
+            # never leave the next frame waiting for it.
+            self.write(_SYNC_OUTPUT_END)
+            self.flush()
+
+
+def _screen_class_for_platform():
+    """Keep POSIX rendering byte-for-byte unchanged."""
+    if running_in_windows_wrapper():
+        return _SynchronizedOutputScreen
+    return urwid.raw_display.Screen
 
 
 def _tmux_batch_argv(commands: list[list[str]]) -> list[str]:
@@ -11731,7 +11772,7 @@ class App:
             # bracketed_paste_mode: the terminal frames pastes in begin/end markers
             # so _filter_input can drop them — sidebar keys are destructive commands,
             # not text input.
-            screen = urwid.raw_display.Screen(
+            screen = _screen_class_for_platform()(
                 focus_reporting=True, bracketed_paste_mode=True
             )
             self._loop = urwid.MainLoop(

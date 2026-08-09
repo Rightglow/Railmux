@@ -49,8 +49,9 @@ def test_terminal_capability_rejects_control_and_oversized_values():
         "x" * 33, "fallback", 32) == "fallback"
 
 
+@pytest.mark.parametrize("with_wt_marker", [True, False])
 def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
-    monkeypatch, tmp_path,
+    monkeypatch, tmp_path, with_wt_marker,
 ):
     runtime_root = tmp_path.parent / f"rx-{os.getpid()}"
     runtime_root.mkdir(mode=0o700)
@@ -100,15 +101,17 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
     target = TmuxServerTarget("/tmp/private/railmux", 77)
 
     try:
+        environ = {
+            "RAILMUX_WINDOWS_RUNTIME": "msys2",
+            "RAILMUX_TMUX_LABEL": "railmux-test",
+            "TERM": "xterm-256color",
+        }
+        if with_wt_marker:
+            environ["WT_SESSION"] = "opaque-and-never-forwarded"
         client = windows_attach_relay.start_relay_client(
             target=target,
             session_id="$5",
-            environ={
-                "RAILMUX_WINDOWS_RUNTIME": "msys2",
-                "RAILMUX_TMUX_LABEL": "railmux-test",
-                "TERM": "xterm-256color",
-                "WT_SESSION": "opaque-and-never-forwarded",
-            },
+            environ=environ,
             stdin_fd=read_fd,
             stdout_fd=write_fd,
         )
@@ -124,7 +127,7 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
         helper = shlex.split(observed["argv"][-1])
         assert helper[helper.index("--socket-path") + 1] == target.socket_path
         assert os.path.isabs(helper[helper.index("--tmux-path") + 1])
-        assert "--synchronized-output" in helper
+        assert ("--synchronized-output" in helper) is with_wt_marker
         assert "opaque-and-never-forwarded" not in helper
         assert observed["kwargs"]["env"]["RAILMUX_TMUX_LABEL"] == (
             "railmux-test"

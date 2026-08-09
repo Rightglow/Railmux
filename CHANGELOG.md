@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc4] - 2026-08-09
+
+### Fixed
+
+- Commit each managed-Windows Urwid sidebar paint as one tmux synchronized
+  application update. Streaming Codex output no longer exposes the cursor
+  restores between independently redrawn sidebar rows in supported Windows
+  Terminal builds; provider output, session/lease polling, and POSIX rendering
+  remain unchanged.
+
+### Changed
+
+- Document Windows Terminal 1.24.10621+ as the supported native-Windows
+  full-screen renderer. It is a terminal-host capability floor rather than a
+  `pip` dependency; other native Windows terminal hosts remain best effort.
+
 ## [0.4.0rc3] - 2026-08-07
 
 ### Fixed
@@ -2622,7 +2638,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc3...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc4...HEAD
+[0.4.0rc4]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc3...v0.4.0rc4
 [0.4.0rc3]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc2...v0.4.0rc3
 [0.4.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc1...v0.4.0rc2
 [0.4.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.0.dev36...v0.4.0rc1

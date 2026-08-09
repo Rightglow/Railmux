@@ -109,16 +109,21 @@ probe and their age and inode identity remain unchanged. A bridge failure
 leaves the existing tmux workspace running and records only a bounded
 diagnostic category. POSIX launches never enter this fallback.
 
-Windows Terminal exposes an opaque `WT_SESSION` marker but keeps the generic
-`xterm-256color` terminal name, so tmux cannot infer its synchronized-output
-support. Managed direct clients add tmux's per-client `sync` feature when that
-marker is present. A fallback bridge carries only the resulting capability bit
-into its server-session PTY—never the opaque marker—and applies the same
-per-client feature before attach. This makes tmux wrap each completed frame in
-DEC synchronized output, preventing Codex's active-turn redraw coordinates
-from becoming visible as roaming hardware cursors. No server-global terminal
-option is changed; conhost, POSIX, and terminals without the marker retain
-their existing behavior.
+Supported Windows Terminal 1.24.10621+ builds expose an opaque `WT_SESSION`
+marker but keep the generic `xterm-256color` terminal name, so tmux cannot
+infer synchronized-output support from `TERM`. Managed direct clients add
+tmux's per-client `sync` feature when that marker is present. A fallback bridge
+carries only the resulting capability bit into its server-session PTY—never
+the opaque marker—and applies the same per-client feature before attach.
+
+The managed Windows Urwid screen also brackets each changed sidebar paint in
+application-side DEC synchronized output. tmux can therefore collect the many
+cursor-addressed row writes into one inactive-pane redraw before the client
+capability commits that completed frame to Windows Terminal. Provider output,
+session/lease polling, and the POSIX screen remain unchanged. No server-global
+terminal option is changed; conhost and unvalidated third-party Windows hosts
+remain best effort, while POSIX and terminals without the marker retain their
+existing client behavior.
 
 The managed launcher suppresses tmux's raw direct-attach error only on this
 Windows path. A completed fallback emits one terminal-capability-aware Railmux
