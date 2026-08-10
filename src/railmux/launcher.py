@@ -18,32 +18,30 @@ def build_new_session_command(claude_binary: str, cwd: Path) -> list[str]:
 # Codex flag that skips all approval prompts AND disables the sandbox.
 # `--yolo` is its (hidden) alias; the explicit name is clearer and stable.
 _CODEX_YOLO_FLAG = "--dangerously-bypass-approvals-and-sandbox"
-_CODEX_REDUCED_MOTION_ARGS = ["-c", "tui.animations=false"]
 
 
-def build_codex_resume_command(codex_binary: str, session_id: str,
-                               cwd: Path, *, yolo: bool = False,
-                               reduce_motion: bool = False) -> list[str]:
+def build_codex_resume_command(
+    codex_binary: str,
+    session_id: str,
+    cwd: Path,
+    *,
+    yolo: bool = False,
+) -> list[str]:
     """Build the argv to resume an existing Codex session.
 
     With *yolo*, prepend the bypass flag before the subcommand (it's a
     top-level option, so it must precede ``resume``).
     """
     prefix = [codex_binary]
-    if reduce_motion:
-        prefix.extend(_CODEX_REDUCED_MOTION_ARGS)
     if yolo:
         prefix.append(_CODEX_YOLO_FLAG)
     return prefix + ["resume", session_id, "-C", str(cwd)]
 
 
 def build_codex_new_command(codex_binary: str, cwd: Path,
-                            *, yolo: bool = False,
-                            reduce_motion: bool = False) -> list[str]:
+                            *, yolo: bool = False) -> list[str]:
     """Build the argv to start a fresh Codex session in `cwd`."""
     cmd = [codex_binary]
-    if reduce_motion:
-        cmd.extend(_CODEX_REDUCED_MOTION_ARGS)
     cmd.extend(["-C", str(cwd)])
     if yolo:
         cmd.append(_CODEX_YOLO_FLAG)

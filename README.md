@@ -78,15 +78,14 @@ On native Windows, that same two-command flow is intentional. The first
 then opens the ordinary Railmux UI inside it. A fresh runtime uses roughly
 700 MB because it contains a complete MSYS2 compatibility base, tmux, and
 Python—not because the Railmux package itself is that large. Later Railmux
-versions reuse the same verified base while its pinned MSYS2 release is
-unchanged and install only a version-isolated application layer.
+versions reuse the same verified runtime generation and install only a
+version-isolated application layer.
 
-Railmux's tmux core requirement remains 2.7+ on every platform. On native
-Windows, tmux 3.7+ is recommended for full synchronized-redraw fidelity; an
-older managed base remains supported, but cursor movement and a provider's
-full-history redraw can be more visible. `railmux doctor` and
-`railmux runtime status` report this distinction. Railmux does not update a
-live private base in place or disturb detached agent sessions to obtain it.
+Railmux's shared tmux core requirement remains 2.7+ on macOS, Linux, and WSL.
+The native-Windows managed runtime automatically installs tmux 3.7 or newer
+and refuses to activate an older package set, because synchronized provider
+redraws are part of the supported Windows contract. Users never install or
+upgrade this private tmux manually.
 
 The managed runtime does not replace Git Bash, adopt an existing MSYS2, edit
 the system `PATH`, or move provider data. Codex and Claude Code remain native
@@ -99,7 +98,14 @@ railmux runtime status --json
 railmux runtime status --verify
 railmux runtime install --yes
 railmux runtime prune --dry-run
+railmux runtime uninstall --dry-run
 ```
+
+For a complete Windows removal, exit every Railmux workspace and provider pane,
+run `railmux runtime uninstall`, then run `pip uninstall railmux`. The first
+command removes only Railmux's private MSYS2, tmux, Python, app layers, and
+package caches; it retains Codex/Claude histories and user-owned MSYS2 trees.
+It refuses to proceed when the private runtime may still be in use.
 
 If installation succeeds but your shell says `railmux: command not found`,
 the Python user scripts directory is not on `PATH`—this is especially common

@@ -57,7 +57,7 @@ pane-bounded drag-to-copy and is not the same as `railmux ssh HOST`.
 |---|---|
 | Python | 3.9 or newer on POSIX/WSL. The native Windows bootstrap requires 3.10+; the managed MSYS2 process currently uses 3.12+. |
 | tmux core workspace | 2.7 or newer. CI compiles the checksum-pinned official tmux 2.7 release and boots a real Railmux frame. |
-| Native Windows synchronized provider redraw | tmux 3.7 or newer is recommended for full visual fidelity. tmux 2.7-3.6 remains core-supported, but application synchronized frames are unavailable and cursor/full-history repaint movement may be visible. Railmux reports this as `degraded` rather than silently raising the cross-platform minimum. |
+| Native Windows synchronized provider redraw | The Railmux-owned MSYS2 generation installs and validates tmux 3.7 or newer before activation. Users do not maintain this private tmux. The shared macOS/Linux/WSL core floor remains tmux 2.7. |
 | Managed shell/Vim and nested pane-local SSH history marker | tmux 3.0 or newer; older tmux fails closed with a warning. |
 | Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |
 | Native Windows full-screen renderer | Windows Terminal 1.24.10621 or newer. This is a host requirement, not a `pip` dependency. `WT_SESSION` is the conservative 0.4 capability gate; `TERM=xterm-256color` alone does not identify a terminal product or synchronized-output support. conhost, IDE terminals, and third-party native Windows terminals are best effort until separately field-validated. |
@@ -215,13 +215,16 @@ must remain covered when the adapter, shared UI, or terminal behavior changes.
    final pass that does not request another restart before publishing the base.
    Stop GnuPG daemons by the private pacman keyring home before staging
    activation; never use a machine-wide process-name or loaded-module kill.
-3. Key one private shared base authority by the pinned MSYS2 compatibility
-   identifier, record an exact package-content identity for rolling repository
-   results, bind each new app marker to it, and keep Railmux application venvs
-   version-isolated beneath it.
-   Make base creation, released-runtime adoption, and app upgrades transactional
-   and recoverable; bump the base identifier whenever its contents must be
-   refreshed. Never adopt or overwrite user-owned MSYS2 files.
+3. Key one private shared base authority by a generation identifier independent
+   of the pinned MSYS2 archive date, record an exact package-content identity
+   for rolling repository results, bind each new app marker to it, and keep
+   Railmux application venvs version-isolated beneath it. Require tmux 3.7 or
+   newer in the staged inventory before publishing the Windows generation.
+   Make base creation and app upgrades transactional and recoverable; bump the
+   generation whenever its required contents change. Never adopt or overwrite
+   user-owned MSYS2 files. Explicit uninstall must re-prove that the private
+   generation is idle, atomically isolate only Railmux-owned runtime/cache
+   trees, and leave provider histories untouched.
 4. Translate Windows paths, Unicode arguments, environment, exit status, and
    Ctrl-C exactly across the handoff without `shell=True` or command-string
    interpolation.
@@ -261,7 +264,9 @@ transition (`dev35` → `dev36` → `rc1`), reused its verified 96-package base,
 attached and detached both new layers, reported the rc1 UI ready through
 `doctor`, matched its content verification, and retained dev35/dev36/rc1 in a
 non-mutating prune dry-run. Unchanged terminal interactions were not repeated
-mechanically.
+mechanically. Rc7 replaces that preview base with the first release generation;
+its fresh-install, tmux 3.7 package-floor, and uninstall checks remain the named
+real-Windows RC gate in the parity ledger.
 
 ## Release closure checklist
 

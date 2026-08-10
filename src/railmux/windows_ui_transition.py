@@ -1,10 +1,9 @@
 """Fail-closed app-layer transitions for the managed Windows outer UI.
 
-This module runs only inside Railmux's private MSYS2 runtime.  It never kills
-the dedicated tmux server, an older stateful controller, or a provider session.
-A cooperative dev24+ App saves its own state and returns swap-owned panes
-before ``exec``.  Released dev11-dev23 controllers require an explicit Soft
-Quit before the next app layer starts.
+This module runs only inside Railmux's private MSYS2 runtime. It never kills
+the dedicated tmux server, a stateful controller, or a provider session. A
+cooperative App saves its own state and returns swap-owned panes before
+``exec``.
 """
 from __future__ import annotations
 
@@ -23,8 +22,12 @@ from packaging.version import InvalidVersion, Version
 
 from railmux import restart_state, tmux_ctl, tmux_server
 from railmux.release_version import PROJECT_VERSION_PATTERN
-from railmux.tmux_capabilities import classify_tmux_version
-from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256
+from railmux.tmux_capabilities import (
+    TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED,
+    classify_tmux_version,
+    parse_tmux_version,
+)
+from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256
 
 
 CURRENT_APP_OPTION = "@railmux_current_app_v1"
@@ -40,7 +43,7 @@ _SESSION_RE = re.compile(r"\$[0-9]+\Z")
 _OPTION_LIMIT = 2048
 _APP_ROOT = Path("/opt/railmux/apps")
 _BASE_MARKER = Path("/railmux-base.json")
-_BASE_CONTENT_MARKER = Path("/railmux-base-content-v1.json")
+_BASE_CONTENT_MARKER = Path("/railmux-base-content.json")
 
 
 @dataclass(frozen=True)
@@ -138,11 +141,11 @@ def _base_identity(runtime: str) -> str | None:
     core = content.get("core_packages") if isinstance(content, dict) else None
     package_count = content.get("package_count") if isinstance(content, dict) else None
     if (
-        base != {"schema": 1, "runtime": runtime}
+        base != {"schema": 2, "runtime": runtime}
         or not isinstance(content, dict)
-        or content.get("schema") != 1
+        or content.get("schema") != 2
         or content.get("runtime") != runtime
-        or content.get("archive_sha256") != MSYS2_BASE_LINEAGE_SHA256
+        or content.get("archive_sha256") != MSYS2_ARCHIVE_SHA256
         or not isinstance(content_id, str)
         or _CONTENT_RE.fullmatch(content_id) is None
         or not isinstance(package_count, int)
@@ -157,6 +160,8 @@ def _base_identity(runtime: str) -> str | None:
             or any(ord(char) < 0x20 or ord(char) > 0x7e for char in value)
             for value in core.values()
         )
+        or (tmux_version := parse_tmux_version(core.get("tmux"))) is None
+        or tmux_version < TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED
     ):
         return None
     return content_id
@@ -733,9 +738,9 @@ def ensure_current_ui(
             _clear_upgrade_request(target, current.pane_id)
             return TransitionOutcome("pending", "running UI did not switch in time")
 
-        # dev11-dev23 do not publish CURRENT_APP_OPTION or save UI state
-        # periodically. Never SIGKILL that stateful controller merely to move
-        # app layers; attach it unchanged and require an explicit Soft Quit.
+        # A controller that does not publish the current generation's identity
+        # is never killed or guessed. It may be the target app still starting;
+        # any other live controller requires a normal Soft Quit.
         shape = _session_shape(target, session_id)
         if shape is None:
             return TransitionOutcome("pending", "outer UI identity was unavailable")
@@ -747,7 +752,7 @@ def ensure_current_ui(
                 target, controller_pane[0], controller_pane[1])
             if detected == target_version:
                 return TransitionOutcome("starting")
-        detail = "the released dev11-dev23 UI must Soft Quit safely first"
+        detail = "the unidentified managed UI must Soft Quit safely first"
         if attached:
             detail += "; its terminal is currently attached"
-        return TransitionOutcome("legacy", detail)
+        return TransitionOutcome("blocked", detail)

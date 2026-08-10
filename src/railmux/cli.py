@@ -27,26 +27,7 @@ from railmux import tmux_server
 from railmux import windows_tmux_lifecycle
 from railmux.system_deps import ensure_tmux_available
 from railmux.ssh_args import AppendSshArgument, ExtendSshArguments
-from railmux.terminal_status import STYLE_WARNING, command_status, styled
-
-
-def _warn_managed_windows_visual_fidelity() -> None:
-    """Explain a known visual limitation without changing the managed base."""
-    from railmux import tmux_ctl
-    from railmux.tmux_capabilities import classify_tmux_version
-
-    capability = classify_tmux_version(tmux_ctl.tmux_version())
-    if capability.windows_visual_fidelity != "degraded":
-        return
-    message = (
-        f"warning: tmux {capability.version} is supported, but Windows visual "
-        "fidelity is reduced below recommended tmux "
-        f"{capability.windows_visual_fidelity_recommended}; cursor movement "
-        "and full-history redraws may remain visible. New Codex panes use "
-        "reduced motion; already-running panes keep their current settings. "
-        "Run 'railmux doctor' for details."
-    )
-    print(styled(message, STYLE_WARNING, stream=sys.stderr), file=sys.stderr)
+from railmux.terminal_status import command_status
 
 
 def _show_startup_message(
@@ -679,8 +660,6 @@ def main(argv: list[str] | None = None) -> int:
             running_in_managed_windows_wrapper,
         )
         managed_windows = running_in_managed_windows_wrapper()
-        if managed_windows:
-            _warn_managed_windows_visual_fidelity()
         dedicated_session_id = (
             tmux_server.target_session_id(dedicated_target, "railmux")
             if dedicated_target is not None else None
@@ -715,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
                     target_app=app_id,
                     target_version=__version__,
                 )
-                if transition.status in {"legacy", "pending", "blocked"}:
+                if transition.status in {"pending", "blocked"}:
                     detail = transition.detail or "the running UI was unchanged"
                     print(
                         "info: the Windows app-layer update is pending; "

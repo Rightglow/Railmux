@@ -13,11 +13,13 @@ from railmux.windows_msys2 import (
     MSYS2_RELEASE,
     Msys2Runtime,
     RuntimeInstallError,
+    apply_managed_runtime_uninstall,
     apply_managed_runtime_prune,
     find_runtime,
     install_managed_runtime,
     managed_runtime_status,
     managed_root,
+    plan_managed_runtime_uninstall,
     plan_managed_runtime_prune,
     reusable_managed_base_candidate,
 )
@@ -35,6 +37,7 @@ def _print_help() -> None:
         "       railmux doctor [--remote HOST] [OPTIONS]\n"
         "       railmux runtime status [--json] [--verify]\n"
         "       railmux runtime install [--yes] [--verbose]\n"
+        "       railmux runtime uninstall [--dry-run] [--yes]\n"
         "       railmux runtime prune [--dry-run] [--yes] [--caches]\n\n"
         "Railmux for Windows runs in a private managed MSYS2/tmux "
         "runtime while Codex and Claude Code remain Windows-native and use "
@@ -70,8 +73,6 @@ def _runtime_status(
         display_status = "ready"
     elif status == "base_ready":
         display_status = "reusable base ready; current app layer not installed"
-    elif status == "legacy_base":
-        display_status = "reusable legacy base; current app layer not installed"
     elif status == "incomplete":
         display_status = "incomplete"
     else:
@@ -102,7 +103,6 @@ def _runtime_status(
     if isinstance(capability, dict):
         tmux_version = capability.get("version")
         fidelity = capability.get("windows_visual_fidelity")
-        recommended = capability.get("windows_visual_fidelity_recommended")
         capability_verification = capability.get("verification")
         if isinstance(tmux_version, str):
             detail = (
@@ -110,24 +110,11 @@ def _runtime_status(
                 f"verification={capability_verification}); "
                 f"Windows visual fidelity={fidelity}"
             )
-            if fidelity == "degraded" and isinstance(recommended, str):
-                detail += f" (tmux {recommended}+ recommended)"
             print(f"Terminal rendering: {detail}")
-            if fidelity == "degraded":
-                print(
-                    "Visual note: this runtime remains supported, but cursor "
-                    "movement and full-history redraws may be more visible. "
-                    "New Codex panes use reduced motion; existing panes keep "
-                    "their current settings."
-                )
         elif runtime is not None:
             print(
                 "Terminal rendering: tmux unknown; "
                 "Windows visual fidelity=unknown"
-            )
-            print(
-                "Visual note: new Codex panes use conservative reduced motion "
-                "until the effective tmux version can be determined."
             )
     return 0 if runtime is not None else 1
 
@@ -182,6 +169,53 @@ def _confirm_prune(*, input_fn: Callable[[str], str] = input) -> bool:
         print()
         return False
     return answer.strip().lower() in {"y", "yes"}
+
+
+def _confirm_uninstall(*, input_fn: Callable[[str], str] = input) -> bool:
+    try:
+        answer = input_fn(
+            "Remove Railmux's private MSYS2, tmux, Python, application "
+            "layers, and package caches? Codex/Claude session histories and "
+            "user-owned MSYS2 installations are outside these paths [y/N] "
+        )
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+    return answer.strip().lower() in {"y", "yes"}
+
+
+def _uninstall(
+    *,
+    environ: Mapping[str, str],
+    dry_run: bool,
+    assume_yes: bool,
+    input_fn: Callable[[str], str],
+) -> int:
+    try:
+        plan = plan_managed_runtime_uninstall(environ=environ)
+    except RuntimeInstallError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print("Railmux Windows runtime uninstall")
+    print(f"  remove private runtime: {plan.root}")
+    if plan.cache is not None:
+        print("  remove private download/package caches")
+    print("  retain: Codex/Claude histories, Railmux workspace state, install logs")
+    if dry_run:
+        print("Dry run only; nothing was removed.")
+        return 0
+    if not assume_yes and not _confirm_uninstall(input_fn=input_fn):
+        print("Runtime uninstall cancelled.", file=sys.stderr)
+        return 2
+    try:
+        apply_managed_runtime_uninstall(plan, environ=environ)
+    except RuntimeInstallError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    print("Removed the private MSYS2, tmux, Python, and Railmux app layers.")
+    print("Codex and Claude session files were not accessed.")
+    print("You may now run 'pip uninstall railmux' to remove the native launcher.")
+    return 0
 
 
 def _prune(
@@ -264,13 +298,9 @@ def _install(
                 print("MSYS2 runtime installation cancelled.", file=sys.stderr)
                 return None
         else:
-            _root, source_version = reusable
-            detail = (
-                f" from Railmux {source_version}" if source_version else ""
-            )
             print(
                 f"Reusing the matching MSYS2 {MSYS2_RELEASE} private base"
-                f"{detail}; only the Railmux {__version__} app layer will be "
+                f"; only the Railmux {__version__} app layer will be "
                 "installed."
             )
             reuse_only = True
@@ -364,6 +394,25 @@ def main(
         )
     if arguments and arguments[0] == "runtime":
         install_arguments = arguments[1:]
+        if install_arguments[:1] == ["uninstall"]:
+            uninstall_flags = install_arguments[1:]
+            if (
+                len(uninstall_flags) != len(set(uninstall_flags))
+                or any(flag not in {"--dry-run", "--yes"} for flag in uninstall_flags)
+                or "--dry-run" in uninstall_flags and "--yes" in uninstall_flags
+            ):
+                print(
+                    "error: usage: railmux runtime uninstall "
+                    "[--dry-run] [--yes]",
+                    file=sys.stderr,
+                )
+                return 2
+            return _uninstall(
+                environ=environ,
+                dry_run="--dry-run" in uninstall_flags,
+                assume_yes="--yes" in uninstall_flags,
+                input_fn=input_fn,
+            )
         if install_arguments[:1] == ["prune"]:
             prune_flags = install_arguments[1:]
             if (

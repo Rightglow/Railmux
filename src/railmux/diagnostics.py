@@ -552,7 +552,7 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
             capability.get("windows_visual_fidelity_recommended") or "unknown"
         )
         fidelity_detail = (
-            "; new Codex panes use conservative reduced motion"
+            "; verify or reinstall the managed runtime"
             if fidelity == "unknown"
             else ""
         )

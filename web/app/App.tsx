@@ -641,8 +641,9 @@ export default function Home() {
                 </p>
                 <p>
                   The first Windows setup is roughly 700 MB. Later Railmux
-                  updates reuse that verified base, while native Codex and
-                  Claude Code keep the same Windows sessions and credentials.
+                  updates reuse that verified base. Railmux installs and
+                  validates its own tmux 3.7+; native Codex and Claude Code
+                  keep the same Windows sessions and credentials.
                 </p>
                 <aside className="install-remote-note">
                   <span>REMOTE WORK</span>

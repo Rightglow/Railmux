@@ -8,12 +8,12 @@ import pytest
 import urwid
 
 from railmux import tmux_server, windows_ui_transition as transition
-from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256
+from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256, MSYS2_RUNTIME_ID
 from railmux.ui import app as app_module
 from railmux.ui.app import App
 
 
-RUNTIME = "msys2-2026-03-22"
+RUNTIME = MSYS2_RUNTIME_ID
 CONTENT = "a" * 64
 TARGET_APP = "railmux-0.4.0.dev24"
 TARGET_VERSION = "0.4.0.dev24"
@@ -34,19 +34,19 @@ def _identity(version: str = "0.4.0.dev23") -> transition.UiAppIdentity:
 
 def _validated_tree(monkeypatch, tmp_path: Path) -> Path:
     base_marker = tmp_path / "railmux-base.json"
-    content_marker = tmp_path / "railmux-base-content-v1.json"
+    content_marker = tmp_path / "railmux-base-content.json"
     applications = tmp_path / "opt" / "railmux" / "apps"
     application = applications / TARGET_APP
     executable = application / "venv" / "bin" / "railmux"
     executable.parent.mkdir(parents=True)
     executable.write_text("#!/bin/sh\n", encoding="utf-8")
     base_marker.write_text(
-        json.dumps({"schema": 1, "runtime": RUNTIME}), encoding="utf-8")
+        json.dumps({"schema": 2, "runtime": RUNTIME}), encoding="utf-8")
     content_marker.write_text(
         json.dumps({
-            "schema": 1,
+            "schema": 2,
             "runtime": RUNTIME,
-            "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
+            "archive_sha256": MSYS2_ARCHIVE_SHA256,
             "content_id": CONTENT,
             "package_count": 3,
             "core_packages": {
@@ -105,11 +105,11 @@ def test_upgrade_exec_requires_exact_content_bound_app(monkeypatch, tmp_path):
         ["old-railmux", "--inside-tmux", "--project", "/work"],
     ) == [str(executable), "--inside-tmux", "--project", "/work"]
 
-    (tmp_path / "railmux-base-content-v1.json").write_text(
+    (tmp_path / "railmux-base-content.json").write_text(
         json.dumps({
-            "schema": 1,
+            "schema": 2,
             "runtime": RUNTIME,
-            "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
+            "archive_sha256": MSYS2_ARCHIVE_SHA256,
             "content_id": "c" * 64,
             "package_count": 3,
             "core_packages": {
@@ -249,7 +249,7 @@ def test_expired_cooperative_request_is_consumed_but_rejected(monkeypatch):
     assert cleared == [1]
 
 
-def test_legacy_controller_is_never_respawned(monkeypatch, tmp_path):
+def test_unidentified_controller_is_never_respawned(monkeypatch, tmp_path):
     _validated_tree(monkeypatch, tmp_path)
     shape = (0, (("%2", 456, False),), "%2")
     monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
@@ -270,12 +270,12 @@ def test_legacy_controller_is_never_respawned(monkeypatch, tmp_path):
         target_version=TARGET_VERSION,
     )
 
-    assert result.status == "legacy"
+    assert result.status == "blocked"
     assert "Soft Quit" in (result.detail or "")
     assert mutations == []
 
 
-def test_legacy_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
+def test_unidentified_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
     _validated_tree(monkeypatch, tmp_path)
     monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
     monkeypatch.setattr(transition, "_transition_lock", _always_locked)
@@ -293,10 +293,10 @@ def test_legacy_multiple_panes_are_left_untouched(monkeypatch, tmp_path):
         target_version=TARGET_VERSION,
     )
 
-    assert result.status == "legacy"
+    assert result.status == "blocked"
 
 
-def test_current_controller_startup_does_not_warn_as_legacy(monkeypatch, tmp_path):
+def test_current_controller_startup_is_recognized(monkeypatch, tmp_path):
     _validated_tree(monkeypatch, tmp_path)
     monkeypatch.setattr(transition.tmux_server, "socket_label", lambda: "label")
     monkeypatch.setattr(transition, "_transition_lock", _always_locked)

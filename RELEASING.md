@@ -123,7 +123,10 @@ credential and publishes only after its build and test job succeeds.
    For an RC/final that changes the managed Windows app identity, also verify
    the exact previous-app → candidate → final transition on one real Windows
    runtime. Confirm base reuse, attach, `doctor`, `runtime status --verify`, and
-   `runtime prune --dry-run` before pruning anything.
+   `runtime prune --dry-run` before pruning anything. When the candidate bumps
+   the managed base generation, additionally prove that an older preview base
+   is not reused, the fresh staged inventory contains tmux 3.7+, and
+   `runtime uninstall --dry-run` names only Railmux-owned runtime/cache paths.
 
 Do not use `git push --follow-tags`: push the exact release tag so unrelated
 local tags can never trigger a publication accidentally.

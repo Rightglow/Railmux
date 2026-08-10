@@ -49,9 +49,18 @@ def test_forward_slash_windows_drive_path_is_normalized():
 
 
 def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch):
-    base_payload = json.dumps({"schema": 1, "runtime": "msys2-test"})
+    content_id = "a" * 64
+    base_payload = json.dumps({"schema": 2, "runtime": "msys2-test"})
     app_payload = json.dumps({
-        "schema": 1, "runtime": "msys2-test", "railmux": __version__,
+        "schema": 2,
+        "runtime": "msys2-test",
+        "railmux": __version__,
+        "base_content_id": content_id,
+    })
+    content_payload = json.dumps({
+        "schema": 2,
+        "runtime": "msys2-test",
+        "content_id": content_id,
     })
     base_marker = SimpleNamespace(
         lstat=lambda: SimpleNamespace(
@@ -69,8 +78,18 @@ def test_noacl_mode_requires_exact_managed_runtime_marker(monkeypatch):
         ),
         read_text=lambda **_kwargs: app_payload,
     )
+    content_marker = SimpleNamespace(
+        lstat=lambda: SimpleNamespace(
+            st_mode=stat.S_IFREG | 0o644,
+            st_uid=42,
+            st_size=len(content_payload),
+        ),
+        read_text=lambda **_kwargs: content_payload,
+    )
     app_root = JoiningMarker(app_marker)
     monkeypatch.setattr(provider_paths, "_MANAGED_BASE_MARKER", base_marker)
+    monkeypatch.setattr(
+        provider_paths, "_MANAGED_BASE_CONTENT_MARKER", content_marker)
     monkeypatch.setattr(provider_paths, "_MANAGED_APP_ROOT", app_root)
     monkeypatch.setattr(provider_paths.sys, "platform", "cygwin")
     monkeypatch.setattr(

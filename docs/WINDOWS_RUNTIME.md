@@ -17,20 +17,21 @@ Python, then hands the original argv to a version-isolated Railmux application
 inside that base. AppData writes made by packaged desktop applications may be
 redirected into a package-private view that PowerShell and executable child
 loaders do not share, so packaged Python must use the non-virtualized profile
-location for the complete executable tree, caches, locks, and logs. The
-MSYS2 release identifier is the base compatibility and refresh boundary; a new
-Railmux version reuses that base and installs only its own venv while
-the identifier remains unchanged. That one POSIX application remains the owner
-of layout, mouse routing, previews, dialogs, restore state, SSH display, and
-provider lifecycle.
+location for the complete executable tree, caches, locks, and logs. A managed
+runtime generation identifier, independent of the pinned MSYS2 archive date,
+is the base compatibility boundary. A new Railmux version reuses that exact
+generation and installs only its own venv; changed base requirements create a
+new generation instead of adopting or mutating an older tree. That one POSIX
+application remains the owner of layout, mouse routing, previews, dialogs,
+restore state, SSH display, and provider lifecycle.
 
 Because MSYS2 repositories roll independently of that archive identifier, the
 base also owns a separate exact package-content identity: a SHA-256 of the
 bounded sorted pacman inventory plus the recorded tmux, Python, and pip package
-versions. dev24+ app markers bind to that identity. The released dev11-dev23
-base/app markers remain readable for safe attachment and explicit Soft Quit;
-`runtime status --verify` can report live package drift without silently
-changing either authority.
+versions. Every app marker binds to that identity. The first release generation
+requires a recorded tmux package version of 3.7 or newer; an older or
+unparseable inventory is never published or reused. `runtime status --verify`
+can report live package drift without silently changing either authority.
 
 The footprint is about 700 MB or more because Windows needs a complete,
 internally consistent private MSYS2 compatibility base plus tmux and Python;
@@ -164,21 +165,19 @@ opens a WSL shell and runs the ordinary POSIX product there.
   never falls back to reinstalling the base, and never opens or modifies
   Codex/Claude histories. The pip cache is disposable and may be deleted while
   no Railmux installation is running.
-- Because MSYS2 repositories roll forward, an older otherwise valid private
-  base can record tmux 3.6a while a newly prepared base records tmux 3.7b.
-  Codex emits synchronized application frames, but tmux gained support for
-  consuming them in 3.7. On tmux older than 3.7, Railmux therefore disables
-  Codex animations only for the launched process to avoid rapid intermediate
-  cursor positions; it does not edit Codex configuration or session files.
-  `railmux runtime status` and `railmux doctor` classify that base as supported
-  with degraded Windows visual fidelity, while direct launch prints one
-  bounded warning. The global tmux requirement stays at 2.7. Already-running
-  Codex panes retain their original settings.
+- MSYS2 repositories roll independently of the pinned base archive. Fresh
+  staging therefore performs a complete package update, installs tmux, Python,
+  and pip noninteractively, records the exact sorted package inventory, and
+  rejects the tree unless tmux parses as 3.7 or newer. Codex synchronized
+  application frames are consequently part of the supported native-Windows
+  rendering contract. The global macOS/Linux/WSL tmux requirement stays at
+  2.7; only the Railmux-owned Windows generation has the higher floor.
 - A published base is never upgraded in place. A pacman core transition can
   temporarily replace DLLs needed by the updater itself, so mutating the base
   that owns a live detached tmux server would turn a visual improvement into a
   session-availability risk. Fresh installations use a disposable staging tree
-  and publish only after verification; an existing older base remains intact.
+  and publish only after package-floor, marker, application, and executable
+  verification.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
   run archive download, extraction, pacman update, or package installation.
@@ -202,18 +201,11 @@ opens a WSL shell and runs the ordinary POSIX product there.
   undiscoverable until an exact probe succeeds and its marker is atomically
   published. A crash can therefore leave only a markerless Railmux-owned app
   directory, which the next locked installer removes before retrying while
-  explicitly reporting that provider data lives elsewhere. dev11 can
-  adopt a released dev4-dev10 private runtime as its shared base only after its
-  exact owner marker, directory name, runtime identifier, and installed
-  Railmux version all probe successfully. Adoption adds a base marker and a
-  new versioned app directory in place; it does not download, copy, upgrade, or
-  relocate the existing MSYS2 files, and it preserves the legacy venv and
-  marker for rollback. After adoption, the base marker is the durable discovery
-  authority, so removing rollback state cannot make Railmux orphan and
-  redownload the base. Incomplete final directories fail closed and are never
-  silently removed. User-selected `RAILMUX_MSYS2_ROOT` runtimes are probed
-  read-only and never provisioned, adopted, or updated.
-- Versioned app layers are deliberately retained for preview rollback and are
+  explicitly reporting that provider data lives elsewhere. Incomplete final
+  directories fail closed and are never silently removed. User-selected
+  `RAILMUX_MSYS2_ROOT` runtimes are probed read-only and never provisioned,
+  adopted, updated, or removed.
+- Versioned app layers are deliberately retained for rollback and are
   never pruned during install or launch. Their growth is the application-layer
   size (22.4 MiB in the measured dev11 environment), not another MSYS2 base.
   `runtime prune` is the only cleanup authority: it inventories process argv,
@@ -222,6 +214,15 @@ opens a WSL shell and runs the ordinary POSIX product there.
   exact content-bound marked app directories after replanning under the install
   lock. `--dry-run` is read-only; cache removal requires `--caches`; provider
   roots are outside every candidate and are never inspected or removed.
+- `runtime uninstall` is the explicit full software-removal authority before
+  `pip uninstall railmux`. It refuses user-owned overrides, requires an exact
+  current-generation base marker, proves no other process is visible in that
+  private MSYS2 generation, repeats the proof under the install lock, and
+  atomically renames the complete base and private package cache before
+  deleting either tree. A live executable/DLL handle or ambiguous inventory
+  therefore fails closed without a partial in-place deletion. Install logs and
+  normal Railmux workspace state remain for diagnostics; `.codex`, `.claude`,
+  provider histories, and user-owned MSYS2 trees are outside every candidate.
 - No system `PATH`, shell profile, Windows package manager, user-owned MSYS2,
   or provider history is modified. All captured text and marker files use an
   explicit UTF-8 codec; CP936/GBK is never an implicit file encoding.
@@ -231,13 +232,12 @@ opens a WSL shell and runs the ordinary POSIX product there.
 - The parent waits through Ctrl-C instead of killing the child. tmux owns
   persistence after detach or outer-window closure.
 - Installing a new wheel never makes an already-running outer UI appear
-  upgraded. dev24+ controllers publish their exact content-bound app identity
-  only after MainLoop is usable. A detached older dev24+ UI cooperatively saves
+  upgraded. Controllers publish their exact content-bound app identity only
+  after MainLoop is usable. A detached older UI cooperatively saves
   state, returns displayed provider panes, releases UI-only leases, and execs
   the validated new absolute app after a nonce-bound pane-local request.
-  Released dev11-dev23 controllers remain untouched until the user chooses
-  Soft Quit; the next launch creates the dev24 UI. Attached, ambiguous, or
-  racing state is likewise left untouched. Neither path kills the tmux
+  An unidentified, attached, ambiguous, or racing controller is left untouched
+  and requires a normal Soft Quit. Neither path kills the tmux
   server, a provider session/process, or Codex/Claude history.
 - The ordinary label-selected tmux attach remains the fast path. If Windows
   rejects only that terminal attachment while the same server and immutable
@@ -318,7 +318,7 @@ The machine-readable feature ledger is `windows-wrapper-parity.toml`. It makes
 every stable support-matrix ID explicit and preserves manual checks for the
 visual and terminal behavior that unit tests cannot prove.
 
-Windows-preview CI performs an advisory one-byte HTTPS Range request against
+Windows runtime CI performs an advisory one-byte HTTPS Range request against
 the exact pinned artifact on every approved transport and validates its exact
 `Content-Range`. It also reads the same bounded pacman database sample from
 every approved package candidate. It intentionally does not use ICMP ping and
@@ -327,7 +327,7 @@ runtime integrity remains the SHA-256 and pacman package-signature checks, not
 the CI capability probe.
 The blocking Windows jobs separately exercise the native 3.10/3.13 bootstrap
 and a real MSYS2/tmux/Python runtime. The MSYS2 job records an exact package
-identity, writes content-bound managed markers, and runs the Windows UI
+identity, requires tmux 3.7+, writes content-bound managed markers, and runs the Windows UI
 transition, provider-path, local/remote config, local/remote doctor, and
 privacy-safe diagnostics suites from the runtime-owned app venv.
 

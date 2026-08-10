@@ -23,8 +23,8 @@ from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_SHA256,
     MSYS2_ARCHIVE_SIZE,
     MSYS2_ARCHIVE_SOURCES,
-    MSYS2_BASE_LINEAGE_SHA256,
     MSYS2_RUNTIME_ID,
+    RUNTIME_SCHEMA,
     Msys2Runtime,
     RuntimeInstallError,
     download_adaptive,
@@ -39,7 +39,6 @@ from railmux.windows_pacman import PacmanMirrorDecision
 
 
 VERSION = __version__
-LEGACY_VERSION = "0.4.0.dev10"
 _ANSI_STYLE_RE = re.compile(r"\x1b\[[0-9;]*m")
 _TEST_PACKAGE_INVENTORY = (
     b"python 3.12.13-1\npython-pip 26.1.2-1\ntmux 3.7.b-1\n"
@@ -98,15 +97,15 @@ def make_runtime(
     if managed:
         if shared:
             (root / "railmux-base.json").write_text(
-                json.dumps({"schema": 1, "runtime": MSYS2_RUNTIME_ID}),
+                json.dumps({"schema": RUNTIME_SCHEMA, "runtime": MSYS2_RUNTIME_ID}),
                 encoding="utf-8",
             )
-            (root / "railmux-base-content-v1.json").write_text(
+            (root / "railmux-base-content.json").write_text(
                 json.dumps(
                     {
-                        "schema": 1,
+                        "schema": RUNTIME_SCHEMA,
                         "runtime": MSYS2_RUNTIME_ID,
-                        "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
+                        "archive_sha256": MSYS2_ARCHIVE_SHA256,
                         "content_id": _TEST_CONTENT_ID,
                         "package_count": 3,
                         "core_packages": {
@@ -124,7 +123,7 @@ def make_runtime(
             (app_root / "railmux-app.json").write_text(
                 json.dumps(
                     {
-                        "schema": 2,
+                        "schema": RUNTIME_SCHEMA,
                         "runtime": MSYS2_RUNTIME_ID,
                         "railmux": version,
                         "base_content_id": _TEST_CONTENT_ID,
@@ -133,12 +132,7 @@ def make_runtime(
                 encoding="utf-8",
             )
             return Msys2Runtime(root, managed=True, app_name=app_name)
-        (root / "railmux-runtime.json").write_text(
-            json.dumps(
-                {"schema": 1, "runtime": MSYS2_RUNTIME_ID, "railmux": version}
-            ),
-            encoding="utf-8",
-        )
+        raise AssertionError("managed fixtures must use the shared base layout")
     return Msys2Runtime(root, managed=managed)
 
 
@@ -149,7 +143,7 @@ def add_marked_app(root: Path, version: str) -> Path:
     executable.write_bytes(b"fixture")
     (application / "railmux-app.json").write_text(
         json.dumps({
-            "schema": 2,
+            "schema": RUNTIME_SCHEMA,
             "runtime": MSYS2_RUNTIME_ID,
             "railmux": version,
             "base_content_id": _TEST_CONTENT_ID,
@@ -680,7 +674,7 @@ def test_transient_discovery_failure_reuses_exact_app_without_reinstalling(tmp_p
     assert "no files were installed or replaced" in log
 
 
-def test_preview_versions_share_one_base_but_use_separate_app_layers(tmp_path):
+def test_application_versions_share_one_generation_but_use_separate_layers(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
 
     dev7 = managed_root(environ)
@@ -690,6 +684,25 @@ def test_preview_versions_share_one_base_but_use_separate_app_layers(tmp_path):
     assert windows_msys2._app_name("0.4.0.dev7") != windows_msys2._app_name(
         "0.4.0.dev8"
     )
+
+
+def test_preview_generation_is_not_discovered_or_reused(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    old = (
+        Path(environ["LOCALAPPDATA"])
+        / "Railmux"
+        / "runtimes"
+        / "shared"
+        / "msys2-2026-03-22"
+    )
+    old.mkdir(parents=True)
+    (old / "railmux-base.json").write_text(
+        json.dumps({"schema": 1, "runtime": "msys2-2026-03-22"}),
+        encoding="utf-8",
+    )
+
+    assert managed_root(environ) != old
+    assert windows_msys2.reusable_managed_base_candidate(environ) is None
 
 
 def test_packaged_python_runtime_root_avoids_local_app_data(tmp_path, monkeypatch):
@@ -895,85 +908,6 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
     assert "[msys]" in config.read_text(encoding="utf-8")
     assert "[mingw64]" not in config.read_text(encoding="utf-8")
     assert not list((Path(environ["LOCALAPPDATA"]) / "Railmux" / "runtimes").glob(".install-*"))
-
-
-def test_dev11_adopts_verified_dev10_base_without_downloading_or_copying(tmp_path):
-    environ = {"LOCALAPPDATA": str(tmp_path), "USERPROFILE": r"C:\Users\u"}
-    base = Path(environ["LOCALAPPDATA"]) / "Railmux" / "runtimes"
-    legacy_root = (
-        base / MSYS2_RUNTIME_ID / f"railmux-{LEGACY_VERSION}"
-    )
-    make_runtime(
-        legacy_root,
-        managed=True,
-        version=LEGACY_VERSION,
-        shared=False,
-    )
-    original_marker = (legacy_root / "railmux-runtime.json").read_bytes()
-    commands = []
-
-    current_executable = (
-        f"/opt/railmux/apps/railmux-{VERSION}/venv/bin/railmux"
-    )
-
-    def probe(argv, *, env, timeout):
-        if "pacman -Q" in argv[4]:
-            return completed(argv, stdout=_TEST_PACKAGE_INVENTORY)
-        if argv[6] == current_executable:
-            return completed(argv, stdout=f"railmux {VERSION}\n".encode())
-        if argv[6] == "/opt/railmux/venv/bin/railmux":
-            return completed(argv, stdout=f"railmux {LEGACY_VERSION}\n".encode())
-        return completed(argv, returncode=1)
-
-    def runner(argv, *, env, check):
-        commands.append(argv)
-        return completed(argv)
-
-    @contextmanager
-    def unlocked(_base):
-        yield
-
-    runtime = install_managed_runtime(
-        version=VERSION,
-        environ=environ,
-        downloader=lambda *_args: pytest.fail("MSYS2 must not be downloaded"),
-        runner=runner,
-        probe=probe,
-        lock_factory=unlocked,
-        mirror_optimizer=lambda _root: pytest.fail("pacman must not run"),
-    )
-
-    assert runtime.root == legacy_root
-    assert runtime.app_name == f"railmux-{VERSION}"
-    assert (legacy_root / "railmux-runtime.json").read_bytes() == original_marker
-    assert windows_msys2._base_marker_matches(legacy_root)
-    assert windows_msys2._app_marker_matches(
-        legacy_root,
-        app_name=f"railmux-{VERSION}",
-        version=VERSION,
-    )
-    assert all("pacman" not in " ".join(command) for command in commands)
-    assert len(commands) == 2
-    final_posix = f"/opt/railmux/apps/railmux-{VERSION}"
-    assert commands[0][-1] == final_posix
-    pip_cache = str(Path(environ["LOCALAPPDATA"]) / "Railmux" / "cache" / "pip")
-    assert commands[1][-5:] == [final_posix, VERSION, pip_cache, "60", "5"]
-    assert '--cache-dir "$cache"' in commands[1][4]
-    assert "--no-cache-dir" not in commands[1][4]
-    assert find_runtime(version=VERSION, environ=environ, probe=probe) == runtime
-    assert probe_runtime(
-        Msys2Runtime(legacy_root, managed=True),
-        version=LEGACY_VERSION,
-        environ=environ,
-        probe=probe,
-    )
-    (legacy_root / "railmux-runtime.json").unlink()
-    assert find_runtime(version=VERSION, environ=environ, probe=probe) == runtime
-    log = next(
-        (Path(environ["LOCALAPPDATA"]) / "Railmux" / "logs").glob("*.log")
-    ).read_text(encoding="utf-8")
-    assert "[1/3] Reusing verified MSYS2" in log
-    assert "will not be downloaded, copied, or upgraded" in log
 
 
 def test_shared_base_upgrade_reuses_verified_dependencies_and_native_package(
@@ -1350,45 +1284,6 @@ def test_pip_cache_reparse_point_is_rejected_before_app_commands(
     assert unpublished.read_bytes() == b"preserve until cache validation passes"
 
 
-def test_mismatched_legacy_marker_is_never_an_adoption_candidate(tmp_path):
-    environ = {"LOCALAPPDATA": str(tmp_path)}
-    base = Path(environ["LOCALAPPDATA"]) / "Railmux" / "runtimes"
-    root = base / MSYS2_RUNTIME_ID / f"railmux-{LEGACY_VERSION}"
-    make_runtime(root, managed=True, version="0.4.0.dev9")
-
-    assert windows_msys2.reusable_managed_base_candidate(environ) is None
-
-    @contextmanager
-    def unlocked(_base):
-        yield
-
-    with pytest.raises(RuntimeInstallError, match="no full runtime installation"):
-        install_managed_runtime(
-            version=VERSION,
-            environ=environ,
-            reuse_only=True,
-            downloader=lambda *_args: pytest.fail("must not download"),
-            lock_factory=unlocked,
-        )
-
-
-def test_newest_legacy_candidate_uses_semantic_preview_order(tmp_path):
-    environ = {"LOCALAPPDATA": str(tmp_path)}
-    base = Path(environ["LOCALAPPDATA"]) / "Railmux" / "runtimes"
-    for version in ("0.4.0.dev9", "0.4.0.dev10"):
-        make_runtime(
-            base / MSYS2_RUNTIME_ID / f"railmux-{version}",
-            managed=True,
-            version=version,
-        )
-
-    candidate = windows_msys2.reusable_managed_base_candidate(environ)
-
-    assert candidate is not None
-    assert candidate[0].name == "railmux-0.4.0.dev10"
-    assert candidate[1] == "0.4.0.dev10"
-
-
 def test_marked_shared_base_with_missing_bash_fails_actionably(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
@@ -1413,10 +1308,11 @@ def test_markerless_interrupted_app_layer_is_rebuilt_safely(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
     assert root is not None
+    previous_version = "0.4.0rc5"
     make_runtime(
         root,
         managed=True,
-        version=LEGACY_VERSION,
+        version=previous_version,
         shared=True,
     )
     app = root / "opt" / "railmux" / "apps" / f"railmux-{VERSION}"
@@ -1432,7 +1328,7 @@ def test_markerless_interrupted_app_layer_is_rebuilt_safely(tmp_path):
     def probe(argv, **_kwargs):
         version = VERSION if argv[6].endswith(
             f"/railmux-{VERSION}/venv/bin/railmux"
-        ) else LEGACY_VERSION
+        ) else previous_version
         return completed(argv, stdout=f"railmux {version}\n".encode())
 
     @contextmanager
@@ -1459,14 +1355,11 @@ def test_markerless_interrupted_app_layer_is_rebuilt_safely(tmp_path):
     assert "provider session files are outside this directory" in log
 
 
-def test_incomplete_canonical_base_blocks_legacy_adoption(tmp_path):
+def test_incomplete_canonical_base_blocks_fresh_install_reuse(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     base = Path(environ["LOCALAPPDATA"]) / "Railmux" / "runtimes"
     canonical = base / "shared" / MSYS2_RUNTIME_ID
     canonical.mkdir(parents=True)
-    legacy = base / MSYS2_RUNTIME_ID / f"railmux-{LEGACY_VERSION}"
-    make_runtime(legacy, managed=True, version=LEGACY_VERSION)
-
     @contextmanager
     def unlocked(_base):
         yield
@@ -1476,9 +1369,6 @@ def test_incomplete_canonical_base_blocks_legacy_adoption(tmp_path):
             version=VERSION,
             environ=environ,
             reuse_only=True,
-            probe=lambda argv, **_kwargs: completed(
-                argv, stdout=f"railmux {LEGACY_VERSION}\n".encode()
-            ),
             lock_factory=unlocked,
         )
 
@@ -2212,14 +2102,12 @@ def test_runtime_status_verifies_exact_package_identity(tmp_path):
     }
 
 
-def test_runtime_status_reports_supported_legacy_tmux_as_visually_degraded(
-    tmp_path,
-):
+def test_runtime_status_rejects_managed_base_below_tmux_floor(tmp_path):
     environ = {"LOCALAPPDATA": str(tmp_path)}
     root = managed_root(environ)
     assert root is not None
     make_runtime(root, managed=True, shared=True)
-    marker_path = root / "railmux-base-content-v1.json"
+    marker_path = root / "railmux-base-content.json"
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     marker["core_packages"]["tmux"] = "3.6.a-1"
     marker_path.write_text(json.dumps(marker), encoding="utf-8")
@@ -2227,8 +2115,26 @@ def test_runtime_status_reports_supported_legacy_tmux_as_visually_degraded(
     snapshot = windows_msys2.managed_runtime_status(
         version=VERSION, environ=environ)
 
-    assert snapshot["tmux_capability"]["support"] == "supported"
-    assert snapshot["tmux_capability"]["windows_visual_fidelity"] == "degraded"
+    assert snapshot["status"] == "incomplete"
+    assert snapshot["tmux_capability"]["support"] == "unknown"
+
+
+def test_package_inventory_below_windows_tmux_floor_is_never_publishable(
+    tmp_path,
+):
+    root = tmp_path / "msys64"
+    inventory = (
+        b"python 3.12.13-1\npython-pip 26.1.2-1\ntmux 3.6.a-1\n"
+    )
+
+    with pytest.raises(RuntimeInstallError, match="requires tmux 3.7 or newer"):
+        windows_msys2._collect_base_content_identity(
+            root,
+            environ={"USERPROFILE": r"C:\Users\u"},
+            probe=lambda argv, **_kwargs: completed(argv, stdout=inventory),
+        )
+
+    assert not (root / "railmux-base-content.json").exists()
 
 
 def test_runtime_status_missing_base_has_stable_unknown_capability(tmp_path):
@@ -2262,7 +2168,7 @@ def test_runtime_status_reports_package_drift_without_mutating(tmp_path):
     assert snapshot["tmux_capability"]["support"] == "unknown"
     assert snapshot["tmux_capability"]["windows_visual_fidelity"] == "unknown"
     marker = json.loads(
-        (root / "railmux-base-content-v1.json").read_text(encoding="utf-8")
+        (root / "railmux-base-content.json").read_text(encoding="utf-8")
     )
     assert marker["content_id"] == _TEST_CONTENT_ID
 
@@ -2523,3 +2429,72 @@ def test_apply_prune_reports_quarantined_partial_cleanup(tmp_path, monkeypatch):
 
     assert not old20.exists()
     assert len(list(old20.parent.glob(".railmux-prune-railmux-0.4.0.dev20-*"))) == 1
+
+
+def test_runtime_uninstall_refuses_a_live_private_process(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+
+    with pytest.raises(RuntimeInstallError, match="still in use"):
+        windows_msys2.plan_managed_runtime_uninstall(
+            environ=environ,
+            probe=lambda argv, **_kwargs: completed(argv, returncode=4),
+        )
+
+    assert root.is_dir()
+
+
+def test_runtime_uninstall_removes_only_private_runtime_and_cache(tmp_path):
+    environ = {"LOCALAPPDATA": str(tmp_path)}
+    root = managed_root(environ)
+    assert root is not None
+    make_runtime(root, managed=True, shared=True)
+    data_root = Path(environ["LOCALAPPDATA"]) / "Railmux"
+    cache = data_root / "cache"
+    (cache / "pacman").mkdir(parents=True)
+    (cache / "pacman" / "package.pkg.tar.zst").write_bytes(b"cache")
+    logs = data_root / "logs"
+    logs.mkdir()
+    (logs / "install.log").write_text("retain", encoding="utf-8")
+    provider_root = tmp_path / ".codex"
+    provider_root.mkdir()
+    provider_history = provider_root / "session.jsonl"
+    provider_history.write_text("provider", encoding="utf-8")
+
+    def idle(argv, **_kwargs):
+        return completed(argv)
+
+    plan = windows_msys2.plan_managed_runtime_uninstall(
+        environ=environ,
+        probe=idle,
+    )
+
+    @contextmanager
+    def locked(_base):
+        yield
+
+    windows_msys2.apply_managed_runtime_uninstall(
+        plan,
+        environ=environ,
+        probe=idle,
+        lock_factory=locked,
+    )
+
+    assert not root.exists()
+    assert not cache.exists()
+    assert (logs / "install.log").read_text(encoding="utf-8") == "retain"
+    assert provider_history.read_text(encoding="utf-8") == "provider"
+
+
+def test_runtime_uninstall_never_touches_user_owned_override(tmp_path):
+    root = tmp_path / "user-msys"
+    root.mkdir()
+
+    with pytest.raises(RuntimeInstallError, match="user-owned runtime"):
+        windows_msys2.plan_managed_runtime_uninstall(
+            environ={"RAILMUX_MSYS2_ROOT": str(root)},
+        )
+
+    assert root.is_dir()

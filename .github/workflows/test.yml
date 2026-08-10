@@ -205,6 +205,8 @@ jobs:
           # runtime extras; the separate quality job owns ruff/build/twine.
           "$app/venv/bin/python" -m pip install ".[ssh]" "pytest>=8.0"
           tmux -V
+          TMUX_VERSION="$(tmux -V)" "$app/venv/bin/python" -c \
+            'import os; from railmux.tmux_capabilities import parse_tmux_version; assert parse_tmux_version(os.environ["TMUX_VERSION"]) >= (3, 7)'
           "$app/venv/bin/railmux" --version
           printf '%s' "$version" > /tmp/railmux-version
       - name: Seed exact managed markers and exercise Windows-only suites
@@ -216,8 +218,10 @@ jobs:
           content=$(sha256sum /tmp/railmux-packages | awk '{print $1}')
           count=$(wc -l < /tmp/railmux-packages)
           archive_sha=$("$app/venv/bin/python" -c \
-            'from railmux.windows_msys2 import MSYS2_BASE_LINEAGE_SHA256; print(MSYS2_BASE_LINEAGE_SHA256)')
-          RUNTIME_ID=msys2-2026-03-22 VERSION="$version" \
+            'from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256; print(MSYS2_ARCHIVE_SHA256)')
+          runtime_id=$("$app/venv/bin/python" -c \
+            'from railmux.windows_msys2 import MSYS2_RUNTIME_ID; print(MSYS2_RUNTIME_ID)')
+          RUNTIME_ID="$runtime_id" VERSION="$version" \
             CONTENT="$content" PACKAGE_COUNT="$count" ARCHIVE_SHA="$archive_sha" \
             "$app/venv/bin/python" - <<'PY'
           import json, os
@@ -230,9 +234,9 @@ jobs:
               name, package_version = row.split(" ", 1)
               inventory[name] = package_version
           Path("/railmux-base.json").write_text(
-              json.dumps({"schema": 1, "runtime": runtime}), encoding="utf-8")
-          Path("/railmux-base-content-v1.json").write_text(json.dumps({
-              "schema": 1,
+              json.dumps({"schema": 2, "runtime": runtime}), encoding="utf-8")
+          Path("/railmux-base-content.json").write_text(json.dumps({
+              "schema": 2,
               "runtime": runtime,
               "archive_sha256": os.environ["ARCHIVE_SHA"],
               "content_id": content,
@@ -269,7 +273,7 @@ jobs:
             tests/test_diagnostics.py \
             tests/test_provider_paths.py
           RAILMUX_WINDOWS_RUNTIME=msys2 \
-            RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22 \
+            RAILMUX_MSYS2_RUNTIME_ID="$runtime_id" \
             RAILMUX_MSYS2_APP_ID="railmux-$version" \
             "$app/venv/bin/railmux" doctor --json > /tmp/managed-doctor.json
           grep -q '"managed_windows"' /tmp/managed-doctor.json

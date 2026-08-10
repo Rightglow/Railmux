@@ -14,7 +14,7 @@ from railmux.release_version import PROJECT_VERSION_PATTERN
 
 _DRIVE_PATH = re.compile(r"^(?:\\\\\?\\)?([A-Za-z]):[\\/](.*)\Z")
 _MANAGED_BASE_MARKER = Path("/railmux-base.json")
-_MANAGED_BASE_CONTENT_MARKER = Path("/railmux-base-content-v1.json")
+_MANAGED_BASE_CONTENT_MARKER = Path("/railmux-base-content.json")
 _MANAGED_APP_ROOT = Path("/opt/railmux/apps")
 _MANAGED_APP_ID = re.compile(
     rf"railmux-{PROJECT_VERSION_PATTERN}\Z"
@@ -63,19 +63,14 @@ def running_in_managed_windows_wrapper(
     from railmux import __version__
 
     base_valid = base_payload == {
-        "schema": 1,
+        "schema": 2,
         "runtime": runtime_id,
-    }
-    legacy_app = app_payload == {
-        "schema": 1,
-        "runtime": runtime_id,
-        "railmux": __version__,
     }
     content_payload = read_safe_marker(_MANAGED_BASE_CONTENT_MARKER)
     content_id = (
         content_payload.get("content_id")
         if isinstance(content_payload, dict)
-        and content_payload.get("schema") == 1
+        and content_payload.get("schema") == 2
         and content_payload.get("runtime") == runtime_id
         else None
     )
@@ -89,7 +84,7 @@ def running_in_managed_windows_wrapper(
             "base_content_id": content_id,
         }
     )
-    return base_valid and (legacy_app or exact_app)
+    return base_valid and exact_app
 
 
 def private_mode_is_safe(mode: int) -> bool:

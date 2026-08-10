@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from railmux import __version__
@@ -31,6 +32,7 @@ def test_windows_help_describes_shared_native_provider_data(capsys):
     assert "managed MSYS2/tmux" in output
     assert "Windows-native" in output
     assert "runtime status" in output
+    assert "runtime uninstall" in output
     assert "runtime prune" in output
     assert "--verbose" in output
     finder.assert_not_called()
@@ -130,40 +132,6 @@ def test_runtime_status_labels_user_owned_override(capsys, tmp_path):
     assert "Managed location:" not in output
 
 
-def test_runtime_status_explains_supported_degraded_tmux(capsys, tmp_path, monkeypatch):
-    runtime = Msys2Runtime(tmp_path / "managed", managed=True)
-    monkeypatch.setattr(
-        windows_bootstrap,
-        "managed_runtime_status",
-        lambda **_kwargs: {
-            "schema": 2,
-            "runtime": MSYS2_RUNTIME_ID,
-            "status": "ready",
-            "current_app": True,
-            "layers": [__version__],
-            "tmux_capability": {
-                "version": "3.6.a-1",
-                "minimum_supported": "2.7",
-                "source": "recorded_base_marker",
-                "support": "supported",
-                "verification": "not_requested",
-                "windows_visual_fidelity": "degraded",
-                "windows_visual_fidelity_recommended": "3.7",
-            },
-        },
-    )
-
-    assert windows_bootstrap._runtime_status(
-        runtime, environ={"LOCALAPPDATA": str(tmp_path)}
-    ) == 0
-
-    output = capsys.readouterr().out
-    assert "tmux 3.6.a-1 (recorded base marker" in output
-    assert "Windows visual fidelity=degraded" in output
-    assert "tmux 3.7+ recommended" in output
-    assert "existing panes keep their current settings" in output
-
-
 def test_runtime_install_accepts_verbose_and_yes_in_either_order(
     tmp_path, monkeypatch
 ):
@@ -200,6 +168,59 @@ def test_runtime_install_rejects_duplicate_or_unknown_logging_flags(capsys):
     assert capsys.readouterr().err.count("[--yes] [--verbose]") == 2
 
 
+def test_runtime_uninstall_dry_run_never_applies(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "runtime"
+    cache = tmp_path / "cache"
+    runtime = Msys2Runtime(root, managed=True)
+    monkeypatch.setattr(
+        windows_bootstrap,
+        "plan_managed_runtime_uninstall",
+        lambda **_kwargs: SimpleNamespace(root=root, cache=cache),
+    )
+    apply = MagicMock(side_effect=AssertionError("dry run must not remove"))
+    monkeypatch.setattr(
+        windows_bootstrap, "apply_managed_runtime_uninstall", apply)
+
+    assert main(
+        ["runtime", "uninstall", "--dry-run"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: runtime,
+        version_info=(3, 10),
+    ) == 0
+
+    assert "Dry run only" in capsys.readouterr().out
+    apply.assert_not_called()
+
+
+def test_runtime_uninstall_yes_removes_without_second_prompt(
+    tmp_path, monkeypatch, capsys,
+):
+    root = tmp_path / "runtime"
+    plan = SimpleNamespace(root=root, cache=None)
+    runtime = Msys2Runtime(root, managed=True)
+    monkeypatch.setattr(
+        windows_bootstrap,
+        "plan_managed_runtime_uninstall",
+        lambda **_kwargs: plan,
+    )
+    apply = MagicMock(return_value=plan)
+    monkeypatch.setattr(
+        windows_bootstrap, "apply_managed_runtime_uninstall", apply)
+
+    assert main(
+        ["runtime", "uninstall", "--yes"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: runtime,
+        input_fn=lambda _prompt: (_ for _ in ()).throw(
+            AssertionError("--yes must not prompt")
+        ),
+        version_info=(3, 10),
+    ) == 0
+
+    apply.assert_called_once_with(plan, environ={"LOCALAPPDATA": str(tmp_path)})
+    assert "pip uninstall railmux" in capsys.readouterr().out
+
+
 def test_runtime_install_consent_describes_updates_and_private_disk(capsys):
     assert main(
         ["runtime", "install"],
@@ -217,33 +238,18 @@ def test_runtime_install_consent_describes_updates_and_private_disk(capsys):
     assert "private disk space" in output
 
 
-def test_matching_private_base_installs_app_layer_without_prompt(
+def test_matching_current_private_base_installs_app_layer_without_prompt(
     tmp_path, monkeypatch, capsys
 ):
-    legacy_version = "0.4.0.dev10"
-    root = (
-        tmp_path
-        / "Railmux"
-        / "runtimes"
-        / MSYS2_RUNTIME_ID
-        / f"railmux-{legacy_version}"
-    )
-    bash = root / "usr" / "bin" / "bash.exe"
-    bash.parent.mkdir(parents=True)
-    bash.write_bytes(b"fixture")
-    (root / "railmux-runtime.json").write_text(
-        json.dumps(
-            {
-                "schema": 1,
-                "runtime": MSYS2_RUNTIME_ID,
-                "railmux": legacy_version,
-            }
-        ),
-        encoding="utf-8",
-    )
+    root = tmp_path / "Railmux" / "runtimes" / "shared" / MSYS2_RUNTIME_ID
     installed = Msys2Runtime(root, managed=True, app_name=f"railmux-{__version__}")
     install = MagicMock(return_value=installed)
     monkeypatch.setattr(windows_bootstrap, "install_managed_runtime", install)
+    monkeypatch.setattr(
+        windows_bootstrap,
+        "reusable_managed_base_candidate",
+        lambda _environ: root,
+    )
 
     assert main(
         ["runtime", "install"],
@@ -272,7 +278,7 @@ def test_noninteractive_doctor_never_installs_from_reusable_base(
     monkeypatch.setattr(
         windows_bootstrap,
         "reusable_managed_base_candidate",
-        lambda _environ: (runtime.root, "0.4.0.dev10"),
+        lambda _environ: runtime.root,
     )
     process = MagicMock()
     process.wait.return_value = 0

@@ -12,7 +12,6 @@ from railmux.cli import (
     _reset_terminal_modes,
     _run_tmux_client_with_watchdog,
     _show_startup_message,
-    _warn_managed_windows_visual_fidelity,
     is_ssh_session,
     main,
 )
@@ -28,30 +27,6 @@ def test_interactive_terminal_size_uses_real_tty_dimensions(monkeypatch):
 
     assert _interactive_terminal_size() == (164, 46)
     get_size.assert_called_once_with(sys.stdout.fileno())
-
-
-def test_managed_windows_warns_for_supported_tmux_below_visual_threshold(
-    monkeypatch, capsys,
-):
-    monkeypatch.setattr("railmux.tmux_ctl.tmux_version", lambda: (3, 6))
-
-    _warn_managed_windows_visual_fidelity()
-
-    error = capsys.readouterr().err
-    assert "tmux 3.6 is supported" in error
-    assert "recommended tmux 3.7" in error
-    assert "New Codex panes use reduced motion" in error
-    assert "already-running panes keep their current settings" in error
-
-
-def test_managed_windows_visual_warning_is_quiet_for_tmux_37(
-    monkeypatch, capsys,
-):
-    monkeypatch.setattr("railmux.tmux_ctl.tmux_version", lambda: (3, 7))
-
-    _warn_managed_windows_visual_fidelity()
-
-    assert capsys.readouterr().err == ""
 
 
 def test_interactive_terminal_size_does_not_invent_non_tty_fallback(
@@ -573,7 +548,7 @@ def test_managed_windows_precreates_missing_outer_session_for_bridge(
         "tmux", "-L", "railmux", "-T", "sync", "start-server", ";",
     ]
     assert "opaque-terminal-identity" not in run_client.call_args.args[0]
-    assert "Windows visual fidelity is reduced" in capsys.readouterr().err
+    assert "Windows visual fidelity is reduced" not in capsys.readouterr().err
 
 
 def test_managed_windows_without_wt_marker_keeps_ordinary_client_features(

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc7] - 2026-08-10
+
+### Changed
+
+- Replace the pre-release Windows base identity with a clean managed runtime
+  generation. Native Windows now installs tmux itself and refuses to publish or
+  reuse a managed package inventory below tmux 3.7; macOS, Linux, and WSL keep
+  the shared tmux 2.7 floor. Preview-generation MSYS2 trees and marker formats
+  are no longer adopted.
+- Remove the managed-Windows tmux 3.6 reduced-motion compatibility path. The
+  private tmux is a Railmux-owned dependency rather than software users must
+  install or upgrade manually.
+
+### Added
+
+- Add `railmux runtime uninstall` with dry-run and noninteractive modes. It
+  revalidates idleness under the install lock, atomically isolates only the
+  Railmux-owned MSYS2 generation and package caches, and never accesses native
+  Codex/Claude histories or user-owned MSYS2 trees.
+
 ## [0.4.0rc6] - 2026-08-09
 
 ### Changed

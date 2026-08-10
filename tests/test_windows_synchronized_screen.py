@@ -75,32 +75,3 @@ def test_posix_keeps_stock_urwid_screen(monkeypatch):
     monkeypatch.setattr(app_module, "running_in_windows_wrapper", lambda: False)
 
     assert app_module._screen_class_for_platform() is urwid.raw_display.Screen
-
-
-def test_legacy_managed_windows_tmux_reduces_codex_motion(monkeypatch):
-    monkeypatch.setattr(
-        app_module, "running_in_managed_windows_wrapper", lambda: True)
-    monkeypatch.setattr(app_module.tmux_ctl, "tmux_version", lambda: (3, 6))
-
-    assert app_module._reduce_codex_motion_for_terminal() is True
-
-
-@pytest.mark.parametrize("version", [(3, 7), (3, 8)])
-def test_current_managed_windows_tmux_keeps_codex_motion(monkeypatch, version):
-    monkeypatch.setattr(
-        app_module, "running_in_managed_windows_wrapper", lambda: True)
-    monkeypatch.setattr(app_module.tmux_ctl, "tmux_version", lambda: version)
-
-    assert app_module._reduce_codex_motion_for_terminal() is False
-
-
-def test_posix_never_changes_codex_motion(monkeypatch):
-    monkeypatch.setattr(
-        app_module, "running_in_managed_windows_wrapper", lambda: False)
-    monkeypatch.setattr(
-        app_module.tmux_ctl,
-        "tmux_version",
-        lambda: pytest.fail("POSIX must not need a tmux compatibility probe"),
-    )
-
-    assert app_module._reduce_codex_motion_for_terminal() is False

@@ -55,7 +55,11 @@ from railmux.release_version import (
     parse_project_version,
 )
 from railmux.terminal_status import STYLE_ACCENT, STYLE_MUTED, styled
-from railmux.tmux_capabilities import classify_tmux_text
+from railmux.tmux_capabilities import (
+    TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED,
+    classify_tmux_text,
+    parse_tmux_version,
+)
 
 
 MSYS2_RELEASE = "2026-03-22"
@@ -86,23 +90,21 @@ MSYS2_ARCHIVE_SHA256 = (
 )
 MSYS2_ARCHIVE_MEMBER_COUNT = 16_485
 MSYS2_ARCHIVE_UNPACKED_SIZE = 289_361_533
-# Schema-1 base-content markers released in dev24/dev25 use the SFX digest as
-# their pinned release-lineage token.  Keep accepting and writing that durable
-# value while the bootstrap consumes the equivalent official tar.xz artifact.
-MSYS2_BASE_LINEAGE_SHA256 = (
-    "6fe0cc8154132040e034ff4daface2a4163a9d1f6ebaaa1133394bff460bd5cf"
-)
-MSYS2_RUNTIME_ID = f"msys2-{MSYS2_RELEASE}"
+# Runtime IDs are immutable package generations, not merely archive dates.
+# Generation 1 is the first release contract and requires tmux 3.7+ before a
+# staged base can be published. Preview generations are intentionally neither
+# discovered nor adopted.
+MSYS2_RUNTIME_GENERATION = 1
+MSYS2_RUNTIME_ID = f"msys2-{MSYS2_RELEASE}-r{MSYS2_RUNTIME_GENERATION}"
 _NATIVE_WINDOWS = os.name == "nt"
-RUNTIME_SCHEMA = 1
+RUNTIME_SCHEMA = 2
 
 _RUNTIME_OVERRIDE = "RAILMUX_MSYS2_ROOT"
-_RUNTIME_MARKER = "railmux-runtime.json"
 _BASE_MARKER = "railmux-base.json"
-_BASE_CONTENT_MARKER = "railmux-base-content-v1.json"
+_BASE_CONTENT_MARKER = "railmux-base-content.json"
 _APP_MARKER = "railmux-app.json"
 _APP_ROOT = "/opt/railmux/apps"
-_LEGACY_RAILMUX_EXECUTABLE = "/opt/railmux/venv/bin/railmux"
+_UNVERSIONED_RAILMUX_EXECUTABLE = "/opt/railmux/venv/bin/railmux"
 _HANDOFF_COMMAND = (
     'unset MSYS2_ARG_CONV_EXCL; executable=$1; shift; exec "$executable" "$@"'
 )
@@ -162,6 +164,12 @@ _IN_USE_APPS_COMMAND = (
     "for f in /proc/[0-9]*/cmdline; do "
     "[ -r \"$f\" ] || continue; tr '\\0' '\\n' <\"$f\"; done"
 )
+_RUNTIME_IDLE_COMMAND = (
+    "self=$$; for f in /proc/[0-9]*/cmdline; do "
+    "pid=${f#/proc/}; pid=${pid%/cmdline}; "
+    "[ \"$pid\" = \"$self\" ] && continue; "
+    "[ -r \"$f\" ] || exit 3; exit 4; done; exit 0"
+)
 _VENV_COMMAND = 'python -m venv "$1/venv"'
 _PACKAGE_COMMAND = (
     'cache=$(cygpath -u "$3") && mkdir -p "$cache" && '
@@ -205,9 +213,9 @@ class BaseContentIdentity:
 
     def marker(self) -> dict[str, object]:
         return {
-            "schema": 1,
+            "schema": RUNTIME_SCHEMA,
             "runtime": MSYS2_RUNTIME_ID,
-            "archive_sha256": MSYS2_BASE_LINEAGE_SHA256,
+            "archive_sha256": MSYS2_ARCHIVE_SHA256,
             "content_id": self.content_id,
             "package_count": self.package_count,
             "core_packages": dict(self.core_packages),
@@ -226,6 +234,14 @@ class RuntimePrunePlan:
     @property
     def empty(self) -> bool:
         return not self.remove_apps and self.pip_cache is None
+
+
+@dataclass(frozen=True)
+class RuntimeUninstallPlan:
+    """Exact Railmux-owned runtime and cache eligible for removal."""
+
+    root: Path
+    cache: Path | None
 
 
 Probe = Callable[..., subprocess.CompletedProcess[bytes]]
@@ -568,7 +584,7 @@ class Msys2Runtime:
         executable = (
             f"{_APP_ROOT}/{self.app_name}/venv/bin/railmux"
             if self.app_name is not None
-            else _LEGACY_RAILMUX_EXECUTABLE
+            else _UNVERSIONED_RAILMUX_EXECUTABLE
         )
         return [
             str(self.bash),
@@ -859,8 +875,6 @@ def managed_runtime_status(
     current_app = bool(layers is not None and version in layers)
     if base_valid and identity is not None:
         status = "ready" if current_app else "base_ready"
-    elif base_valid:
-        status = "legacy_base"
     else:
         status = "incomplete"
     result: dict[str, object] = {
@@ -939,19 +953,6 @@ def _probe(
     )
 
 
-def _marker_matches(root: Path, *, version: str) -> bool:
-    try:
-        raw = (root / _RUNTIME_MARKER).read_text(encoding="utf-8")
-        data = json.loads(raw)
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    return data == {
-        "schema": RUNTIME_SCHEMA,
-        "runtime": MSYS2_RUNTIME_ID,
-        "railmux": version,
-    }
-
-
 def _read_json_marker(path: Path) -> object | None:
     try:
         if path.is_symlink() or path.stat().st_size > 4096:
@@ -978,9 +979,9 @@ def _decode_base_content_marker(root: Path) -> BaseContentIdentity | None:
     package_count = payload.get("package_count")
     core = payload.get("core_packages")
     if (
-        payload.get("schema") != 1
+        payload.get("schema") != RUNTIME_SCHEMA
         or payload.get("runtime") != MSYS2_RUNTIME_ID
-        or payload.get("archive_sha256") != MSYS2_BASE_LINEAGE_SHA256
+        or payload.get("archive_sha256") != MSYS2_ARCHIVE_SHA256
         or not isinstance(content_id, str)
         or re.fullmatch(r"[0-9a-f]{64}", content_id) is None
         or not isinstance(package_count, int)
@@ -995,6 +996,8 @@ def _decode_base_content_marker(root: Path) -> BaseContentIdentity | None:
             or any(ord(char) < 0x20 or ord(char) > 0x7e for char in value)
             for value in core.values()
         )
+        or (tmux_version := parse_tmux_version(core.get("tmux"))) is None
+        or tmux_version < TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED
     ):
         return None
     return BaseContentIdentity(content_id, package_count, dict(core))
@@ -1058,6 +1061,19 @@ def _collect_base_content_identity(
         raise RuntimeInstallError(
             "the private MSYS2 package inventory omitted a required package"
         )
+    tmux_version = parse_tmux_version(packages["tmux"])
+    if (
+        tmux_version is None
+        or tmux_version < TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED
+    ):
+        minimum = ".".join(
+            str(part) for part in TMUX_WINDOWS_VISUAL_FIDELITY_RECOMMENDED
+        )
+        raise RuntimeInstallError(
+            "the private MSYS2 repository supplied tmux "
+            f"{packages['tmux']!r}; Railmux for Windows requires tmux "
+            f"{minimum} or newer"
+        )
     encoded = ("\n".join(normalized) + "\n").encode("ascii")
     return BaseContentIdentity(
         hashlib.sha256(encoded).hexdigest(),
@@ -1086,17 +1102,11 @@ def _app_marker_matches(root: Path, *, app_name: str, version: str) -> bool:
     if application.is_symlink() or not application.is_dir():
         return False
     payload = _read_json_marker(application / _APP_MARKER)
-    if payload == {
-        "schema": RUNTIME_SCHEMA,
-        "runtime": MSYS2_RUNTIME_ID,
-        "railmux": version,
-    }:
-        return True
     identity = _decode_base_content_marker(root)
     return bool(
         identity is not None
         and payload == {
-            "schema": 2,
+            "schema": RUNTIME_SCHEMA,
             "runtime": MSYS2_RUNTIME_ID,
             "railmux": version,
             "base_content_id": identity.content_id,
@@ -1194,6 +1204,17 @@ def plan_managed_runtime_prune(
     cache = _managed_cache(environ)
     if root is None or cache is None or not _base_marker_matches(root):
         raise RuntimeInstallError("a complete Railmux-managed runtime was not found")
+    try:
+        if _path_is_link_or_reparse(root):
+            raise RuntimeInstallError(
+                "the private runtime root is a link or reparse point; nothing "
+                "was removed"
+            )
+    except OSError as exc:
+        raise RuntimeInstallError(
+            "the private runtime root could not be validated; nothing was "
+            "removed"
+        ) from exc
     layers = _marked_app_versions(root)
     in_use = _in_use_app_names(root, environ=environ, probe=probe)
     if layers is None or in_use is None:
@@ -1297,28 +1318,137 @@ def apply_managed_runtime_prune(
         return current
 
 
+def _runtime_is_idle(
+    root: Path,
+    *,
+    environ: Mapping[str, str],
+    probe: Probe = _probe,
+) -> bool | None:
+    """Return true only when this MSYS2 generation exposes no other process."""
+    runtime = Msys2Runtime(root, managed=False)
+    try:
+        result = probe(
+            _bash_command(root, _RUNTIME_IDLE_COMMAND),
+            env=runtime.environment(environ),
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 4:
+        return False
+    return None
+
+
+def plan_managed_runtime_uninstall(
+    *,
+    environ: Mapping[str, str],
+    probe: Probe = _probe,
+) -> RuntimeUninstallPlan:
+    """Prove that the current Railmux-owned base can be removed safely."""
+    if environ.get(_RUNTIME_OVERRIDE, "").strip():
+        raise RuntimeInstallError(
+            "RAILMUX_MSYS2_ROOT selects a user-owned runtime; Railmux will "
+            "not uninstall it"
+        )
+    root = managed_root(environ)
+    cache = _managed_cache(environ)
+    if root is None or cache is None or not _base_marker_matches(root):
+        raise RuntimeInstallError("a complete Railmux-managed runtime was not found")
+    idle = _runtime_is_idle(root, environ=environ, probe=probe)
+    if idle is None:
+        raise RuntimeInstallError(
+            "could not prove that the private MSYS2 runtime is idle; nothing "
+            "was removed"
+        )
+    if not idle:
+        raise RuntimeInstallError(
+            "the private MSYS2 runtime is still in use; detach is not enough. "
+            "Exit all Railmux workspaces and provider panes, then retry"
+        )
+    if cache.exists():
+        try:
+            if _path_is_link_or_reparse(cache) or not cache.is_dir():
+                raise RuntimeInstallError(
+                    "the private runtime cache is not an owned directory; "
+                    "nothing was removed"
+                )
+        except OSError as exc:
+            raise RuntimeInstallError(
+                "the private runtime cache could not be validated; nothing "
+                "was removed"
+            ) from exc
+    else:
+        cache = None
+    return RuntimeUninstallPlan(root=root, cache=cache)
+
+
+def apply_managed_runtime_uninstall(
+    plan: RuntimeUninstallPlan,
+    *,
+    environ: Mapping[str, str],
+    probe: Probe = _probe,
+    lock_factory: Callable[[Path], object] | None = None,
+) -> RuntimeUninstallPlan:
+    """Re-prove idleness, isolate owned trees, then remove them."""
+    base = _managed_base(environ)
+    if base is None:
+        raise RuntimeInstallError(
+            "a non-virtualized Windows user data directory is unavailable"
+        )
+    effective_lock = install_lock if lock_factory is None else lock_factory
+    quarantined: list[tuple[Path, Path]] = []
+    with effective_lock(base):
+        current = plan_managed_runtime_uninstall(
+            environ=environ,
+            probe=probe,
+        )
+        if current != plan:
+            raise RuntimeInstallError(
+                "the managed runtime changed while uninstalling; nothing was "
+                "removed"
+            )
+        candidates = [current.root]
+        if current.cache is not None:
+            candidates.append(current.cache)
+        try:
+            for candidate in candidates:
+                quarantine = candidate.with_name(
+                    f".railmux-uninstall-{candidate.name}-"
+                    f"{secrets.token_hex(8)}"
+                )
+                os.replace(candidate, quarantine)
+                quarantined.append((candidate, quarantine))
+        except OSError as exc:
+            rollback_failed = False
+            for original, quarantine in reversed(quarantined):
+                try:
+                    os.replace(quarantine, original)
+                except OSError:
+                    rollback_failed = True
+            detail = (
+                " one or more isolated paths could not be restored"
+                if rollback_failed
+                else " nothing was removed"
+            )
+            raise RuntimeInstallError(
+                "the private runtime could not be isolated;" + detail
+            ) from exc
+    for _original, quarantine in quarantined:
+        try:
+            shutil.rmtree(quarantine)
+        except OSError as exc:
+            raise RuntimeInstallError(
+                "the private runtime was isolated from use but disk cleanup "
+                f"did not finish: {quarantine}"
+            ) from exc
+    return current
+
+
 def _find_shared_root(base: Path) -> Path | None:
     canonical = base / "shared" / MSYS2_RUNTIME_ID
-    if _base_marker_matches(canonical):
-        return canonical
-    legacy_parent = base / MSYS2_RUNTIME_ID
-    candidates: list[tuple[ProjectVersion, Path]] = []
-    try:
-        paths = list(legacy_parent.glob("railmux-*"))
-    except OSError:
-        return None
-    for candidate in paths:
-        prefix = "railmux-"
-        version = candidate.name[len(prefix) :] if candidate.name.startswith(prefix) else ""
-        if (
-            not candidate.is_symlink()
-            and _base_marker_matches(candidate)
-            and is_project_version(version)
-        ):
-            candidates.append((_version_key(version), candidate))
-    if candidates:
-        return max(candidates)[1]
-    return None
+    return canonical if _base_marker_matches(canonical) else None
 
 
 def probe_runtime(
@@ -1331,10 +1461,7 @@ def probe_runtime(
     if not runtime.bash.is_file():
         return False
     if runtime.managed:
-        if runtime.app_name is None:
-            if not _marker_matches(runtime.root, version=version):
-                return False
-        elif not (
+        if runtime.app_name is None or not (
             _base_marker_matches(runtime.root)
             and _app_marker_matches(
                 runtime.root, app_name=runtime.app_name, version=version
@@ -2347,7 +2474,7 @@ def _write_app_marker(app_root: Path, *, version: str) -> None:
     _write_json_marker(
         app_root / _APP_MARKER,
         {
-            "schema": 2,
+            "schema": RUNTIME_SCHEMA,
             "runtime": MSYS2_RUNTIME_ID,
             "railmux": version,
             "base_content_id": identity.content_id,
@@ -2355,43 +2482,9 @@ def _write_app_marker(app_root: Path, *, version: str) -> None:
     )
 
 
-def _legacy_candidates(base: Path) -> list[tuple[Path, str]]:
-    parent = base / MSYS2_RUNTIME_ID
-    candidates: list[tuple[ProjectVersion, Path, str]] = []
-    try:
-        paths = list(parent.glob("railmux-*"))
-    except OSError:
-        return []
-    for root in paths:
-        if root.is_symlink() or not root.is_dir() or _base_marker_matches(root):
-            continue
-        payload = _read_json_marker(root / _RUNTIME_MARKER)
-        if not isinstance(payload, dict):
-            continue
-        version = payload.get("railmux")
-        if (
-            not isinstance(version, str)
-            or not is_project_version(version)
-            or payload
-            != {
-                "schema": RUNTIME_SCHEMA,
-                "runtime": MSYS2_RUNTIME_ID,
-                "railmux": version,
-            }
-            or root.name != f"railmux-{version}"
-            or not (root / "usr" / "bin" / "bash.exe").is_file()
-        ):
-            continue
-        candidates.append((_version_key(version), root, version))
-    return [
-        (root, version)
-        for _key, root, version in sorted(candidates, reverse=True)
-    ]
-
-
 def reusable_managed_base_candidate(
     environ: Mapping[str, str],
-) -> tuple[Path, str | None] | None:
+) -> Path | None:
     """Return a structurally valid private base candidate without modifying it.
 
     Exact executable probing remains inside the serialized installer. Callers
@@ -2402,27 +2495,7 @@ def reusable_managed_base_candidate(
     base = _managed_base(environ)
     if base is None:
         return None
-    shared = _find_shared_root(base)
-    if shared is not None:
-        return shared, None
-    candidates = _legacy_candidates(base)
-    return candidates[0] if candidates else None
-
-
-def _find_reusable_legacy_root(
-    base: Path,
-    *,
-    environ: Mapping[str, str],
-    probe: Probe,
-) -> tuple[Path, str] | None:
-    """Find a complete Railmux-owned pre-dev11 runtime without modifying it."""
-    for root, version in _legacy_candidates(base):
-        legacy = Msys2Runtime(root, managed=True)
-        if probe_runtime(
-            legacy, version=version, environ=environ, probe=probe
-        ):
-            return root, version
-    return None
+    return _find_shared_root(base)
 
 
 def _validate_pip_cache_path(cache: Path) -> None:
@@ -3057,27 +3130,11 @@ def install_managed_runtime(
                         "missing; retry after checking antivirus or disk damage. "
                         f"The base was left untouched: {shared_root}"
                     )
-                adopted_version: str | None = None
-                if shared_root is None:
-                    reusable = _find_reusable_legacy_root(
-                        base, environ=environ, probe=probe
-                    )
-                    if reusable is not None:
-                        shared_root, adopted_version = reusable
-
                 if shared_root is not None:
                     reporter.phase(
                         1, 3, f"Reusing verified MSYS2 {MSYS2_RELEASE} base"
                     )
-                    if adopted_version is None:
-                        reporter.done("shared base")
-                    else:
-                        reporter.done(f"from Railmux {adopted_version}")
-                        reporter.note(
-                            "The existing private MSYS2, tmux, and Python files "
-                            "will not be downloaded, copied, or upgraded.",
-                            level="muted",
-                        )
+                    reporter.done("shared base")
 
                     identity = _ensure_base_content_identity(
                         shared_root,

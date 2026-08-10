@@ -119,7 +119,7 @@ def test_detached_managed_windows_session_receives_only_runtime_identity(
     )
     env = {
         "RAILMUX_WINDOWS_RUNTIME": "msys2",
-        "RAILMUX_MSYS2_RUNTIME_ID": "msys2-2026-03-22",
+        "RAILMUX_MSYS2_RUNTIME_ID": "msys2-2026-03-22-r1",
         "RAILMUX_MSYS2_APP_ID": f"railmux-{__version__}",
         "CODEX_API_KEY": "must-not-enter-tmux",
     }
@@ -138,7 +138,7 @@ def test_detached_managed_windows_session_receives_only_runtime_identity(
         "railmux",
         "-x", "164", "-y", "46",
         "-e", "RAILMUX_WINDOWS_RUNTIME=msys2",
-        "-e", "RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22",
+        "-e", "RAILMUX_MSYS2_RUNTIME_ID=msys2-2026-03-22-r1",
         "-e", f"RAILMUX_MSYS2_APP_ID=railmux-{__version__}",
         "/opt/railmux/bin/railmux", "--inside-tmux",
     ]

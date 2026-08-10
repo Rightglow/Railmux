@@ -152,22 +152,24 @@ existing client behavior.
 
 Codex independently brackets its own TUI paints in application-side
 synchronized output, but tmux learned to consume application frames only in
-3.7. A managed base whose recorded package inventory contains an older tmux
-therefore cannot make a complete provider frame atomic even when the outer
-Windows Terminal client advertises `sync`. Railmux detects that bounded
-compatibility case at provider launch and supplies the process-local Codex
-override `tui.animations=false`; it never edits the user's Codex config or
-history. tmux 3.7+ keeps the user's normal Codex motion setting. This is a
-Windows visual-fidelity threshold, not a change to Railmux's shared tmux 2.7
-core floor. The base's recorded package and the effective tmux classification
-are exposed by `railmux runtime status` and `railmux doctor`; direct managed
-Windows launch also emits one warning for a known supported version below 3.7.
-Already-running provider panes retain their current process settings.
+3.7. The Railmux-owned Windows runtime generation therefore installs tmux
+noninteractively and rejects its staged package inventory unless tmux parses as
+3.7 or newer. Users never maintain that private tmux manually. This managed
+Windows floor does not change Railmux's shared macOS/Linux/WSL tmux 2.7 core
+floor. The recorded package and effective tmux classification remain exposed
+by `railmux runtime status` and `railmux doctor`.
 
 The verified base is immutable after publication. Railmux never runs an
-in-place `pacman -Syu`, replaces a live tmux binary, or kills a server merely
-to improve rendering. A fresh staged base can receive current tmux packages;
-an older safe base remains usable with the explicit degraded classification.
+in-place `pacman -Syu`, replaces a live tmux binary, or kills a server to meet
+a changed base contract. Such a contract uses a new side-by-side runtime
+generation and publishes only after complete staging validation.
+
+Native `runtime uninstall` is the only authority that removes the managed base.
+It refuses user-owned overrides, proves the private generation idle, repeats
+that proof under the install lock, then atomically isolates the whole base and
+private package cache before recursive cleanup. An open executable/DLL handle,
+an ambiguous process inventory, or changed marker fails closed. Provider data
+and ordinary Railmux workspace state are outside its candidates.
 
 The managed launcher suppresses tmux's raw direct-attach error only on this
 Windows path. A completed fallback emits one terminal-capability-aware Railmux
@@ -197,10 +199,9 @@ shorter explicit bounds used to monitor a server already believed to be live.
 ### Managed Windows app identity and UI transition
 
 Managed Windows app layers have a second identity boundary above the tmux
-server. The shared base marker remains compatible with released dev11-dev23
-apps, while a separate immutable content marker hashes the complete sorted
-pacman package inventory and records the required tmux/Python package versions.
-Every dev24+ app marker binds to that exact content identity. Startup trusts an
+server. A separate immutable content marker hashes the complete sorted pacman
+package inventory and records the required tmux/Python package versions. Every
+app marker binds to that exact content identity. Startup trusts an
 app only when the runtime ID, versioned directory, app marker, executable, and
 base content identity all agree; `runtime status --verify` may compare the live
 package database read-only and report drift without rewriting the marker.
@@ -216,16 +217,14 @@ venv and recreates it through the existing private pip-cache path; it never
 changes the prior layer or grants authority to reinstall the shared base.
 
 An existing outer UI is never assumed to have changed merely because native
-pip installed a newer app layer. dev24+ controllers publish their exact app
+pip installed a newer app layer. Controllers publish their exact app
 identity only after reaching the usable MainLoop boundary. A detached older
 controller receives a pane-local nonce request and private F19 wakeup, saves
 portable state, returns displayed provider panes to their owning sessions,
 releases UI-only tmux state, then `exec`s the validated absolute new app.
-Released dev11-dev23 controllers do not implement that save boundary and are
-therefore never respawned or killed for migration. They remain attachable and
-report an explicit Soft Quit instruction; the following launch creates the
-dev24 UI. Attached clients, ambiguous identity, races, or failed validation
-likewise leave the old UI running. No transition kills the
+An unidentified controller is never respawned or killed for migration and
+requires an explicit Soft Quit. Attached clients, ambiguous identity, races,
+or failed validation likewise leave the old UI running. No transition kills the
 tmux server, a provider session, or a provider process, and the transition lock
 is scoped to the exact server label and immutable outer-session ID.
 
