@@ -85,6 +85,15 @@ def _user_state_snapshot(env: dict[str, str]) -> dict[str, tuple[str, ...]]:
     return snapshot
 
 
+def _doctor_schema_matches(
+    doctor: dict[str, object],
+    imported: dict[str, object],
+) -> bool:
+    """Compare the CLI with the contract shipped in the same wheel."""
+    expected = imported.get("doctor_schema")
+    return isinstance(expected, int) and doctor.get("schema_version") == expected
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("wheel", type=Path)
@@ -120,9 +129,12 @@ def main() -> int:
                 "-c",
                 (
                     "import json, pathlib, railmux, "
+                    "railmux.diagnostic_contract, "
                     "railmux.fast_display_client, railmux.remote_config, pyte; "
                     "print(json.dumps({'version': railmux.__version__, "
-                    "'path': str(pathlib.Path(railmux.__file__).resolve())}))"
+                    "'path': str(pathlib.Path(railmux.__file__).resolve()), "
+                    "'doctor_schema': "
+                    "railmux.diagnostic_contract.DOCTOR_SCHEMA_VERSION}))"
                 ),
             ],
             cwd=root,
@@ -163,7 +175,7 @@ def main() -> int:
             cwd=root,
             env=env,
         ))
-        if doctor.get("schema_version") != 5:
+        if not _doctor_schema_matches(doctor, imported):
             raise RuntimeError("wheel doctor emitted an unexpected schema")
     return 0
 

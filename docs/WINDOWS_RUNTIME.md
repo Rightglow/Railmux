@@ -178,6 +178,28 @@ opens a WSL shell and runs the ordinary POSIX product there.
   session-availability risk. Fresh installations use a disposable staging tree
   and publish only after package-floor, marker, application, and executable
   verification.
+- A generation change never adopts an older RC's live tmux state. Before a
+  fresh generation is downloaded, rechecked under the install lock, published,
+  or entered, the native bootstrap enumerates Windows processes directly and
+  treats executables beneath every marker-proven older managed base plus native
+  provider descendants whose parent chain remains linkable in that snapshot as
+  a migration blocker. An unqueryable process below an attributed seed remains
+  in that graph, while a failed complete inventory fails closed; an unrelated
+  system-wide tmux is not attributed without a managed path or parent chain. A
+  provider orphan whose old parent already exited cannot be
+  attributed by executable paths alone, so provider writer locking and the
+  ordinary exact pane/lease validation remain authoritative. A bounded
+  old-server check starts the old `tmux.exe`
+  directly under native Python supervision; a Windows timeout terminates and
+  reaps that exact client, rather than relying on an MSYS shell or `timeout`
+  process that can remain blocked behind an unresponsive server. `runtime
+  status` and `doctor` remain available and report only bounded generation,
+  process/provider counts, and reachable/unreachable classification. The user
+  must exit the older workspace normally or restart Windows before retrying;
+  Railmux never deletes a Codex/Claude writer lock, lease record, history, or
+  provider process to force migration. A version-only app-layer install inside
+  the already-published current generation remains safe and does not mutate the
+  older generation.
 - A new base renders seven stable phases rather than exposing all pacman noise;
   an upgrade that can reuse the exact base renders three phases and does not
   run archive download, extraction, pacman update, or package installation.

@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from railmux import __version__
 from railmux.diagnostic_contract import DOCTOR_SCHEMA_VERSION
 from railmux.windows_msys2 import (
+    LEGACY_RUNTIME_STATUS_ENV,
     MSYS2_RELEASE,
     Msys2Runtime,
     RuntimeInstallError,
@@ -17,11 +18,13 @@ from railmux.windows_msys2 import (
     apply_managed_runtime_prune,
     find_runtime,
     install_managed_runtime,
+    managed_legacy_runtime_activity,
     managed_runtime_status,
     managed_root,
     plan_managed_runtime_uninstall,
     plan_managed_runtime_prune,
     reusable_managed_base_candidate,
+    require_legacy_runtime_idle,
 )
 from railmux.windows_paths import managed_windows_data_root
 
@@ -51,9 +54,14 @@ def _runtime_status(
     environ: Mapping[str, str],
     json_output: bool = False,
     verify: bool = False,
+    legacy_activity: Mapping[str, object] | None = None,
 ) -> int:
     snapshot = managed_runtime_status(
-        version=__version__, environ=environ, verify=verify)
+        version=__version__,
+        environ=environ,
+        verify=verify,
+        legacy_activity=legacy_activity,
+    )
     data_root = (
         managed_windows_data_root(environ)
         if runtime is None or runtime.managed
@@ -116,7 +124,38 @@ def _runtime_status(
                 "Terminal rendering: tmux unknown; "
                 "Windows visual fidelity=unknown"
             )
+    _print_legacy_runtime_status(snapshot.get("legacy_runtime"))
     return 0 if runtime is not None else 1
+
+
+def _print_legacy_runtime_status(value: object) -> None:
+    if not isinstance(value, dict):
+        return
+    status = value.get("status")
+    generations = value.get("legacy_generation_count")
+    processes = value.get("process_count")
+    providers = value.get("provider_process_count")
+    unreachable = value.get("unreachable_generation_count")
+    if status == "clear":
+        if isinstance(generations, int) and generations:
+            print(f"Previous runtime generations: {generations}; all idle")
+        else:
+            print("Previous runtime generations: none")
+    elif status == "blocked":
+        print(
+            "Previous runtime generations: migration blocked; "
+            f"processes={processes}, providers={providers}, "
+            f"unreachable tmux={unreachable}"
+        )
+        print(
+            "Migration: exit old Railmux/provider panes or restart Windows; "
+            "do not delete Codex/Claude or lease lock files."
+        )
+    else:
+        print(
+            "Previous runtime generations: could not prove idle; run "
+            "'railmux doctor --json' or restart Windows before launch."
+        )
 
 
 def _native_doctor_missing_runtime(
@@ -124,9 +163,14 @@ def _native_doctor_missing_runtime(
     environ: Mapping[str, str],
     json_output: bool,
     remote_requested: bool,
+    legacy_activity: Mapping[str, object] | None = None,
 ) -> int:
     runtime = managed_runtime_status(
-        version=__version__, environ=environ, verify=False)
+        version=__version__,
+        environ=environ,
+        verify=False,
+        legacy_activity=legacy_activity,
+    )
     if json_output:
         json.dump(
             {
@@ -149,6 +193,7 @@ def _native_doctor_missing_runtime(
     print(f"Railmux: {__version__}")
     print("Platform: native Windows bootstrap")
     print("Managed Windows runtime: not ready")
+    _print_legacy_runtime_status(runtime.get("legacy_runtime"))
     if remote_requested:
         print(
             "Remote preflight: not run; install the managed runtime first, "
@@ -324,11 +369,15 @@ def _wait_for_runtime(
     *,
     environ: Mapping[str, str],
     popen: Callable[..., object],
+    legacy_activity: Mapping[str, object],
 ) -> int:
+    child_environ = dict(environ)
+    child_environ[LEGACY_RUNTIME_STATUS_ENV] = json.dumps(
+        legacy_activity, separators=(",", ":"), sort_keys=True)
     try:
         process = popen(
             runtime.argv(arguments),
-            env=runtime.environment(environ),
+            env=runtime.environment(child_environ),
         )
     except OSError as exc:
         print(f"error: could not enter the MSYS2 runtime: {exc}", file=sys.stderr)
@@ -352,6 +401,9 @@ def main(
     popen: Callable[..., object] = subprocess.Popen,
     input_fn: Callable[[str], str] = input,
     stdin_isatty: Callable[[], bool] = sys.stdin.isatty,
+    legacy_activity_finder: Callable[..., dict[str, object]] = (
+        managed_legacy_runtime_activity
+    ),
 ) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if version_info < _MINIMUM_WINDOWS_PYTHON:
@@ -367,7 +419,6 @@ def main(
         _print_help()
         return 0
 
-    runtime = runtime_finder(version=__version__, environ=environ)
     if arguments[:2] == ["runtime", "status"]:
         status_flags = arguments[2:]
         if (
@@ -379,18 +430,16 @@ def main(
                 file=sys.stderr,
             )
             return 2
+        # Status is read-only. Inventory once and reuse that exact bounded
+        # snapshot rather than probing an unresponsive old tmux repeatedly.
+        legacy_activity = legacy_activity_finder(environ=environ)
+        runtime = runtime_finder(version=__version__, environ=environ)
         return _runtime_status(
             runtime,
             environ=environ,
             json_output="--json" in status_flags,
             verify="--verify" in status_flags,
-        )
-    if arguments and arguments[0] == "doctor" and runtime is None:
-        json_output = "--json" in arguments[1:]
-        return _native_doctor_missing_runtime(
-            environ=environ,
-            json_output=json_output,
-            remote_requested="--remote" in arguments[1:],
+            legacy_activity=legacy_activity,
         )
     if arguments and arguments[0] == "runtime":
         install_arguments = arguments[1:]
@@ -448,6 +497,7 @@ def main(
                 file=sys.stderr,
             )
             return 2
+        runtime = runtime_finder(version=__version__, environ=environ)
         runtime = runtime or _install(
             environ=environ,
             assume_yes="--yes" in install_flags,
@@ -456,6 +506,32 @@ def main(
         )
         return 0 if runtime is not None else 2
 
+    diagnostic_or_repair = (
+        arguments[:1] == ["doctor"]
+        or arguments[:1] == ["config"]
+    )
+    # For an ordinary launch this fence must run before even probing the
+    # current MSYS generation. Doctor/config are read-only or repair surfaces,
+    # but receive the same one-shot privacy-safe snapshot.
+    legacy_activity = legacy_activity_finder(environ=environ)
+    if not diagnostic_or_repair:
+        try:
+            require_legacy_runtime_idle(legacy_activity)
+        except RuntimeInstallError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+    runtime = runtime_finder(version=__version__, environ=environ)
+    if arguments and arguments[0] == "doctor" and runtime is None:
+        json_output = "--json" in arguments[1:]
+        return _native_doctor_missing_runtime(
+            environ=environ,
+            json_output=json_output,
+            remote_requested="--remote" in arguments[1:],
+            legacy_activity=legacy_activity,
+        )
+
+    installed_now = False
     if runtime is None:
         root = managed_root(environ)
         print(
@@ -481,10 +557,24 @@ def main(
         )
         if runtime is None:
             return 2
+        installed_now = True
+
+    if installed_now and not diagnostic_or_repair:
+        # Installation can take long enough for an older launcher to become
+        # live. Re-inventory only after that long boundary; an ordinary
+        # ready-runtime launch reuses its initial result and avoids a second
+        # old-tmux timeout.
+        legacy_activity = legacy_activity_finder(environ=environ)
+        try:
+            require_legacy_runtime_idle(legacy_activity)
+        except RuntimeInstallError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
     return _wait_for_runtime(
         runtime,
         arguments,
         environ=environ,
         popen=popen,
+        legacy_activity=legacy_activity,
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ctypes
 import io
 import json
 import os
@@ -25,6 +26,7 @@ from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_SOURCES,
     MSYS2_RUNTIME_ID,
     RUNTIME_SCHEMA,
+    RUNTIME_STATUS_SCHEMA,
     Msys2Runtime,
     RuntimeInstallError,
     download_adaptive,
@@ -2205,7 +2207,7 @@ def test_runtime_status_verifies_exact_package_identity(tmp_path):
     )
 
     assert snapshot["status"] == "ready"
-    assert snapshot["schema"] == 2
+    assert snapshot["schema"] == RUNTIME_STATUS_SCHEMA
     assert snapshot["current_app"] is True
     assert snapshot["content_identity"] == _TEST_CONTENT_ID
     assert snapshot["content_verification"] == "match"
@@ -2259,7 +2261,7 @@ def test_runtime_status_missing_base_has_stable_unknown_capability(tmp_path):
     snapshot = windows_msys2.managed_runtime_status(
         version=VERSION, environ={"LOCALAPPDATA": str(tmp_path)})
 
-    assert snapshot["schema"] == 2
+    assert snapshot["schema"] == RUNTIME_STATUS_SCHEMA
     assert snapshot["tmux_capability"]["version"] is None
     assert snapshot["tmux_capability"]["support"] == "unknown"
 
@@ -2302,6 +2304,185 @@ def test_runtime_status_distinguishes_reusable_base_from_current_app(tmp_path):
 
     assert snapshot["status"] == "base_ready"
     assert snapshot["current_app"] is False
+
+
+def _make_legacy_generation(
+    tmp_path, runtime_id="msys2-2026-03-22", *, schema=1,
+):
+    root = tmp_path / "Railmux" / "runtimes" / "shared" / runtime_id
+    bash = root / "usr" / "bin" / "bash.exe"
+    bash.parent.mkdir(parents=True)
+    bash.write_bytes(b"fixture")
+    (root / "railmux-base.json").write_text(
+        json.dumps({"schema": schema, "runtime": runtime_id}),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_legacy_runtime_activity_blocks_native_provider_descendants(tmp_path):
+    root = _make_legacy_generation(tmp_path)
+    processes = (
+        windows_msys2.NativeWindowsProcess(
+            10, 1, "tmux.exe", str(root / "usr" / "bin" / "tmux.exe")),
+        windows_msys2.NativeWindowsProcess(
+            11, 10, "node.exe", r"D:\Scoop\node.exe"),
+        windows_msys2.NativeWindowsProcess(
+            12, 11, "codex.exe", r"D:\Scoop\codex.exe"),
+        windows_msys2.NativeWindowsProcess(
+            20, 1, "codex.exe", r"D:\unrelated\codex.exe"),
+    )
+
+    snapshot = windows_msys2.managed_legacy_runtime_activity(
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        processes=processes,
+        tmux_probe=lambda candidate: (
+            "unreachable" if candidate == root else "reachable"),
+    )
+
+    assert snapshot["status"] == "blocked"
+    assert snapshot["process_count"] == 3
+    assert snapshot["provider_process_count"] == 2
+    assert snapshot["tmux_process_count"] == 1
+    assert snapshot["unreachable_generation_count"] == 1
+    assert snapshot["generations"] == [{
+        "runtime": "msys2-2026-03-22",
+        "status": "busy",
+        "process_count": 3,
+        "tmux_process_count": 1,
+        "provider_process_count": 2,
+        "tmux_server": "unreachable",
+    }]
+    with pytest.raises(RuntimeInstallError, match="restart Windows"):
+        windows_msys2.require_legacy_runtime_idle(snapshot)
+
+
+def test_stale_legacy_generation_without_processes_does_not_block(tmp_path):
+    _make_legacy_generation(tmp_path)
+
+    snapshot = windows_msys2.managed_legacy_runtime_activity(
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        processes=(),
+        tmux_probe=lambda _root: pytest.fail("an idle generation must not probe tmux"),
+    )
+
+    assert snapshot["status"] == "clear"
+    assert snapshot["legacy_generation_count"] == 1
+    assert snapshot["busy_generation_count"] == 0
+    windows_msys2.require_legacy_runtime_idle(snapshot)
+
+
+def test_unqueryable_unrelated_tmux_is_not_attributed_to_legacy_root(tmp_path):
+    _make_legacy_generation(tmp_path)
+
+    snapshot = windows_msys2.managed_legacy_runtime_activity(
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        processes=(windows_msys2.NativeWindowsProcess(
+            10, 1, "tmux.exe", None),),
+    )
+
+    assert snapshot["status"] == "clear"
+    windows_msys2.require_legacy_runtime_idle(snapshot)
+
+
+def test_native_process_snapshot_first_api_failure_is_unknown(monkeypatch):
+    calls = []
+
+    class Function:
+        def __init__(self, name, result):
+            self.name = name
+            self.result = result
+
+        def __call__(self, *_args):
+            calls.append(self.name)
+            return self.result
+
+    fake = SimpleNamespace(
+        CreateToolhelp32Snapshot=Function("snapshot", 123),
+        Process32FirstW=Function("first", 0),
+        Process32NextW=Function("next", 0),
+        OpenProcess=Function("open", 0),
+        QueryFullProcessImageNameW=Function("query", 0),
+        CloseHandle=Function("close", 1),
+    )
+    monkeypatch.setattr(windows_msys2, "_NATIVE_WINDOWS", True)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: fake,
+                        raising=False)
+
+    assert windows_msys2._native_windows_process_snapshot() is None
+    assert calls == ["snapshot", "first", "close"]
+
+
+def test_unrecognized_sibling_tree_is_never_adopted_as_managed(tmp_path):
+    root = _make_legacy_generation(tmp_path, schema=99)
+    snapshot = windows_msys2.managed_legacy_runtime_activity(
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        processes=(windows_msys2.NativeWindowsProcess(
+            10, 1, "bash.exe", str(root / "usr" / "bin" / "bash.exe")),),
+    )
+
+    assert snapshot["status"] == "clear"
+    assert snapshot["legacy_generation_count"] == 0
+
+
+def test_current_generation_processes_are_not_a_legacy_blocker(tmp_path):
+    _make_legacy_generation(tmp_path)
+    current = managed_root({"LOCALAPPDATA": str(tmp_path)})
+    assert current is not None
+    processes = (windows_msys2.NativeWindowsProcess(
+        10, 1, "tmux.exe", str(current / "usr" / "bin" / "tmux.exe")),)
+
+    snapshot = windows_msys2.managed_legacy_runtime_activity(
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        processes=processes,
+    )
+
+    assert snapshot["status"] == "clear"
+    assert snapshot["process_count"] == 0
+
+
+def test_legacy_tmux_probe_is_direct_and_native_timeout_is_unreachable(tmp_path):
+    root = tmp_path / "old"
+    calls = []
+
+    def timeout(argv, **kwargs):
+        calls.append((argv, kwargs))
+        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+
+    assert windows_msys2._native_legacy_tmux_status(
+        root,
+        environ={"USERPROFILE": r"C:\Users\u"},
+        runner=timeout,
+    ) == "unreachable"
+    argv, kwargs = calls[0]
+    assert argv[0] == str(root / "usr" / "bin" / "tmux.exe")
+    assert "bash" not in " ".join(argv).lower()
+    assert kwargs["timeout"] == 3.0
+
+
+def test_fresh_generation_install_refuses_legacy_process_before_download(
+    tmp_path, monkeypatch,
+):
+    old = _make_legacy_generation(tmp_path)
+    sentinel = tmp_path / "provider-history.jsonl"
+    sentinel.write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(
+        windows_msys2,
+        "_native_windows_process_snapshot",
+        lambda: (windows_msys2.NativeWindowsProcess(
+            10, 1, "bash.exe", str(old / "usr" / "bin" / "bash.exe")),),
+    )
+    downloader = MagicMock(side_effect=AssertionError("download must not start"))
+
+    with pytest.raises(RuntimeInstallError, match="still active"):
+        install_managed_runtime(
+            version=VERSION,
+            environ={"LOCALAPPDATA": str(tmp_path)},
+            downloader=downloader,
+        )
+
+    downloader.assert_not_called()
+    assert sentinel.read_text(encoding="utf-8") == "keep"
 
 
 def test_native_payload_selects_exact_version_among_stale_dist_info(

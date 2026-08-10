@@ -214,6 +214,41 @@ def test_start_holder_rejects_a_changed_supplied_process_birth(
     popen.assert_not_called()
 
 
+def test_start_holder_requires_lock_verification_after_parent_detaches(
+    monkeypatch,
+) -> None:
+    claim = MagicMock(
+        root=Path("/provider"),
+        provider="claude",
+        instance="instance-a",
+        files=(("session-a", Path("/lease"), 9),),
+    )
+    stream = MagicMock()
+    stream.readline.return_value = b"ready\n"
+    process = MagicMock(stdout=stream)
+    process.wait.return_value = 0
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: "birth-42")
+    monkeypatch.setattr(
+        session_lease.subprocess, "Popen", MagicMock(return_value=process))
+    selector = MagicMock()
+    selector.select.return_value = [(stream, object())]
+    monkeypatch.setattr(
+        session_lease.selectors, "DefaultSelector",
+        MagicMock(return_value=selector),
+    )
+    monkeypatch.setattr(session_lease, "active_owner", lambda *_args: None)
+
+    result = session_lease.start_holder(
+        claim, pane_id="%9", pane_pid=42, process_start="birth-42")
+
+    assert not result
+    assert result.category == "holder-lock-verification-failed"
+    claim.detach.assert_called_once_with()
+    claim.close.assert_not_called()
+    process.terminate.assert_called_once_with()
+
+
 def test_app_waits_for_exact_new_pane_birth_before_transferring_lease(
     monkeypatch,
 ) -> None:
@@ -302,15 +337,188 @@ def test_running_entry_reacquires_after_its_holder_lock_disappears(
     monkeypatch.setattr(
         session_lease, "process_start_token", lambda _pid: token)
 
-    assert app._ensure_running_session_lease(running, session)
+    assert not app._ensure_running_session_lease(running, session)
+    assert running.lease_session_ids == frozenset()
 
     assert running.lease_repair_thread is not None
     running.lease_repair_thread.join(timeout=1.0)
+
+    owner = session_lease.LeaseOwner(
+        "claude", "session-a", session_lease._bounded_host(), "local",
+        pane_id=pane.pane_id, pane_pid=pane.pane_pid, process_start=token,
+    )
+    monkeypatch.setattr(
+        session_lease, "active_owner", lambda *_args: owner)
+    assert app._ensure_running_session_lease(running, session)
 
     acquire.assert_called_once_with(tmp_path, "claude", ["session-a"])
     start_holder.assert_called_once_with(
         claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid,
         process_start=token)
+
+
+def test_running_lease_repair_failure_is_observed_without_fake_alias(
+    monkeypatch, tmp_path,
+) -> None:
+    project = Project(tmp_path, "-tmp", tmp_path / "claude-project", 1, 1.0)
+    session = SessionMeta(
+        project=project, session_id="session-a",
+        jsonl_path=tmp_path / "session-a.jsonl", title="Shared",
+        message_count=1, token_total=1, last_mtime=1.0,
+        session_type="claude",
+    )
+    running = _Running(
+        key="session-a", tmux_name="cc-session-a", label="tmp/Shared",
+        project=project, session_type="claude",
+    )
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, running.tmux_name, "$9", "@9", False, 80, 24)
+    app = App.__new__(App)
+    app._claude_home = tmp_path
+    app._codex_real_pane_identity = MagicMock(return_value=pane)
+    claim = MagicMock(session_ids=("session-a",))
+    monkeypatch.setattr(session_lease, "active_owner", lambda *_args: None)
+    monkeypatch.setattr(session_lease, "acquire", lambda *_args: claim)
+    monkeypatch.setattr(
+        app, "_start_session_lease_holder",
+        MagicMock(return_value=session_lease.HolderStartResult.failure(
+            "holder-did-not-become-ready")),
+    )
+
+    assert not app._ensure_running_session_lease(running, session)
+    assert running.lease_session_ids == frozenset()
+    assert running.lease_warning is None
+    assert running.lease_repair_thread is not None
+    running.lease_repair_thread.join(timeout=1.0)
+
+    assert not app._ensure_running_session_lease(running, session)
+    assert running.lease_session_ids == frozenset()
+    assert running.lease_warning == "session lease holder did not become ready"
+
+
+def test_running_lease_repair_exception_releases_reserving_claim(
+    monkeypatch, tmp_path,
+) -> None:
+    project = Project(tmp_path, "-tmp", tmp_path / "claude-project", 1, 1.0)
+    session = SessionMeta(
+        project=project, session_id="session-a",
+        jsonl_path=tmp_path / "session-a.jsonl", title="Shared",
+        message_count=1, token_total=1, last_mtime=1.0,
+        session_type="claude",
+    )
+    running = _Running(
+        key="session-a", tmux_name="cc-session-a", label="tmp/Shared",
+        project=project, session_type="claude",
+    )
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, running.tmux_name, "$9", "@9", False, 80, 24)
+    app = App.__new__(App)
+    app._claude_home = tmp_path
+    app._codex_real_pane_identity = MagicMock(return_value=pane)
+    claim = MagicMock(session_ids=("session-a",))
+    monkeypatch.setattr(session_lease, "active_owner", lambda *_args: None)
+    monkeypatch.setattr(session_lease, "acquire", lambda *_args: claim)
+    monkeypatch.setattr(
+        app, "_start_session_lease_holder",
+        MagicMock(side_effect=RuntimeError("private provider detail")),
+    )
+
+    assert not app._ensure_running_session_lease(running, session)
+    assert running.lease_repair_thread is not None
+    running.lease_repair_thread.join(timeout=1.0)
+    assert not app._ensure_running_session_lease(running, session)
+
+    claim.close.assert_called_once_with()
+    assert running.lease_warning == "session lease holder could not be started"
+    assert "private provider detail" not in running.lease_warning
+
+
+def test_running_lease_repair_catches_base_exception_and_closes_claim(
+    monkeypatch, tmp_path,
+) -> None:
+    project = Project(tmp_path, "-tmp", tmp_path / "claude-project", 1, 1.0)
+    session = SessionMeta(
+        project=project, session_id="session-a",
+        jsonl_path=tmp_path / "session-a.jsonl", title="Shared",
+        message_count=1, token_total=1, last_mtime=1.0,
+        session_type="claude",
+    )
+    running = _Running(
+        key="session-a", tmux_name="cc-session-a", label="tmp/Shared",
+        project=project, session_type="claude",
+    )
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, running.tmux_name, "$9", "@9", False, 80, 24)
+    app = App.__new__(App)
+    app._claude_home = tmp_path
+    app._codex_real_pane_identity = MagicMock(return_value=pane)
+    claim = MagicMock(session_ids=("session-a",))
+    monkeypatch.setattr(session_lease, "active_owner", lambda *_args: None)
+    monkeypatch.setattr(session_lease, "acquire", lambda *_args: claim)
+    monkeypatch.setattr(
+        app, "_start_session_lease_holder",
+        MagicMock(side_effect=KeyboardInterrupt()),
+    )
+
+    assert not app._ensure_running_session_lease(running, session)
+    assert running.lease_repair_thread is not None
+    running.lease_repair_thread.join(timeout=1.0)
+    assert not app._ensure_running_session_lease(running, session)
+
+    claim.close.assert_called_once_with()
+    assert running.lease_warning == "session lease holder could not be started"
+
+
+def test_stuck_lease_repair_becomes_visible_without_fake_protection(
+    monkeypatch, tmp_path,
+) -> None:
+    project = Project(tmp_path, "-tmp", tmp_path / "claude-project", 1, 1.0)
+    session = SessionMeta(
+        project=project, session_id="session-a",
+        jsonl_path=tmp_path / "session-a.jsonl", title="Shared",
+        message_count=1, token_total=1, last_mtime=1.0,
+        session_type="claude",
+    )
+    running = _Running(
+        key="session-a", tmux_name="cc-session-a", label="tmp/Shared",
+        project=project, session_type="claude",
+        lease_repair_thread=MagicMock(), lease_repair_started_at=10.0,
+    )
+    running.lease_repair_thread.is_alive.return_value = True
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, running.tmux_name, "$9", "@9", False, 80, 24)
+    app = App.__new__(App)
+    app._claude_home = tmp_path
+    app._codex_real_pane_identity = MagicMock(return_value=pane)
+    app._set_status = MagicMock()
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: 19.0)
+
+    protected = app._ensure_running_session_lease(running, session)
+    app._record_session_lease_result(running, protected)
+
+    assert not protected
+    assert running.lease_session_ids == frozenset()
+    assert running.lease_warning == "session lease holder is still starting"
+    assert "still starting" in app._set_status.call_args.args[0]
+
+
+def test_pending_repair_resets_warning_dedupe_for_same_failure() -> None:
+    running = _Running(
+        key="session-a", tmux_name="cc-session-a", label="tmp/Shared",
+        lease_warning=None,
+    )
+    app = App.__new__(App)
+    app._session_lease_warnings = {
+        running.tmux_name: "session lease holder did not become ready",
+    }
+    app._set_status = MagicMock()
+
+    app._record_session_lease_result(running, False)
+    running.lease_warning = "session lease holder did not become ready"
+    app._record_session_lease_result(running, False)
+
+    app._set_status.assert_called_once()
+    assert "did not become ready" in app._set_status.call_args.args[0]
 
 
 def test_running_lease_failure_stays_visible_on_its_row(
@@ -409,6 +617,153 @@ def test_launch_closes_claim_when_new_tmux_topology_never_appears(
 
     claim.close.assert_called_once_with()
     killed.assert_called_once_with("cc-session-a")
+    assert "provider exited or its pane could not be observed" in (
+        app._set_status.call_args.args[0])
+    assert "session history was not changed" not in (
+        app._set_status.call_args.args[0])
+
+
+def test_launch_distinguishes_unpublished_provider_pane(
+    monkeypatch, tmp_path,
+) -> None:
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._running = {}
+    app._session_name = MagicMock(return_value="cc-session-a")
+    app._shellify = MagicMock(return_value="claude --resume session-a")
+    app._ensure_detached_agent = MagicMock(return_value=(True, None))
+    app._set_status = MagicMock()
+    claim = MagicMock(session_ids=("session-a",))
+    exists = iter((False, True, False))
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "session_exists", lambda _name: next(exists))
+    monkeypatch.setattr(app_mod.tmux_ctl, "session_topology", lambda _name: None)
+    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session", MagicMock())
+    monkeypatch.setattr(app_mod.time, "sleep", lambda _seconds: None)
+
+    assert not app._launch(
+        "session-a", ["claude"], tmp_path, "tmp/Shared", None,
+        lease_claim=claim)
+
+    assert "provider pane could not be observed" in (
+        app._set_status.call_args.args[0])
+    assert "no duplicate writer" not in app._set_status.call_args.args[0]
+
+
+def test_launch_reports_provider_exit_without_exposing_pane_output(
+    monkeypatch, tmp_path,
+) -> None:
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._running = {}
+    app._session_name = MagicMock(return_value="cx-session-a")
+    app._shellify = MagicMock(return_value="private provider output")
+    app._ensure_detached_agent = MagicMock(return_value=(True, None))
+    app._set_status = MagicMock()
+    claim = MagicMock(session_ids=("session-a",))
+    dead = tmux_ctl.PaneIdentity(
+        "%9", 42, "cx-session-a", "$9", "@9", True, 80, 24)
+    topology = tmux_ctl.SessionTopology(
+        "cx-session-a", "$9", 0, ("@9",), (dead,))
+    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _name: False)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "session_topology", lambda _name: topology)
+    monkeypatch.setattr(app_mod.tmux_ctl, "kill_session", MagicMock())
+
+    assert not app._launch(
+        "session-a", ["codex"], tmp_path, "tmp/Shared", None,
+        session_type="codex", lease_claim=claim)
+
+    status = app._set_status.call_args.args[0]
+    assert "provider exited during startup" in status
+    assert "private provider output" not in status
+
+
+def test_launch_reports_holder_failure_category(monkeypatch, tmp_path) -> None:
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._running = {}
+    app._session_name = MagicMock(return_value="cc-session-a")
+    app._shellify = MagicMock(return_value="claude --resume session-a")
+    app._ensure_detached_agent = MagicMock(return_value=(True, None))
+    app._set_status = MagicMock()
+    claim = MagicMock(session_ids=("session-a",))
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, "cc-session-a", "$9", "@9", False, 80, 24)
+    topology = tmux_ctl.SessionTopology(
+        "cc-session-a", "$9", 0, ("@9",), (pane,))
+    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _name: False)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "session_topology", lambda _name: topology)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "kill_session_identity", MagicMock(return_value=True))
+    monkeypatch.setattr(app_mod.tmux_ctl, "pane_identity", lambda _pane: None)
+    starts = iter(("birth-42", None))
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: next(starts))
+    app._start_session_lease_holder = MagicMock(
+        return_value=session_lease.HolderStartResult.failure(
+            "holder-process-start-failed"))
+
+    assert not app._launch(
+        "session-a", ["claude"], tmp_path, "tmp/Shared", None,
+        lease_claim=claim)
+
+    status = app._set_status.call_args.args[0]
+    assert "lease holder process could not start" in status
+    assert "cross-host session lease could not be kept alive" not in status
+    assert "do not resume" not in status
+
+
+def test_launch_warns_when_failed_holder_cleanup_cannot_be_confirmed(
+    monkeypatch, tmp_path,
+) -> None:
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._running = {}
+    app._session_name = MagicMock(return_value="cc-session-a")
+    app._shellify = MagicMock(return_value="claude --resume session-a")
+    app._ensure_detached_agent = MagicMock(return_value=(True, None))
+    app._set_status = MagicMock()
+    claim = MagicMock(session_ids=("session-a",))
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, "cc-session-a", "$9", "@9", False, 80, 24)
+    topology = tmux_ctl.SessionTopology(
+        "cc-session-a", "$9", 0, ("@9",), (pane,))
+    monkeypatch.setattr(app_mod.tmux_ctl, "session_exists", lambda _name: False)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "session_topology", lambda _name: topology)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "kill_session_identity", MagicMock(return_value=False))
+    monkeypatch.setattr(app_mod.tmux_ctl, "pane_identity", lambda _pane: pane)
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: "birth-42")
+    monkeypatch.setattr(app_mod.time, "sleep", lambda _seconds: None)
+    app._start_session_lease_holder = MagicMock(
+        return_value=session_lease.HolderStartResult.failure(
+            "holder-process-start-failed"))
+
+    assert not app._launch(
+        "session-a", ["claude"], tmp_path, "tmp/Shared", None,
+        lease_claim=claim)
+
+    status = app._set_status.call_args.args[0]
+    assert "cleanup could not be confirmed" in status
+    assert "do not resume this session on another host" in status
+    assert app._running == {}
+
+
+def test_failed_launch_cleanup_needs_provider_birth_proof(monkeypatch) -> None:
+    app = App.__new__(App)
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, "cc-session-a", "$9", "@9", False, 80, 24)
+    monkeypatch.setattr(
+        app_mod.tmux_ctl, "kill_session_identity", MagicMock(return_value=True))
+    monkeypatch.setattr(app_mod.tmux_ctl, "pane_identity", lambda _pane: None)
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: None)
+
+    assert not app._confirm_failed_launch_cleanup(pane)
 
 
 def test_resume_releases_claim_when_launch_double_does_not_take_it(

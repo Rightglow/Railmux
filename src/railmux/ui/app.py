@@ -128,6 +128,7 @@ _STATUS_RED = "#ff5f5f"
 _TERMINAL_COLORS = 2**24
 _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
 _SESSION_LEASE_PROBE_TTL_S = 2.0
+_SESSION_LEASE_REPAIR_WARN_S = 8.0
 _SYNC_OUTPUT_BEGIN = "\x1b[?2026h"
 _SYNC_OUTPUT_END = "\x1b[?2026l"
 
@@ -383,6 +384,31 @@ _RUNNING_SORT_INTERVAL = 60.0
 _SESSION_LEASE_IDENTITY_SETTLE_S = 1.0
 _SESSION_LEASE_IDENTITY_POLL_S = 0.025
 
+
+def _session_lease_failure_description(category: str | None) -> str:
+    """Map internal holder outcomes to bounded, provider-data-free text."""
+    return {
+        "provider-pane-identity-changed": (
+            "the provider pane changed before session protection completed"
+        ),
+        "provider-process-identity-unavailable": (
+            "the provider process identity could not be validated"
+        ),
+        "provider-process-identity-changed": (
+            "the provider process changed before session protection completed"
+        ),
+        "holder-process-start-failed": (
+            "the session lease holder process could not start"
+        ),
+        "holder-did-not-become-ready": (
+            "the session lease holder did not become ready"
+        ),
+        "holder-lock-verification-failed": (
+            "the session lease holder did not retain the shared lock"
+        ),
+        "holder-start-failed": "the session lease holder could not be started",
+    }.get(category, "session protection failed")
+
 # Cross-platform identity stamp stored on each detached agent tmux session.
 # Unlike the short-lived runtime state file, a session option lives exactly as
 # long as the tmux session and survives Railmux restarts without renaming it.
@@ -441,10 +467,18 @@ class _Running:
     # continuation and compaction checkpoints without a user rewind.
     codex_baseline_rollback_count: int = 0
     codex_history_generation_stamped: bool = False
+    # Stable aliases selected at Codex launch.  This is repair intent only;
+    # unlike ``lease_session_ids`` it never claims that an OS lock is held.
+    lease_anchor_ids: frozenset[str] = frozenset()
     lease_session_ids: frozenset[str] = frozenset()
     lease_warning: str | None = None
     lease_recheck_at: float = 0.0
     lease_repair_thread: threading.Thread | None = None
+    lease_repair_started_at: float | None = None
+    # A repair worker publishes only a privacy-safe outcome.  Missing aliases
+    # do not enter ``lease_session_ids`` until the UI thread consumes success
+    # and independently observes the holder's advisory locks.
+    lease_repair_result: tuple[frozenset[str], str | None] | None = None
 
     @property
     def is_placeholder(self) -> bool:
@@ -4899,7 +4933,7 @@ class App:
         self,
         claim: session_lease.LeaseClaim,
         pane: tmux_ctl.PaneIdentity,
-    ) -> bool:
+    ) -> session_lease.HolderStartResult:
         """Transfer a lease after a just-respawned pane publishes its birth.
 
         MSYS2 can expose the exact tmux pane before its process-birth token is
@@ -4912,7 +4946,8 @@ class App:
             current = tmux_ctl.pane_identity(pane.pane_id)
             if not self._same_live_pane(pane, current):
                 claim.close()
-                return False
+                return session_lease.HolderStartResult.failure(
+                    "provider-pane-identity-changed")
             process_start = session_lease.process_start_token(pane.pane_pid)
             if process_start is not None:
                 return session_lease.start_holder(
@@ -4923,8 +4958,33 @@ class App:
                 )
             if time.monotonic() >= deadline:
                 claim.close()
-                return False
+                return session_lease.HolderStartResult.failure(
+                    "provider-process-identity-unavailable")
             time.sleep(_SESSION_LEASE_IDENTITY_POLL_S)
+
+    def _confirm_failed_launch_cleanup(
+        self,
+        pane: tmux_ctl.PaneIdentity,
+    ) -> bool:
+        """Stop one exact failed launch and prove its provider process left."""
+        process_start = session_lease.process_start_token(pane.pane_pid)
+        tmux_ctl.kill_session_identity(pane)
+        for attempt in range(3):
+            current = tmux_ctl.pane_identity(pane.pane_id)
+            pane_gone = not self._same_live_pane(pane, current)
+            process_gone = (
+                process_start is not None
+                and session_lease.process_start_token(pane.pane_pid)
+                != process_start
+            )
+            # A tmux acknowledgement is not proof that an unidentifiable
+            # native provider exited. Without a birth token, keep cleanup
+            # unconfirmed and surface the do-not-resume warning.
+            if pane_gone and process_gone:
+                return True
+            if attempt < 2:
+                time.sleep(0.05)
+        return False
 
     def _recover_unrepresented_displayed_agents(
         self, server: tmux_ctl.ServerSnapshot | None,
@@ -5144,26 +5204,70 @@ class App:
                 if attempt < 2:
                     time.sleep(0.05)
             pane = topology.single_live_pane if topology is not None else None
-            if pane is None or not self._start_session_lease_holder(
-                    lease_claim, pane):
+            holder_result = (
+                self._start_session_lease_holder(lease_claim, pane)
+                if pane is not None else None
+            )
+            if pane is None or not holder_result:
+                # Preserve the post-create observation before cleanup removes
+                # the exact session.  A surviving session with no publishable
+                # topology differs from a provider that already exited.
+                session_without_topology = bool(
+                    topology is None and tmux_ctl.session_exists(tmux_name))
                 # ``start_holder`` closes the claim on its own failure.  A
                 # missing topology never called it, so close explicitly.
                 lease_claim.close()
+                cleanup_confirmed = True
                 if pane is not None:
-                    tmux_ctl.kill_session_identity(pane)
+                    cleanup_confirmed = self._confirm_failed_launch_cleanup(pane)
                 elif topology is not None:
                     tmux_ctl.kill_session(topology.session_id)
+                    cleanup_confirmed = not tmux_ctl.session_exists(tmux_name)
                 else:
                     # This name was proved absent immediately before Railmux
                     # created it in this launch transaction.  It is the only
                     # available cleanup identity when topology publication
                     # itself failed throughout the bounded retry.
                     tmux_ctl.kill_session(tmux_name)
-                self._set_status(
-                    "Launch refused: the cross-host session lease could not "
-                    "be kept alive",
-                    "error",
-                )
+                    cleanup_confirmed = not tmux_ctl.session_exists(tmux_name)
+                if topology is None:
+                    if session_without_topology:
+                        message = (
+                            "Launch failed: the provider pane could not be "
+                            "observed after startup"
+                        )
+                    else:
+                        message = (
+                            "Launch failed: the provider exited or its pane "
+                            "could not be observed after startup"
+                        )
+                elif (len(topology.panes) == 1 and topology.panes[0].dead):
+                    message = (
+                        "Launch failed: the provider exited during startup"
+                    )
+                elif pane is None:
+                    message = (
+                        "Launch refused: the provider pane topology changed "
+                        "before it could be validated"
+                    )
+                else:
+                    category = (
+                        holder_result.category
+                        if isinstance(
+                            holder_result, session_lease.HolderStartResult)
+                        else "holder-start-failed"
+                    )
+                    message = (
+                        "Launch refused: "
+                        f"{_session_lease_failure_description(category)}"
+                    )
+                if not cleanup_confirmed:
+                    message += (
+                        "; provider cleanup could not be confirmed—do not "
+                        "resume this session on another host; run "
+                        "railmux doctor"
+                    )
+                self._set_status(message, "error")
                 return False
         self._running[key] = _Running(
             key=key, tmux_name=tmux_name, label=label, project=project,
@@ -5175,6 +5279,10 @@ class App:
             orphan=launch_marker,
             allow_heuristic_resolution=pre_launch_complete,
             lease_session_ids=(
+                frozenset(lease_claim.session_ids)
+                if lease_claim is not None else frozenset()
+            ),
+            lease_anchor_ids=(
                 frozenset(lease_claim.session_ids)
                 if lease_claim is not None else frozenset()
             ),
@@ -9311,6 +9419,11 @@ class App:
             warnings = {}
         if protected:
             warnings.pop(running.tmux_name, None)
+        elif running.lease_warning is None:
+            # A new pending repair is a distinct attempt. Clear only status
+            # deduplication so the same warning is reported again if this
+            # attempt fails; pending itself remains a normal silent state.
+            warnings.pop(running.tmux_name, None)
         elif (running.lease_warning is not None
               and warnings.get(running.tmux_name) != running.lease_warning):
             warnings[running.tmux_name] = running.lease_warning
@@ -9332,13 +9445,19 @@ class App:
             return True
         now = time.monotonic()
         observed = self._session_lease_ids(session)
+        if (session.session_type == "codex"
+                and not running.lease_anchor_ids
+                and running.lease_session_ids):
+            # In-memory entries created before this field was populated still
+            # provide their already-validated launch aliases once.
+            running.lease_anchor_ids = running.lease_session_ids
         # Every rewind lineage the Codex index can link shares an ancestor with
         # the aliases held when this pane started. Keeping that stable anchor
         # set fences a later resume over the same known lineage and avoids
         # spawning one resident holder per rewind generation.
         desired = (
-            running.lease_session_ids
-            if session.session_type == "codex" and running.lease_session_ids
+            running.lease_anchor_ids
+            if session.session_type == "codex" and running.lease_anchor_ids
             else observed
         )
         if (desired.issubset(running.lease_session_ids)
@@ -9346,22 +9465,48 @@ class App:
                 and now < running.lease_recheck_at):
             return True
 
-        def finish(warning: str | None) -> bool:
+        def finish(warning: str | None, *, retry_after: float | None = None) -> bool:
             running.lease_warning = warning
             running.lease_recheck_at = now + (
-                _SESSION_LEASE_PROBE_TTL_S if warning is None else 1.0)
+                _SESSION_LEASE_PROBE_TTL_S if warning is None
+                else (1.0 if retry_after is None else retry_after))
             return warning is None
+
+        def pending() -> bool:
+            # Handoff is deliberately not authoritative until the child has
+            # published ready and a fresh OS-lock probe matches the pane.  It
+            # is also a normal sub-second state, not a user-facing failure.
+            running.lease_warning = (
+                "session lease holder is still starting"
+                if running.lease_repair_started_at is not None
+                and now - running.lease_repair_started_at
+                >= _SESSION_LEASE_REPAIR_WARN_S
+                else None
+            )
+            running.lease_recheck_at = now + 0.25
+            return False
 
         identity = self._codex_real_pane_identity(running)
         if identity is None:
             return finish("exact provider pane identity is unavailable")
         repair = running.lease_repair_thread
         if repair is not None and repair.is_alive():
-            # The claim is already exclusively locked while the holder starts.
-            running.lease_recheck_at = now + 0.25
-            running.lease_warning = None
-            return True
-        running.lease_repair_thread = None
+            # The parent claim is exclusive during this short handoff, but it
+            # is not provider-lifetime protection.  Keep the pending state
+            # visible and never add its aliases to descriptive held state.
+            return pending()
+        if repair is not None:
+            result = running.lease_repair_result
+            running.lease_repair_thread = None
+            running.lease_repair_started_at = None
+            running.lease_repair_result = None
+            if result is None:
+                return finish("session lease holder result was unavailable")
+            pending_ids, repair_warning = result
+            if not pending_ids or not pending_ids.issubset(desired):
+                return finish("session lease holder result no longer matched")
+            if repair_warning is not None:
+                return finish(repair_warning)
         root = self._session_lease_root(session.session_type)
         # ``lease_session_ids`` is descriptive state, never lock authority.
         # Revalidate the OS locks so an unexpectedly dead holder is repaired
@@ -9394,27 +9539,47 @@ class App:
                 )
             except session_lease.LeaseError:
                 return finish("shared locking is unavailable")
+            pending_ids = frozenset(missing)
+
             def _start_holder() -> None:
-                self._start_session_lease_holder(claim, identity)
+                try:
+                    result = self._start_session_lease_holder(claim, identity)
+                except BaseException:
+                    # The raw failure may include paths or provider details;
+                    # keep the UI result bounded and make sure no reserving
+                    # descriptor survives an unexpected worker exception.
+                    claim.close()
+                    result = session_lease.HolderStartResult.failure(
+                        "holder-start-failed")
+                category = (
+                    result.category
+                    if isinstance(result, session_lease.HolderStartResult)
+                    else (None if result else "holder-start-failed")
+                )
+                running.lease_repair_result = (
+                    pending_ids,
+                    None if result else _session_lease_failure_description(
+                        category).removeprefix("the "),
+                )
 
             repair = threading.Thread(
                 target=_start_holder,
                 name="railmux-session-lease",
                 daemon=True,
             )
+            running.lease_repair_result = None
             running.lease_repair_thread = repair
+            running.lease_repair_started_at = now
             try:
                 repair.start()
             except RuntimeError:
                 claim.close()
                 running.lease_repair_thread = None
+                running.lease_repair_started_at = None
                 return finish("lease holder could not be started")
-            held.update(missing)
         running.lease_session_ids = frozenset(held)
         if running.lease_repair_thread is not None:
-            running.lease_recheck_at = now + 0.25
-            running.lease_warning = None
-            return True
+            return pending()
         return finish(
             None if desired.issubset(running.lease_session_ids)
             else "not all provider aliases are protected"

@@ -108,6 +108,40 @@ def test_input_protocol_decodes_bytes_resize_and_keyframe_request():
         encode_client_resize(39, 40)
 
 
+def test_large_bracketed_paste_survives_many_terminal_and_protocol_reads():
+    payload = b"\033[200~" + ("诊断-line\n" * 12000).encode() + b"\033[201~"
+    assert len(payload) > 64 * 1024
+    terminal_decoder = TerminalInputDecoder()
+    protocol_stream = bytearray()
+    forwarded = bytearray()
+
+    terminal_reads = [payload[:3]]
+    cursor = 3
+    while cursor < len(payload) - 4:
+        end = min(cursor + 4096, len(payload) - 4)
+        terminal_reads.append(payload[cursor:end])
+        cursor = end
+    terminal_reads.append(payload[-4:])
+    for chunk in terminal_reads:
+        for part in terminal_decoder.feed(chunk):
+            assert isinstance(part, bytes)
+            forwarded.extend(part)
+            protocol_stream.extend(encode_client_input(part))
+    for part in terminal_decoder.flush_pending(delay=0):
+        forwarded.extend(part)
+        protocol_stream.extend(encode_client_input(part))
+
+    protocol_decoder = InputFrameDecoder()
+    decoded = bytearray()
+    for start in range(0, len(protocol_stream), 7001):
+        for message in protocol_decoder.feed(protocol_stream[start : start + 7001]):
+            assert message.kind is InputKind.BYTES
+            decoded.extend(message.data)
+
+    assert bytes(forwarded) == payload
+    assert bytes(decoded) == payload
+
+
 def test_screen_model_applies_patch_and_rejects_gap_or_wrong_geometry():
     decoder = ClientScreenUpdateDecoder()
     model = ScreenModel()

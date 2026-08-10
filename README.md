@@ -81,6 +81,13 @@ Python—not because the Railmux package itself is that large. Later Railmux
 versions reuse the same verified runtime generation and install only a
 version-isolated application layer.
 
+When an upgrade changes that private runtime generation, Railmux will not
+silently enter while an attributable older managed workspace is still active.
+If startup reports a previous runtime, exit its Railmux/provider panes normally
+or restart Windows, then run `railmux` again. Do not delete Codex/Claude history
+or lock files; the safety check does not modify them. The diagnostic commands
+`railmux doctor --json` and `railmux runtime status --json` remain available.
+
 Railmux's shared tmux core requirement remains 2.7+ on macOS, Linux, and WSL.
 The native-Windows managed runtime automatically installs tmux 3.7 or newer
 and refuses to activate an older package set, because synchronized provider

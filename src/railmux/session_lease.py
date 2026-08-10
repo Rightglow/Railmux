@@ -55,6 +55,25 @@ class LeaseOwner:
         return self.host or "another host"
 
 
+@dataclass(frozen=True)
+class HolderStartResult:
+    """Privacy-safe outcome of transferring a claim to its lifetime holder."""
+
+    ready: bool
+    category: str | None = None
+
+    def __bool__(self) -> bool:
+        return self.ready
+
+    @classmethod
+    def success(cls) -> HolderStartResult:
+        return cls(True)
+
+    @classmethod
+    def failure(cls, category: str) -> HolderStartResult:
+        return cls(False, category)
+
+
 class LeaseError(RuntimeError):
     """The shared lease authority could not be used safely."""
 
@@ -412,14 +431,39 @@ def owner_matches_pane(
     )
 
 
+def _stop_holder_process(process: subprocess.Popen[bytes]) -> None:
+    """Boundedly stop one not-yet-authoritative holder process."""
+    try:
+        process.terminate()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def start_holder(
     claim: LeaseClaim,
     *,
     pane_id: str,
     pane_pid: int,
     process_start: str | None = None,
-) -> bool:
-    """Transfer one acquired claim to an independent pane-lifetime holder."""
+) -> HolderStartResult:
+    """Transfer one acquired claim to an independent pane-lifetime holder.
+
+    ``ready`` is not enough on its own: after the parent descriptors close, a
+    fresh advisory-lock probe must still observe the exact holder owner.  This
+    prevents an exited or incorrectly inherited helper from being reported as
+    protection merely because it managed to write one byte to its pipe.
+    """
     token = process_start or process_start_token(pane_pid)
     if (
         not pane_id.startswith("%")
@@ -427,7 +471,7 @@ def start_holder(
         or process_start_token(pane_pid) != token
     ):
         claim.close()
-        return False
+        return HolderStartResult.failure("provider-process-identity-changed")
     argv = [
         sys.executable,
         "-m",
@@ -457,36 +501,40 @@ def start_holder(
         )
     except OSError:
         claim.close()
-        return False
+        return HolderStartResult.failure("holder-process-start-failed")
     assert process.stdout is not None
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
     ready = False
+    selector: selectors.BaseSelector | None = None
     try:
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdout, selectors.EVENT_READ)
         if selector.select(_READY_TIMEOUT_S):
             ready = process.stdout.readline().strip() == b"ready"
+    except (OSError, ValueError):
+        ready = False
     finally:
-        selector.close()
+        if selector is not None:
+            selector.close()
         process.stdout.close()
     if not ready:
-        try:
-            process.terminate()
-        except OSError:
-            pass
-        try:
-            process.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
-            try:
-                process.kill()
-            except OSError:
-                pass
-            try:
-                process.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                pass
+        _stop_holder_process(process)
         claim.close()
-        return False
+        return HolderStartResult.failure("holder-did-not-become-ready")
     claim.detach()
+    verified = True
+    try:
+        for session_id, _path, _fd in claim.files:
+            owner = active_owner(
+                claim.root, claim.provider, (session_id,))
+            if owner is None or not owner_matches_pane(
+                    owner, pane_id, pane_pid, process_start=token):
+                verified = False
+                break
+    except LeaseError:
+        verified = False
+    if not verified:
+        _stop_holder_process(process)
+        return HolderStartResult.failure("holder-lock-verification-failed")
     # The holder may outlive Railmux after Soft Quit. While Railmux remains
     # alive, reap it asynchronously when its provider pane eventually exits.
     threading.Thread(
@@ -494,7 +542,7 @@ def start_holder(
         name="railmux-session-lease-reaper",
         daemon=True,
     ).start()
-    return True
+    return HolderStartResult.success()
 
 
 def _hold(args: argparse.Namespace) -> int:

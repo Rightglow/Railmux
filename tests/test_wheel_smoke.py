@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from tools.wheel_smoke import _install_argv, _installed_paths
+from railmux.diagnostic_contract import DOCTOR_SCHEMA_VERSION
+from tools.wheel_smoke import (
+    _doctor_schema_matches,
+    _install_argv,
+    _installed_paths,
+)
 
 
 @pytest.mark.parametrize(
@@ -40,3 +45,14 @@ def test_prefix_install_cannot_uninstall_invoking_environment(
     assert "--ignore-installed" in argv
     assert "--force-reinstall" not in argv
     assert argv[-1] == f"{wheel}[ssh]"
+
+
+def test_doctor_schema_comes_from_the_installed_wheel_contract():
+    imported = {"doctor_schema": DOCTOR_SCHEMA_VERSION}
+
+    assert _doctor_schema_matches(
+        {"schema_version": DOCTOR_SCHEMA_VERSION}, imported)
+    assert not _doctor_schema_matches(
+        {"schema_version": DOCTOR_SCHEMA_VERSION - 1}, imported)
+    assert not _doctor_schema_matches(
+        {"schema_version": DOCTOR_SCHEMA_VERSION}, {})

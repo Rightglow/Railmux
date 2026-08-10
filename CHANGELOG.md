@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc9] - 2026-08-10
+
+### Fixed
+
+- Fence native-Windows startup and fresh runtime publication when a
+  marker-proven older managed-runtime generation still has attributable
+  Railmux, tmux, or provider processes alive. Because each MSYS2 generation
+  owns a different physical tmux socket directory, Railmux now fails closed
+  with normal-exit or Windows-restart guidance instead of repeating the
+  observed split-generation launch. Status and doctor remain available, as
+  does config when the current runtime exists; no provider history or lock file
+  is changed. Their new bounded legacy-generation fields advance doctor JSON
+  to schema 6 and Windows runtime-status JSON to schema 3.
+- Treat a session lease as protected only after its independent holder reports
+  ready, the parent's descriptors close, and a fresh advisory-lock probe
+  verifies the exact pane/process owner. Pending repair no longer claims
+  protection; real provider-start, topology, identity, and holder failures use
+  distinct privacy-safe messages instead of one misleading cross-host lease
+  error.
+- Keep `railmux ssh` history contiguous after a very large paste or output
+  burst replaces the complete hot capture. Matching Codex/Claude live footer
+  rows no longer masquerade as timeline overlap anchors, while real rows that
+  move from the live viewport into scrollback still preserve valid history.
+
 ## [0.4.0rc8] - 2026-08-10
 
 ### Fixed

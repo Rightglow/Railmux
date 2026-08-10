@@ -7,6 +7,7 @@ remain Windows-native.
 from __future__ import annotations
 
 import concurrent.futures
+import ctypes
 import hashlib
 import http.client
 import importlib.metadata as importlib_metadata
@@ -117,8 +118,10 @@ TMUX_PACKAGE_SIGNATURE_SOURCES = tuple(
 # neither discovered nor adopted.
 MSYS2_RUNTIME_GENERATION = 2
 MSYS2_RUNTIME_ID = f"msys2-{MSYS2_RELEASE}-r{MSYS2_RUNTIME_GENERATION}"
+LEGACY_RUNTIME_STATUS_ENV = "RAILMUX_WINDOWS_LEGACY_RUNTIME_STATUS"
 _NATIVE_WINDOWS = os.name == "nt"
 RUNTIME_SCHEMA = 2
+RUNTIME_STATUS_SCHEMA = 3
 
 _RUNTIME_OVERRIDE = "RAILMUX_MSYS2_ROOT"
 _BASE_MARKER = "railmux-base.json"
@@ -130,6 +133,9 @@ _HANDOFF_COMMAND = (
     'unset MSYS2_ARG_CONV_EXCL; executable=$1; shift; exec "$executable" "$@"'
 )
 _PROBE_TIMEOUT_SECONDS = 15.0
+_LEGACY_TMUX_PROBE_TIMEOUT_SECONDS = 3.0
+_LEGACY_GENERATION_LIMIT = 32
+_WINDOWS_PROCESS_LIMIT = 16_384
 _DOWNLOAD_LIMIT = 128 * 1024 * 1024
 _DOWNLOAD_LOG_STEP = 8 * 1024 * 1024
 _DOWNLOAD_PROBE_BYTES = 1024 * 1024
@@ -268,6 +274,16 @@ class RuntimeUninstallPlan:
 
     root: Path
     cache: Path | None
+
+
+@dataclass(frozen=True)
+class NativeWindowsProcess:
+    """Privacy-bounded process identity used for managed-generation fencing."""
+
+    pid: int
+    parent_pid: int
+    name: str
+    executable: str | None
 
 
 Probe = Callable[..., subprocess.CompletedProcess[bytes]]
@@ -954,18 +970,356 @@ def managed_root(environ: Mapping[str, str]) -> Path | None:
     return shared if shared is not None else base / "shared" / MSYS2_RUNTIME_ID
 
 
+def _native_windows_process_snapshot() -> tuple[NativeWindowsProcess, ...] | None:
+    """Inventory native processes without starting PowerShell, MSYS, or WMI.
+
+    Querying the kernel snapshot directly is important here: a hung MSYS tmux
+    server can leave shell-supervised clients blocked forever.  Executable-path
+    lookup may be denied for unrelated system processes; those entries remain
+    in the parent graph but are never treated as a managed-runtime seed.
+    """
+    if not _NATIVE_WINDOWS:
+        return ()
+    try:
+        from ctypes import wintypes
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", wintypes.LONG),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", wintypes.WCHAR * 260),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_snapshot = kernel32.CreateToolhelp32Snapshot
+        create_snapshot.argtypes = (wintypes.DWORD, wintypes.DWORD)
+        create_snapshot.restype = wintypes.HANDLE
+        process_first = kernel32.Process32FirstW
+        process_first.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        process_first.restype = wintypes.BOOL
+        process_next = kernel32.Process32NextW
+        process_next.argtypes = (wintypes.HANDLE, ctypes.POINTER(ProcessEntry))
+        process_next.restype = wintypes.BOOL
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        query_image = kernel32.QueryFullProcessImageNameW
+        query_image.argtypes = (
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD),
+        )
+        query_image.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        snapshot = create_snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        if snapshot in (None, ctypes.c_void_p(-1).value):
+            return None
+        rows: list[NativeWindowsProcess] = []
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(entry)
+            available = bool(process_first(snapshot, ctypes.byref(entry)))
+            # A real Windows process snapshot always contains at least the
+            # current process.  Treat an initial API failure as unavailable,
+            # never as authoritative evidence that every old runtime is idle.
+            if not available:
+                return None
+            while available:
+                pid = int(entry.th32ProcessID)
+                executable = None
+                handle = open_process(0x1000, False, pid)  # limited query
+                if handle:
+                    try:
+                        capacity = wintypes.DWORD(32_768)
+                        buffer = ctypes.create_unicode_buffer(capacity.value)
+                        if query_image(handle, 0, buffer, ctypes.byref(capacity)):
+                            executable = buffer.value
+                    finally:
+                        close_handle(handle)
+                rows.append(NativeWindowsProcess(
+                    pid=pid,
+                    parent_pid=int(entry.th32ParentProcessID),
+                    name=str(entry.szExeFile),
+                    executable=executable,
+                ))
+                if len(rows) > _WINDOWS_PROCESS_LIMIT:
+                    return None
+                entry.dwSize = ctypes.sizeof(entry)
+                available = bool(process_next(snapshot, ctypes.byref(entry)))
+        finally:
+            close_handle(snapshot)
+        return tuple(rows)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+
+
+def _legacy_managed_generation_roots(
+    environ: Mapping[str, str],
+) -> tuple[tuple[Path, str], ...] | None:
+    """Find bounded, marker-proven old managed generations read-only."""
+    if environ.get(_RUNTIME_OVERRIDE, "").strip():
+        return ()
+    data_roots: list[Path] = []
+    selected = managed_windows_data_root(environ)
+    legacy = legacy_local_app_data_root(environ)
+    for candidate in (selected, legacy):
+        if candidate is not None and candidate not in data_roots:
+            data_roots.append(candidate)
+    found: dict[str, tuple[Path, str]] = {}
+    for data_root in data_roots:
+        shared = data_root / "runtimes" / "shared"
+        try:
+            candidates = sorted(shared.iterdir(), key=lambda path: path.name)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return None
+        if len(candidates) > _LEGACY_GENERATION_LIMIT:
+            return None
+        for candidate in candidates:
+            try:
+                if _path_is_link_or_reparse(candidate) or not candidate.is_dir():
+                    continue
+            except OSError:
+                return None
+            payload = _read_json_marker(candidate / _BASE_MARKER)
+            if not isinstance(payload, dict):
+                continue
+            runtime_id = payload.get("runtime")
+            if (
+                payload.get("schema") not in {1, RUNTIME_SCHEMA}
+                or not isinstance(runtime_id, str)
+                or runtime_id != candidate.name
+                or runtime_id == MSYS2_RUNTIME_ID
+                or not runtime_id.startswith("msys2-")
+                or not (candidate / "usr" / "bin" / "bash.exe").is_file()
+            ):
+                continue
+            # The same physical root can be visible through both selected and
+            # legacy data-root projections.  Do not double count it.
+            key = os.path.normcase(str(candidate.absolute()))
+            found[key] = (candidate, runtime_id)
+    return tuple(found[key] for key in sorted(found))
+
+
+def _executable_is_within(executable: str | None, root: Path) -> bool:
+    if not executable:
+        return False
+    try:
+        return os.path.commonpath((
+            os.path.normcase(os.path.abspath(executable)),
+            os.path.normcase(os.path.abspath(root)),
+        )) == os.path.normcase(os.path.abspath(root))
+    except (OSError, ValueError):
+        return False
+
+
+def _native_legacy_tmux_status(
+    root: Path,
+    *,
+    environ: Mapping[str, str],
+    runner: Runner = subprocess.run,
+) -> str:
+    """Probe one old server with a directly supervised native tmux client.
+
+    Python's Windows timeout path calls ``TerminateProcess`` on this exact
+    native client and waits for it.  No MSYS shell or ``timeout`` wrapper is
+    involved, so an unresponsive server cannot leave another blocked client.
+    """
+    tmux = root / "usr" / "bin" / "tmux.exe"
+    try:
+        result = runner(
+            [str(tmux), "-L", "railmux", "display-message", "-p", "#{pid}"],
+            env=Msys2Runtime(root, managed=False).environment(environ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=_LEGACY_TMUX_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unreachable"
+    return "reachable" if result.returncode == 0 else "unreachable"
+
+
+def managed_legacy_runtime_activity(
+    *,
+    environ: Mapping[str, str],
+    processes: Sequence[NativeWindowsProcess] | None = None,
+    tmux_probe: Callable[[Path], str] | None = None,
+) -> dict[str, object]:
+    """Return a privacy-safe migration fence for earlier managed generations."""
+    roots = _legacy_managed_generation_roots(environ)
+    if roots is None:
+        return {
+            "schema": 1,
+            "status": "unknown",
+            "migration": "diagnostics_required",
+            "legacy_generation_count": None,
+            "busy_generation_count": None,
+            "process_count": None,
+            "tmux_process_count": None,
+            "provider_process_count": None,
+            "unreachable_generation_count": None,
+            "generations": [],
+        }
+    if not roots:
+        return {
+            "schema": 1,
+            "status": "clear",
+            "migration": "ready",
+            "legacy_generation_count": 0,
+            "busy_generation_count": 0,
+            "process_count": 0,
+            "tmux_process_count": 0,
+            "provider_process_count": 0,
+            "unreachable_generation_count": 0,
+            "generations": [],
+        }
+    snapshot = _native_windows_process_snapshot() if processes is None else tuple(processes)
+    if snapshot is None:
+        generations = [
+            {
+                "runtime": runtime_id,
+                "status": "unknown",
+                "process_count": None,
+                "tmux_process_count": None,
+                "provider_process_count": None,
+                "tmux_server": "not_probed",
+            }
+            for _root, runtime_id in roots
+        ]
+        return {
+            "schema": 1,
+            "status": "unknown",
+            "migration": "diagnostics_required",
+            "legacy_generation_count": len(roots),
+            "busy_generation_count": None,
+            "process_count": None,
+            "tmux_process_count": None,
+            "provider_process_count": None,
+            "unreachable_generation_count": None,
+            "generations": generations,
+        }
+
+    by_parent: dict[int, list[NativeWindowsProcess]] = {}
+    for process in snapshot:
+        by_parent.setdefault(process.parent_pid, []).append(process)
+    generations: list[dict[str, object]] = []
+    total_processes = total_tmux = total_providers = unreachable = busy = 0
+    provider_names = {"codex.exe", "claude.exe", "node.exe"}
+    for root, runtime_id in roots:
+        seeds = {process.pid for process in snapshot if _executable_is_within(
+            process.executable, root)}
+        owned = set(seeds)
+        pending = list(seeds)
+        while pending:
+            for child in by_parent.get(pending.pop(), ()):
+                if child.pid not in owned:
+                    owned.add(child.pid)
+                    pending.append(child.pid)
+        rows = [process for process in snapshot if process.pid in owned]
+        tmux_count = sum(
+            process.name.casefold() == "tmux.exe" for process in rows)
+        provider_count = sum(
+            process.name.casefold() in provider_names for process in rows)
+        if rows:
+            busy += 1
+            if tmux_count:
+                server = (
+                    tmux_probe(root)
+                    if tmux_probe is not None
+                    else _native_legacy_tmux_status(root, environ=environ)
+                )
+            else:
+                server = "absent"
+            if server == "unreachable":
+                unreachable += 1
+            state = "busy"
+        else:
+            server = "absent"
+            state = "idle"
+        generations.append({
+            "runtime": runtime_id,
+            "status": state,
+            "process_count": len(rows),
+            "tmux_process_count": tmux_count,
+            "provider_process_count": provider_count,
+            "tmux_server": server,
+        })
+        total_processes += len(rows)
+        total_tmux += tmux_count
+        total_providers += provider_count
+    return {
+        "schema": 1,
+        "status": "blocked" if busy else "clear",
+        "migration": "restart_required" if busy else "ready",
+        "legacy_generation_count": len(roots),
+        "busy_generation_count": busy,
+        "process_count": total_processes,
+        "tmux_process_count": total_tmux,
+        "provider_process_count": total_providers,
+        "unreachable_generation_count": unreachable,
+        "generations": generations,
+    }
+
+
+def require_legacy_runtime_idle(
+    activity: Mapping[str, object],
+) -> None:
+    """Reject unsafe cross-generation launch without touching provider data."""
+    if activity.get("status") == "clear":
+        return
+    if activity.get("status") == "blocked":
+        processes = activity.get("process_count")
+        providers = activity.get("provider_process_count")
+        detail = (
+            f" ({processes} processes, including {providers} provider processes)"
+            if isinstance(processes, int) and isinstance(providers, int)
+            else ""
+        )
+        raise RuntimeInstallError(
+            "a previous Railmux Windows runtime generation is still active"
+            f"{detail}. Railmux will not start a second generation while "
+            "Codex or Claude may still own session writers. Exit every old "
+            "Railmux/provider pane, or restart Windows, then retry. Session "
+            "files were not changed; do not delete provider or lease locks"
+        )
+    raise RuntimeInstallError(
+        "Railmux could not prove that previous Windows runtime generations "
+        "are idle. Nothing was started. Run 'railmux doctor --json'; if old "
+        "Railmux processes cannot exit normally, restart Windows and retry"
+    )
+
+
 def managed_runtime_status(
     *,
     version: str,
     environ: Mapping[str, str],
     verify: bool = False,
     probe: Probe | None = None,
+    legacy_activity: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Return bounded native-bootstrap state without installing anything."""
+    legacy_snapshot = (
+        managed_legacy_runtime_activity(environ=environ)
+        if legacy_activity is None
+        else dict(legacy_activity)
+    )
     root = managed_root(environ)
     if root is None or not root.exists():
         return {
-            "schema": 2,
+            "schema": RUNTIME_STATUS_SCHEMA,
             "runtime": MSYS2_RUNTIME_ID,
             "status": "not_installed",
             "tmux_capability": classify_tmux_text(None).payload(
@@ -974,6 +1328,7 @@ def managed_runtime_status(
             ),
             "current_app": False,
             "layers": [],
+            "legacy_runtime": legacy_snapshot,
         }
     base_valid = _base_marker_matches(root)
     identity = _decode_base_content_marker(root) if base_valid else None
@@ -984,7 +1339,7 @@ def managed_runtime_status(
     else:
         status = "incomplete"
     result: dict[str, object] = {
-        "schema": 2,
+        "schema": RUNTIME_STATUS_SCHEMA,
         "runtime": MSYS2_RUNTIME_ID,
         "status": status,
         "base_marker": "valid" if base_valid else "invalid",
@@ -1007,6 +1362,7 @@ def managed_runtime_status(
         ),
         "current_app": current_app,
         "layers": sorted(layers or (), key=_version_key, reverse=True),
+        "legacy_runtime": legacy_snapshot,
     }
     if verify and identity is not None:
         try:
@@ -3240,6 +3596,13 @@ def install_managed_runtime(
     pip_cache = cache_base / _PIP_CACHE_NAME
     final_root.parent.mkdir(parents=True, exist_ok=True)
 
+    # App-only upgrades inside the already-published generation are safe.  A
+    # fresh generation is not: an older invisible /tmp may still own native
+    # provider writers, so refuse before doing the large download/stage work.
+    if _find_shared_root(base) is None:
+        require_legacy_runtime_idle(
+            managed_legacy_runtime_activity(environ=environ))
+
     try:
         with InstallReporter(log_path, verbose=verbose) as reporter:
             with lock_factory(base):
@@ -3253,6 +3616,11 @@ def install_managed_runtime(
                     return existing
 
                 shared_root = _find_shared_root(base)
+                if shared_root is None:
+                    # Repeat under the install lock so another native launcher
+                    # cannot race the preflight and publish a second generation.
+                    require_legacy_runtime_idle(
+                        managed_legacy_runtime_activity(environ=environ))
                 if final_root.exists() and shared_root != final_root:
                     raise RuntimeInstallError(
                         "the canonical shared MSYS2 directory exists but is "
@@ -3512,6 +3880,8 @@ def install_managed_runtime(
                         raise RuntimeInstallError(
                             "the staged Railmux runtime failed validation"
                         )
+                    require_legacy_runtime_idle(
+                        managed_legacy_runtime_activity(environ=environ))
                     os.replace(root, final_root)
 
                 installed = Msys2Runtime(

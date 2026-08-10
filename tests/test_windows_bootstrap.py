@@ -320,9 +320,9 @@ def test_missing_runtime_doctor_json_keeps_doctor_schema(capsys):
     ) == 2
 
     snapshot = json.loads(capsys.readouterr().out)
-    assert snapshot["schema_version"] == 5
+    assert snapshot["schema_version"] == 6
     assert snapshot["status"] == "runtime_not_installed"
-    assert snapshot["managed_windows"]["schema"] == 2
+    assert snapshot["managed_windows"]["schema"] == 3
     assert "schema" not in snapshot
 
 
@@ -401,3 +401,108 @@ def test_ctrl_c_does_not_kill_the_msys_handoff(tmp_path):
 
     process.kill.assert_not_called()
     process.terminate.assert_not_called()
+
+
+def _busy_legacy_activity(*, providers=2):
+    return {
+        "schema": 1,
+        "status": "blocked",
+        "migration": "restart_required",
+        "legacy_generation_count": 1,
+        "busy_generation_count": 1,
+        "process_count": 4,
+        "tmux_process_count": 1,
+        "provider_process_count": providers,
+        "unreachable_generation_count": 1,
+        "generations": [],
+    }
+
+
+def test_ready_runtime_refuses_busy_previous_generation(tmp_path, capsys):
+    runtime = Msys2Runtime(tmp_path / "current", managed=True)
+    popen = MagicMock(side_effect=AssertionError("runtime must not start"))
+    runtime_finder = MagicMock(return_value=runtime)
+
+    assert main(
+        [],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=runtime_finder,
+        legacy_activity_finder=lambda **_kwargs: _busy_legacy_activity(),
+        popen=popen,
+        version_info=(3, 10),
+    ) == 2
+
+    output = capsys.readouterr().err
+    assert "previous Railmux Windows runtime generation is still active" in output
+    assert "restart Windows" in output
+    assert "do not delete provider or lease locks" in output
+    runtime_finder.assert_not_called()
+    popen.assert_not_called()
+
+
+def test_ready_runtime_inventory_is_reused_for_one_launch(tmp_path):
+    runtime = Msys2Runtime(tmp_path / "current", managed=True)
+    clear = {
+        "schema": 1,
+        "status": "clear",
+        "migration": "ready",
+        "legacy_generation_count": 1,
+        "busy_generation_count": 0,
+        "process_count": 0,
+        "tmux_process_count": 0,
+        "provider_process_count": 0,
+        "unreachable_generation_count": 0,
+        "generations": [],
+    }
+    activity = MagicMock(return_value=clear)
+    process = MagicMock()
+    process.wait.return_value = 0
+
+    assert main(
+        [],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: runtime,
+        legacy_activity_finder=activity,
+        popen=MagicMock(return_value=process),
+        version_info=(3, 10),
+    ) == 0
+
+    activity.assert_called_once_with(environ={"LOCALAPPDATA": str(tmp_path)})
+
+
+def test_doctor_reports_busy_previous_generation_without_starting_ui(tmp_path):
+    runtime = Msys2Runtime(tmp_path / "current", managed=True)
+    process = MagicMock()
+    process.wait.return_value = 0
+    popen = MagicMock(return_value=process)
+
+    assert main(
+        ["doctor", "--json"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: runtime,
+        legacy_activity_finder=lambda **_kwargs: _busy_legacy_activity(),
+        popen=popen,
+        version_info=(3, 10),
+    ) == 0
+
+    child_env = popen.call_args.kwargs["env"]
+    payload = json.loads(child_env["RAILMUX_WINDOWS_LEGACY_RUNTIME_STATUS"])
+    assert payload["status"] == "blocked"
+    assert payload["provider_process_count"] == 2
+
+
+def test_config_remains_available_when_previous_generation_is_busy(tmp_path):
+    runtime = Msys2Runtime(tmp_path / "current", managed=True)
+    process = MagicMock()
+    process.wait.return_value = 0
+    popen = MagicMock(return_value=process)
+
+    assert main(
+        ["config"],
+        environ={"LOCALAPPDATA": str(tmp_path)},
+        runtime_finder=lambda **_kwargs: runtime,
+        legacy_activity_finder=lambda **_kwargs: _busy_legacy_activity(providers=0),
+        popen=popen,
+        version_info=(3, 10),
+    ) == 0
+    popen.assert_called_once()

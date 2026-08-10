@@ -241,6 +241,8 @@ class LocalHistoryView:
     def _timeline_delta(
         previous: tuple[bytes, ...],
         incoming: tuple[bytes, ...],
+        *,
+        live_height: int,
     ) -> int | None:
         """Locate incoming[0] in previous's coordinate space."""
         previous_positions: dict[bytes, list[int]] = {}
@@ -257,7 +259,23 @@ class LocalHistoryView:
         for key, positions in incoming_positions.items():
             old_positions = previous_positions[key]
             if len(old_positions) == 1 and len(positions) == 1:
-                delta = old_positions[0] - positions[0]
+                old_index = old_positions[0]
+                incoming_index = positions[0]
+                if (
+                    live_height > 0
+                    and old_index >= len(previous) - live_height
+                    and incoming_index >= len(incoming) - live_height
+                ):
+                    # Full-screen agents keep prompt/status rows fixed at the
+                    # bottom, or move them within the live viewport as a long
+                    # input expands and contracts, while arbitrarily much
+                    # output enters scrollback. A row found inside both live
+                    # viewports therefore does not prove timeline overlap.
+                    # Voting with it could manufacture a seam between old and
+                    # new content. A previous live row that later moved into
+                    # incoming scrollback remains valid evidence.
+                    continue
+                delta = old_index - incoming_index
                 votes[delta] = votes.get(delta, 0) + 1
         if not votes:
             return None
@@ -281,7 +299,11 @@ class LocalHistoryView:
             previous, incoming
         ) or not self._history_source_matches(previous, incoming):
             return incoming
-        delta = self._timeline_delta(previous.lines, incoming.lines)
+        delta = self._timeline_delta(
+            previous.lines,
+            incoming.lines,
+            live_height=incoming.height,
+        )
         if delta is None:
             # Never splice two captures whose timelines cannot be aligned.
             # Retaining old history and replacing only the live viewport
@@ -329,7 +351,12 @@ class LocalHistoryView:
             anchored = (
                 self._same_geometry(previous, snapshot)
                 and self._history_source_matches(previous, snapshot)
-                and self._timeline_delta(previous.lines, snapshot.lines) is not None
+                and self._timeline_delta(
+                    previous.lines,
+                    snapshot.lines,
+                    live_height=snapshot.height,
+                )
+                is not None
             )
             stored = self._merge_content(previous, snapshot) if anchored else snapshot
             self._unverified_after_reconnect.discard(snapshot.pane_id)

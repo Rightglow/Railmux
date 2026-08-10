@@ -1397,6 +1397,110 @@ def test_unaligned_hot_prefetch_never_creates_a_discontinuous_history_seam():
     assert b"old-196" not in view.viewports["%8"].snapshot.lines
 
 
+def test_stationary_live_footer_cannot_anchor_a_replaced_hot_suffix():
+    view = LocalHistoryView(history_limit=2000)
+    previous = HistorySnapshot(
+        1,
+        "%8",
+        30,
+        0,
+        80,
+        3,
+        tuple(f"old-{index}".encode() for index in range(997))
+        + (b"status", b"prompt", b"cwd"),
+        more_available=True,
+    )
+    view.content_cache["%8"] = previous
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    incoming = replace(
+        previous,
+        request_id=request_id,
+        lines=tuple(f"new-{index}".encode() for index in range(297))
+        + (b"status", b"prompt", b"cwd"),
+    )
+
+    view.accept_prefetch(HistoryBatch(request_id, (incoming,)))
+
+    # More than one hot page arrived while the same three live footer rows
+    # remained fixed. They are screen positions, not proof of timeline
+    # overlap, so retaining old-* would manufacture an unverified seam.
+    assert view.content_cache["%8"].lines == incoming.lines
+    assert b"old-699" not in view.content_cache["%8"].lines
+
+
+def test_previous_live_rows_can_anchor_after_entering_incoming_scrollback():
+    view = LocalHistoryView(history_limit=2000)
+    previous = HistorySnapshot(
+        1,
+        "%8",
+        30,
+        0,
+        80,
+        3,
+        tuple(f"old-{index}".encode() for index in range(997))
+        + (b"old-live-a", b"old-live-b", b"old-live-c"),
+        more_available=True,
+    )
+    view.content_cache["%8"] = previous
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    incoming = replace(
+        previous,
+        request_id=request_id,
+        lines=(
+            *previous.lines[-100:],
+            *(f"new-{index}".encode() for index in range(197)),
+            b"current-a",
+            b"current-b",
+            b"current-c",
+        ),
+    )
+
+    view.accept_prefetch(HistoryBatch(request_id, (incoming,)))
+
+    cached = view.content_cache["%8"].lines
+    assert cached[:3] == (b"old-0", b"old-1", b"old-2")
+    assert cached[997:1003] == (
+        b"old-live-a",
+        b"old-live-b",
+        b"old-live-c",
+        b"new-0",
+        b"new-1",
+        b"new-2",
+    )
+    assert cached[-3:] == (b"current-a", b"current-b", b"current-c")
+
+
+def test_moved_live_footer_cannot_anchor_a_replaced_hot_suffix():
+    view = LocalHistoryView(history_limit=2000)
+    previous = HistorySnapshot(
+        1,
+        "%8",
+        30,
+        0,
+        80,
+        5,
+        tuple(f"old-{index}".encode() for index in range(998))
+        + (b"footer-a", b"footer-b"),
+        more_available=True,
+    )
+    view.content_cache["%8"] = previous
+    prefetch = InputFrameDecoder().feed(view.begin_prefetch(2.0))[0]
+    request_id, _limit = decode_history_prefetch(prefetch.data)
+    incoming = replace(
+        previous,
+        request_id=request_id,
+        lines=tuple(f"new-{index}".encode() for index in range(296))
+        + (b"footer-a", b"footer-b", b"input-a", b"input-b"),
+    )
+
+    view.accept_prefetch(HistoryBatch(request_id, (incoming,)))
+
+    assert view.content_cache["%8"].lines == incoming.lines
+    assert b"old-701" not in view.content_cache["%8"].lines
+
+
 def test_initial_deep_history_retry_and_wheel_down_are_bounded():
     view = LocalHistoryView(history_limit=2000)
     route = HistorySnapshot(

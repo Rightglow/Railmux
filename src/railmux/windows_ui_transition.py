@@ -27,7 +27,10 @@ from railmux.tmux_capabilities import (
     classify_tmux_version,
     parse_tmux_version,
 )
-from railmux.windows_msys2 import MSYS2_ARCHIVE_SHA256
+from railmux.windows_msys2 import (
+    LEGACY_RUNTIME_STATUS_ENV,
+    MSYS2_ARCHIVE_SHA256,
+)
 
 
 CURRENT_APP_OPTION = "@railmux_current_app_v1"
@@ -101,6 +104,7 @@ def diagnostic_status(
         "base_content_id": _base_identity(runtime),
         "running_ui_version": None,
         "transition_status": None,
+        "legacy_runtime": _legacy_runtime_status(env),
         "tmux_capability": capability.payload(
             source="effective_tmux",
             verification="effective",
@@ -121,6 +125,99 @@ def diagnostic_status(
     status = _target_option(target, session_id, TRANSITION_STATUS_OPTION)
     if status is not None and re.fullmatch(r"[A-Za-z0-9:_.-]{1,96}", status):
         result["transition_status"] = status
+    return result
+
+
+def _legacy_runtime_status(environ: Mapping[str, str]) -> dict[str, object]:
+    """Decode only the bounded privacy-safe snapshot from the native parent."""
+    fallback: dict[str, object] = {
+        "schema": 1,
+        "status": "not_reported",
+        "migration": "diagnostics_required",
+        "legacy_generation_count": None,
+        "busy_generation_count": None,
+        "process_count": None,
+        "tmux_process_count": None,
+        "provider_process_count": None,
+        "unreachable_generation_count": None,
+        "generations": [],
+    }
+    raw = environ.get(LEGACY_RUNTIME_STATUS_ENV, "")
+    if not raw or len(raw) > 16_384:
+        return fallback
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError):
+        return fallback
+    if not isinstance(payload, dict) or payload.get("schema") != 1:
+        return fallback
+    status = payload.get("status")
+    migration = payload.get("migration")
+    if (
+        status not in {"clear", "blocked", "unknown"}
+        or migration not in {"ready", "restart_required", "diagnostics_required"}
+    ):
+        return fallback
+    count_keys = (
+        "legacy_generation_count",
+        "busy_generation_count",
+        "process_count",
+        "tmux_process_count",
+        "provider_process_count",
+        "unreachable_generation_count",
+    )
+    if any(
+        value is not None
+        and (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 0 <= value <= 100_000
+        )
+        for value in (payload.get(key) for key in count_keys)
+    ):
+        return fallback
+    generations = payload.get("generations")
+    if not isinstance(generations, list) or len(generations) > 32:
+        return fallback
+    safe_generations: list[dict[str, object]] = []
+    for generation in generations:
+        if not isinstance(generation, dict):
+            return fallback
+        runtime = generation.get("runtime")
+        if (
+            not isinstance(runtime, str)
+            or len(runtime) > 96
+            or re.fullmatch(r"msys2-[0-9A-Za-z.-]+", runtime) is None
+            or generation.get("status") not in {"idle", "busy", "unknown"}
+            or generation.get("tmux_server")
+            not in {"reachable", "unreachable", "absent", "not_probed"}
+            or any(
+                not isinstance(generation.get(key), int)
+                or isinstance(generation.get(key), bool)
+                or not 0 <= generation[key] <= 100_000
+                for key in (
+                    "process_count",
+                    "tmux_process_count",
+                    "provider_process_count",
+                )
+                if generation.get(key) is not None
+            )
+        ):
+            return fallback
+        safe_generations.append({
+            "runtime": runtime,
+            "status": generation.get("status"),
+            "process_count": generation.get("process_count"),
+            "tmux_process_count": generation.get("tmux_process_count"),
+            "provider_process_count": generation.get("provider_process_count"),
+            "tmux_server": generation.get("tmux_server"),
+        })
+    result = dict(fallback)
+    result.update({
+        key: payload.get(key)
+        for key in ("status", "migration", *count_keys)
+    })
+    result["generations"] = safe_generations
     return result
 
 

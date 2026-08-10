@@ -91,6 +91,49 @@ def test_diagnostic_status_reports_effective_tmux_visual_fidelity(monkeypatch):
         "windows_visual_fidelity": "degraded",
         "windows_visual_fidelity_recommended": "3.7",
     }
+    assert status["legacy_runtime"]["status"] == "not_reported"
+
+
+def test_diagnostic_status_accepts_only_bounded_native_legacy_snapshot(monkeypatch):
+    monkeypatch.setattr(transition, "_base_identity", lambda _runtime: CONTENT)
+    monkeypatch.setattr(transition.tmux_ctl, "tmux_version", lambda: (3, 7))
+    monkeypatch.setattr(transition.tmux_server, "discover_target", lambda **_kw: None)
+    snapshot = {
+        "schema": 1,
+        "status": "blocked",
+        "migration": "restart_required",
+        "legacy_generation_count": 1,
+        "busy_generation_count": 1,
+        "process_count": 3,
+        "tmux_process_count": 1,
+        "provider_process_count": 2,
+        "unreachable_generation_count": 1,
+        "generations": [{
+            "runtime": "msys2-2026-03-22",
+            "status": "busy",
+            "process_count": 3,
+            "tmux_process_count": 1,
+            "provider_process_count": 2,
+            "tmux_server": "unreachable",
+        }],
+    }
+
+    status = transition.diagnostic_status({
+        "RAILMUX_MSYS2_RUNTIME_ID": RUNTIME,
+        "RAILMUX_MSYS2_APP_ID": TARGET_APP,
+        transition.LEGACY_RUNTIME_STATUS_ENV: json.dumps(snapshot),
+    })
+    assert status["legacy_runtime"] == snapshot
+
+    status = transition.diagnostic_status({
+        "RAILMUX_MSYS2_RUNTIME_ID": RUNTIME,
+        "RAILMUX_MSYS2_APP_ID": TARGET_APP,
+        transition.LEGACY_RUNTIME_STATUS_ENV: json.dumps({
+            **snapshot,
+            "generations": [{**snapshot["generations"][0], "runtime": "secret/path"}],
+        }),
+    })
+    assert status["legacy_runtime"]["status"] == "not_reported"
 
 
 def test_upgrade_exec_requires_exact_content_bound_app(monkeypatch, tmp_path):

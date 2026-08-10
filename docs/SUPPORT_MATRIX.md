@@ -224,7 +224,12 @@ must remain covered when the adapter, shared UI, or terminal behavior changes.
    than trusting rolling mirror metadata to select its version.
    Make base creation and app upgrades transactional and recoverable; bump the
    generation whenever its required contents change. Never adopt or overwrite
-   user-owned MSYS2 files. Explicit uninstall must re-prove that the private
+   user-owned MSYS2 files. Before entering a changed generation, detect
+   marker-proven older-generation processes and native provider descendants
+   still attributable through the same process snapshot;
+   busy or ambiguous state must fail closed with exit/restart guidance rather
+   than duplicate a provider writer or adopt the older tmux server. Explicit
+   uninstall must re-prove that the private
    generation is idle, atomically isolate only Railmux-owned runtime/cache
    trees, and leave provider histories untouched.
 4. Translate Windows paths, Unicode arguments, environment, exit status, and

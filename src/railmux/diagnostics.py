@@ -86,6 +86,7 @@ class ManagedWindowsDiagnostic:
     base_content_id: str | None
     running_ui_version: str | None
     transition_status: str | None
+    legacy_runtime: dict[str, object]
     tmux_capability: dict[str, str | None]
 
 
@@ -572,6 +573,30 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
             f"source={capability.get('source') or 'unknown'}"
             f"{fidelity_detail}",
         ))
+        legacy = managed.legacy_runtime
+        legacy_status = legacy.get("status")
+        if legacy_status == "blocked":
+            lines.append(
+                "Windows previous runtimes: migration blocked; "
+                f"generations={legacy.get('busy_generation_count')}, "
+                f"processes={legacy.get('process_count')}, "
+                f"providers={legacy.get('provider_process_count')}, "
+                f"unreachable tmux={legacy.get('unreachable_generation_count')}"
+            )
+            lines.append(
+                "Windows migration repair: exit old Railmux/provider panes "
+                "or restart Windows; never delete provider or lease locks"
+            )
+        elif legacy_status == "clear":
+            lines.append(
+                "Windows previous runtimes: clear; "
+                f"generations={legacy.get('legacy_generation_count')}"
+            )
+        else:
+            lines.append(
+                "Windows previous runtimes: idle state unavailable; restart "
+                "Windows before migration if old processes cannot exit"
+            )
     lines.extend((
         (
             "Most recent railmux ssh (host not recorded): "

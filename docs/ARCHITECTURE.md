@@ -218,6 +218,27 @@ Any absence, mismatch, or copy/validation failure removes that unpublished
 venv and recreates it through the existing private pip-cache path; it never
 changes the prior layer or grants authority to reinstall the shared base.
 
+A base-generation change is not an app transition. Each MSYS2 tree owns a
+different physical `/tmp`, so an identical tmux label does not make an older
+server visible to the current generation. Native startup therefore fences on
+processes whose executable belongs to a marker-proven older generation and on
+descendants whose parent chain is still linkable in the same native snapshot.
+An unqueryable process already linked beneath such a seed remains attributed;
+a failed complete inventory is ambiguous and fails closed. An unrelated
+system-wide tmux whose executable path is unavailable is not enough to accuse
+one Railmux generation.
+This blocks the observed split-generation writer path before even probing the
+current MSYS runtime. A fully orphaned native provider whose old parent already
+exited cannot be attributed to a generation from process paths alone; provider
+writer locking and the ordinary post-launch pane/lease validation remain the
+final safety authorities in that case. Busy or ambiguous state rejects startup
+with an exit-or-restart migration instruction; it does not delete a
+writer/lease lock or attempt cross-generation tmux adoption.
+Read-only status and doctor remain available; config repair remains available
+when the current managed runtime is installed. Old-server
+reachability uses an exact native tmux client with a Windows-enforced timeout,
+not an MSYS timeout wrapper that can leave a blocked client tree.
+
 An existing outer UI is never assumed to have changed merely because native
 pip installed a newer app layer. Controllers publish their exact app
 identity only after reaching the usable MainLoop boundary. A detached older
@@ -303,8 +324,13 @@ stale; route changes, reconnect, and bounded policy-recovery refreshes remain
 immediate. For a stable pane, geometry, and history source, uniquely
 aligned snapshots are merged into one newest-bounded timeline. Unaligned hot
 captures are never spliced: the cache switches to the newest internally
-contiguous suffix, then recovers older rows from a cumulative deep page. The
-periodic routing capture retains 300 rows, enough to
+contiguous suffix, then recovers older rows from a cumulative deep page.
+Matching live prompt/status rows are not timeline anchors while they remain
+inside both live viewports, even if an expanding input moves them; a
+previous live row that later entered scrollback may still establish real
+overlap. This prevents a long paste or output burst from manufacturing a seam
+after replacing the complete hot suffix. The periodic routing capture retains
+300 rows, enough to
 enter history immediately and defer the 2,000-row cumulative request until the
 viewport approaches the top of that coherent suffix. If byte budgeting or an
 older peer supplies fewer than 300 rows while reporting older content, the
@@ -834,16 +860,22 @@ while an unavailable lock service fails resume closed.
 The acquired descriptors transfer to a small independent holder tied to the
 exact provider pane PID and process-birth token. They therefore survive UI
 Soft Quit, but are released by the operating system when that pane exits or the
-holder dies. A newly respawned MSYS2 pane may publish before its native process
-birth token becomes queryable, so transfer may retry for one bounded interval
-only while pane ID, PID, session ID/name, and window ID remain unchanged and
-non-dead. Replacement, disappearance, timeout, or a changed birth token closes
-the claim rather than weakening identity. New sessions acquire their UUID
-immediately when placeholder resolution proves it. A live UI periodically
-revalidates the advisory locks
+holder dies. Holder `ready` is not authority by itself: the parent first closes
+its descriptor copies, then a fresh advisory-lock probe must observe the exact
+holder owner before aliases are recorded as protected. An asynchronous repair
+remains explicitly pending until that proof, reports a bounded stuck/failure
+category without provider output, and never turns a `reserving` owner record
+into authority. A newly respawned MSYS2 pane may publish before its native
+process birth token becomes queryable, so transfer may retry for one bounded
+interval only while pane ID, PID, session ID/name, and window ID remain
+unchanged and non-dead. Replacement, disappearance, timeout, or a changed
+birth token closes the claim rather than weakening identity. New sessions
+acquire their UUID immediately when placeholder resolution proves it. A live
+UI periodically revalidates the advisory locks
 rather than trusting its in-memory lease list, so it can replace an
 unexpectedly dead holder while the exact provider pane remains alive; a sticky
-Running-row warning remains visible until protection is restored. Confirmed
+Running-row warning remains visible between attempts, while a new bounded
+handoff is silent unless it becomes stuck or fails again. Confirmed
 deletion also takes a fresh lease (or verifies the exact locally owned provider
 pane) and refuses to touch history owned on another host. A remote owner may
 annotate a Sessions row as `running on HOST`, but cannot enter the node-local
