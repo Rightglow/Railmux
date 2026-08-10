@@ -10,10 +10,14 @@ import tempfile
 from pathlib import Path
 
 from railmux.windows_install_log import InstallReporter
+from railmux.tmux_capabilities import parse_tmux_version
 from railmux.windows_msys2 import (
     MSYS2_ARCHIVE_SHA256,
     Msys2Runtime,
+    _bash_command,
     _extract_msys2_archive,
+    _install_pinned_tmux,
+    _prepare_pinned_tmux_package,
     _run_base_update_with_restarts,
     download_from_sources,
 )
@@ -93,13 +97,49 @@ def main() -> int:
                 runner=None,
                 mirror_optimizer=mirror_optimizer,
             )
+        package_cache = stage / "pacman-cache"
+        tmux_package, tmux_source = _prepare_pinned_tmux_package(
+            package_cache,
+            downloader=None,
+        )
+        print(f"Verified pinned tmux artifact source: {tmux_source}")
+        dependency = subprocess.run(
+            _bash_command(
+                runtime.root,
+                'cache=$(cygpath -u "$1") && '
+                "pacman --config /etc/railmux-pacman.conf "
+                '--cachedir "$cache" -Syu --noconfirm --needed libevent',
+                str(package_cache),
+            ),
+            env=runtime.environment(os.environ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=300,
+            check=False,
+        )
+        if dependency.returncode:
+            output = dependency.stdout.decode("utf-8", errors="replace")[-2000:]
+            raise SystemExit(f"tmux dependency installation failed:\n{output}")
+        with InstallReporter(
+            stage / "tmux.log", verbose=True, stream=sys.stdout
+        ) as reporter:
+            _install_pinned_tmux(
+                runtime.root,
+                tmux_package,
+                cache=package_cache,
+                env=runtime.environment(os.environ),
+                reporter=reporter,
+                runner=None,
+            )
         result = subprocess.run(
             [
                 str(runtime.bash),
                 "--noprofile",
                 "--norc",
                 "-c",
-                "cygpath --version >/dev/null && pacman --version >/dev/null",
+                "cygpath --version >/dev/null && pacman --version >/dev/null "
+                "&& tmux -V",
             ],
             env=runtime.environment(os.environ),
             stdin=subprocess.DEVNULL,
@@ -113,6 +153,9 @@ def main() -> int:
             raise SystemExit(
                 f"extracted MSYS2 executables failed ({result.returncode}):\n{output}"
             )
+        tmux_output = result.stdout.decode("utf-8", errors="replace")
+        if parse_tmux_version(tmux_output) != (3, 7):
+            raise SystemExit(f"unexpected pinned tmux version: {tmux_output!r}")
     print("Native Windows archive extraction and executable loading passed.")
     return 0
 

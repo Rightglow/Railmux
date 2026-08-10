@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc8] - 2026-08-10
+
+### Fixed
+
+- Pin the exact MSYS2-signed tmux 3.7b package and verify both its package and
+  detached-signature hashes before asking pacman to install it. A responsive
+  but stale package-mirror database can no longer make a fresh Windows runtime
+  download tmux 3.6a and fail only at the final package-inventory gate.
+- Move the corrected package selection into a new immutable Windows runtime
+  generation. Failed rc7 staging trees and their generation-specific pacman
+  caches are never reused; Codex and Claude histories remain outside both.
+
 ## [0.4.0rc7] - 2026-08-10
 
 ### Changed

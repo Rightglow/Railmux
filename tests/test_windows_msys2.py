@@ -194,6 +194,28 @@ def test_approved_archive_sources_are_https_and_share_one_pinned_artifact():
         assert url.endswith(f"/{MSYS2_ARCHIVE_NAME}")
 
 
+def test_pinned_tmux_package_and_signature_have_exact_approved_sources():
+    assert windows_msys2.TMUX_PACKAGE_VERSION == "3.7.b-1"
+    assert windows_msys2.TMUX_PACKAGE_SIZE == 466_823
+    assert windows_msys2.TMUX_PACKAGE_SHA256 == (
+        "42fc9be7b7075b6142914adf1181c091205b345a4f6b8b851d0f0636569d29c6"
+    )
+    assert windows_msys2.TMUX_PACKAGE_SIGNATURE_SIZE == 566
+    assert windows_msys2.TMUX_PACKAGE_SIGNATURE_SHA256 == (
+        "f6ff7e1bc4f303f453ce8faeb06d43cf7f115f3e2df4f7a8cfc0baa48c9e6110"
+    )
+    assert len(windows_msys2.TMUX_PACKAGE_SOURCES) == 5
+    assert len(windows_msys2.TMUX_PACKAGE_SIGNATURE_SOURCES) == 5
+    for label, url in windows_msys2.TMUX_PACKAGE_SOURCES:
+        assert label
+        assert url.startswith("https://")
+        assert url.endswith(f"/{windows_msys2.TMUX_PACKAGE_NAME}")
+    assert windows_msys2.TMUX_PACKAGE_SIGNATURE_SOURCES == tuple(
+        (label, f"{url}.sig")
+        for label, url in windows_msys2.TMUX_PACKAGE_SOURCES
+    )
+
+
 def test_download_reports_bytes_and_percentage_on_a_terminal(tmp_path, monkeypatch):
     payload = b"a" * (2 * 1024 * 1024)
     progress = TtyBuffer()
@@ -822,13 +844,37 @@ def test_complete_but_temporarily_unverified_runtime_is_not_called_incomplete(
         )
 
 
-def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
+def test_install_is_staged_and_activated_only_after_exact_probe(
+    tmp_path, monkeypatch
+):
     environ = {"LOCALAPPDATA": str(tmp_path), "USERPROFILE": r"C:\Users\u"}
     commands = []
+    tmux_package = b"verified pinned tmux package"
+    tmux_signature = b"verified pinned tmux signature"
+    monkeypatch.setattr(windows_msys2, "TMUX_PACKAGE_SIZE", len(tmux_package))
+    monkeypatch.setattr(
+        windows_msys2,
+        "TMUX_PACKAGE_SHA256",
+        hashlib.sha256(tmux_package).hexdigest(),
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "TMUX_PACKAGE_SIGNATURE_SIZE",
+        len(tmux_signature),
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "TMUX_PACKAGE_SIGNATURE_SHA256",
+        hashlib.sha256(tmux_signature).hexdigest(),
+    )
 
     def downloader(_url, destination, _sha256):
-        assert destination.name == MSYS2_ARCHIVE_NAME
-        destination.write_bytes(b"verified fixture")
+        payload = {
+            MSYS2_ARCHIVE_NAME: b"verified fixture",
+            windows_msys2.TMUX_PACKAGE_NAME: tmux_package,
+            f"{windows_msys2.TMUX_PACKAGE_NAME}.sig": tmux_signature,
+        }[destination.name]
+        destination.write_bytes(payload)
 
     def extractor(archive, output, *, reporter):
         assert archive.name == MSYS2_ARCHIVE_NAME
@@ -893,7 +939,14 @@ def test_install_is_staged_and_activated_only_after_exact_probe(tmp_path):
     base_updates = [command for command in joined if "-Syuu --noconfirm" in command]
     assert len(base_updates) == 2
     assert any("-Syu --noconfirm" in command for command in joined)
-    assert any("--needed tmux python python-pip" in command for command in joined)
+    assert any(
+        "--needed libevent python python-pip" in command for command in joined
+    )
+    assert any(
+        '-U --noconfirm "$package"' in command
+        and windows_msys2.TMUX_PACKAGE_NAME in command
+        for command in joined
+    )
     assert any('python -m venv "$1/venv"' in command for command in joined)
     assert any('railmux[ssh]==$2' in command for command in joined)
     assert all(MSYS2_ARCHIVE_NAME not in command for command in joined)
@@ -1393,6 +1446,71 @@ def test_verified_base_archive_cache_avoids_a_second_download(tmp_path, monkeypa
 
     assert selected == archive
     assert source == "verified local cache"
+
+
+def test_pinned_tmux_cache_ignores_old_mirror_selected_package(
+    tmp_path, monkeypatch
+):
+    package = b"pinned tmux 3.7 package"
+    signature = b"pinned tmux signature"
+    monkeypatch.setattr(windows_msys2, "TMUX_PACKAGE_SIZE", len(package))
+    monkeypatch.setattr(
+        windows_msys2,
+        "TMUX_PACKAGE_SHA256",
+        hashlib.sha256(package).hexdigest(),
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "TMUX_PACKAGE_SIGNATURE_SIZE",
+        len(signature),
+    )
+    monkeypatch.setattr(
+        windows_msys2,
+        "TMUX_PACKAGE_SIGNATURE_SHA256",
+        hashlib.sha256(signature).hexdigest(),
+    )
+    cache = tmp_path / "pacman"
+    cache.mkdir()
+    stale = cache / "tmux-3.6.a-1-x86_64.pkg.tar.zst"
+    stale.write_bytes(b"stale mirror package")
+
+    def downloader(_url, destination, _sha256):
+        destination.write_bytes(
+            signature if destination.name.endswith(".sig") else package
+        )
+
+    selected, source = windows_msys2._prepare_pinned_tmux_package(
+        cache,
+        downloader=downloader,
+    )
+
+    assert selected.name == windows_msys2.TMUX_PACKAGE_NAME
+    assert selected.read_bytes() == package
+    assert selected.with_name(f"{selected.name}.sig").read_bytes() == signature
+    assert stale.read_bytes() == b"stale mirror package"
+    assert source == "MSYS2 geo mirror"
+
+
+def test_pinned_tmux_cache_reuses_only_exact_verified_artifacts(tmp_path):
+    cache = tmp_path / "pacman"
+    cache.mkdir()
+    package = cache / windows_msys2.TMUX_PACKAGE_NAME
+    signature = cache / f"{windows_msys2.TMUX_PACKAGE_NAME}.sig"
+    package.write_bytes(b"tampered")
+    signature.write_bytes(b"tampered")
+
+    with pytest.raises(RuntimeInstallError, match="any approved source"):
+        windows_msys2._prepare_pinned_tmux_package(
+            cache,
+            downloader=lambda *_args: (_ for _ in ()).throw(
+                RuntimeInstallError("offline")
+            ),
+    )
+
+    assert not package.exists()
+    # The signature is not consumed without its exact package. A later retry
+    # validates and replaces it independently before pacman sees either file.
+    assert signature.read_bytes() == b"tampered"
 
 
 def test_packaged_python_reuses_verified_pre_fix_archive_cache(tmp_path, monkeypatch):

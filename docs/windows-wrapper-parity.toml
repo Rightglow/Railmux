@@ -61,9 +61,9 @@ unicode_profile = "The managed runtime path and provider history must still be e
 
 [release_validation]
 date = "2026-08-10"
-candidate = "0.4.0rc7"
-scope = "The release owner previously passed the complete native-Windows interaction checklist through rc6. Rc7 automation introduces the first release runtime generation, rejects preview-generation reuse and managed tmux below 3.7, removes the old reduced-motion compatibility path, and adds fail-closed private-runtime uninstall. The prior UI/SSH evidence remains applicable, but it does not by itself validate the new full-install and uninstall boundaries."
-remaining_rc_gate = "On real Windows, complete one fresh rc7 generation install, verify the recorded package inventory contains tmux 3.7+, launch/exit the UI, check doctor and runtime status --verify, prove uninstall refuses while the workspace is live, then after normal exit verify uninstall --dry-run and the confirmed cleanup preserve .codex/.claude. The non-ASCII Windows profile-name case remains a documented limitation rather than a 0.4 blocker."
+candidate = "0.4.0rc8"
+scope = "The release owner previously passed the complete native-Windows interaction checklist through rc6. Rc8 uses a new immutable runtime generation, pins the exact signed tmux 3.7b package independently of stale mirror metadata, rejects preview-generation reuse and managed tmux below 3.7, removes the old reduced-motion compatibility path, and adds fail-closed private-runtime uninstall. The prior UI/SSH evidence remains applicable, but it does not by itself validate the new full-install and uninstall boundaries."
+remaining_rc_gate = "On real Windows, complete one fresh rc8 generation install, verify step 5 names the pinned tmux 3.7b package rather than tmux 3.6a and the recorded package inventory contains tmux 3.7+, launch/exit the UI, check doctor and runtime status --verify, prove uninstall refuses while the workspace is live, then after normal exit verify uninstall --dry-run and the confirmed cleanup preserve .codex/.claude. The non-ASCII Windows profile-name case remains a documented limitation rather than a 0.4 blocker."
 
 [[scenarios]]
 id = "WW-PACKAGE-DISPATCH"

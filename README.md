@@ -84,7 +84,9 @@ version-isolated application layer.
 Railmux's shared tmux core requirement remains 2.7+ on macOS, Linux, and WSL.
 The native-Windows managed runtime automatically installs tmux 3.7 or newer
 and refuses to activate an older package set, because synchronized provider
-redraws are part of the supported Windows contract. Users never install or
+redraws are part of the supported Windows contract. Railmux pins and hashes the
+exact MSYS2 tmux package and detached signature independently of rolling mirror
+metadata, then lets pacman verify the MSYS2 signature. Users never install or
 upgrade this private tmux manually.
 
 The managed runtime does not replace Git Bash, adopt an existing MSYS2, edit

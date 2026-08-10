@@ -15,6 +15,10 @@ sys.path.insert(0, str(ROOT / "src"))
 from railmux.windows_msys2 import (  # noqa: E402
     MSYS2_ARCHIVE_SIZE,
     MSYS2_ARCHIVE_SOURCES,
+    TMUX_PACKAGE_SIGNATURE_SIZE,
+    TMUX_PACKAGE_SIGNATURE_SOURCES,
+    TMUX_PACKAGE_SIZE,
+    TMUX_PACKAGE_SOURCES,
 )
 from railmux.windows_pacman import (  # noqa: E402
     PACMAN_MIRROR_SOURCES,
@@ -22,9 +26,9 @@ from railmux.windows_pacman import (  # noqa: E402
 )
 
 
-def check_source(source: tuple[str, str]) -> str:
-    label, url = source
-    offset = 1024 * 1024
+def check_artifact_source(source: tuple[str, str, int, str]) -> str:
+    label, url, expected_size, kind = source
+    offset = min(1024 * 1024, expected_size - 1)
     request = urllib.request.Request(
         url,
         headers={
@@ -37,7 +41,7 @@ def check_source(source: tuple[str, str]) -> str:
         status = getattr(response, "status", 200)
         if status != 206:
             raise RuntimeError(f"HTTP {status}")
-        expected_range = f"bytes {offset}-{offset}/{MSYS2_ARCHIVE_SIZE}"
+        expected_range = f"bytes {offset}-{offset}/{expected_size}"
         actual_range = response.headers.get("Content-Range")
         if actual_range != expected_range:
             raise RuntimeError(
@@ -52,7 +56,7 @@ def check_source(source: tuple[str, str]) -> str:
             raise RuntimeError(f"redirected outside HTTPS: {final_url}")
         if response.read(2) == b"":
             raise RuntimeError("range response was empty")
-    return f"{label}: OK (HTTPS range resume supported)"
+    return f"{label}: OK ({kind} HTTPS range resume supported)"
 
 
 def check_pacman_source(source: tuple[str, str]) -> str:
@@ -66,8 +70,26 @@ def check_pacman_source(source: tuple[str, str]) -> str:
 def main() -> int:
     failures = []
     checks = [
-        (f"archive {source[0]}", check_source, source)
-        for source in MSYS2_ARCHIVE_SOURCES
+        (
+            f"archive {label}",
+            check_artifact_source,
+            (label, url, MSYS2_ARCHIVE_SIZE, "archive"),
+        )
+        for label, url in MSYS2_ARCHIVE_SOURCES
+    ] + [
+        (
+            f"tmux package {label}",
+            check_artifact_source,
+            (label, url, TMUX_PACKAGE_SIZE, "tmux package"),
+        )
+        for label, url in TMUX_PACKAGE_SOURCES
+    ] + [
+        (
+            f"tmux signature {label}",
+            check_artifact_source,
+            (label, url, TMUX_PACKAGE_SIGNATURE_SIZE, "tmux signature"),
+        )
+        for label, url in TMUX_PACKAGE_SIGNATURE_SOURCES
     ] + [
         (f"pacman {source[0]}", check_pacman_source, source)
         for source in PACMAN_MIRROR_SOURCES

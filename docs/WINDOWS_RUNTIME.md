@@ -326,8 +326,10 @@ does not block product tests when an external mirror has a transient outage;
 runtime integrity remains the SHA-256 and pacman package-signature checks, not
 the CI capability probe.
 The blocking Windows jobs separately exercise the native 3.10/3.13 bootstrap
-and a real MSYS2/tmux/Python runtime. The MSYS2 job records an exact package
-identity, requires tmux 3.7+, writes content-bound managed markers, and runs the Windows UI
+and a real MSYS2/tmux/Python runtime. The archive job installs the exact pinned
+tmux package with pacman's signature verification, while the MSYS2 job records
+an exact package identity, requires tmux 3.7+, writes content-bound managed
+markers, and runs the Windows UI
 transition, provider-path, local/remote config, local/remote doctor, and
 privacy-safe diagnostics suites from the runtime-owned app venv.
 

@@ -36,6 +36,7 @@ from railmux.windows_install_log import (
     stream_process_output,
 )
 from railmux.windows_pacman import (
+    PACMAN_MIRROR_SOURCES,
     PacmanMirrorDecision,
     PacmanMirrorError,
     deactivate_pacman_hosts,
@@ -90,11 +91,31 @@ MSYS2_ARCHIVE_SHA256 = (
 )
 MSYS2_ARCHIVE_MEMBER_COUNT = 16_485
 MSYS2_ARCHIVE_UNPACKED_SIZE = 289_361_533
+TMUX_PACKAGE_VERSION = "3.7.b-1"
+TMUX_PACKAGE_NAME = f"tmux-{TMUX_PACKAGE_VERSION}-x86_64.pkg.tar.zst"
+TMUX_PACKAGE_SIZE = 466_823
+TMUX_PACKAGE_SHA256 = (
+    "42fc9be7b7075b6142914adf1181c091205b345a4f6b8b851d0f0636569d29c6"
+)
+TMUX_PACKAGE_SIGNATURE_SIZE = 566
+TMUX_PACKAGE_SIGNATURE_SHA256 = (
+    "f6ff7e1bc4f303f453ce8faeb06d43cf7f115f3e2df4f7a8cfc0baa48c9e6110"
+)
+TMUX_PACKAGE_SOURCES = tuple(
+    (
+        label,
+        urllib.parse.urljoin(server.replace("$arch", "x86_64"), TMUX_PACKAGE_NAME),
+    )
+    for label, server in PACMAN_MIRROR_SOURCES
+)
+TMUX_PACKAGE_SIGNATURE_SOURCES = tuple(
+    (label, f"{url}.sig") for label, url in TMUX_PACKAGE_SOURCES
+)
 # Runtime IDs are immutable package generations, not merely archive dates.
-# Generation 1 is the first release contract and requires tmux 3.7+ before a
-# staged base can be published. Preview generations are intentionally neither
-# discovered nor adopted.
-MSYS2_RUNTIME_GENERATION = 1
+# Generation 2 pins the exact signed tmux package independently of rolling
+# mirror databases. Earlier release-candidate generations are intentionally
+# neither discovered nor adopted.
+MSYS2_RUNTIME_GENERATION = 2
 MSYS2_RUNTIME_ID = f"msys2-{MSYS2_RELEASE}-r{MSYS2_RUNTIME_GENERATION}"
 _NATIVE_WINDOWS = os.name == "nt"
 RUNTIME_SCHEMA = 2
@@ -121,7 +142,7 @@ _CONTENT_RANGE_RE = re.compile(r"bytes (\d+)-(\d+)/(\d+)\Z")
 _VERSION_RE = PROJECT_VERSION_RE
 
 _PACMAN_CONFIG = "/etc/railmux-pacman.conf"
-_PACMAN_PACKAGES = "tmux python python-pip"
+_PACMAN_PACKAGES = "libevent python python-pip"
 _PIP_CACHE_NAME = "pip"
 _PIP_INITIAL_TIMEOUT_SECONDS = 60
 _PIP_RETRY_TIMEOUT_SECONDS = 120
@@ -132,6 +153,11 @@ _PACKAGE_URL_COMMAND = (
     f"--needed {_PACMAN_PACKAGES} 2>/dev/null"
 )
 _PACKAGE_INVENTORY_COMMAND = "set -o pipefail; pacman -Q | LC_ALL=C sort"
+_PINNED_TMUX_INSTALL_COMMAND = (
+    'package=$(cygpath -u "$1") && cache=$(cygpath -u "$2") && '
+    f'pacman --config {_PACMAN_CONFIG} --cachedir "$cache" '
+    '-U --noconfirm "$package"'
+)
 _PACKAGE_INVENTORY_LIMIT = 1024 * 1024
 _CORE_RUNTIME_PACKAGES = ("tmux", "python", "python-pip")
 _MAX_BASE_UPDATE_PASSES = 3
@@ -634,6 +660,86 @@ def _archive_cache_is_valid(path: Path) -> bool:
         return digest.hexdigest().lower() == MSYS2_ARCHIVE_SHA256.lower()
     except OSError:
         return False
+
+
+def _artifact_cache_is_valid(
+    path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+) -> bool:
+    try:
+        if (
+            _path_is_link_or_reparse(path)
+            or not path.is_file()
+            or path.stat().st_size != expected_size
+        ):
+            return False
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return False
+    return digest.hexdigest().lower() == expected_sha256.lower()
+
+
+def _prepare_pinned_tmux_package(
+    cache: Path,
+    *,
+    downloader: Downloader | None,
+) -> tuple[Path, str]:
+    """Cache the exact signed tmux package independently of mirror metadata."""
+    cache.mkdir(parents=True, exist_ok=True)
+    artifacts = (
+        (
+            cache / TMUX_PACKAGE_NAME,
+            TMUX_PACKAGE_SIZE,
+            TMUX_PACKAGE_SHA256,
+            TMUX_PACKAGE_SOURCES,
+        ),
+        (
+            cache / f"{TMUX_PACKAGE_NAME}.sig",
+            TMUX_PACKAGE_SIGNATURE_SIZE,
+            TMUX_PACKAGE_SIGNATURE_SHA256,
+            TMUX_PACKAGE_SIGNATURE_SOURCES,
+        ),
+    )
+    sources: list[str] = []
+    for destination, size, sha256, approved_sources in artifacts:
+        if _artifact_cache_is_valid(
+            destination,
+            expected_size=size,
+            expected_sha256=sha256,
+        ):
+            sources.append("verified local cache")
+            continue
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeInstallError(
+                "could not replace the private tmux package cache"
+            ) from exc
+        source = download_from_sources(
+            destination,
+            sha256,
+            sources=approved_sources,
+            downloader=downloader,
+            expected_size=size,
+        )
+        if not _artifact_cache_is_valid(
+            destination,
+            expected_size=size,
+            expected_sha256=sha256,
+        ):
+            raise RuntimeInstallError(
+                "the pinned tmux package cache failed verification"
+            )
+        sources.append(source)
+    source = sources[0]
+    if sources[1] != source:
+        source = f"{source}; signature from {sources[1]}"
+    return cache / TMUX_PACKAGE_NAME, source
 
 
 def _prepare_cached_archive(
@@ -1784,6 +1890,7 @@ def download_from_sources(
     *,
     sources: Sequence[tuple[str, str]] = MSYS2_ARCHIVE_SOURCES,
     downloader: Downloader | None = None,
+    expected_size: int = MSYS2_ARCHIVE_SIZE,
 ) -> str:
     """Use adaptive range selection, retaining a full-download fallback."""
     if downloader is not None:
@@ -1794,7 +1901,12 @@ def download_from_sources(
             downloader=downloader,
         )
     try:
-        return download_adaptive(destination, sha256, sources=sources)
+        return download_adaptive(
+            destination,
+            sha256,
+            sources=sources,
+            expected_size=expected_size,
+        )
     except RuntimeInstallError as exc:
         print(
             f"Adaptive MSYS2 download failed ({exc}); retrying ordinary "
@@ -2244,6 +2356,30 @@ def _run_pacman_with_recovery(
     reporter.command_failed(f"{label} resilient retry", retry_returncode)
     raise RuntimeInstallError(
         f"{label} resilient retry failed with exit code {retry_returncode}"
+    )
+
+
+def _install_pinned_tmux(
+    root: Path,
+    package: Path,
+    *,
+    cache: Path,
+    env: Mapping[str, str],
+    reporter: InstallReporter,
+    runner: Runner | None,
+) -> None:
+    """Install the verified local tmux package with pacman's signature check."""
+    _run_checked(
+        _bash_command(
+            root,
+            _PINNED_TMUX_INSTALL_COMMAND,
+            str(package),
+            str(cache),
+        ),
+        env=env,
+        reporter=reporter,
+        runner=runner,
+        label=f"Pinned tmux {TMUX_PACKAGE_VERSION} installation",
     )
 
 
@@ -3276,10 +3412,16 @@ def install_managed_runtime(
                             f"Using {len(post_update_decision.active)} measured "
                             "package sources."
                         )
-                    reporter.phase(5, 7, "Installing tmux and private Python")
+                    reporter.phase(
+                        5,
+                        7,
+                        f"Installing tmux {TMUX_PACKAGE_VERSION} and private Python",
+                    )
                     reporter.note(
-                        "Mirror fallback is per package; completed package "
-                        "files stay in Railmux's private cache during retries.",
+                        "Railmux pins tmux independently of mirror metadata; "
+                        "pacman still verifies its MSYS2 signature. Mirror "
+                        "fallback remains per package for dependencies, and "
+                        "completed files stay in the private cache.",
                         level="muted",
                     )
                     cached_packages = _completed_package_cache_count(package_cache)
@@ -3289,6 +3431,14 @@ def install_managed_runtime(
                             "package files; pacman will not fetch them again.",
                             level="muted",
                         )
+                    pinned_tmux, tmux_source = _prepare_pinned_tmux_package(
+                        package_cache,
+                        downloader=downloader,
+                    )
+                    reporter.note(
+                        f"Verified pinned tmux package and signature · {tmux_source}.",
+                        level="success",
+                    )
                     _validate_transaction_mirrors(
                         root,
                         env=child_env,
@@ -3305,6 +3455,14 @@ def install_managed_runtime(
                             runner=runner,
                             label="MSYS2 package installation",
                             mirror_optimizer=mirror_optimizer,
+                        )
+                        _install_pinned_tmux(
+                            root,
+                            pinned_tmux,
+                            cache=package_cache,
+                            env=child_env,
+                            reporter=reporter,
+                            runner=runner,
                         )
                     finally:
                         _stop_private_gpg_agents(

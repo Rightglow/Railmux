@@ -220,6 +220,8 @@ must remain covered when the adapter, shared UI, or terminal behavior changes.
    for rolling repository results, bind each new app marker to it, and keep
    Railmux application venvs version-isolated beneath it. Require tmux 3.7 or
    newer in the staged inventory before publishing the Windows generation.
+   Resolve tmux from an exact hash-pinned package and detached signature rather
+   than trusting rolling mirror metadata to select its version.
    Make base creation and app upgrades transactional and recoverable; bump the
    generation whenever its required contents change. Never adopt or overwrite
    user-owned MSYS2 files. Explicit uninstall must re-prove that the private

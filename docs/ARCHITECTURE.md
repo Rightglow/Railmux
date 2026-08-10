@@ -153,8 +153,10 @@ existing client behavior.
 Codex independently brackets its own TUI paints in application-side
 synchronized output, but tmux learned to consume application frames only in
 3.7. The Railmux-owned Windows runtime generation therefore installs tmux
-noninteractively and rejects its staged package inventory unless tmux parses as
-3.7 or newer. Users never maintain that private tmux manually. This managed
+noninteractively from an exact hash-pinned MSYS2 package and detached signature,
+then rejects its staged package inventory unless tmux parses as 3.7 or newer.
+Rolling mirrors supply dependencies but cannot select an older tmux. Users
+never maintain that private tmux manually. This managed
 Windows floor does not change Railmux's shared macOS/Linux/WSL tmux 2.7 core
 floor. The recorded package and effective tmux classification remain exposed
 by `railmux runtime status` and `railmux doctor`.
