@@ -37,6 +37,8 @@ _HISTORY_LOAD_AHEAD_LINES = 120
 _HISTORY_PREFETCH_TIMEOUT = 6.0
 _HISTORY_DEEP_TIMEOUT = 10.0
 _HISTORY_CONTENT_PANES = 8
+_TIMELINE_MIN_UNIQUE_VOTES = 3
+_TIMELINE_MIN_CONTIGUOUS_ROWS = 4
 
 
 @dataclass(frozen=True)
@@ -281,13 +283,67 @@ class LocalHistoryView:
             return None
         best_votes = max(votes.values())
         best = [delta for delta, count in votes.items() if count == best_votes]
-        if best_votes < 2 or len(best) != 1:
+        if best_votes < _TIMELINE_MIN_UNIQUE_VOTES or len(best) != 1:
             return None
-        return best[0]
+        delta = best[0]
+
+        # Two unrelated captures can each contain a handful of individually
+        # unique headings (especially after a long structured paste). Votes
+        # alone then manufacture a plausible delta and permanently splice the
+        # old prefix onto the new timeline. A real rolling capture retains a
+        # contiguous run in scrollback; require that structural evidence too.
+        # Live viewport rows are excluded because full-screen agents repaint
+        # them in place and can repeat the same prompt/footer at unrelated
+        # points in time.
+        previous_history_end = max(0, len(previous) - live_height)
+        incoming_history_end = max(0, len(incoming) - live_height)
+        contiguous = 0
+        longest = 0
+        for incoming_index in range(len(incoming)):
+            previous_index = incoming_index + delta
+            if not 0 <= previous_index < len(previous):
+                contiguous = 0
+                continue
+            if (
+                previous_index >= previous_history_end
+                and incoming_index >= incoming_history_end
+            ):
+                contiguous = 0
+                continue
+            previous_line = _SGR_STYLE_RE.sub(b"", previous[previous_index])
+            incoming_line = _SGR_STYLE_RE.sub(b"", incoming[incoming_index])
+            if previous_line == incoming_line:
+                contiguous += 1
+                longest = max(longest, contiguous)
+            else:
+                contiguous = 0
+        if longest < _TIMELINE_MIN_CONTIGUOUS_ROWS:
+            return None
+        return delta
 
     @staticmethod
     def _line_is_blank(line: bytes) -> bool:
         return not _SGR_STYLE_RE.sub(b"", line).strip()
+
+    @staticmethod
+    def _has_timeline(snapshot: HistorySnapshot) -> bool:
+        return (
+            snapshot.timeline_end > snapshot.timeline_start
+            and snapshot.timeline_end - snapshot.timeline_start == len(snapshot.lines)
+        )
+
+    @classmethod
+    def _timeline_overlaps(
+        cls,
+        left: HistorySnapshot,
+        right: HistorySnapshot,
+    ) -> bool:
+        return (
+            cls._has_timeline(left)
+            and cls._has_timeline(right)
+            and right.timeline_end >= left.timeline_start
+            and right.timeline_start <= left.timeline_end
+        )
 
     def _merge_content(
         self,
@@ -299,11 +355,24 @@ class LocalHistoryView:
             previous, incoming
         ) or not self._history_source_matches(previous, incoming):
             return incoming
-        delta = self._timeline_delta(
-            previous.lines,
-            incoming.lines,
-            live_height=incoming.height,
-        )
+        coordinated = self._has_timeline(previous) and self._has_timeline(incoming)
+        if coordinated:
+            # A smaller end means the server timeline was rewound or replaced.
+            # A gap means rows were omitted. Neither case is safe to splice.
+            delta = (
+                incoming.timeline_start - previous.timeline_start
+                if (
+                    incoming.timeline_end >= previous.timeline_end
+                    and self._timeline_overlaps(previous, incoming)
+                )
+                else None
+            )
+        else:
+            delta = self._timeline_delta(
+                previous.lines,
+                incoming.lines,
+                live_height=incoming.height,
+            )
         if delta is None:
             # Never splice two captures whose timelines cannot be aligned.
             # Retaining old history and replacing only the live viewport
@@ -316,8 +385,12 @@ class LocalHistoryView:
             start = min(0, delta)
             incoming_end = delta + len(incoming.lines)
             end = max(len(previous.lines), incoming_end)
-            if 0 <= incoming_end < len(previous.lines) and all(
-                self._line_is_blank(line) for line in previous.lines[incoming_end:]
+            if (
+                not coordinated
+                and 0 <= incoming_end < len(previous.lines)
+                and all(
+                    self._line_is_blank(line) for line in previous.lines[incoming_end:]
+                )
             ):
                 # A temporary full-screen view such as Codex /btw can append
                 # an almost-empty live viewport. Once a newer capture anchors
@@ -334,7 +407,18 @@ class LocalHistoryView:
             lines = tuple(merged)
         if len(lines) > self.history_limit:
             lines = lines[-self.history_limit :]
-        return replace(incoming, lines=tuple(lines))
+        if coordinated and delta is not None:
+            timeline_end = max(previous.timeline_end, incoming.timeline_end)
+            timeline_start = timeline_end - len(lines)
+        else:
+            timeline_start = incoming.timeline_start
+            timeline_end = incoming.timeline_end
+        return replace(
+            incoming,
+            lines=tuple(lines),
+            timeline_start=timeline_start,
+            timeline_end=timeline_end,
+        )
 
     def _remember_content(
         self,
@@ -351,12 +435,19 @@ class LocalHistoryView:
             anchored = (
                 self._same_geometry(previous, snapshot)
                 and self._history_source_matches(previous, snapshot)
-                and self._timeline_delta(
-                    previous.lines,
-                    snapshot.lines,
-                    live_height=snapshot.height,
+                and (
+                    self._timeline_overlaps(previous, snapshot)
+                    or (
+                        not self._has_timeline(previous)
+                        and not self._has_timeline(snapshot)
+                        and self._timeline_delta(
+                            previous.lines,
+                            snapshot.lines,
+                            live_height=snapshot.height,
+                        )
+                        is not None
+                    )
                 )
-                is not None
             )
             stored = self._merge_content(previous, snapshot) if anchored else snapshot
             self._unverified_after_reconnect.discard(snapshot.pane_id)
@@ -497,9 +588,8 @@ class LocalHistoryView:
             cached = route
         loaded_limit = min(len(cached.lines), self.history_limit)
         target_lines = min(self.history_limit, _HISTORY_INITIAL_LINES)
-        if (
-            cached.more_available
-            and loaded_limit < min(target_lines, _HISTORY_PREFETCH_LINES)
+        if cached.more_available and loaded_limit < min(
+            target_lines, _HISTORY_PREFETCH_LINES
         ):
             self.cancel_pane(route.pane_id)
             request_id = self._allocate_request_id()
@@ -919,7 +1009,9 @@ class LocalHistoryView:
             self.cancel_pane(pending.pane_id)
             return HistoryAction(restore_live=True)
         anchor = self._visible_lines(viewport)
-        aligned_offset = self._aligned_offset(snapshot, anchor)
+        aligned_offset = self._coordinate_aligned_offset(snapshot, viewport)
+        if aligned_offset is None:
+            aligned_offset = self._aligned_offset(snapshot, anchor)
         if aligned_offset is None:
             # The live pane moved while the deep capture was in flight and no
             # unique exact visible anchor survived. Keep the immutable hot
@@ -931,7 +1023,9 @@ class LocalHistoryView:
         # of merging it with the older hot generation; this keeps every row's
         # text and background styling from one server render.
         stored = self._replace_content(snapshot)
-        stored_offset = self._aligned_offset(stored, anchor)
+        stored_offset = self._coordinate_aligned_offset(stored, viewport)
+        if stored_offset is None:
+            stored_offset = self._aligned_offset(stored, anchor)
         if stored_offset is None:
             # The raw response was valid, so this can only be an ambiguous
             # cache merge. Preserve the user's frozen viewport and retry later.
@@ -1018,6 +1112,22 @@ class LocalHistoryView:
             return None
         start = best_starts[0]
         return len(snapshot.lines) - (start + len(anchor))
+
+    @classmethod
+    def _coordinate_aligned_offset(
+        cls,
+        incoming: HistorySnapshot,
+        viewport: _HistoryViewport,
+    ) -> int | None:
+        """Map a frozen viewport through v16 absolute timeline coordinates."""
+        previous = viewport.snapshot
+        if not cls._has_timeline(previous) or not cls._has_timeline(incoming):
+            return None
+        anchor_end = previous.timeline_end - viewport.offset
+        anchor_start = anchor_end - previous.height
+        if anchor_start < incoming.timeline_start or anchor_end > incoming.timeline_end:
+            return None
+        return incoming.timeline_end - anchor_end
 
     def overlays(
         self,

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc12] - 2026-08-11
+
+### Changed
+
+- Advance the exact-match private SSH display protocol to v16. History
+  snapshots now carry server-owned absolute row coordinates whenever the
+  complete source extent is known, so hot and deep captures are joined by
+  timeline identity rather than matching repeated prompt, heading, or status
+  text. A byte-truncated transcript keeps the stricter content fallback instead
+  of inventing coordinates. Older clients and servers fail closed into
+  the existing explicit upgrade flow instead of mixing framing versions.
+- Move read-only tmux capture, transcript formatting, and history rendering to
+  one bounded worker with self-pipe wakeups. Provider PTY input/output and
+  screen coalescing continue while a deep page is prepared; superseded pending
+  prefetches are coalesced, config reparsing is mtime-gated, and a short
+  topology cache avoids duplicate serial tmux discovery within one gesture.
+- Make Claude session metadata indexing append-incremental. Unchanged or
+  growing provider JSONL files reuse exact accumulated title/count/token/status
+  state and read only complete new records. Inode replacement, truncation,
+  same-size mutation, or a changed boundary checkpoint falls back to a full
+  read-only scan; provider files, mtimes, locks, and transcripts are never
+  modified.
+
+### Fixed
+
+- Reject false history joins when unrelated long structured captures happen
+  to repeat a few unique headings. The content fallback now also requires a
+  contiguous scrollback run; v16 peers use exact coordinates and never depend
+  on this fallback. Large paste, live append, CJK, reconnect, rewind, and deep
+  anchor paths retain one coherent suffix.
+- Restore the managed-Windows hardware cursor after Codex's repeated
+  hide/show/hide repaint signature while preserving a single intentional hide.
+  Railmux remembers and replays only the last validated absolute visible
+  cursor position after the quiet boundary, keeping the cursor available for
+  input and giving Windows Terminal IME pre-edit text one stable anchor without
+  changing provider argv, input, configuration, or session data.
+
 ## [0.4.0rc11] - 2026-08-11
 
 ### Fixed
@@ -2781,6 +2818,12 @@ made after 0.2.21.
 - Initial PyPI release under the Railmux name.
 
 [Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc6...HEAD
+[0.4.0rc12]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc11...v0.4.0rc12
+[0.4.0rc11]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc10...v0.4.0rc11
+[0.4.0rc10]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc9...v0.4.0rc10
+[0.4.0rc9]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc8...v0.4.0rc9
+[0.4.0rc8]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc7...v0.4.0rc8
+[0.4.0rc7]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc6...v0.4.0rc7
 [0.4.0rc6]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc5...v0.4.0rc6
 [0.4.0rc5]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc4...v0.4.0rc5
 [0.4.0rc4]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc3...v0.4.0rc4

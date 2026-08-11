@@ -33,6 +33,7 @@ import struct
 import subprocess
 import sys
 import termios
+import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
@@ -164,6 +165,127 @@ _WINDOW_SIZE_ATTEMPTS = 3
 _HISTORY_SNAPSHOT_RAW_BUDGET = 12 * 1024 * 1024
 _OSC52_PREFIX = b"\033]52;"
 _OSC52_MAX_ENCODED = ((MAX_CLIPBOARD_BYTES + 2) // 3) * 4
+
+
+@dataclass(frozen=True)
+class _HistoryJob:
+    kind: str
+    session_id: str
+    request: tuple[int, ...]
+    claude_history_policy: str | None
+
+
+class _HistoryWorker:
+    """Run expensive read-only history capture away from the PTY select loop."""
+
+    _CAPACITY = 4
+
+    def __init__(self, pyte: object) -> None:
+        self._pyte = pyte
+        self._condition = threading.Condition()
+        self._jobs: deque[_HistoryJob] = deque()
+        self._results: deque[bytes] = deque()
+        self._in_flight = 0
+        self._closed = False
+        self.read_fd, self._write_fd = os.pipe()
+        os.set_blocking(self.read_fd, False)
+        os.set_blocking(self._write_fd, False)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="railmux-history",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, job: _HistoryJob) -> bool:
+        with self._condition:
+            if self._closed:
+                return False
+            if job.kind == "batch":
+                # Only the newest not-yet-started routing snapshot is useful.
+                self._jobs = deque(item for item in self._jobs if item.kind != "batch")
+            if len(self._jobs) + self._in_flight + len(self._results) >= self._CAPACITY:
+                return False
+            self._jobs.append(job)
+            self._condition.notify()
+            return True
+
+    def drain(self) -> tuple[bytes, ...]:
+        while True:
+            try:
+                if not os.read(self.read_fd, 4096):
+                    break
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+        with self._condition:
+            results = tuple(self._results)
+            self._results.clear()
+        return results
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._jobs.clear()
+            self._condition.notify()
+        self._thread.join(timeout=2.0)
+        for fd in (self.read_fd, self._write_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while not self._jobs and not self._closed:
+                    self._condition.wait()
+                if self._closed:
+                    return
+                job = self._jobs.popleft()
+                self._in_flight += 1
+            try:
+                if job.kind == "snapshot":
+                    snapshot = capture_history_snapshot(
+                        job.session_id,
+                        *job.request,
+                        pyte=self._pyte,
+                        claude_history_policy=job.claude_history_policy,
+                        use_topology_cache=True,
+                    )
+                    packet = encode_history_snapshot(snapshot)
+                else:
+                    request_id, max_lines = job.request
+                    batch = capture_history_batch(
+                        self._pyte,
+                        job.session_id,
+                        request_id,
+                        max_lines,
+                        claude_history_policy=job.claude_history_policy,
+                        use_topology_cache=True,
+                    )
+                    packet = encode_history_batch(batch)
+            except Exception:
+                # This is an isolation boundary: one malformed provider row,
+                # renderer edge case, or subprocess failure must not kill the
+                # worker and strand all later history requests. The response
+                # remains a bounded rejection and provider files are untouched.
+                request_id = job.request[0]
+                packet = (
+                    encode_history_snapshot(HistorySnapshot(request_id, None))
+                    if job.kind == "snapshot"
+                    else encode_history_batch(HistoryBatch(request_id, ()))
+                )
+            with self._condition:
+                self._in_flight -= 1
+                if self._closed:
+                    return
+                self._results.append(packet)
+            try:
+                os.write(self._write_fd, b"\x01")
+            except (BlockingIOError, OSError):
+                pass
 
 
 class _Osc52ClipboardDecoder:
@@ -383,9 +505,9 @@ class _ExtendedScreenMixin:
             elif mode == 2:
                 index = min(len(values), index + 3)
         if indexed:
-            self.cursor.attrs = self.cursor.attrs._replace(**{
-                key: f"ansi256:{colour}" for key, colour in indexed.items()
-            })
+            self.cursor.attrs = self.cursor.attrs._replace(
+                **{key: f"ansi256:{colour}" for key, colour in indexed.items()}
+            )
 
 
 @lru_cache(maxsize=4)
@@ -465,6 +587,8 @@ class _TranscriptCacheEntry:
     identity: tuple[int, int, int, int]
     rows: tuple[bytes, ...]
     more_available: bool
+    total_rows: int = 0
+    timeline_stable: bool = True
 
 
 _TRANSCRIPT_CACHE: OrderedDict[tuple[str, int], _TranscriptCacheEntry] = OrderedDict()
@@ -473,6 +597,11 @@ _INFERRED_TRANSCRIPTS: OrderedDict[tuple[str, int], tuple[bool, str | None]] = (
     OrderedDict()
 )
 _INFERRED_TRANSCRIPT_LIMIT = 8
+_PANE_GEOMETRY_CACHE: OrderedDict[
+    tuple[str, str], tuple[float, tuple[_PaneGeometry, ...]]
+] = OrderedDict()
+_PANE_GEOMETRY_CACHE_LIMIT = 8
+_PANE_GEOMETRY_CACHE_TTL = 0.25
 _TRANSCRIPT_MAX_BYTES = 32 * 1024 * 1024
 _SESSION_BINDING_OPTION = "@railmux_binding_v1"
 _SWAP_OPTIONS = ("@railmux_swap_primary", "@railmux_swap_secondary")
@@ -482,11 +611,11 @@ _HISTORY_GENERATION_RE = re.compile(
 )
 
 
-def _history_generation(marker: str) -> int:
+def _history_generation(marker: str, server_identity: str = "") -> int:
     """Map one validated provider UUID to a bounded opaque wire epoch."""
-    generation_marker = marker
+    generation_marker = f"{marker}@{server_identity}"
     if marker.startswith(tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX):
-        marker = marker[len(tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX):]
+        marker = marker[len(tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX) :]
     if not _HISTORY_GENERATION_RE.fullmatch(marker):
         return 0
     return int.from_bytes(
@@ -874,11 +1003,14 @@ def _pane_at_pointer(
     y: int,
     *,
     claude_history_policy: str | None = None,
+    use_cache: bool = False,
 ) -> _PaneGeometry | None:
     """Resolve a non-controller pane from 1-based client coordinates."""
     pointer_x, pointer_y = x - 1, y - 1
     for pane in _list_agent_panes(
-        session_id, claude_history_policy=claude_history_policy
+        session_id,
+        claude_history_policy=claude_history_policy,
+        use_cache=use_cache,
     ):
         if (
             pane.x <= pointer_x < pane.x + pane.width
@@ -892,8 +1024,17 @@ def _list_agent_panes(
     session_id: str,
     *,
     claude_history_policy: str | None = None,
+    use_cache: bool = False,
 ) -> tuple[_PaneGeometry, ...]:
     """Return one coherent, fail-closed generation of visible agent panes."""
+    if claude_history_policy is None:
+        claude_history_policy = Settings().claude_history_policy
+    cache_key = (session_id, claude_history_policy)
+    now = time.monotonic()
+    cached = _PANE_GEOMETRY_CACHE.get(cache_key) if use_cache else None
+    if cached is not None and now - cached[0] <= _PANE_GEOMETRY_CACHE_TTL:
+        _PANE_GEOMETRY_CACHE.move_to_end(cache_key)
+        return cached[1]
     controller = _live_controller(session_id)
     if controller is None:
         return ()
@@ -911,7 +1052,7 @@ def _list_agent_panes(
                 f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}} "
                 f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}} "
                 f"#{{{tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION}}} "
-                f"#{{{TOOL_PANE_OPTION}}}",
+                f"#{{{TOOL_PANE_OPTION}}} #{{pid}}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -919,19 +1060,18 @@ def _list_agent_panes(
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return ()
-    if claude_history_policy is None:
-        claude_history_policy = Settings().claude_history_policy
     rows: list[tuple[bool, bool, _PaneGeometry]] = []
     seen: set[str] = set()
     for raw_row in output.splitlines():
         fields = raw_row.split(" ")
         if (
-            len(fields) != 17
+            len(fields) not in (17, 18)
             or fields[0] != session_id
             or fields[2] not in ("0", "1")
             or fields[3] not in ("0", "1")
             or fields[11] not in ("0", "1")
             or fields[12] not in ("0", "1")
+            or (len(fields) == 18 and not fields[17].isdigit())
         ):
             return ()
         window_id = fields[1]
@@ -974,7 +1114,8 @@ def _list_agent_panes(
         transcript_marker = fields[14] or None
         transcript_locator = (
             tmux_server.decode_transcript_source(transcript_marker)
-            if transcript_marker is not None else None
+            if transcript_marker is not None
+            else None
         )
         transcript_backed = transcript_locator is not None
         if not transcript_backed and fields[11] == "1" and fields[12] == "1":
@@ -996,7 +1137,8 @@ def _list_agent_panes(
         canonical_history = bool(
             transcript_backed
             and transcript_locator is not None
-            and history_marker == (
+            and history_marker
+            == (
                 f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}"
                 f"{transcript_locator.session_id}"
             )
@@ -1024,7 +1166,16 @@ def _list_agent_panes(
                         else None
                     ),
                     claude_history_policy=claude_history_policy,
-                    history_generation=_history_generation(history_marker),
+                    history_generation=_history_generation(
+                        history_marker,
+                        (
+                            str(history_server.server_pid)
+                            if history_server is not None
+                            else fields[17]
+                            if len(fields) == 18
+                            else ""
+                        ),
+                    ),
                     canonical_history=canonical_history,
                 ),
             )
@@ -1037,8 +1188,17 @@ def _list_agent_panes(
     if rows[0][0]:
         # tmux retains the old unzoomed geometry on hidden panes. Only the
         # active pane actually occupies the client when the window is zoomed.
-        return () if active[0].pane_id == controller else (active[0],)
-    return tuple(pane for _zoomed, _active, pane in rows if pane.pane_id != controller)
+        result = () if active[0].pane_id == controller else (active[0],)
+    else:
+        result = tuple(
+            pane for _zoomed, _active, pane in rows if pane.pane_id != controller
+        )
+    if use_cache:
+        _PANE_GEOMETRY_CACHE[cache_key] = (now, result)
+        _PANE_GEOMETRY_CACHE.move_to_end(cache_key)
+        while len(_PANE_GEOMETRY_CACHE) > _PANE_GEOMETRY_CACHE_LIMIT:
+            _PANE_GEOMETRY_CACHE.popitem(last=False)
+    return result
 
 
 def _pane_current_path(pane: _PaneGeometry) -> str | None:
@@ -1071,7 +1231,9 @@ def _pane_current_path(pane: _PaneGeometry) -> str | None:
         ).rstrip("\n")
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
-    return current if current and "\x00" not in current and "\n" not in current else None
+    return (
+        current if current and "\x00" not in current and "\n" not in current else None
+    )
 
 
 def resolve_path_result(
@@ -1194,11 +1356,7 @@ def apply_path_open_request(
             column=column,
         )
     else:
-        directory = (
-            path
-            if resolved.kind is PathKind.DIRECTORY
-            else path.parent
-        )
+        directory = path if resolved.kind is PathKind.DIRECTORY else path.parent
         outcome = manager.open_shell(slot, pane_id, directory)
         if (
             outcome.ok
@@ -1275,16 +1433,18 @@ def _read_transcript_tail(fd: int) -> tuple[str, bool]:
 
 def _wrap_transcript_rows(
     pyte: object, text: str, width: int
-) -> tuple[tuple[bytes, ...], bool]:
+) -> tuple[tuple[bytes, ...], bool, int]:
     """Wrap allowlisted transcript ANSI into independently paintable rows."""
     rows: deque[bytes] = deque(maxlen=MAX_HISTORY_LINES)
     row = bytearray(b"\033[0m")
     column = 0
     active: list[bytes] = []
     dropped = False
+    total_rows = 0
 
     def finish() -> None:
-        nonlocal row, column, dropped
+        nonlocal row, column, dropped, total_rows
+        total_rows += 1
         if len(rows) == rows.maxlen:
             dropped = True
         rows.append(bytes(row) + b"\033[0m")
@@ -1332,7 +1492,7 @@ def _wrap_transcript_rows(
             column += max(0, cell_width)
     if column or len(row) > len(b"\033[0m" + b"".join(active)):
         finish()
-    return tuple(rows), dropped
+    return tuple(rows), dropped, total_rows
 
 
 def _transcript_rows(
@@ -1368,8 +1528,14 @@ def _transcript_rows(
                 claude_native=source.provider == "claude",
             )
         )
-        rows, dropped = _wrap_transcript_rows(pyte, formatted, width)
-        entry = _TranscriptCacheEntry(identity, rows, truncated or dropped)
+        rows, dropped, total_rows = _wrap_transcript_rows(pyte, formatted, width)
+        entry = _TranscriptCacheEntry(
+            identity,
+            rows,
+            truncated or dropped,
+            total_rows,
+            not truncated,
+        )
         _TRANSCRIPT_CACHE[key] = entry
         _TRANSCRIPT_CACHE.move_to_end(key)
         while len(_TRANSCRIPT_CACHE) > _TRANSCRIPT_CACHE_LIMIT:
@@ -1387,6 +1553,8 @@ def _capture_pane_history(
     *,
     allow_stale_transcript: bool = False,
 ) -> HistorySnapshot | None:
+    nonce = secrets.token_hex(8)
+    timeline_marker = f"RAILMUX-HISTORY-{nonce}"
     try:
         if pane.history_server is not None and pane.history_pane_id is not None:
             if not tmux_server.target_is_live(pane.history_server, timeout=0.25):
@@ -1401,6 +1569,12 @@ def _capture_pane_history(
                 pane.history_pane_id,
                 "-S",
                 f"-{max_lines}",
+                ";",
+                "display-message",
+                "-p",
+                "-t",
+                pane.history_pane_id,
+                f"{timeline_marker} #{{history_size}} #{{pane_height}}",
             )
         else:
             argv = tmux_server.tmux_argv(
@@ -1412,6 +1586,12 @@ def _capture_pane_history(
                 pane.pane_id,
                 "-S",
                 f"-{max_lines}",
+                ";",
+                "display-message",
+                "-p",
+                "-t",
+                pane.pane_id,
+                f"{timeline_marker} #{{history_size}} #{{pane_height}}",
             )
         output = subprocess.check_output(
             argv,
@@ -1423,6 +1603,21 @@ def _capture_pane_history(
     raw_lines = output.split(b"\n")
     if raw_lines and raw_lines[-1] == b"":
         raw_lines.pop()
+    captured_history_size = pane.history_size
+    captured_height = pane.height
+    encoded_marker = timeline_marker.encode("ascii") + b" "
+    if raw_lines and raw_lines[-1].startswith(encoded_marker):
+        fields = raw_lines.pop().split(b" ")
+        if len(fields) == 3:
+            try:
+                marker_history_size = int(fields[1])
+                marker_height = int(fields[2])
+            except ValueError:
+                pass
+            else:
+                if marker_history_size >= 0 and marker_height > 0:
+                    captured_history_size = marker_history_size
+                    captured_height = marker_height
     # Retain the newest suffix when the styled representation reaches its byte
     # budget. Iterate backwards so an oversized response never sacrifices the
     # pane's current viewport merely to retain older scrollback.
@@ -1460,8 +1655,16 @@ def _capture_pane_history(
         source_lines = (
             transcript_lines[-history_count:] if history_count else ()
         ) + current_raw
+        timeline_end = max(
+            pane.height,
+            (transcript_entry.total_rows or len(transcript_entry.rows)) + pane.height,
+        )
     else:
         source_lines = rendered_raw
+        timeline_end = max(
+            pane.height,
+            captured_history_size + captured_height,
+        )
     newest_first: list[bytes] = []
     packed_size = 2  # history line-count prefix
     budget_truncated = False
@@ -1476,6 +1679,15 @@ def _capture_pane_history(
     if len(lines) < pane.height:
         blank = _render_history_line(pyte, b"", pane.width)
         lines += (blank,) * (pane.height - len(lines))
+    if (
+        transcript_used
+        and transcript_entry is not None
+        and not transcript_entry.timeline_stable
+    ):
+        timeline_start = timeline_end = 0
+    else:
+        timeline_end = max(timeline_end, len(lines))
+        timeline_start = timeline_end - len(lines)
     return HistorySnapshot(
         request_id=request_id,
         pane_id=pane.pane_id,
@@ -1502,6 +1714,8 @@ def _capture_pane_history(
             )
         ),
         generation=pane.history_generation,
+        timeline_start=timeline_start,
+        timeline_end=timeline_end,
     )
 
 
@@ -1514,18 +1728,15 @@ def capture_history_snapshot(
     pyte: object | None = None,
     *,
     claude_history_policy: str | None = None,
+    use_topology_cache: bool = False,
 ) -> HistorySnapshot:
     """Capture bounded styled history without entering tmux copy-mode."""
-    pane = (
-        _pane_at_pointer(session_id, x, y)
-        if claude_history_policy is None
-        else _pane_at_pointer(
-            session_id,
-            x,
-            y,
-            claude_history_policy=claude_history_policy,
-        )
-    )
+    pointer_options: dict[str, object] = {}
+    if claude_history_policy is not None:
+        pointer_options["claude_history_policy"] = claude_history_policy
+    if use_topology_cache:
+        pointer_options["use_cache"] = True
+    pane = _pane_at_pointer(session_id, x, y, **pointer_options)
     if pane is None:
         return HistorySnapshot(request_id, None)
     try:
@@ -1547,13 +1758,16 @@ def capture_history_batch(
     max_lines: int,
     *,
     claude_history_policy: str | None = None,
+    use_topology_cache: bool = False,
 ) -> HistoryBatch:
     """Atomically describe and warm-cache every visible agent pane."""
     pyte = _extended_pyte(pyte)
     snapshots = tuple(
         snapshot
         for pane in _list_agent_panes(
-            session_id, claude_history_policy=claude_history_policy
+            session_id,
+            claude_history_policy=claude_history_policy,
+            use_cache=use_topology_cache,
         )
         if (
             snapshot := _capture_pane_history(
@@ -1680,32 +1894,42 @@ def _compact_tmux_output(*args: str) -> str | None:
 
 
 def _set_compact_resize_option(
-    session_id: str, value: str | None,
+    session_id: str,
+    value: str | None,
 ) -> bool:
     args = [
-        "set-window-option", "-t", session_id,
+        "set-window-option",
+        "-t",
+        session_id,
     ]
     if value is None:
         args.extend(["-u", COMPACT_RESIZE_OPTION])
     else:
         args.extend([COMPACT_RESIZE_OPTION, value])
     try:
-        return subprocess.run(
-            tmux_server.tmux_argv(*args),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=_COMPACT_TMUX_TIMEOUT,
-            check=False,
-        ).returncode == 0
+        return (
+            subprocess.run(
+                tmux_server.tmux_argv(*args),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=_COMPACT_TMUX_TIMEOUT,
+                check=False,
+            ).returncode
+            == 0
+        )
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
 def _clear_compact_resize_option_if(
-    session_id: str, expected: str,
+    session_id: str,
+    expected: str,
 ) -> None:
     current = _compact_tmux_output(
-        "show-window-options", "-v", "-t", session_id,
+        "show-window-options",
+        "-v",
+        "-t",
+        session_id,
         COMPACT_RESIZE_OPTION,
     )
     if current == expected:
@@ -1732,7 +1956,10 @@ def _request_compact_resize_preparation(
         return None
     try:
         raw = _compact_tmux_output(
-            "display-message", "-p", "-t", session_id,
+            "display-message",
+            "-p",
+            "-t",
+            session_id,
             "#{window_width} #{window_height} #{window_panes}"
             " #{@railmux_controller_pane}",
         )
@@ -1741,9 +1968,11 @@ def _request_compact_resize_preparation(
         panes = int(pane_count)
     except (AttributeError, TypeError, ValueError):
         return None
-    if (_is_compact_geometry(*current)
-            or panes <= 1
-            or re.fullmatch(r"%[0-9]+", controller) is None):
+    if (
+        _is_compact_geometry(*current)
+        or panes <= 1
+        or re.fullmatch(r"%[0-9]+", controller) is None
+    ):
         return None
 
     token = secrets.token_hex(8)
@@ -1755,7 +1984,10 @@ def _request_compact_resize_preparation(
     try:
         sent = subprocess.run(
             tmux_server.tmux_argv(
-                "send-keys", "-l", "-t", controller,
+                "send-keys",
+                "-l",
+                "-t",
+                controller,
                 COMPACT_RESIZE_SEQUENCE,
             ),
             stdout=subprocess.DEVNULL,
@@ -1774,7 +2006,10 @@ def _request_compact_resize_preparation(
         if progress is not None:
             progress()
         current_value = _compact_tmux_output(
-            "show-window-options", "-v", "-t", session_id,
+            "show-window-options",
+            "-v",
+            "-t",
+            session_id,
             COMPACT_RESIZE_OPTION,
         )
         if current_value is None:
@@ -1870,9 +2105,7 @@ def _detach_session_clients(session_id: str) -> None:
     """Detach only clients re-enumerated on one immutable managed session."""
     try:
         rows = subprocess.check_output(
-            tmux_server.tmux_argv(
-                "list-clients", "-F", "#{session_id} #{client_name}"
-            ),
+            tmux_server.tmux_argv("list-clients", "-F", "#{session_id} #{client_name}"),
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=2.0,
@@ -2028,10 +2261,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
             if continuation_cells:
                 continuation_cells -= 1
                 continuation = row[column]
-                if (
-                    not continuation.data
-                    or continuation.data == continuation_data
-                ):
+                if not continuation.data or continuation.data == continuation_data:
                     continue
                 # A partial repaint may put real, different content over a
                 # former wide-glyph continuation cell. Preserve that content;
@@ -2072,7 +2302,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
 
 
 def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v15 wire allowlist."""
+    """Project pyte's private-mode set onto the bounded v16 wire allowlist."""
     terminal_modes = TerminalMode.NONE
     if 2004 << 5 in screen.mode:
         terminal_modes |= TerminalMode.BRACKETED_PASTE
@@ -2179,9 +2409,8 @@ def serve(
             "the selected tmux cannot inspect the existing Railmux server; "
             "run 'railmux config' on the remote host"
         ) from exc
-    if (
-        existing_target is not None
-        and not tmux_server.sync_server_environment(existing_target)
+    if existing_target is not None and not tmux_server.sync_server_environment(
+        existing_target
     ):
         raise DisplayServerError(
             "could not apply the configured environment to the existing "
@@ -2210,8 +2439,7 @@ def serve(
             # no newer helper can cross this boundary until this attach ends.
             _detach_session_clients(session_id)
         _use_smallest_window_size(session_id)
-        compact_ready = _request_compact_resize_preparation(
-            session_id, width, height)
+        compact_ready = _request_compact_resize_preparation(session_id, width, height)
         pid, master_fd = _spawn_tmux_client(session_id, width, height)
         if not _wait_until_attached(session_id, pid):
             _stop_client(pid, master_fd)
@@ -2258,6 +2486,7 @@ def _serve_attached(
     pending_offset = 0
     pending_state: _ScreenState | None = None
     control_packets: deque[bytes] = deque()
+    history_ready: deque[bytes] = deque()
     clipboard_decoder = _Osc52ClipboardDecoder()
     claude_history_override: str | None = None
     claude_history_persisted_at_override: str | None = None
@@ -2278,6 +2507,28 @@ def _serve_attached(
     if target is None:
         _stop_client(pid, master_fd)
         raise DisplayServerError("dedicated tmux server disappeared after attach")
+    history_worker = _HistoryWorker(pyte)
+    history_settings = Settings()
+    persisted_history_policy = history_settings.claude_history_policy
+
+    def settings_signature() -> tuple[int, int, int, int] | None:
+        try:
+            info = history_settings._path.stat()
+        except OSError:
+            return None
+        return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+
+    persisted_history_signature = settings_signature()
+
+    def current_history_policy() -> str:
+        nonlocal history_settings, persisted_history_policy
+        nonlocal persisted_history_signature
+        signature = settings_signature()
+        if signature != persisted_history_signature:
+            history_settings = Settings()
+            persisted_history_policy = history_settings.claude_history_policy
+            persisted_history_signature = settings_signature()
+        return persisted_history_policy
 
     def discard_unsent_update() -> None:
         nonlocal pending_packet, pending_offset, pending_state
@@ -2410,6 +2661,9 @@ def _serve_attached(
 
     try:
         while pty_open and not _child_exited(pid):
+            history_ready.extend(history_worker.drain())
+            while history_ready and len(control_packets) < 4:
+                queue_control_packet(history_ready.popleft())
             activate_control_packet()
             now = time.monotonic()
             timeout = (
@@ -2423,8 +2677,15 @@ def _serve_attached(
             )
             writable_fds = [stdout_fd] if pending_packet is not None else []
             readable, writable, _ = select.select(
-                [master_fd, stdin_fd], writable_fds, [], timeout
+                [master_fd, stdin_fd, history_worker.read_fd],
+                writable_fds,
+                [],
+                timeout,
             )
+            if history_worker.read_fd in readable:
+                history_ready.extend(history_worker.drain())
+                while history_ready and len(control_packets) < 4:
+                    queue_control_packet(history_ready.popleft())
             if stdin_fd in readable:
                 try:
                     packet = os.read(stdin_fd, 65536)
@@ -2446,7 +2707,7 @@ def _serve_attached(
                         screen_changed = True
                         continue
                     if message.kind is InputKind.REQUEST_HISTORY:
-                        if len(control_packets) < 4:
+                        if len(control_packets) + len(history_ready) < 4:
                             if claude_history_override is not None:
                                 (
                                     claude_history_override,
@@ -2454,22 +2715,29 @@ def _serve_attached(
                                 ) = refresh_claude_history_override(
                                     claude_history_override,
                                     claude_history_persisted_at_override,
-                                    Settings().claude_history_policy,
+                                    current_history_policy(),
                                 )
                             try:
                                 request = decode_history_request(message.data)
                             except ValueError:
                                 continue
-                            snapshot = capture_history_snapshot(
-                                session_id,
-                                *request,
-                                pyte=pyte,
-                                claude_history_policy=claude_history_override,
+                            submitted = history_worker.submit(
+                                _HistoryJob(
+                                    "snapshot",
+                                    session_id,
+                                    request,
+                                    claude_history_override,
+                                )
                             )
-                            queue_control_packet(encode_history_snapshot(snapshot))
+                            if not submitted:
+                                queue_control_packet(
+                                    encode_history_snapshot(
+                                        HistorySnapshot(request[0], None)
+                                    )
+                                )
                         continue
                     if message.kind is InputKind.PREFETCH_HISTORY:
-                        if len(control_packets) < 4:
+                        if len(control_packets) + len(history_ready) < 4:
                             if claude_history_override is not None:
                                 (
                                     claude_history_override,
@@ -2477,7 +2745,7 @@ def _serve_attached(
                                 ) = refresh_claude_history_override(
                                     claude_history_override,
                                     claude_history_persisted_at_override,
-                                    Settings().claude_history_policy,
+                                    current_history_policy(),
                                 )
                             try:
                                 request_id, max_lines = decode_history_prefetch(
@@ -2485,14 +2753,18 @@ def _serve_attached(
                                 )
                             except ValueError:
                                 continue
-                            batch = capture_history_batch(
-                                pyte,
-                                session_id,
-                                request_id,
-                                max_lines,
-                                claude_history_policy=claude_history_override,
+                            submitted = history_worker.submit(
+                                _HistoryJob(
+                                    "batch",
+                                    session_id,
+                                    (request_id, max_lines),
+                                    claude_history_override,
+                                )
                             )
-                            queue_control_packet(encode_history_batch(batch))
+                            if not submitted:
+                                queue_control_packet(
+                                    encode_history_batch(HistoryBatch(request_id, ()))
+                                )
                         continue
                     if message.kind is InputKind.SET_CLAUDE_HISTORY:
                         try:
@@ -2505,9 +2777,13 @@ def _serve_attached(
                             policy,
                             persistent=persistent,
                             current_override=claude_history_override,
+                            settings=history_settings,
                         )
+                        if applied and persistent:
+                            persisted_history_policy = policy
+                            persisted_history_signature = settings_signature()
                         claude_history_persisted_at_override = (
-                            Settings().claude_history_policy
+                            current_history_policy()
                             if applied and not persistent
                             else None
                         )
@@ -2619,6 +2895,7 @@ def _serve_attached(
             return 0
         return int(_classify_observed_exit(session_id, target))
     finally:
+        history_worker.close()
         _stop_client(pid, master_fd)
 
 
@@ -2697,9 +2974,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             config = None
     if config is not None:
         if config.tmux_binary != "tmux":
-            tmux_available = check_executable(
-                "tmux", config.tmux_binary
-            ).valid
+            tmux_available = check_executable("tmux", config.tmux_binary).valid
         if tmux_available is not False:
             activate_runtime_environment(config)
         if tmux_available is None:

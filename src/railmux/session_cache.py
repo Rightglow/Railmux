@@ -1,30 +1,42 @@
 """mtime-keyed cache wrapping railmux.session_index.list_sessions."""
+
 from __future__ import annotations
 
 import os
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from railmux.models import Project, SessionMeta
 from railmux.renames import Renames
-from railmux.session_index import _scan_session, _TOOL_BLOCK_AGE_S
+from railmux.session_index import (
+    FileSignature,
+    _SessionScanState,
+    _TOOL_BLOCK_AGE_S,
+    _scan_session_incremental,
+)
 
 
 _DEFAULT_TOP_N = 30
 
 
-FileSignature = tuple[int, int]  # (mtime_ns, size)
+@dataclass(frozen=True)
+class _CacheEntry:
+    signature: FileSignature
+    meta: SessionMeta | None
+    state: _SessionScanState
 
 
 class SessionCache:
     def __init__(self, renames: Renames | None = None) -> None:
-        self._entries: dict[Path, tuple[FileSignature, SessionMeta]] = {}
+        self._entries: dict[Path, _CacheEntry] = {}
         # User-assigned titles, overlaid at read time so they survive Claude
         # Code rewriting its own ai-title record every turn.
         self._renames = renames
 
-    def list_sessions(self, project: Project, top_n: int = _DEFAULT_TOP_N) -> list[SessionMeta]:
+    def list_sessions(
+        self, project: Project, top_n: int = _DEFAULT_TOP_N
+    ) -> list[SessionMeta]:
         """Return up to `top_n` most-recent sessions for `project`.
 
         Older sessions beyond `top_n` exist on disk but are not parsed here.
@@ -45,11 +57,16 @@ class SessionCache:
                     stat = entry.stat()
                 except OSError:
                     continue
-                signature = (stat.st_mtime_ns, stat.st_size)
+                signature = (
+                    stat.st_dev,
+                    stat.st_ino,
+                    stat.st_mtime_ns,
+                    stat.st_size,
+                )
                 candidates.append((signature, Path(entry.path)))
 
         # Phase 2: sort by mtime desc, optionally cap.
-        candidates.sort(key=lambda item: item[0][0], reverse=True)
+        candidates.sort(key=lambda item: item[0][2], reverse=True)
         if top_n > 0:
             candidates = candidates[:top_n]
 
@@ -82,28 +99,52 @@ class SessionCache:
             stat = path.stat()
         except OSError:
             return None
-        signature = (stat.st_mtime_ns, stat.st_size)
+        signature = (
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
         return self._meta_for(project, path, signature, time.time())
 
-    def _meta_for(self, project: Project, path: Path, signature: FileSignature,
-                  now: float) -> SessionMeta | None:
+    def _meta_for(
+        self, project: Project, path: Path, signature: FileSignature, now: float
+    ) -> SessionMeta | None:
         """Cached-or-scanned SessionMeta for `path`.
 
-        A cached "busy" entry whose age has crossed the block window is
-        re-scanned even though its signature is unchanged. Scan results are
-        keyed to the signature captured before reading, so an append during
-        the read forces another scan on the next poll.
+        Pending-tool status ages from cached metadata without reopening the
+        provider file. Scan results use the identity observed on the opened
+        descriptor, so an append during the read forces another incremental
+        scan on the next poll.
         """
         cached = self._entries.get(path)
-        if cached is not None and cached[0] == signature:
-            meta = cached[1]
-            if (meta.status != "busy"
-                    or now - meta.last_mtime <= _TOOL_BLOCK_AGE_S):
-                return self._with_override(meta)
-        meta = _scan_session(project, path)
-        if meta is not None:
-            self._entries[path] = (signature, meta)
-        return self._with_override(meta)
+        if cached is not None and cached.signature == signature:
+            return self._with_override(self._aged(cached.meta, now))
+        result = _scan_session_incremental(
+            project,
+            path,
+            None if cached is None else cached.state,
+        )
+        if result.state is None:
+            # A transient open/read/stat failure must not publish a false
+            # disappearance. Keep the last coherent metadata generation and
+            # retry because its old signature cannot match the next scandir.
+            return self._with_override(
+                self._aged(None if cached is None else cached.meta, now)
+            )
+        self._entries[path] = _CacheEntry(
+            result.signature,
+            result.meta,
+            result.state,
+        )
+        return self._with_override(self._aged(result.meta, now))
+
+    @staticmethod
+    def _aged(meta: SessionMeta | None, now: float) -> SessionMeta | None:
+        if meta is None or not meta.pending_tool:
+            return meta
+        status = "blocked" if now - meta.last_mtime > _TOOL_BLOCK_AGE_S else "busy"
+        return meta if meta.status == status else replace(meta, status=status)
 
     def _with_override(self, meta: SessionMeta | None) -> SessionMeta | None:
         """Overlay a user rename onto *meta*'s title, if one exists.

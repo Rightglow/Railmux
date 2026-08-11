@@ -113,6 +113,8 @@ def test_v10_unified_decoder_round_trips_history_capabilities():
         transcript_available=True,
         history_choice_required=True,
         generation=42,
+        timeline_start=100,
+        timeline_end=104,
     )
     local_snapshot = replace(
         snapshot,
@@ -150,9 +152,28 @@ def test_v10_history_snapshot_round_trips_the_maximum_line_count():
         width=50,
         height=2,
         lines=(b"x",) * 20000,
+        timeline_start=10,
+        timeline_end=20010,
     )
 
     assert ServerMessageDecoder().feed(encode_history_snapshot(snapshot)) == [snapshot]
+
+
+def test_v16_history_timeline_must_cover_exactly_the_transmitted_rows():
+    snapshot = HistorySnapshot(
+        9,
+        "%2",
+        0,
+        0,
+        10,
+        2,
+        (b"a", b"b"),
+        timeline_start=30,
+        timeline_end=33,
+    )
+
+    with pytest.raises(ValueError, match="timeline"):
+        encode_history_snapshot(snapshot)
 
 
 def test_rejected_history_response_is_bounded_and_screen_decoder_ignores_it():

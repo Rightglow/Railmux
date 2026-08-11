@@ -1,4 +1,4 @@
-"""Private v15 framing for the coalesced full-window SSH display."""
+"""Private v16 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD15\x00"
-INPUT_MAGIC = b"RMUXK15\x00"
-PROTOCOL_VERSION = 15
+DISPLAY_MAGIC = b"RMUXD16\x00"
+INPUT_MAGIC = b"RMUXK16\x00"
+PROTOCOL_VERSION = 16
 REMOTE_CONFIG_PROTOCOL = 1
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
@@ -28,10 +28,10 @@ MAX_HISTORY_PANES = 8
 MAX_CLIPBOARD_BYTES = 64 * 1024
 MAX_PATH_BYTES = 4096
 _UPDATE_METADATA = struct.Struct(">BIHHHHBHI")
-_HISTORY_METADATA = struct.Struct(">IIHHHHBQI")
+_HISTORY_METADATA = struct.Struct(">IIHHHHBQQQI")
 _HISTORY_REQUEST = struct.Struct(">IHHH")
 _HISTORY_BATCH_METADATA = struct.Struct(">II")
-_HISTORY_PANE_METADATA = struct.Struct(">IHHHHBQ")
+_HISTORY_PANE_METADATA = struct.Struct(">IHHHHBQQQ")
 _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
 _PATH_REQUEST = struct.Struct(">IIH")
 _PATH_RESULT = struct.Struct(">IBBH")
@@ -144,6 +144,11 @@ class HistorySnapshot:
     transcript_available: bool = False
     history_choice_required: bool = False
     generation: int = 0
+    # Absolute half-open row coordinates in the server-owned pane timeline.
+    # A zero/zero span is retained only for local synthetic callers; v16
+    # servers populate it for every accepted response.
+    timeline_start: int = 0
+    timeline_end: int = 0
 
 
 @dataclass(frozen=True)
@@ -264,10 +269,7 @@ def _history_capabilities(snapshot: HistorySnapshot) -> int:
         (_HISTORY_MOUSE_FORWARDABLE if snapshot.mouse_forwardable else 0)
         | (_HISTORY_TRANSCRIPT_BACKED if snapshot.transcript_backed else 0)
         | (_HISTORY_MORE_AVAILABLE if snapshot.more_available else 0)
-        | (
-            _HISTORY_TRANSCRIPT_AVAILABLE
-            if snapshot.transcript_available else 0
-        )
+        | (_HISTORY_TRANSCRIPT_AVAILABLE if snapshot.transcript_available else 0)
         | (_HISTORY_CHOICE_REQUIRED if snapshot.history_choice_required else 0)
     )
     _validate_history_capabilities(capabilities)
@@ -275,36 +277,55 @@ def _history_capabilities(snapshot: HistorySnapshot) -> int:
 
 
 def _validate_history_capabilities(capabilities: int) -> None:
-    transcript_available = bool(
-        capabilities & _HISTORY_TRANSCRIPT_AVAILABLE
-    )
+    transcript_available = bool(capabilities & _HISTORY_TRANSCRIPT_AVAILABLE)
     transcript_backed = bool(capabilities & _HISTORY_TRANSCRIPT_BACKED)
     choice_required = bool(capabilities & _HISTORY_CHOICE_REQUIRED)
     if (
         capabilities & ~_KNOWN_HISTORY_CAPABILITIES
-        or (transcript_backed or choice_required) and not transcript_available
-        or transcript_backed and choice_required
+        or (transcript_backed or choice_required)
+        and not transcript_available
+        or transcript_backed
+        and choice_required
     ):
         raise ValueError("invalid history capabilities")
+
+
+def _validate_history_timeline(snapshot: HistorySnapshot) -> None:
+    if not (
+        0 <= snapshot.timeline_start <= 0xFFFFFFFFFFFFFFFF
+        and 0 <= snapshot.timeline_end <= 0xFFFFFFFFFFFFFFFF
+    ):
+        raise ValueError("invalid history timeline")
+    if snapshot.timeline_start == snapshot.timeline_end == 0:
+        return
+    if (
+        snapshot.timeline_end < snapshot.timeline_start
+        or snapshot.timeline_end - snapshot.timeline_start != len(snapshot.lines)
+    ):
+        raise ValueError("history timeline does not match its rows")
 
 
 def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
     if not 0 <= snapshot.request_id <= 0xFFFFFFFF:
         raise ValueError("invalid history request identity")
     if snapshot.pane_id is None:
-        if any((
-            snapshot.x,
-            snapshot.y,
-            snapshot.width,
-            snapshot.height,
-            snapshot.lines,
-            snapshot.mouse_forwardable,
-            snapshot.transcript_backed,
-            snapshot.more_available,
-            snapshot.transcript_available,
-            snapshot.history_choice_required,
-            snapshot.generation,
-        )):
+        if any(
+            (
+                snapshot.x,
+                snapshot.y,
+                snapshot.width,
+                snapshot.height,
+                snapshot.lines,
+                snapshot.mouse_forwardable,
+                snapshot.transcript_backed,
+                snapshot.more_available,
+                snapshot.transcript_available,
+                snapshot.history_choice_required,
+                snapshot.generation,
+                snapshot.timeline_start,
+                snapshot.timeline_end,
+            )
+        ):
             raise ValueError("a rejected history response must be empty")
         pane_number = 0
     else:
@@ -313,7 +334,10 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
         pane_number = int(snapshot.pane_id[1:])
         if not 0 < pane_number <= 0xFFFFFFFF:
             raise ValueError("invalid history pane identity")
-        if not 1 <= snapshot.width <= MAX_WIDTH or not 1 <= snapshot.height <= MAX_HEIGHT:
+        if (
+            not 1 <= snapshot.width <= MAX_WIDTH
+            or not 1 <= snapshot.height <= MAX_HEIGHT
+        ):
             raise ValueError("invalid history geometry")
         if not 0 <= snapshot.x < MAX_WIDTH or not 0 <= snapshot.y < MAX_HEIGHT:
             raise ValueError("invalid history position")
@@ -321,6 +345,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
             raise ValueError("history snapshot is shorter than its viewport")
         if not 0 <= snapshot.generation <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("invalid history generation")
+        _validate_history_timeline(snapshot)
     raw_lines = _pack_history_lines(snapshot.lines)
     compressed = zlib.compress(raw_lines, level=3)
     metadata = _HISTORY_METADATA.pack(
@@ -332,6 +357,8 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
         snapshot.height,
         _history_capabilities(snapshot),
         snapshot.generation,
+        snapshot.timeline_start,
+        snapshot.timeline_end,
         len(raw_lines),
     )
     payload = bytes((int(OutputKind.HISTORY),)) + metadata + compressed
@@ -359,7 +386,10 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
         pane_number = int(snapshot.pane_id[1:])
         if not 0 < pane_number <= 0xFFFFFFFF:
             raise ValueError("invalid history pane identity")
-        if not 1 <= snapshot.width <= MAX_WIDTH or not 1 <= snapshot.height <= MAX_HEIGHT:
+        if (
+            not 1 <= snapshot.width <= MAX_WIDTH
+            or not 1 <= snapshot.height <= MAX_HEIGHT
+        ):
             raise ValueError("invalid history geometry")
         if not 0 <= snapshot.x < MAX_WIDTH or not 0 <= snapshot.y < MAX_HEIGHT:
             raise ValueError("invalid history position")
@@ -367,6 +397,7 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             raise ValueError("history snapshot is shorter than its viewport")
         if not 0 <= snapshot.generation <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("invalid history generation")
+        _validate_history_timeline(snapshot)
         packed_lines = _pack_history_lines(snapshot.lines)
         pane_metadata = _HISTORY_PANE_METADATA.pack(
             pane_number,
@@ -376,6 +407,8 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             snapshot.height,
             _history_capabilities(snapshot),
             snapshot.generation,
+            snapshot.timeline_start,
+            snapshot.timeline_end,
         )
         total += len(pane_metadata) + len(packed_lines)
         if total > MAX_SCREEN_BYTES:
@@ -391,7 +424,10 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
 
 
 def encode_claude_history_policy_result(
-    policy: str, *, persistent: bool, applied: bool,
+    policy: str,
+    *,
+    persistent: bool,
+    applied: bool,
 ) -> bytes:
     values = {"local": 1, "native": 2}
     if (
@@ -400,21 +436,19 @@ def encode_claude_history_policy_result(
         or not isinstance(applied, bool)
     ):
         raise ValueError("invalid Claude history policy")
-    payload = bytes((
-        int(OutputKind.CLAUDE_HISTORY_POLICY),
-        values[policy],
-        int(persistent),
-        int(applied),
-    ))
+    payload = bytes(
+        (
+            int(OutputKind.CLAUDE_HISTORY_POLICY),
+            values[policy],
+            int(persistent),
+            int(applied),
+        )
+    )
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
 
 
 def encode_clipboard_copy(data: bytes) -> bytes:
-    if (
-        not isinstance(data, bytes)
-        or not data
-        or len(data) > MAX_CLIPBOARD_BYTES
-    ):
+    if not isinstance(data, bytes) or not data or len(data) > MAX_CLIPBOARD_BYTES:
         raise ValueError("invalid clipboard payload")
     payload = bytes((int(OutputKind.CLIPBOARD),)) + data
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
@@ -516,12 +550,12 @@ def _unpack_rows(raw: bytes, height: int) -> tuple[tuple[int, bytes], ...]:
     for _ in range(count):
         if len(raw) - offset < 6:
             raise ValueError("truncated screen row header")
-        index, size = struct.unpack(">HI", raw[offset:offset + 6])
+        index, size = struct.unpack(">HI", raw[offset : offset + 6])
         offset += 6
         if index >= height or index in seen or size > len(raw) - offset:
             raise ValueError("invalid screen row")
         seen.add(index)
-        rows.append((index, raw[offset:offset + size]))
+        rows.append((index, raw[offset : offset + size]))
         offset += size
     if offset != len(raw):
         raise ValueError("trailing screen row data")
@@ -536,11 +570,12 @@ def _unpack_history_lines(raw: bytes) -> tuple[bytes, ...]:
 
 
 def _unpack_history_lines_at(
-    raw: bytes, offset: int,
+    raw: bytes,
+    offset: int,
 ) -> tuple[tuple[bytes, ...], int]:
     if len(raw) - offset < 2:
         raise ValueError("truncated history lines")
-    count = struct.unpack(">H", raw[offset:offset + 2])[0]
+    count = struct.unpack(">H", raw[offset : offset + 2])[0]
     if count > MAX_HISTORY_LINES:
         raise ValueError("too many history lines")
     offset += 2
@@ -548,11 +583,11 @@ def _unpack_history_lines_at(
     for _ in range(count):
         if len(raw) - offset < 4:
             raise ValueError("truncated history line header")
-        size = struct.unpack(">I", raw[offset:offset + 4])[0]
+        size = struct.unpack(">I", raw[offset : offset + 4])[0]
         offset += 4
         if size > len(raw) - offset:
             raise ValueError("invalid history line")
-        lines.append(raw[offset:offset + size])
+        lines.append(raw[offset : offset + size])
         offset += size
     return tuple(lines), offset
 
@@ -564,7 +599,8 @@ class ServerMessageDecoder:
         self._buffer = bytearray()
 
     def feed(
-        self, data: bytes,
+        self,
+        data: bytes,
     ) -> list[
         ScreenUpdate
         | HistorySnapshot
@@ -595,7 +631,7 @@ class ServerMessageDecoder:
             if len(self._buffer) < header_size:
                 return messages
             payload_size = struct.unpack(
-                ">I", self._buffer[len(DISPLAY_MAGIC):header_size]
+                ">I", self._buffer[len(DISPLAY_MAGIC) : header_size]
             )[0]
             if not 1 <= payload_size <= MAX_WIRE_BYTES:
                 del self._buffer[0]
@@ -620,25 +656,29 @@ class ServerMessageDecoder:
                         height,
                         raw_capabilities,
                         generation,
+                        timeline_start,
+                        timeline_end,
                         raw_size,
-                    ) = (
-                        _HISTORY_METADATA.unpack(body[:_HISTORY_METADATA.size])
-                    )
+                    ) = _HISTORY_METADATA.unpack(body[: _HISTORY_METADATA.size])
                     _validate_history_capabilities(raw_capabilities)
                     raw_lines = _decompress_rows(
-                        body[_HISTORY_METADATA.size:], raw_size
+                        body[_HISTORY_METADATA.size :], raw_size
                     )
                     lines = _unpack_history_lines(raw_lines)
                     if pane_number == 0:
-                        if any((
-                            x,
-                            y,
-                            width,
-                            height,
-                            lines,
-                            raw_capabilities,
-                            generation,
-                        )):
+                        if any(
+                            (
+                                x,
+                                y,
+                                width,
+                                height,
+                                lines,
+                                raw_capabilities,
+                                generation,
+                                timeline_start,
+                                timeline_end,
+                            )
+                        ):
                             raise ValueError("invalid rejected history response")
                         pane_id = None
                     else:
@@ -649,7 +689,7 @@ class ServerMessageDecoder:
                         if len(lines) < height:
                             raise ValueError("incomplete history viewport")
                         pane_id = f"%{pane_number}"
-                    messages.append(HistorySnapshot(
+                    snapshot = HistorySnapshot(
                         request_id=request_id,
                         pane_id=pane_id,
                         x=x,
@@ -663,9 +703,7 @@ class ServerMessageDecoder:
                         transcript_backed=bool(
                             raw_capabilities & _HISTORY_TRANSCRIPT_BACKED
                         ),
-                        more_available=bool(
-                            raw_capabilities & _HISTORY_MORE_AVAILABLE
-                        ),
+                        more_available=bool(raw_capabilities & _HISTORY_MORE_AVAILABLE),
                         transcript_available=bool(
                             raw_capabilities & _HISTORY_TRANSCRIPT_AVAILABLE
                         ),
@@ -673,16 +711,21 @@ class ServerMessageDecoder:
                             raw_capabilities & _HISTORY_CHOICE_REQUIRED
                         ),
                         generation=generation,
-                    ))
+                        timeline_start=timeline_start,
+                        timeline_end=timeline_end,
+                    )
+                    if pane_id is not None:
+                        _validate_history_timeline(snapshot)
+                    messages.append(snapshot)
                     continue
                 if output_kind is OutputKind.HISTORY_BATCH:
                     if len(body) < _HISTORY_BATCH_METADATA.size:
                         raise ValueError("truncated history batch metadata")
                     request_id, raw_size = _HISTORY_BATCH_METADATA.unpack(
-                        body[:_HISTORY_BATCH_METADATA.size]
+                        body[: _HISTORY_BATCH_METADATA.size]
                     )
                     raw = _decompress_rows(
-                        body[_HISTORY_BATCH_METADATA.size:], raw_size
+                        body[_HISTORY_BATCH_METADATA.size :], raw_size
                     )
                     if len(raw) < 2:
                         raise ValueError("truncated history batch")
@@ -703,8 +746,10 @@ class ServerMessageDecoder:
                             height,
                             raw_capabilities,
                             generation,
+                            timeline_start,
+                            timeline_end,
                         ) = _HISTORY_PANE_METADATA.unpack(
-                            raw[offset:offset + _HISTORY_PANE_METADATA.size]
+                            raw[offset : offset + _HISTORY_PANE_METADATA.size]
                         )
                         offset += _HISTORY_PANE_METADATA.size
                         if pane_number == 0 or pane_number in seen:
@@ -718,7 +763,7 @@ class ServerMessageDecoder:
                         lines, offset = _unpack_history_lines_at(raw, offset)
                         if len(lines) < height:
                             raise ValueError("incomplete history viewport")
-                        snapshots.append(HistorySnapshot(
+                        snapshot = HistorySnapshot(
                             request_id=request_id,
                             pane_id=f"%{pane_number}",
                             x=x,
@@ -742,23 +787,25 @@ class ServerMessageDecoder:
                                 raw_capabilities & _HISTORY_CHOICE_REQUIRED
                             ),
                             generation=generation,
-                        ))
+                            timeline_start=timeline_start,
+                            timeline_end=timeline_end,
+                        )
+                        _validate_history_timeline(snapshot)
+                        snapshots.append(snapshot)
                     if offset != len(raw):
                         raise ValueError("trailing history batch data")
                     messages.append(HistoryBatch(request_id, tuple(snapshots)))
                     continue
                 if output_kind is OutputKind.CLAUDE_HISTORY_POLICY:
-                    if (
-                        len(body) != 3
-                        or body[1] not in (0, 1)
-                        or body[2] not in (0, 1)
-                    ):
+                    if len(body) != 3 or body[1] not in (0, 1) or body[2] not in (0, 1):
                         raise ValueError("invalid Claude history result")
-                    messages.append(ClaudeHistoryPolicyResult(
-                        policy=decode_claude_history_policy(body[:1]),
-                        persistent=bool(body[1]),
-                        applied=bool(body[2]),
-                    ))
+                    messages.append(
+                        ClaudeHistoryPolicyResult(
+                            policy=decode_claude_history_policy(body[:1]),
+                            persistent=bool(body[1]),
+                            applied=bool(body[2]),
+                        )
+                    )
                     continue
                 if output_kind is OutputKind.CLIPBOARD:
                     if not 1 <= len(body) <= MAX_CLIPBOARD_BYTES:
@@ -769,11 +816,11 @@ class ServerMessageDecoder:
                     if len(body) < _PATH_RESULT.size:
                         raise ValueError("truncated path result")
                     request_id, raw_kind, raw_policy, size = _PATH_RESULT.unpack(
-                        body[:_PATH_RESULT.size]
+                        body[: _PATH_RESULT.size]
                     )
                     kind = PathKind(raw_kind)
                     policy = _decode_path_open_policy(raw_policy)
-                    encoded = body[_PATH_RESULT.size:]
+                    encoded = body[_PATH_RESULT.size :]
                     if len(encoded) != size or size > MAX_PATH_BYTES:
                         raise ValueError("invalid path result size")
                     path = encoded.decode("utf-8")
@@ -788,7 +835,7 @@ class ServerMessageDecoder:
                     if len(body) < _PATH_OPEN_RESULT.size:
                         raise ValueError("truncated path-open result")
                     request_id, applied, raw_level, size = _PATH_OPEN_RESULT.unpack(
-                        body[:_PATH_OPEN_RESULT.size]
+                        body[: _PATH_OPEN_RESULT.size]
                     )
                     levels = {
                         0: "info",
@@ -796,7 +843,7 @@ class ServerMessageDecoder:
                         2: "warning",
                         3: "error",
                     }
-                    encoded = body[_PATH_OPEN_RESULT.size:]
+                    encoded = body[_PATH_OPEN_RESULT.size :]
                     if (
                         applied not in (0, 1)
                         or raw_level not in levels
@@ -805,12 +852,14 @@ class ServerMessageDecoder:
                         or b"\x00" in encoded
                     ):
                         raise ValueError("invalid path-open result")
-                    messages.append(PathOpenResult(
-                        request_id,
-                        bool(applied),
-                        levels[raw_level],
-                        encoded.decode("utf-8"),
-                    ))
+                    messages.append(
+                        PathOpenResult(
+                            request_id,
+                            bool(applied),
+                            levels[raw_level],
+                            encoded.decode("utf-8"),
+                        )
+                    )
                     continue
                 if len(body) < _UPDATE_METADATA.size:
                     raise ValueError("truncated screen metadata")
@@ -824,14 +873,14 @@ class ServerMessageDecoder:
                     visible,
                     raw_modes,
                     raw_size,
-                ) = _UPDATE_METADATA.unpack(body[:_UPDATE_METADATA.size])
+                ) = _UPDATE_METADATA.unpack(body[: _UPDATE_METADATA.size])
                 kind = UpdateKind(raw_kind)
                 if not 1 <= width <= MAX_WIDTH or not 1 <= height <= MAX_HEIGHT:
                     raise ValueError("invalid screen geometry")
                 if raw_modes & ~int(KNOWN_TERMINAL_MODES):
                     raise ValueError("unknown terminal mode")
                 terminal_modes = TerminalMode(raw_modes)
-                raw_rows = _decompress_rows(body[_UPDATE_METADATA.size:], raw_size)
+                raw_rows = _decompress_rows(body[_UPDATE_METADATA.size :], raw_size)
                 rows = _unpack_rows(raw_rows, height)
                 if kind is UpdateKind.KEYFRAME and (
                     len(rows) != height
@@ -842,21 +891,23 @@ class ServerMessageDecoder:
                 # The packet is already length-delimited. Drop it rather than
                 # exposing untrusted compressed or malformed row data.
                 continue
-            messages.append(ScreenUpdate(
-                kind=kind,
-                sequence=sequence,
-                width=width,
-                height=height,
-                cursor_x=min(cursor_x, width - 1),
-                cursor_y=min(cursor_y, height - 1),
-                cursor_visible=bool(visible),
-                rows=rows,
-                terminal_modes=terminal_modes,
-            ))
+            messages.append(
+                ScreenUpdate(
+                    kind=kind,
+                    sequence=sequence,
+                    width=width,
+                    height=height,
+                    cursor_x=min(cursor_x, width - 1),
+                    cursor_y=min(cursor_y, height - 1),
+                    cursor_visible=bool(visible),
+                    rows=rows,
+                    terminal_modes=terminal_modes,
+                )
+            )
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v15 control-response messages."""
+    """Compatibility view which ignores v16 control-response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()
@@ -897,7 +948,9 @@ def encode_heartbeat() -> bytes:
 
 
 def encode_claude_history_policy(
-    policy: str, *, persistent: bool = True,
+    policy: str,
+    *,
+    persistent: bool = True,
 ) -> bytes:
     values = {
         ("local", True): 1,
@@ -955,52 +1008,45 @@ def encode_path_open_request(
         raise ValueError("invalid path-open persistence")
     if policy not in {"internal", "external"}:
         raise ValueError("invalid path-open policy")
-    if (
-        line is not None
-        and (
-            not isinstance(line, int)
-            or isinstance(line, bool)
-            or not 1 <= line <= 0xFFFFFFFF
-        )
+    if line is not None and (
+        not isinstance(line, int)
+        or isinstance(line, bool)
+        or not 1 <= line <= 0xFFFFFFFF
     ):
         raise ValueError("invalid path-open line")
-    if (
-        column is not None
-        and (
-            line is None
-            or not isinstance(column, int)
-            or isinstance(column, bool)
-            or not 1 <= column <= 0xFFFFFFFF
-        )
+    if column is not None and (
+        line is None
+        or not isinstance(column, int)
+        or isinstance(column, bool)
+        or not 1 <= column <= 0xFFFFFFFF
     ):
         raise ValueError("invalid path-open column")
     # Reuse the path request's strict identity and text validation.
     encoded_request = encode_path_request(request_id, pane_id, path)
     header = len(INPUT_MAGIC) + LENGTH_BYTES + 1
     raw = encoded_request[header:]
-    path_request_id, pane_number, size = _PATH_REQUEST.unpack(
-        raw[:_PATH_REQUEST.size]
+    path_request_id, pane_number, size = _PATH_REQUEST.unpack(raw[: _PATH_REQUEST.size])
+    encoded = raw[_PATH_REQUEST.size :]
+    payload = (
+        _PATH_OPEN_REQUEST.pack(
+            path_request_id,
+            pane_number,
+            int(_path_open_policy(policy)),
+            int(persistent),
+            line or 0,
+            column or 0,
+            size,
+        )
+        + encoded
     )
-    encoded = raw[_PATH_REQUEST.size:]
-    payload = _PATH_OPEN_REQUEST.pack(
-        path_request_id,
-        pane_number,
-        int(_path_open_policy(policy)),
-        int(persistent),
-        line or 0,
-        column or 0,
-        size,
-    ) + encoded
     return _encode_input_message(InputKind.OPEN_PATH, payload)
 
 
 def decode_path_request(data: bytes) -> tuple[int, str, str]:
     if len(data) < _PATH_REQUEST.size:
         raise ValueError("invalid path request")
-    request_id, pane_number, size = _PATH_REQUEST.unpack(
-        data[:_PATH_REQUEST.size]
-    )
-    encoded = data[_PATH_REQUEST.size:]
+    request_id, pane_number, size = _PATH_REQUEST.unpack(data[: _PATH_REQUEST.size])
+    encoded = data[_PATH_REQUEST.size :]
     if (
         pane_number == 0
         or len(encoded) != size
@@ -1019,9 +1065,9 @@ def decode_path_open_request(
     if len(data) < _PATH_OPEN_REQUEST.size:
         raise ValueError("invalid path-open request")
     request_id, pane_number, raw_policy, persistent, line, column, size = (
-        _PATH_OPEN_REQUEST.unpack(data[:_PATH_OPEN_REQUEST.size])
+        _PATH_OPEN_REQUEST.unpack(data[: _PATH_OPEN_REQUEST.size])
     )
-    encoded = data[_PATH_OPEN_REQUEST.size:]
+    encoded = data[_PATH_OPEN_REQUEST.size :]
     if (
         pane_number == 0
         or persistent not in (0, 1)
@@ -1064,7 +1110,10 @@ def decode_claude_history_choice(data: bytes) -> tuple[str, bool]:
 
 
 def encode_history_request(
-    request_id: int, x: int, y: int, max_lines: int = 2000,
+    request_id: int,
+    x: int,
+    y: int,
+    max_lines: int = 2000,
 ) -> bytes:
     if not 0 <= request_id <= 0xFFFFFFFF:
         raise ValueError("invalid history request identity")
@@ -1131,7 +1180,7 @@ class InputFrameDecoder:
             if len(self._buffer) < header_size:
                 return messages
             payload_size = struct.unpack(
-                ">I", self._buffer[len(INPUT_MAGIC):header_size]
+                ">I", self._buffer[len(INPUT_MAGIC) : header_size]
             )[0]
             if not 1 <= payload_size <= MAX_INPUT_BYTES:
                 del self._buffer[0]
@@ -1153,9 +1202,7 @@ class InputFrameDecoder:
                 or (kind is InputKind.HEARTBEAT and message_data)
                 or (
                     kind is InputKind.SET_CLAUDE_HISTORY
-                    and message_data not in (
-                        b"\x01", b"\x02", b"\x03", b"\x04"
-                    )
+                    and message_data not in (b"\x01", b"\x02", b"\x03", b"\x04")
                 )
                 or (
                     kind is InputKind.REQUEST_HISTORY
@@ -1169,16 +1216,14 @@ class InputFrameDecoder:
                     kind is InputKind.RESOLVE_PATH
                     and (
                         len(message_data) < _PATH_REQUEST.size
-                        or len(message_data)
-                        > _PATH_REQUEST.size + MAX_PATH_BYTES
+                        or len(message_data) > _PATH_REQUEST.size + MAX_PATH_BYTES
                     )
                 )
                 or (
                     kind is InputKind.OPEN_PATH
                     and (
                         len(message_data) < _PATH_OPEN_REQUEST.size
-                        or len(message_data)
-                        > _PATH_OPEN_REQUEST.size + MAX_PATH_BYTES
+                        or len(message_data) > _PATH_OPEN_REQUEST.size + MAX_PATH_BYTES
                     )
                 )
             ):

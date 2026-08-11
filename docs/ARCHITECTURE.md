@@ -376,10 +376,16 @@ fail-closed cancellation paths. The per-read one-direction bound applies only
 to wheel input still forwarded to sidebar/modal or another remote owner; it
 must never discard locally owned agent-history distance.
 Native Claude, local transcript, and
-undecided history are separate sources and are never merged. Protocol v15 also
-carries the opaque pane-local Codex history
-generation; a changed non-content generation replaces that pane's cached
-timeline instead of merging across a confirmed rewind. A rejected deep
+undecided history are separate sources and are never merged. Protocol v16
+carries both the opaque pane-local Codex history generation and, whenever the
+complete source extent is known, an absolute half-open row range. A changed non-content
+generation replaces that pane's cached timeline instead of merging across a
+confirmed rewind; same-generation hot and deep pages merge only when those
+server-owned ranges overlap or touch. Repeated headings and prompt/status rows
+are therefore never timeline authority. The generation includes the owning
+tmux server identity, so a restarted server cannot reuse an old in-memory
+scrollback coordinate space merely because the provider session UUID stayed
+the same. A rejected deep
 response does not mutate the reusable cache. Deep
 history begins with 2000 physical lines and requests cumulative 2000-line
 expansions only as the viewport approaches the oldest loaded content.
@@ -394,6 +400,15 @@ keyboard cursor resolves to a verified agent route; sidebar and modal
 navigation remains remote. The server retains the newest suffix if styled
 history reaches the protocol byte
 budget; a byte-bound truncation is an effective end, never a helper failure.
+The attached display loop never performs a history capture itself. One bounded
+read-only worker owns tmux capture, transcript formatting, and history-row
+rendering, then wakes the PTY select loop through a self-pipe. Pending routing
+prefetches coalesce to the newest request; deep requests remain individually
+identified, and stale results are rejected by the client's request/route
+epoch. A short per-policy pane-topology cache avoids repeating serial tmux
+discovery within one gesture, while a config file identity check reloads TOML
+only after an actual change. The worker never writes provider transcripts or
+session metadata.
 Styled raw capture is decoded as one chronological terminal stream because
 tmux may carry SGR foreground, background, and text attributes across physical
 row boundaries. Each decoded row is then reset and re-encoded as an
@@ -547,7 +562,7 @@ attach prompts remain cooked-mode interactions.
 
 ### SSH attach contention and helper leases
 
-Protocol v15 reports a second bounded status after the attach boundary and
+Protocol v16 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45
@@ -1014,9 +1029,16 @@ after close.
 
 Claude's `SessionCache` remains a separate source. Its UI path scans only the
 selected project directory, caps cold parsing to the newest entries, and parses
-only changed files. Moving that bounded per-project source to another worker is
-not required by the Codex whole-tree invariant, but any future worker must use
-the same last-known-good generation rules.
+only changed files. Claude's append-only JSONL path retains an accumulated
+record-boundary state and reads only a newly appended complete suffix. Device,
+inode, size, mtime, and a bounded hash checkpoint immediately before the
+committed offset must all agree; replacement, truncation, same-size mutation,
+or checkpoint drift discards the incremental state and performs a clean
+read-only scan. A syntactically complete final record without a newline may be
+shown but is not committed until its boundary arrives, preventing double
+counting. Moving that bounded per-project source to another worker is not
+required by the Codex whole-tree invariant, but any future worker must use the
+same last-known-good generation rules.
 
 `SessionMeta.message_count` is a provider-normalized logical conversation
 count, not a raw JSONL-record count: exclude tool results and harness-injected
@@ -1469,7 +1491,7 @@ shell-quoted command instead. Clean clicks in an unfocused agent continue to
 mean focus, and drags continue to mean selection, so semantic recognition
 cannot replace either established gesture.
 
-Protocol v15 separates path validation from the requested destination. The
+Protocol v16 separates path validation from the requested destination. The
 first response includes the remote workspace's Ask/Inside/Separate policy; an
 Inside or Separate choice is returned in a bounded typed request and the
 server revalidates pane identity, current working directory, path type, and

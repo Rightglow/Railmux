@@ -170,9 +170,7 @@ def test_posix_history_wheel_distance_remains_one_row():
 
 
 @pytest.mark.parametrize(("windows", "expected"), ((False, 1), (True, 3)))
-def test_client_selects_platform_history_wheel_distance(
-    monkeypatch, windows, expected
-):
+def test_client_selects_platform_history_wheel_distance(monkeypatch, windows, expected):
     monkeypatch.setattr(
         fast_display_client, "running_in_windows_wrapper", lambda: windows
     )
@@ -1647,6 +1645,46 @@ def test_periodic_hot_prefetch_does_not_shrink_a_reusable_deep_snapshot():
     assert len(view.viewports["%8"].snapshot.lines) == 2000
 
 
+def test_unrelated_hot_captures_with_shared_headings_are_not_spliced():
+    view = LocalHistoryView(history_limit=2000)
+
+    def prefetch(lines: tuple[bytes, ...], now: float) -> None:
+        frame = InputFrameDecoder().feed(view.begin_prefetch(now))[0]
+        request_id, _limit = decode_history_prefetch(frame.data)
+        view.accept_prefetch(
+            HistoryBatch(
+                request_id,
+                (
+                    HistorySnapshot(
+                        request_id,
+                        "%8",
+                        30,
+                        0,
+                        80,
+                        20,
+                        lines,
+                        generation=7,
+                    ),
+                ),
+            )
+        )
+
+    previous = [f"old-{index}".encode() for index in range(300)]
+    incoming = [f"new-{index}".encode() for index in range(300)]
+    for old_index, new_index, heading in (
+        (100, 20, b"shared-heading-a"),
+        (150, 70, b"shared-heading-b"),
+        (200, 120, b"shared-heading-c"),
+    ):
+        previous[old_index] = heading
+        incoming[new_index] = heading
+
+    prefetch(tuple(previous), 1.0)
+    prefetch(tuple(incoming), 2.0)
+
+    assert view.content_cache["%8"].lines == tuple(incoming)
+
+
 def test_validated_deep_capture_recovers_unanchored_rewind_output():
     view = LocalHistoryView(history_limit=2000)
     first = InputFrameDecoder().feed(view.begin_prefetch(1.0))[0]
@@ -2284,3 +2322,68 @@ def test_screen_input_route_detection_distinguishes_sidebar_and_agent_cursor():
     assert screen_input_may_change_routes(b"\x02", view, agent)
     assert not screen_input_may_change_routes(b"\x1b[I", view, sidebar)
     assert not screen_input_may_change_routes(b"\x1b[O", view, sidebar)
+
+
+def test_v16_timeline_coordinates_merge_without_textual_anchor():
+    view = LocalHistoryView()
+    previous = HistorySnapshot(
+        1,
+        "%8",
+        30,
+        0,
+        40,
+        2,
+        (b"old-a", b"old-b", b"live-a", b"live-b"),
+        generation=9,
+        timeline_start=100,
+        timeline_end=104,
+    )
+    incoming = HistorySnapshot(
+        2,
+        "%8",
+        30,
+        0,
+        40,
+        2,
+        (b"new-live-a", b"new-live-b"),
+        generation=9,
+        timeline_start=104,
+        timeline_end=106,
+    )
+
+    merged = view._merge_content(previous, incoming)
+
+    assert merged.lines == previous.lines + incoming.lines
+    assert (merged.timeline_start, merged.timeline_end) == (100, 106)
+
+
+def test_v16_timeline_gap_or_rewind_is_never_spliced():
+    view = LocalHistoryView()
+    previous = HistorySnapshot(
+        1,
+        "%8",
+        30,
+        0,
+        40,
+        2,
+        (b"same", b"head"),
+        generation=9,
+        timeline_start=100,
+        timeline_end=102,
+    )
+    gap = HistorySnapshot(
+        2,
+        "%8",
+        30,
+        0,
+        40,
+        2,
+        (b"same", b"head"),
+        generation=9,
+        timeline_start=110,
+        timeline_end=112,
+    )
+    rewind = replace(gap, timeline_start=50, timeline_end=52)
+
+    assert view._merge_content(previous, gap) == gap
+    assert view._merge_content(previous, rewind) == rewind

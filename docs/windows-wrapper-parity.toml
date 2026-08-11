@@ -61,9 +61,9 @@ unicode_profile = "The managed runtime path and provider history must still be e
 
 [release_validation]
 date = "2026-08-11"
-candidate = "0.4.0rc11"
-scope = "Rc11 keeps the immutable r2 runtime and rc10 lease fixes, replaces the broad managed-Windows Codex reduced-motion argv with a same-session private-PTY cursor-visibility coalescer, creates detached providers at their destination pane geometry, and hardens wide-glyph rendering against repeated continuation-cell data. The proxy leaves ordinary output byte-exact, tracks bounded VT control boundaries, is presentation-only, and fails back to the ordinary direct client; provider animation, Working timers, session files, input, and SSH display behavior retain their shared contracts."
-remaining_rc_gate = "On the affected real Windows profile, install rc11 without deleting the managed runtime or any provider/lock data. Normally exit any rc10-started Codex pane, resume it under rc11, and confirm the Working seconds advance while the cursor stays stable and returns for input. Resume a long conversation and confirm it does not replay at 80x24 before reflow. Open the reported CJK history view and confirm each full-width glyph appears once. The non-ASCII Windows profile-name case remains a documented limitation rather than a 0.4 blocker."
+candidate = "0.4.0rc12"
+scope = "Rc12 keeps the immutable r2 runtime and rc11 provider geometry/CJK fixes, restores a stable visible cursor and exact validated IME anchor after noisy Codex visibility bursts, makes Claude metadata scans append-incremental, and advances exact-match SSH display protocol v16 with absolute history row coordinates plus a bounded read-only history worker. Provider files remain read-only; cursor handling changes only presentation controls; old SSH peers enter the explicit upgrade flow."
+remaining_rc_gate = "On the affected real Windows profile, install rc12 without deleting the managed runtime or provider/lock data. Resume Codex, confirm the cursor is visible at input and IME pre-edit no longer jumps within the input region. From Windows and macOS/Linux clients, accept the exact rc12 remote upgrade, paste or generate structured output beyond 300 rows while output continues, and verify wheel/Page Up deep history is coherent and the live agent remains responsive. The non-ASCII Windows profile-name case remains a documented limitation rather than a 0.4 blocker."
 
 [[scenarios]]
 id = "WW-PACKAGE-DISPATCH"

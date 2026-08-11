@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import inspect
 import io
+import select
 import shlex
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from unittest.mock import MagicMock
 
@@ -12,6 +15,7 @@ import pytest
 
 from railmux.config import Config
 from railmux.fast_display_protocol import (
+    HistorySnapshot,
     PROTOCOL_VERSION,
     REMOTE_CONFIG_PROTOCOL,
     REMOTE_ATTACH_BUSY,
@@ -35,6 +39,70 @@ def test_remote_server_has_no_bare_tmux_server_argv():
 
     assert '["tmux",' not in source
     assert "['tmux'," not in source
+
+
+def test_history_worker_keeps_capture_off_caller_and_signals_result(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_capture(_session, request_id, *_args, **_kwargs):
+        started.set()
+        assert release.wait(2)
+        return HistorySnapshot(request_id, None)
+
+    monkeypatch.setattr(fast_display_server, "capture_history_snapshot", slow_capture)
+    worker = fast_display_server._HistoryWorker(object())
+    try:
+        before = time.monotonic()
+        assert worker.submit(
+            fast_display_server._HistoryJob("snapshot", "railmux", (7, 1, 1, 50), None)
+        )
+        assert time.monotonic() - before < 0.1
+        assert started.wait(1)
+        release.set()
+        readable, _, _ = select.select([worker.read_fd], [], [], 2)
+        assert readable == [worker.read_fd]
+        messages = ServerMessageDecoder().feed(worker.drain()[0])
+        assert messages == [HistorySnapshot(7, None)]
+    finally:
+        release.set()
+        worker.close()
+
+
+def test_history_worker_coalesces_unstarted_prefetches(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+    captured: list[int] = []
+
+    def capture(_pyte, _session, request_id, _lines, **_kwargs):
+        captured.append(request_id)
+        if request_id == 1:
+            started.set()
+            assert release.wait(2)
+        return fast_display_server.HistoryBatch(request_id, ())
+
+    monkeypatch.setattr(fast_display_server, "capture_history_batch", capture)
+    worker = fast_display_server._HistoryWorker(object())
+    try:
+        assert worker.submit(
+            fast_display_server._HistoryJob("batch", "railmux", (1, 300), None)
+        )
+        assert started.wait(1)
+        assert worker.submit(
+            fast_display_server._HistoryJob("batch", "railmux", (2, 300), None)
+        )
+        assert worker.submit(
+            fast_display_server._HistoryJob("batch", "railmux", (3, 300), None)
+        )
+        release.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and captured != [1, 3]:
+            select.select([worker.read_fd], [], [], 0.05)
+            worker.drain()
+        assert captured == [1, 3]
+    finally:
+        release.set()
+        worker.close()
 
 
 def test_remote_server_hello_reports_version_protocol_and_dependency(monkeypatch):
@@ -765,6 +833,37 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     )
 
 
+def test_history_worker_topology_cache_reuses_one_gesture_snapshot(monkeypatch):
+    fast_display_server._PANE_GEOMETRY_CACHE.clear()
+    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
+    calls = 0
+
+    def list_panes(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1    \n"
+        )
+
+    monkeypatch.setattr(subprocess, "check_output", list_panes)
+
+    first = fast_display_server._list_agent_panes(
+        "$4",
+        claude_history_policy="ask",
+        use_cache=True,
+    )
+    second = fast_display_server._list_agent_panes(
+        "$4",
+        claude_history_policy="ask",
+        use_cache=True,
+    )
+
+    assert second == first
+    assert calls == 1
+    fast_display_server._PANE_GEOMETRY_CACHE.clear()
+
+
 def test_server_projects_bounded_codex_history_generation(monkeypatch):
     marker = "019fc7c1-a27c-7ae0-9937-7570552a112a"
     monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
@@ -785,6 +884,34 @@ def test_server_projects_bounded_codex_history_generation(monkeypatch):
     )
     assert panes[0].history_generation != 0
     assert not panes[0].canonical_history
+
+
+def test_server_restart_changes_history_generation(monkeypatch):
+    marker = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *args, **kwargs: (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001\n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001\n"
+        ),
+    )
+
+    panes = fast_display_server._list_agent_panes(
+        "$4",
+        claude_history_policy="ask",
+    )
+
+    assert len(panes) == 1
+    assert panes[0].history_generation == fast_display_server._history_generation(
+        marker,
+        "9001",
+    )
+    assert panes[0].history_generation != fast_display_server._history_generation(
+        marker,
+        "9002",
+    )
 
 
 def test_server_accepts_canonical_history_only_for_matching_transcript(
@@ -1035,7 +1162,7 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
     assert styled.buffer[0][48].bg == "red"
     assert b"]52" not in snapshot.lines[2]
     assert b"visible" in snapshot.lines[2]
-    assert calls[0][0] == [
+    assert calls[0][0][:11] == [
         "tmux",
         "-L",
         "railmux",
@@ -1048,6 +1175,14 @@ def test_server_history_capture_preserves_sgr_but_filters_controls(monkeypatch):
         "-S",
         "-2000",
     ]
+    assert calls[0][0][11:16] == [
+        ";",
+        "display-message",
+        "-p",
+        "-t",
+        "%8",
+    ]
+    assert calls[0][0][16].startswith("RAILMUX-HISTORY-")
     assert not any(
         destructive in calls[0][0]
         for destructive in ("kill-pane", "kill-session", "resize-pane", "send-keys")
@@ -1077,7 +1212,42 @@ def test_server_history_capture_honours_limits_above_the_old_4096_cap(
     assert len(snapshot.lines) == 5000
     assert snapshot.lines[0] == b"line-1"
     assert snapshot.lines[-1] == b"line-5000"
-    assert calls[0][-2:] == ["-S", "-5000"]
+    assert calls[0][9:11] == ["-S", "-5000"]
+
+
+def test_server_history_capture_uses_atomic_tmux_timeline_marker(monkeypatch):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        49,
+        2,
+        history_size=3,
+    )
+    monkeypatch.setattr(fast_display_server.secrets, "token_hex", lambda _n: "fixed")
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: (
+            b"old-a\nold-b\nlive-a\nlive-b\nRAILMUX-HISTORY-fixed 12 2\n"
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
+    )
+
+    snapshot = fast_display_server._capture_pane_history(
+        object(),
+        pane,
+        7,
+        300,
+    )
+
+    assert snapshot is not None
+    assert snapshot.lines == (b"old-a", b"old-b", b"live-a", b"live-b")
+    assert (snapshot.timeline_start, snapshot.timeline_end) == (10, 14)
 
 
 def test_server_raw_styled_hot_and_deep_history_keep_codex_foreground(
@@ -1354,10 +1524,15 @@ def test_server_unreadable_claude_transcript_preserves_native_wheel_fallback(
 def test_transcript_wrapper_preserves_combined_sgr_after_line_wrap():
     pyte = fast_display_server._extended_pyte(__import__("pyte"))
 
-    rows, dropped = fast_display_server._wrap_transcript_rows(pyte, "\033[0;31mabcd", 2)
+    rows, dropped, total_rows = fast_display_server._wrap_transcript_rows(
+        pyte,
+        "\033[0;31mabcd",
+        2,
+    )
 
     assert not dropped
     assert len(rows) == 2
+    assert total_rows == 2
     assert b"\033[31m" in rows[1]
 
 
@@ -1460,21 +1635,27 @@ def test_server_captures_nested_history_from_real_pane_without_resizing(
     snapshot = fast_display_server.capture_history_snapshot("$4", 7, 40, 5, 300)
 
     assert snapshot.pane_id == "%8"
-    assert calls == [
-        [
-            "tmux",
-            "-S",
-            "/tmp/default",
-            "capture-pane",
-            "-p",
-            "-e",
-            "-N",
-            "-t",
-            "%2",
-            "-S",
-            "-300",
-        ]
+    assert calls[0][:11] == [
+        "tmux",
+        "-S",
+        "/tmp/default",
+        "capture-pane",
+        "-p",
+        "-e",
+        "-N",
+        "-t",
+        "%2",
+        "-S",
+        "-300",
     ]
+    assert calls[0][11:16] == [
+        ";",
+        "display-message",
+        "-p",
+        "-t",
+        "%2",
+    ]
+    assert calls[0][16].startswith("RAILMUX-HISTORY-")
     assert not any(
         item in calls[0]
         for item in ("resize-pane", "swap-pane", "send-keys", "kill-pane")
@@ -1570,22 +1751,14 @@ def test_server_renderer_collapses_reported_repeated_cjk_physical_cells():
     class RepeatedCjkScreen:
         lines = 1
         columns = len(cells)
-        _character_width = staticmethod(
-            lambda value: 2 if ord(value) > 127 else 1)
-        buffer = {
-            0: {
-                column: cell
-                for column, cell in enumerate(cells)
-            }
-        }
+        _character_width = staticmethod(lambda value: 2 if ord(value) > 127 else 1)
+        buffer = {0: {column: cell for column, cell in enumerate(cells)}}
 
-    rendered = render_rows(RepeatedCjkScreen())[0].decode(
-        "utf-8", errors="replace")
+    rendered = render_rows(RepeatedCjkScreen())[0].decode("utf-8", errors="replace")
 
     assert text in rendered
     assert all(
-        rendered.count(character) == text.count(character)
-        for character in set(text)
+        rendered.count(character) == text.count(character) for character in set(text)
     )
 
 
@@ -1596,8 +1769,7 @@ def test_server_renderer_preserves_real_content_over_a_continuation_cell():
         _character_width = staticmethod(lambda value: 2 if value == "你" else 1)
         buffer = {0: {0: _Char("你"), 1: _Char("x")}}
 
-    rendered = render_rows(RepaintedScreen())[0].decode(
-        "utf-8", errors="replace")
+    rendered = render_rows(RepaintedScreen())[0].decode("utf-8", errors="replace")
 
     assert "你x" in rendered
 
@@ -1607,10 +1779,12 @@ def test_transcript_wrapper_does_not_duplicate_cjk_full_width_cells():
     terminal = fast_display_server._extended_pyte(pyte)
     text = "基本通了，但发现一个真 bug："
 
-    rows, dropped = fast_display_server._wrap_transcript_rows(
-        terminal, text, 80)
+    rows, dropped, total_rows = fast_display_server._wrap_transcript_rows(
+        terminal, text, 80
+    )
 
     assert not dropped
+    assert total_rows == len(rows)
     rendered = b"".join(rows).decode("utf-8", errors="replace")
     assert text in rendered
     assert all(rendered.count(character) == text.count(character) for character in text)
