@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc10] - 2026-08-11
+
+### Fixed
+
+- Keep managed-Windows Codex launches visually stable with a process-local
+  `tui.animations=false` override. A real Windows Terminal 1.24 trace proved
+  that tmux 3.7 received complete synchronized text frames while Codex still
+  alternated visible frame-final cursor positions outside those boundaries;
+  the override changes neither user configuration nor provider history.
+- Freeze and persist the complete Codex lease-repair alias set before its
+  asynchronous holder starts. A partially verified alias snapshot can no
+  longer replace that intent on the next UI tick and produce the false
+  `session lease holder result no longer matched` warning; advisory locks and
+  exact pane/process identity remain the only authority.
+- Let a newly created managed-Windows pane keep one native process-birth token
+  stable before handing it provider leases, and allow its isolated holder a
+  bounded ten-second cold start. Shell-to-Node transitions no longer cause a
+  spurious `holder did not become ready` refusal, while replacement,
+  ambiguity, child exit, and real timeout remain distinct fail-closed errors.
+
 ## [0.4.0rc9] - 2026-08-10
 
 ### Fixed

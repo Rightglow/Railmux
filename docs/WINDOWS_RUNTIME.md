@@ -172,6 +172,12 @@ opens a WSL shell and runs the ordinary POSIX product there.
   application frames are consequently part of the supported native-Windows
   rendering contract. The global macOS/Linux/WSL tmux requirement stays at
   2.7; only the Railmux-owned Windows generation has the higher floor.
+- tmux 3.7 makes Codex text frames atomic but cannot absorb the provider's
+  cursor visibility and final-position changes when Codex emits them outside
+  those frames. Managed-Windows Codex launches therefore add the process-local
+  `-c tui.animations=false` option. Railmux does not edit Codex configuration
+  or history, and an already-running Codex pane retains the argv it started
+  with until the user normally exits and resumes it.
 - A published base is never upgraded in place. A pacman core transition can
   temporarily replace DLLs needed by the updater itself, so mutating the base
   that owns a live detached tmux server would turn a visual improvement into a

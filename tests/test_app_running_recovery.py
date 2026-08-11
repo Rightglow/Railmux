@@ -428,6 +428,41 @@ def test_only_live_tmux_binding_migrates_codex_rollback_baseline(monkeypatch):
     assert cached_only.codex_baseline_rollback_count == 0
 
 
+def test_soft_restart_preserves_codex_lease_repair_anchor(monkeypatch):
+    cwd = Path("/tmp/codex-only")
+    project = _project("codex-only")
+    root_id = "12345678-1234-1234-1234-1234567890ab"
+    child_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    root = _codex_meta(project, root_id)
+    tmux_name = "cx-new---abcdef-1"
+    app = _minimal_app()
+    app._codex_index = MagicMock()
+    app._codex_index.get.return_value = root
+    app._codex_index.representative_for.return_value = root
+    app._codex_home_path = lambda: Path("/tmp/codex-home")
+    monkeypatch.setattr(tmux_ctl, "session_rollout_ids", lambda *_args: None)
+    binding = {
+        "key": root_id,
+        "tmux_name": tmux_name,
+        "session_type": "codex",
+        "cwd": str(cwd),
+        "lease_anchor_ids": [root_id, child_id],
+    }
+
+    running = app._valid_running_binding(
+        binding,
+        {tmux_name: (cwd, 100)},
+        {app._path_key(cwd): project},
+    )
+
+    assert running is not None
+    assert running.lease_anchor_ids == frozenset({root_id, child_id})
+    assert app._running_binding_data(running)["lease_anchor_ids"] == [
+        root_id,
+        child_id,
+    ]
+
+
 @pytest.mark.parametrize("probe_result", [False, None, OSError("denied")])
 def test_soft_restart_rejects_other_writer_without_exact_resume_arg(
     monkeypatch,

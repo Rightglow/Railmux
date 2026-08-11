@@ -30,6 +30,7 @@ SCHEMA_VERSION = 1
 LEASE_DIRECTORY = "railmux-session-leases-v1"
 _MAX_OWNER_BYTES = 4096
 _READY_TIMEOUT_S = 3.0
+_WINDOWS_READY_TIMEOUT_S = 10.0
 _PROCFS_POLL_INTERVAL_S = 0.25
 _FALLBACK_POLL_INTERVAL_S = 2.0
 _PROBE_RETRY_WINDOW_S = 0.2
@@ -508,7 +509,12 @@ def start_holder(
     try:
         selector = selectors.DefaultSelector()
         selector.register(process.stdout, selectors.EVENT_READ)
-        if selector.select(_READY_TIMEOUT_S):
+        ready_timeout = (
+            _WINDOWS_READY_TIMEOUT_S
+            if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2"
+            else _READY_TIMEOUT_S
+        )
+        if selector.select(ready_timeout):
             ready = process.stdout.readline().strip() == b"ready"
     except (OSError, ValueError):
         ready = False
@@ -517,9 +523,17 @@ def start_holder(
             selector.close()
         process.stdout.close()
     if not ready:
+        process_exited = process.poll() is not None
+        identity_changed = not _process_matches(pane_pid, token)
         _stop_holder_process(process)
         claim.close()
-        return HolderStartResult.failure("holder-did-not-become-ready")
+        if identity_changed:
+            return HolderStartResult.failure(
+                "provider-process-identity-changed")
+        return HolderStartResult.failure(
+            "holder-process-exited-before-ready"
+            if process_exited else "holder-did-not-become-ready"
+        )
     claim.detach()
     verified = True
     try:

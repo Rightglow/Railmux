@@ -249,6 +249,78 @@ def test_start_holder_requires_lock_verification_after_parent_detaches(
     process.terminate.assert_called_once_with()
 
 
+def test_managed_windows_holder_uses_bounded_cold_start_window(monkeypatch) -> None:
+    claim = MagicMock(
+        root=Path("/provider"),
+        provider="codex",
+        instance="instance-a",
+        files=(("session-a", Path("/lease"), 9),),
+    )
+    stream = MagicMock()
+    process = MagicMock(stdout=stream)
+    process.poll.return_value = None
+    process.wait.return_value = 0
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: "birth-42"
+    )
+    monkeypatch.setattr(
+        session_lease.subprocess, "Popen", MagicMock(return_value=process)
+    )
+    selector = MagicMock()
+    selector.select.return_value = []
+    monkeypatch.setattr(
+        session_lease.selectors,
+        "DefaultSelector",
+        MagicMock(return_value=selector),
+    )
+
+    result = session_lease.start_holder(
+        claim, pane_id="%9", pane_pid=42, process_start="birth-42"
+    )
+
+    assert not result
+    assert result.category == "holder-did-not-become-ready"
+    selector.select.assert_called_once_with(
+        session_lease._WINDOWS_READY_TIMEOUT_S
+    )
+    claim.close.assert_called_once_with()
+
+
+def test_holder_reports_child_exit_before_ready(monkeypatch) -> None:
+    claim = MagicMock(
+        root=Path("/provider"),
+        provider="codex",
+        instance="instance-a",
+        files=(("session-a", Path("/lease"), 9),),
+    )
+    stream = MagicMock()
+    process = MagicMock(stdout=stream)
+    process.poll.return_value = 2
+    process.wait.return_value = 2
+    monkeypatch.setattr(
+        session_lease, "process_start_token", lambda _pid: "birth-42"
+    )
+    monkeypatch.setattr(
+        session_lease.subprocess, "Popen", MagicMock(return_value=process)
+    )
+    selector = MagicMock()
+    selector.select.return_value = []
+    monkeypatch.setattr(
+        session_lease.selectors,
+        "DefaultSelector",
+        MagicMock(return_value=selector),
+    )
+
+    result = session_lease.start_holder(
+        claim, pane_id="%9", pane_pid=42, process_start="birth-42"
+    )
+
+    assert not result
+    assert result.category == "holder-process-exited-before-ready"
+    claim.close.assert_called_once_with()
+
+
 def test_app_waits_for_exact_new_pane_birth_before_transferring_lease(
     monkeypatch,
 ) -> None:
@@ -268,6 +340,34 @@ def test_app_waits_for_exact_new_pane_birth_before_transferring_lease(
     transfer.assert_called_once_with(
         claim, pane_id="%9", pane_pid=42, process_start="birth-42")
     claim.close.assert_not_called()
+
+
+def test_managed_windows_waits_for_stable_provider_birth(monkeypatch) -> None:
+    app = App.__new__(App)
+    pane = tmux_ctl.PaneIdentity(
+        "%9", 42, "cx-session-a", "$9", "@9", False, 80, 24
+    )
+    claim = MagicMock()
+    clock = [0.0]
+    monkeypatch.setattr(app_mod, "running_in_windows_wrapper", lambda: True)
+    monkeypatch.setattr(tmux_ctl, "pane_identity", lambda _pane: pane)
+    monkeypatch.setattr(app_mod.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        app_mod.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds)
+    )
+    monkeypatch.setattr(
+        session_lease,
+        "process_start_token",
+        lambda _pid: "shell-birth" if clock[0] < 0.1 else "node-birth",
+    )
+    transfer = MagicMock(return_value=True)
+    monkeypatch.setattr(session_lease, "start_holder", transfer)
+
+    assert app._start_session_lease_holder(claim, pane)
+    transfer.assert_called_once_with(
+        claim, pane_id="%9", pane_pid=42, process_start="node-birth"
+    )
+    assert clock[0] >= app_mod._SESSION_LEASE_WINDOWS_IDENTITY_STABLE_S
 
 
 def test_app_lease_wait_fails_closed_if_new_pane_identity_changes(
@@ -355,6 +455,68 @@ def test_running_entry_reacquires_after_its_holder_lock_disappears(
     start_holder.assert_called_once_with(
         claim, pane_id=pane.pane_id, pane_pid=pane.pane_pid,
         process_start=token)
+
+
+def test_codex_repair_freezes_anchor_across_index_generation_change(
+    monkeypatch, tmp_path,
+) -> None:
+    project = Project(tmp_path, "-tmp", Path(), 1, 1.0)
+    session = SessionMeta(
+        project=project,
+        session_id="parent",
+        jsonl_path=tmp_path / "parent.jsonl",
+        title="Shared",
+        message_count=1,
+        token_total=1,
+        last_mtime=1.0,
+        session_type="codex",
+    )
+    running = _Running(
+        key="parent",
+        tmux_name="cx-parent",
+        label="tmp/Shared",
+        project=project,
+        session_type="codex",
+    )
+    pane = tmux_ctl.PaneIdentity(
+        "%9", os.getpid(), running.tmux_name, "$9", "@9", False, 80, 24
+    )
+    token = session_lease.process_start_token(pane.pane_pid)
+    assert token is not None
+    owner = session_lease.LeaseOwner(
+        "codex",
+        "parent",
+        session_lease._bounded_host(),
+        "local",
+        pane_id=pane.pane_id,
+        pane_pid=pane.pane_pid,
+        process_start=token,
+    )
+    app = App.__new__(App)
+    app._config = MagicMock()
+    app._config.resolved_codex_home.return_value = tmp_path
+    app._codex_real_pane_identity = MagicMock(return_value=pane)
+    app._session_lease_ids = MagicMock(side_effect=(
+        frozenset({"parent", "child"}),
+        frozenset({"new-index-member"}),
+    ))
+    claim = MagicMock(session_ids=("child", "parent"))
+    monkeypatch.setattr(session_lease, "active_owner", lambda *_args: None)
+    monkeypatch.setattr(session_lease, "acquire", lambda *_args: claim)
+    app._start_session_lease_holder = MagicMock(
+        return_value=session_lease.HolderStartResult.success()
+    )
+
+    assert not app._ensure_running_session_lease(running, session)
+    assert running.lease_anchor_ids == frozenset({"parent", "child"})
+    assert running.lease_session_ids == frozenset()
+    assert running.lease_repair_thread is not None
+    running.lease_repair_thread.join(timeout=1.0)
+
+    monkeypatch.setattr(session_lease, "active_owner", lambda *_args: owner)
+    assert app._ensure_running_session_lease(running, session)
+    assert running.lease_warning is None
+    assert running.lease_session_ids == frozenset({"parent", "child"})
 
 
 def test_running_lease_repair_failure_is_observed_without_fake_alias(

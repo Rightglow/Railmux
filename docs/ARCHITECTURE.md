@@ -161,6 +161,15 @@ Windows floor does not change Railmux's shared macOS/Linux/WSL tmux 2.7 core
 floor. The recorded package and effective tmux classification remain exposed
 by `railmux runtime status` and `railmux doctor`.
 
+That text-frame contract does not make Codex's hardware-cursor state atomic.
+A Windows Terminal 1.24 control-sequence trace showed correctly paired Codex
+synchronized frames while cursor hide/show, style, and alternating final-row
+updates remained outside their boundaries. Managed-Windows Codex processes
+therefore receive a process-local `tui.animations=false` override. It applies
+to new, resumed, and private Help processes without rewriting the user's Codex
+configuration or any provider history; POSIX, WSL, and already-running provider
+processes keep their existing argv.
+
 The verified base is immutable after publication. Railmux never runs an
 in-place `pacman -Syu`, replaces a live tmux binary, or kills a server to meet
 a changed base contract. Such a contract uses a new side-by-side runtime
@@ -851,9 +860,13 @@ supports them; type, ownership, and no-symlink checks remain authoritative on
 mode-masking DrvFs/CIFS-style mounts. A Claude lease names its session UUID; a
 Codex resume atomically covers every alias known at launch, while later rewinds
 that the index can link retain that stable lineage anchor instead of
-accumulating holder processes. The lock is authority and its bounded JSON owner
-record is diagnostic only. It is flushed before the claim becomes usable so a
-second NFS client that observes the lock can name its owner without waiting for
+accumulating holder processes. That complete repair intent is frozen before an
+asynchronous holder starts and persisted in the Running binding. A partial set
+of aliases whose locks were already verified is descriptive state only and
+cannot shrink the pending intent on a later UI tick. The lock is authority and
+its bounded JSON owner record is diagnostic only. It is flushed before the
+claim becomes usable so a second NFS client that observes the lock can name its
+owner without waiting for
 the provider-lifetime descriptor to close. An unlocked stale file is inactive,
 while an unavailable lock service fails resume closed.
 
@@ -868,8 +881,12 @@ category without provider output, and never turns a `reserving` owner record
 into authority. A newly respawned MSYS2 pane may publish before its native
 process birth token becomes queryable, so transfer may retry for one bounded
 interval only while pane ID, PID, session ID/name, and window ID remain
-unchanged and non-dead. Replacement, disappearance, timeout, or a changed
-birth token closes the claim rather than weakening identity. New sessions
+unchanged and non-dead. On managed Windows, the token must additionally remain
+unchanged for a short settle interval before handoff, covering the native
+login-shell-to-provider transition, and the isolated holder gets a bounded
+ten-second readiness window. POSIX retains the shorter path. Replacement,
+disappearance, timeout, child exit, or a changed birth token closes the claim
+rather than weakening identity. New sessions
 acquire their UUID immediately when placeholder resolution proves it. A live
 UI periodically revalidates the advisory locks
 rather than trusting its in-memory lease list, so it can replace an

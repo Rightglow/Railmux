@@ -44,6 +44,7 @@ from railmux.help_workspace import (
     materialize_help_workspace,
 )
 from railmux.provider_paths import (
+    running_in_managed_windows_wrapper,
     running_in_windows_wrapper,
 )
 from railmux.settings import LayoutProfile, Settings
@@ -170,6 +171,18 @@ def _screen_class_for_platform():
     if running_in_windows_wrapper():
         return _SynchronizedOutputScreen
     return urwid.raw_display.Screen
+
+
+def _reduce_codex_motion_for_terminal() -> bool:
+    """Keep Codex's frame-final cursor stable in managed Windows Terminal.
+
+    Codex places cursor visibility and final-position changes outside its DEC
+    synchronized-output frames. tmux 3.7 makes the text frame atomic, but a
+    Windows Terminal client can still expose those alternating frame-final
+    coordinates. This process-local override changes neither user config nor
+    provider history.
+    """
+    return running_in_managed_windows_wrapper()
 
 
 def _tmux_batch_argv(commands: list[list[str]]) -> list[str]:
@@ -382,7 +395,10 @@ _TMUX_LEVEL_STYLE = {
 # would make rows jump under the cursor mid-click, so it's throttled to this.
 _RUNNING_SORT_INTERVAL = 60.0
 _SESSION_LEASE_IDENTITY_SETTLE_S = 1.0
+_SESSION_LEASE_WINDOWS_IDENTITY_SETTLE_S = 3.0
+_SESSION_LEASE_WINDOWS_IDENTITY_STABLE_S = 0.25
 _SESSION_LEASE_IDENTITY_POLL_S = 0.025
+_SESSION_LEASE_MAX_PERSISTED_ANCHORS = 256
 
 
 def _session_lease_failure_description(category: str | None) -> str:
@@ -399,6 +415,9 @@ def _session_lease_failure_description(category: str | None) -> str:
         ),
         "holder-process-start-failed": (
             "the session lease holder process could not start"
+        ),
+        "holder-process-exited-before-ready": (
+            "the session lease holder exited before it became ready"
         ),
         "holder-did-not-become-ready": (
             "the session lease holder did not become ready"
@@ -4941,7 +4960,13 @@ class App:
         a disappeared, dead, moved, or replaced pane closes the claim instead
         of weakening the cross-host identity boundary.
         """
-        deadline = time.monotonic() + _SESSION_LEASE_IDENTITY_SETTLE_S
+        managed_windows = running_in_windows_wrapper()
+        deadline = time.monotonic() + (
+            _SESSION_LEASE_WINDOWS_IDENTITY_SETTLE_S
+            if managed_windows else _SESSION_LEASE_IDENTITY_SETTLE_S
+        )
+        stable_token: str | None = None
+        stable_since: float | None = None
         while True:
             current = tmux_ctl.pane_identity(pane.pane_id)
             if not self._same_live_pane(pane, current):
@@ -4950,12 +4975,28 @@ class App:
                     "provider-pane-identity-changed")
             process_start = session_lease.process_start_token(pane.pane_pid)
             if process_start is not None:
-                return session_lease.start_holder(
-                    claim,
-                    pane_id=pane.pane_id,
-                    pane_pid=pane.pane_pid,
-                    process_start=process_start,
-                )
+                now = time.monotonic()
+                if not managed_windows:
+                    return session_lease.start_holder(
+                        claim,
+                        pane_id=pane.pane_id,
+                        pane_pid=pane.pane_pid,
+                        process_start=process_start,
+                    )
+                if process_start != stable_token:
+                    stable_token = process_start
+                    stable_since = now
+                elif (
+                    stable_since is not None
+                    and now - stable_since
+                    >= _SESSION_LEASE_WINDOWS_IDENTITY_STABLE_S
+                ):
+                    return session_lease.start_holder(
+                        claim,
+                        pane_id=pane.pane_id,
+                        pane_pid=pane.pane_pid,
+                        process_start=process_start,
+                    )
             if time.monotonic() >= deadline:
                 claim.close()
                 return session_lease.HolderStartResult.failure(
@@ -5378,6 +5419,7 @@ class App:
                 session_id=session_meta.session_id,
                 cwd=cwd,
                 yolo=self._codex_yolo_enabled(),
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5447,6 +5489,7 @@ class App:
                 codex_binary=self._config.codex_binary,
                 cwd=proj.real_path,
                 yolo=self._codex_yolo_enabled(),
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5487,6 +5530,7 @@ class App:
                 codex_binary=self._config.codex_binary,
                 cwd=path,
                 yolo=self._codex_yolo_enabled(),
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5645,6 +5689,7 @@ class App:
                 binary,
                 workspace,
                 yolo=False,
+                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             # Keep the dedicated help workspace out of Codex's normal history,
             # and never inherit Railmux's optional YOLO choice.
@@ -7222,7 +7267,21 @@ class App:
 
         canonical_id = None
         baseline_rollback_count = 0
+        lease_anchor_ids: frozenset[str] = frozenset()
         if session_type == "codex":
+            raw_anchors = raw.get("lease_anchor_ids", [])
+            if (
+                not isinstance(raw_anchors, list)
+                or len(raw_anchors) > _SESSION_LEASE_MAX_PERSISTED_ANCHORS
+                or any(
+                    not isinstance(item, str)
+                    or not item
+                    or len(item) > 128
+                    for item in raw_anchors
+                )
+            ):
+                return None
+            lease_anchor_ids = frozenset(raw_anchors)
             canonical_id = (
                 raw.get("codex_canonical_session_id")
                 if trust_codex_history_state else None
@@ -7325,6 +7384,7 @@ class App:
                     project=project,
                     status="busy",
                     session_type=session_type,
+                    lease_anchor_ids=lease_anchor_ids,
                     codex_canonical_session_id=canonical_id,
                     codex_baseline_rollback_count=baseline_rollback_count,
                 )
@@ -7341,6 +7401,9 @@ class App:
             status=meta.status,
             last_mtime=meta.last_mtime,
             session_type=session_type,
+            lease_anchor_ids=(
+                lease_anchor_ids if session_type == "codex" else frozenset()
+            ),
             codex_canonical_session_id=(
                 canonical_id if session_type == "codex" else None),
             codex_baseline_rollback_count=(
@@ -7382,6 +7445,12 @@ class App:
                 # heuristic binding.
                 data["pre_launch_complete"] = False
         elif running.session_type == "codex":
+            if (
+                running.lease_anchor_ids
+                and len(running.lease_anchor_ids)
+                <= _SESSION_LEASE_MAX_PERSISTED_ANCHORS
+            ):
+                data["lease_anchor_ids"] = sorted(running.lease_anchor_ids)
             if running.codex_canonical_session_id is not None:
                 data["codex_canonical_session_id"] = (
                     running.codex_canonical_session_id)
@@ -9445,12 +9514,23 @@ class App:
             return True
         now = time.monotonic()
         observed = self._session_lease_ids(session)
-        if (session.session_type == "codex"
-                and not running.lease_anchor_ids
-                and running.lease_session_ids):
-            # In-memory entries created before this field was populated still
-            # provide their already-validated launch aliases once.
-            running.lease_anchor_ids = running.lease_session_ids
+        if session.session_type == "codex" and not running.lease_anchor_ids:
+            # Freeze repair intent before an asynchronous holder starts.  A
+            # partial ``lease_session_ids`` snapshot published while that
+            # worker is pending must never replace its complete alias set and
+            # manufacture a false "result no longer matched" warning.
+            # Existing entries from before the anchor field still prefer
+            # their already-validated held aliases; recovered entries choose
+            # one complete index generation once.
+            running.lease_anchor_ids = (
+                running.lease_session_ids or observed
+            )
+            registry = getattr(self, "_running", None)
+            if (
+                isinstance(registry, dict)
+                and registry.get(running.key) is running
+            ):
+                self._stamp_running(running)
         # Every rewind lineage the Codex index can link shares an ancestor with
         # the aliases held when this pane started. Keeping that stable anchor
         # set fences a later resume over the same known lineage and avoids
