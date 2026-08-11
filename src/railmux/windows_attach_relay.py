@@ -72,7 +72,14 @@ class _CursorVisibilityCoalescer:
     frames. Windows Terminal can therefore paint the cursor at several
     frame-final coordinates even though every text frame is atomic. Keep all
     terminal bytes byte-for-byte except DECTCEM, hide once at burst start, and
-    restore the last requested visibility after a short quiet interval.
+    restore the stable user-facing visibility after a short quiet interval.
+
+    A Codex repaint can finish with one extra HIDE after repeatedly alternating
+    HIDE/SHOW.  Treat that three-or-more transition signature as rendering
+    noise and restore the most recent visible cursor anchor.  A lone HIDE (for
+    example when Railmux intentionally focuses a cursorless surface) remains
+    authoritative.  Replaying the last exact CUP used by SHOW also gives
+    Windows Terminal a stable anchor for IME pre-edit text.
 
     The parser retains only one bounded CSI candidate, never printable text or
     a terminal frame. It tracks OSC/DCS-style string boundaries solely so an
@@ -92,6 +99,32 @@ class _CursorVisibilityCoalescer:
         self._desired_visible = True
         self._physical_visible = True
         self._deadline: float | None = None
+        self._visibility_transitions = 0
+        self._burst_saw_hide = False
+        self._burst_saw_show = False
+        self._exact_cursor_position: bytes | None = None
+        self._visible_cursor_position: bytes | None = None
+
+    def _invalidate_cursor_position(self, value: int) -> None:
+        # Printable bytes and the C0 controls that move the cursor make a prior
+        # absolute CUP unsuitable as an IME anchor.  BEL and other non-moving
+        # controls do not.
+        if value >= 0x20 or value in {0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D}:
+            self._exact_cursor_position = None
+
+    def _observe_csi_cursor_position(self, sequence: bytes) -> None:
+        final = sequence[-1:]
+        parameters = sequence[2:-1]
+        if final in {b"H", b"f"} and all(
+            value in b"0123456789;" for value in parameters
+        ):
+            self._exact_cursor_position = sequence
+            return
+        if final not in {b"J", b"K", b"S", b"T", b"h", b"l", b"m", b"q"}:
+            # Keep an anchor only across CSI operations known not to move the
+            # hardware cursor. Unknown/private operations fail safely by using
+            # the terminal's eventual position rather than replaying stale CUP.
+            self._exact_cursor_position = None
 
     def feed(self, data: bytes, now: float) -> bytes:
         if not data:
@@ -104,6 +137,7 @@ class _CursorVisibilityCoalescer:
                     self._state = "escape"
                 else:
                     rendered.append(value)
+                    self._invalidate_cursor_position(value)
                 continue
 
             if self._state == "escape":
@@ -120,9 +154,12 @@ class _CursorVisibilityCoalescer:
                     self._pending.clear()
                     self._state = "string"
                     self._string_allows_bel = value == ord("]")
+                    if value != ord("]"):
+                        self._exact_cursor_position = None
                     continue
                 rendered.extend(self._pending)
                 self._pending.clear()
+                self._exact_cursor_position = None
                 self._state = "ground"
                 continue
 
@@ -145,6 +182,13 @@ class _CursorVisibilityCoalescer:
                             and requested_visible == self._physical_visible
                         ):
                             continue
+                        self._visibility_transitions += 1
+                        self._burst_saw_show |= requested_visible
+                        self._burst_saw_hide |= not requested_visible
+                        if requested_visible:
+                            self._visible_cursor_position = (
+                                self._exact_cursor_position
+                            )
                         self._desired_visible = requested_visible
                         self._deadline = now + self.quiet_interval
                         if not requested_visible and self._physical_visible:
@@ -152,10 +196,12 @@ class _CursorVisibilityCoalescer:
                             self._physical_visible = False
                     else:
                         rendered.extend(sequence)
+                        self._observe_csi_cursor_position(sequence)
                     continue
                 if len(self._pending) > self._MAX_CONTROL:
                     rendered.extend(self._pending)
                     self._pending.clear()
+                    self._exact_cursor_position = None
                     self._state = "csi_passthrough"
                 continue
 
@@ -219,10 +265,25 @@ class _CursorVisibilityCoalescer:
             self._state = "ground"
         else:
             rendered = bytearray()
-        if self._physical_visible != self._desired_visible:
-            rendered.extend(self._SHOW if self._desired_visible else self._HIDE)
-            self._physical_visible = self._desired_visible
+        stable_visible = self._desired_visible or (
+            self._visibility_transitions >= 3
+            and self._burst_saw_hide
+            and self._burst_saw_show
+        )
+        if stable_visible and not self._physical_visible:
+            if self._visible_cursor_position is not None:
+                rendered.extend(self._visible_cursor_position)
+                self._exact_cursor_position = self._visible_cursor_position
+            rendered.extend(self._SHOW)
+            self._physical_visible = True
+        elif not stable_visible and self._physical_visible:
+            rendered.extend(self._HIDE)
+            self._physical_visible = False
         self._deadline = None
+        self._visibility_transitions = 0
+        self._burst_saw_hide = False
+        self._burst_saw_show = False
+        self._visible_cursor_position = None
         return bytes(rendered)
 
 

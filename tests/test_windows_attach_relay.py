@@ -81,6 +81,41 @@ def test_cursor_coalescer_retains_a_final_hidden_state():
     assert cursor.flush_due(1.2) == b""
 
 
+def test_cursor_coalescer_restores_visible_anchor_after_flicker_signature():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(
+        quiet_interval=0.1)
+
+    rendered = cursor.feed(
+        b"\033[?25l\033[55;3H\033[?25h\033[57;1H\033[?25l",
+        1.0,
+    )
+
+    assert rendered == b"\033[?25l\033[55;3H\033[57;1H"
+    assert cursor.flush_due(1.2) == b"\033[55;3H\033[?25h"
+
+
+def test_cursor_coalescer_does_not_override_one_intentional_hide():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(
+        quiet_interval=0.1)
+
+    assert cursor.feed(b"\033[4;7H\033[?25l", 1.0) == (
+        b"\033[4;7H\033[?25l"
+    )
+    assert cursor.flush_due(1.2) == b""
+
+
+def test_cursor_coalescer_invalidates_stale_visible_anchor_after_text():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(
+        quiet_interval=0.1)
+
+    cursor.feed(
+        b"\033[?25l\033[55;3Htext\033[?25h\033[57;1H\033[?25l",
+        1.0,
+    )
+
+    assert cursor.flush_due(1.2) == b"\033[?25h"
+
+
 def test_cursor_coalescer_leaves_ordinary_output_byte_exact():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(
         quiet_interval=0.1)
@@ -238,6 +273,46 @@ def test_local_proxy_forwards_real_pty_output_and_settles_cursor(monkeypatch):
                 os.close(fd)
 
     assert rendered == b"left\033[?25lmidright\033[?25h"
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
+def test_local_proxy_restores_ime_anchor_after_noisy_final_hide(monkeypatch):
+    input_read, input_write = os.pipe()
+    output_read, output_write = os.pipe()
+    monkeypatch.setattr(
+        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    pid, master_fd = windows_attach_relay._spawn_local_pty_process(
+        [
+            "/bin/sh",
+            "-c",
+            "printf '\033[?25l\033[20;4H\033[?25h"
+            "\033[24;1H\033[?25l'; sleep 0.15",
+        ],
+        os.environ,
+        width=80,
+        height=24,
+    )
+    client = windows_attach_relay.LocalPtyClient(
+        pid,
+        master_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_write,
+    )
+    try:
+        assert client.wait(timeout=2.0) == 0
+        client.close()
+        os.close(output_write)
+        output_write = -1
+        rendered = os.read(output_read, 4096)
+    finally:
+        client.close()
+        for fd in (input_read, input_write, output_read, output_write):
+            if fd >= 0:
+                os.close(fd)
+
+    assert rendered == (
+        b"\033[?25l\033[20;4H\033[24;1H\033[20;4H\033[?25h"
+    )
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
