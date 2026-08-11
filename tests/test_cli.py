@@ -908,6 +908,236 @@ def test_managed_windows_fast_attach_rejection_uses_one_terminal_bridge(
     assert "cleaned an abandoned" not in stderr
 
 
+def test_managed_windows_terminal_uses_local_cursor_proxy(monkeypatch, capsys):
+    target = TmuxServerTarget("/tmp/railmux", 77)
+
+    class SuccessfulProxy:
+        returncode = None
+        closed = False
+
+        def poll(self):
+            return self.returncode
+
+        def pump(self, _timeout):
+            self.returncode = 0
+
+        def close(self):
+            self.closed = True
+
+    proxy = SuccessfulProxy()
+    start = MagicMock(return_value=proxy)
+    popen = MagicMock()
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
+    monkeypatch.setattr("railmux.cli.sys.stdout.fileno", lambda: 11)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    monkeypatch.setattr("railmux.cli.termios.tcsetattr", lambda *_args: None)
+    raw = MagicMock()
+    monkeypatch.setattr("railmux.cli.tty.setraw", raw)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "railmux.windows_attach_relay.start_local_pty_client", start)
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket",
+        lambda: False,
+    )
+
+    env = {"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"],
+        env,
+        expected_target=target,
+        expected_session_id="$7",
+    ) == 0
+
+    start.assert_called_once_with(
+        ["tmux", "-L", "railmux"],
+        environ=env,
+        stdin_fd=10,
+        stdout_fd=11,
+        suppress_stderr=True,
+    )
+    popen.assert_not_called()
+    raw.assert_called_once_with(10)
+    assert proxy.closed
+    assert capsys.readouterr().err == ""
+
+
+def test_windows_cursor_proxy_keeps_watchdog_discovery_off_the_pty_pump(
+    monkeypatch,
+    capsys,
+):
+    import threading
+
+    target = TmuxServerTarget("/tmp/railmux", 77)
+    discovered = threading.Event()
+
+    class TwoPumpProxy:
+        returncode = None
+        pumps = 0
+
+        def poll(self):
+            return self.returncode
+
+        def pump(self, _timeout):
+            self.pumps += 1
+            if self.pumps == 2:
+                assert discovered.wait(1.0)
+                self.returncode = 0
+
+        def close(self):
+            pass
+
+    proxy = TwoPumpProxy()
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
+    monkeypatch.setattr("railmux.cli.sys.stdout.fileno", lambda: 11)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    monkeypatch.setattr("railmux.cli.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("railmux.cli.tty.setraw", lambda _fd: None)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "railmux.windows_attach_relay.start_local_pty_client",
+        lambda *_args, **_kwargs: proxy,
+    )
+    times = iter((0.0, 5.0, 6.0, 7.0))
+    monkeypatch.setattr("railmux.cli.time.monotonic", lambda: next(times))
+    discovery_threads = []
+
+    def discover(**_kwargs):
+        discovery_threads.append(threading.current_thread().name)
+        discovered.set()
+        return target
+
+    monkeypatch.setattr("railmux.cli.tmux_server.discover_target", discover)
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket",
+        lambda: False,
+    )
+    env = {"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"],
+        env,
+        expected_target=target,
+        expected_session_id="$7",
+    ) == 0
+
+    assert proxy.pumps == 2
+    assert discovery_threads == ["railmux-tmux-health"]
+
+
+def test_windows_visual_proxy_failure_preserves_direct_attach(monkeypatch, capsys):
+    class SuccessfulDirect:
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    popen = MagicMock(return_value=SuccessfulDirect())
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
+    monkeypatch.setattr("railmux.cli.sys.stdout.fileno", lambda: 11)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    monkeypatch.setattr("railmux.cli.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    start = MagicMock(side_effect=RuntimeError("no pty"))
+    monkeypatch.setattr(
+        "railmux.windows_attach_relay.start_local_pty_client", start)
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket",
+        lambda: False,
+    )
+    env = {"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], env
+    ) == 0
+
+    start.assert_called_once()
+    popen.assert_called_once_with(
+        ["tmux", "-L", "railmux"], env=env)
+    assert capsys.readouterr().err == ""
+
+
+def test_windows_visual_proxy_transport_error_falls_back_to_direct(
+    monkeypatch, capsys,
+):
+    class FailedProxy:
+        returncode = None
+        stopped = False
+        closed = False
+
+        def poll(self):
+            return self.returncode
+
+        def pump(self, _timeout):
+            raise RuntimeError("proxy transport failed")
+
+        def terminate(self):
+            self.returncode = 2
+            self.stopped = True
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+        def close(self):
+            self.closed = True
+
+    class SuccessfulDirect:
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    proxy = FailedProxy()
+    popen = MagicMock(return_value=SuccessfulDirect())
+    monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
+    monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("railmux.cli.sys.stdin.fileno", lambda: 10)
+    monkeypatch.setattr("railmux.cli.sys.stdout.fileno", lambda: 11)
+    monkeypatch.setattr("railmux.cli.termios.tcgetattr", lambda _fd: ["saved"])
+    monkeypatch.setattr("railmux.cli.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("railmux.cli.tty.setraw", lambda _fd: None)
+    monkeypatch.setattr(
+        "railmux.provider_paths.running_in_managed_windows_wrapper",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "railmux.windows_attach_relay.start_local_pty_client",
+        lambda *_args, **_kwargs: proxy,
+    )
+    monkeypatch.setattr(
+        "railmux.cli.windows_tmux_lifecycle.recover_abandoned_socket",
+        lambda: False,
+    )
+    env = {"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}
+
+    assert _run_tmux_client_with_watchdog(
+        ["tmux", "-L", "railmux"], env
+    ) == 0
+
+    assert proxy.stopped and proxy.closed
+    popen.assert_called_once_with(
+        ["tmux", "-L", "railmux"], env=env)
+    assert capsys.readouterr().err == ""
+
+
 def test_managed_windows_attach_without_bridge_is_actionable(
     monkeypatch, capsys,
 ):

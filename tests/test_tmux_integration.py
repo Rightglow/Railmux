@@ -1394,6 +1394,25 @@ def test_real_managed_restart_handoff_crosses_recreated_controller_pane(
     assert app._loaded_restart_source == source
 
 
+def test_real_detached_provider_sessions_start_at_requested_geometry(
+    isolated_tmux,
+):
+    created, reason = tmux_ctl.new_detached_session(
+        "railmux-sized-agent",
+        "sleep 60",
+        initial_size=(93, 31),
+    )
+    assert created, reason
+    assert tmux_ctl.pane_size("railmux-sized-agent") == (93, 31)
+    assert tmux_ctl.kill_session("railmux-sized-agent")
+
+    holder, reason = tmux_ctl.create_detached_holder(
+        "railmux-sized-holder", initial_size=(101, 37))
+    assert holder is not None, reason
+    assert tmux_ctl.pane_size(holder.pane_id) == (101, 37)
+    assert tmux_ctl.kill_session_identity(holder)
+
+
 def test_real_marked_holder_persists_identity_before_provider_runs(
     isolated_tmux, tmp_path,
 ):

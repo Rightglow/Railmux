@@ -114,6 +114,7 @@ def _run_tmux_client_with_watchdog(
         _interactive_terminal_size() if managed_windows else None
     )
     started_at = time.monotonic()
+    local_proxy = None
     try:
         popen_kwargs: dict[str, object] = {"env": env}
         if managed_windows and expected_target is not None:
@@ -122,8 +123,38 @@ def _run_tmux_client_with_watchdog(
             # ``open terminal failed`` line and emit one Railmux-owned status
             # below; bridge failures still receive an actionable error.
             popen_kwargs["stderr"] = subprocess.DEVNULL
-        process: object = subprocess.Popen(argv, **popen_kwargs)
-    except OSError as exc:
+        use_visual_proxy = bool(
+            managed_windows
+            and env.get("WT_SESSION")
+            and attributes is not None
+            and sys.stdout.isatty()
+        )
+        if use_visual_proxy:
+            from railmux.windows_attach_relay import start_local_pty_client
+
+            try:
+                local_proxy = start_local_pty_client(
+                    argv,
+                    environ=env,
+                    stdin_fd=sys.stdin.fileno(),
+                    stdout_fd=sys.stdout.fileno(),
+                    suppress_stderr=expected_target is not None,
+                )
+            except (OSError, RuntimeError):
+                # The proxy is a visual optimization. A supported direct tmux
+                # client remains the fail-safe path if PTY setup is unavailable.
+                local_proxy = None
+            else:
+                tty.setraw(sys.stdin.fileno())
+        process: object = (
+            local_proxy
+            if local_proxy is not None
+            else subprocess.Popen(argv, **popen_kwargs)
+        )
+    except (OSError, termios.error) as exc:
+        if local_proxy is not None:
+            local_proxy.terminate()
+            local_proxy.close()
         print(f"error: could not start tmux client: {exc}", file=sys.stderr)
         return 2
     def monitor_client(
@@ -227,6 +258,8 @@ def _run_tmux_client_with_watchdog(
                 )
                 _stop_tmux_client(process)
                 _restore_terminal(attributes)
+                if local_proxy is not None and process is local_proxy:
+                    _reset_terminal_modes(sys.stdout.fileno())
                 print(
                     "error: the dedicated Railmux tmux server stopped "
                     "responding; run 'railmux doctor' for diagnostics",
@@ -238,13 +271,41 @@ def _run_tmux_client_with_watchdog(
     relay = None
     relay_attempted = False
     try:
-        returncode, watchdog_failed = monitor_client(started_at)
+        try:
+            returncode, watchdog_failed = monitor_client(
+                started_at,
+                asynchronous_probe=local_proxy is not None,
+            )
+        except (OSError, RuntimeError, termios.error):
+            if local_proxy is None:
+                raise
+            # A local PTY is presentation-only. Stop exactly its child and
+            # retain the established direct-client behavior if forwarding
+            # fails before tmux exits.
+            _stop_tmux_client(local_proxy)
+            local_proxy.close()
+            local_proxy = None
+            _restore_terminal(attributes)
+            _reset_terminal_modes(sys.stdout.fileno())
+            try:
+                process = subprocess.Popen(argv, **popen_kwargs)
+            except OSError as exc:
+                print(
+                    f"error: could not start tmux client: {exc}",
+                    file=sys.stderr,
+                )
+                return 2
+            started_at = time.monotonic()
+            returncode, watchdog_failed = monitor_client(started_at)
         if watchdog_failed:
             return returncode
         failed_at = time.monotonic()
         # tmux may leave the client TTY in raw mode even after its process
         # exits. Restore it before a bounded recovery probe or user message.
         _restore_terminal(attributes)
+        if local_proxy is not None:
+            local_proxy.close()
+            local_proxy = None
         current_target = None
         if returncode and expected_target is not None:
             try:
@@ -359,11 +420,14 @@ def _run_tmux_client_with_watchdog(
         windows_tmux_lifecycle.recover_abandoned_socket()
         return returncode
     except KeyboardInterrupt:
+        was_local_proxy = local_proxy is not None and process is local_proxy
         _stop_tmux_client(process)
-        if relay is not None:
+        if relay is not None or was_local_proxy:
             _reset_terminal_modes(sys.stdout.fileno())
         return 130
     finally:
+        if local_proxy is not None:
+            local_proxy.close()
         if relay is not None:
             relay.close()
         _restore_terminal(attributes)

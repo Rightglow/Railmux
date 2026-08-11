@@ -32,18 +32,6 @@ def test_build_codex_resume_command_yolo_prepends_before_subcommand():
     assert cmd == ["codex", _YOLO, "resume", "sid", "-C", "/p"]
 
 
-def test_build_codex_commands_can_reduce_motion_without_touching_user_config():
-    assert build_codex_new_command(
-        "codex", Path("/p"), reduce_motion=True
-    ) == ["codex", "-c", "tui.animations=false", "-C", "/p"]
-    assert build_codex_resume_command(
-        "codex", "sid", Path("/p"), yolo=True, reduce_motion=True
-    ) == [
-        "codex", "-c", "tui.animations=false", _YOLO,
-        "resume", "sid", "-C", "/p",
-    ]
-
-
 def test_build_resume_command():
     cmd = build_resume_command(
         claude_binary="claude",

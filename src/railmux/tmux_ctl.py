@@ -3479,8 +3479,27 @@ def _single_line_error(text: str, limit: int = 500) -> str:
     return clean
 
 
-def new_detached_session(name: str, cmd: str,
-                         env: dict[str, str] | None = None) -> tuple[bool, str | None]:
+def _detached_size_args(initial_size: tuple[int, int] | None) -> list[str]:
+    if not (
+        isinstance(initial_size, tuple)
+        and len(initial_size) == 2
+        and all(
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 < value <= 65535
+            for value in initial_size
+        )
+    ):
+        return []
+    return ["-x", str(initial_size[0]), "-y", str(initial_size[1])]
+
+
+def new_detached_session(
+    name: str,
+    cmd: str,
+    env: dict[str, str] | None = None,
+    initial_size: tuple[int, int] | None = None,
+) -> tuple[bool, str | None]:
     """Create a detached tmux session running `cmd` for a background agent.
 
     Returns ``(True, None)`` on success, ``(False, reason)`` on failure where
@@ -3495,6 +3514,9 @@ def new_detached_session(name: str, cmd: str,
     a login+interactive shell that sources the user's profile and loads the key
     the normal way.
 
+    A validated *initial_size* is supplied before the child starts, avoiding a
+    second full-screen reflow when the detached pane is first displayed.
+
     ``-e`` on ``new-session`` requires tmux >= 3.2, so we gate on the detected
     version rather than blindly retrying without env on ANY failure — a broad
     retry would silently mask unrelated launch errors. On older tmux the env is
@@ -3505,6 +3527,7 @@ def new_detached_session(name: str, cmd: str,
     # `new-session -e KEY=VALUE` was added in tmux 3.2 (not 3.0/3.1).
     use_env = bool(env) and tmux_version() >= (3, 2)
     args = ["tmux", "new-session", "-d"]
+    args.extend(_detached_size_args(initial_size))
     if use_env and env:
         for k, v in env.items():
             args.extend(["-e", f"{k}={v}"])
@@ -3604,16 +3627,21 @@ def new_detached_session(name: str, cmd: str,
 
 
 def create_detached_holder(
-    name: str, env: dict[str, str] | None = None,
+    name: str,
+    env: dict[str, str] | None = None,
+    initial_size: tuple[int, int] | None = None,
 ) -> tuple[PaneIdentity | None, str | None]:
     """Create a short-lived inert session so identity can be marked first.
 
     The finite holder closes the only unmarked crash window: if the creator
     dies between ``new-session`` and ``set-option``, tmux removes the holder
-    automatically instead of retaining an unowned process indefinitely.
+    automatically instead of retaining an unowned process indefinitely. A
+    validated *initial_size* becomes the provider's first PTY geometry when
+    the holder is respawned.
     """
     use_env = bool(env) and tmux_version() >= (3, 2)
     args = ["tmux", "new-session", "-d"]
+    args.extend(_detached_size_args(initial_size))
     if use_env and env:
         for key, value in env.items():
             args.extend(["-e", f"{key}={value}"])

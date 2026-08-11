@@ -174,10 +174,14 @@ opens a WSL shell and runs the ordinary POSIX product there.
   2.7; only the Railmux-owned Windows generation has the higher floor.
 - tmux 3.7 makes Codex text frames atomic but cannot absorb the provider's
   cursor visibility and final-position changes when Codex emits them outside
-  those frames. Managed-Windows Codex launches therefore add the process-local
-  `-c tui.animations=false` option. Railmux does not edit Codex configuration
-  or history, and an already-running Codex pane retains the argv it started
-  with until the user normally exits and resumes it.
+  those frames. On supported Windows Terminal, the same-session tmux client
+  therefore runs behind a private entry-side PTY that leaves ordinary output
+  byte-exact and coalesces only observed DECTCEM cursor visibility across
+  100 ms visibility bursts. A bounded control-state parser keeps inserted
+  visibility outside partial CSI and OSC/DCS payload. Normal Codex animation
+  and Working timers remain enabled; Railmux does not edit Codex configuration,
+  argv, or history. If this visual proxy cannot be created, the normal direct
+  client remains available.
 - A published base is never upgraded in place. A pacman core transition can
   temporarily replace DLLs needed by the updater itself, so mutating the base
   that owns a live detached tmux server would turn a visual improvement into a
@@ -267,10 +271,12 @@ opens a WSL shell and runs the ordinary POSIX product there.
   An unidentified, attached, ambiguous, or racing controller is left untouched
   and requires a normal Soft Quit. Neither path kills the tmux
   server, a provider session/process, or Codex/Claude history.
-- The ordinary label-selected tmux attach remains the fast path. If Windows
-  rejects only that terminal attachment while the same server and immutable
-  Railmux session remain healthy, Railmux makes one fail-closed transparent
-  bridge attempt. While a direct attach remains alive, the existing launcher
+- The ordinary label-selected tmux attach remains the fast path. Supported
+  Windows Terminal entries put that same direct client behind the local visual
+  PTY described above; conhost and unknown terminals retain the inherited TTY
+  path. If Windows rejects only that terminal attachment while the same server
+  and immutable Railmux session remain healthy, Railmux makes one fail-closed
+  transparent bridge attempt. While a direct attach remains alive, the launcher
   watchdog compares the exact entry TTY dimensions and sends `SIGWINCH` only
   to its own tmux client when either dimension changes. This repairs a missed
   MSYS2 native-console resize without directly resizing the shared window or
@@ -300,6 +306,12 @@ opens a WSL shell and runs the ordinary POSIX product there.
   exposed as a bounded `doctor` incident. A successful bridge suppresses the
   raw direct-client terminal error and prints one terminal-aware Railmux info
   line; a failed or unavailable bridge retains an actionable Railmux error.
+- A new or resumed detached provider session is created at the exact current
+  target-pane width and height before its command starts. Codex therefore does
+  not first replay a long transcript at tmux's detached default size and then
+  visibly reflow the same history after the pane is displayed. The dimensions
+  are presentation-only; invalid or unavailable geometry falls back to tmux's
+  default and never changes session, lease, or provider-file authority.
 - MSYS2 projects NTFS ACLs as 0644/0755 even when POSIX chmod requests
   0600/0700. Railmux accepts that representation only under the real
   Cygwin/MSYS managed wrapper after verifying separate same-owner on-disk base

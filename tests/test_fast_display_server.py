@@ -1519,11 +1519,14 @@ class _Char:
 class _FakeScreen:
     lines = 1
     columns = 4
+    _character_width = staticmethod(lambda value: 2 if value == "你" else 1)
     buffer = {
         0: {
             0: _Char("A", fg="red", bold=True),
             1: _Char("你"),
-            2: _Char(""),
+            # Defensive fixture: a non-conforming backend may repeat wide
+            # glyph data in its physical continuation cell.
+            2: _Char("你"),
             3: _Char("\x1b\x9b"),
         }
     }
@@ -1542,6 +1545,75 @@ def test_server_renderer_preserves_wide_cells_and_filters_terminal_controls():
     assert "\x9b".encode() not in rendered
     assert "�".encode() in rendered
     assert rendered.endswith(b"\033[0m")
+
+
+def test_server_renderer_keeps_legitimate_adjacent_cjk_once_per_glyph():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(8, 1)
+    terminal.ByteStream(screen).feed("基本通了".encode())
+
+    rendered = render_rows(screen)[0].decode("utf-8", errors="replace")
+
+    assert "基本通了" in rendered
+    assert all(rendered.count(character) == 1 for character in "基本通了")
+
+
+def test_server_renderer_collapses_reported_repeated_cjk_physical_cells():
+    text = "基本通了，但发现一个真 bug："
+    cells = [
+        _Char(character)
+        for character in text
+        for _physical_cell in range(2 if ord(character) > 127 else 1)
+    ]
+
+    class RepeatedCjkScreen:
+        lines = 1
+        columns = len(cells)
+        _character_width = staticmethod(
+            lambda value: 2 if ord(value) > 127 else 1)
+        buffer = {
+            0: {
+                column: cell
+                for column, cell in enumerate(cells)
+            }
+        }
+
+    rendered = render_rows(RepeatedCjkScreen())[0].decode(
+        "utf-8", errors="replace")
+
+    assert text in rendered
+    assert all(
+        rendered.count(character) == text.count(character)
+        for character in set(text)
+    )
+
+
+def test_server_renderer_preserves_real_content_over_a_continuation_cell():
+    class RepaintedScreen:
+        lines = 1
+        columns = 2
+        _character_width = staticmethod(lambda value: 2 if value == "你" else 1)
+        buffer = {0: {0: _Char("你"), 1: _Char("x")}}
+
+    rendered = render_rows(RepaintedScreen())[0].decode(
+        "utf-8", errors="replace")
+
+    assert "你x" in rendered
+
+
+def test_transcript_wrapper_does_not_duplicate_cjk_full_width_cells():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    text = "基本通了，但发现一个真 bug："
+
+    rows, dropped = fast_display_server._wrap_transcript_rows(
+        terminal, text, 80)
+
+    assert not dropped
+    rendered = b"".join(rows).decode("utf-8", errors="replace")
+    assert text in rendered
+    assert all(rendered.count(character) == text.count(character) for character in text)
 
 
 @pytest.mark.parametrize(

@@ -77,17 +77,5 @@ def test_posix_keeps_stock_urwid_screen(monkeypatch):
     assert app_module._screen_class_for_platform() is urwid.raw_display.Screen
 
 
-def test_managed_windows_reduces_codex_motion_process_locally(monkeypatch):
-    monkeypatch.setattr(
-        app_module, "running_in_managed_windows_wrapper", lambda: True
-    )
-
-    assert app_module._reduce_codex_motion_for_terminal() is True
-
-
-def test_posix_keeps_codex_motion_setting(monkeypatch):
-    monkeypatch.setattr(
-        app_module, "running_in_managed_windows_wrapper", lambda: False
-    )
-
-    assert app_module._reduce_codex_motion_for_terminal() is False
+def test_windows_screen_does_not_disable_provider_animation_in_app():
+    assert not hasattr(app_module, "_reduce_codex_motion_for_terminal")

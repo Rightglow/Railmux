@@ -591,9 +591,10 @@ def test_launch_never_passes_secret_via_any_channel(monkeypatch):
         captured["shell_env"] = env
         return "SHELLCMD"
 
-    def fake_ensure(name, shell_cmd, env=None):
+    def fake_ensure(name, shell_cmd, env=None, initial_size=None):
         captured["tmux_env"] = env
         captured["shell_cmd"] = shell_cmd
+        captured["initial_size"] = initial_size
         return True, None
 
     monkeypatch.setattr(app, "_shellify", fake_shellify)
@@ -609,6 +610,7 @@ def test_launch_never_passes_secret_via_any_channel(monkeypatch):
                        env=env, login_shell=True, session_type="codex")
     assert captured["shell_env"] == {"CODEX_HOME": "/h/.codex"}
     assert captured["tmux_env"] == {"CODEX_HOME": "/h/.codex"}
+    assert captured["initial_size"] is None
     assert "sekret" not in captured["shell_cmd"]
     assert app._running[UUID].session_type == "codex"
 

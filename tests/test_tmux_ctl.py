@@ -1636,6 +1636,25 @@ def test_new_detached_session_hides_inner_status_bar():
     assert ["tmux", "set-option", "-t", "cc-abc", "status", "off"] in argvs
 
 
+def test_new_detached_session_starts_at_the_final_agent_geometry():
+    from railmux.tmux_ctl import new_detached_session
+    with patch("subprocess.check_call") as call, patch("subprocess.run") as run:
+        run.return_value.returncode = 0
+        run.return_value.stdout = "0"
+
+        assert new_detached_session(
+            "cx-wide",
+            "codex resume sid",
+            initial_size=(147, 57),
+        ) == (True, None)
+
+    argvs = [record.args[0] for record in call.call_args_list]
+    assert [
+        "tmux", "new-session", "-d", "-x", "147", "-y", "57",
+        "-s", "cx-wide", "codex resume sid",
+    ] in argvs
+
+
 def test_new_detached_session_survives_tmux_missing():
     from railmux.tmux_ctl import new_detached_session
     with patch("subprocess.check_call", side_effect=FileNotFoundError):

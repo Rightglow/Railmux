@@ -136,10 +136,21 @@ diagnostic category. POSIX launches never enter this fallback.
 
 Supported Windows Terminal 1.24.10621+ builds expose an opaque `WT_SESSION`
 marker but keep the generic `xterm-256color` terminal name, so tmux cannot
-infer synchronized-output support from `TERM`. Managed direct clients add
-tmux's per-client `sync` feature when that marker is present. A fallback bridge
-carries only the resulting capability bit into its server-session PTY—never
-the opaque marker—and applies the same per-client feature before attach.
+infer synchronized-output support from `TERM`. Managed clients add tmux's
+per-client `sync` feature when that marker is present. The ordinary same-session
+client runs behind a private PTY and still addresses the selected tmux server
+directly. Its entry-side proxy forwards every byte except DECTCEM cursor
+visibility: only a real visibility transition starts a coalesced burst, ordinary
+output remains byte-exact, and the last requested state is restored after 100 ms
+of visibility quiet. A bounded VT control-state parser prevents injection into
+partial CSI or opaque OSC/DCS payload. The proxy does not interpret text,
+frames, panes, input, or provider history. This preserves Codex's Working timer
+and animations while preventing Windows Terminal from painting the cursor at
+each intermediate frame-final row. If private-PTY setup fails, the unfiltered
+direct client remains the fail-safe. A cross-Terminal-
+Services fallback bridge carries only the resulting capability bit into its
+server-session PTY—never the opaque marker—and applies the same per-client
+feature before attach.
 
 The managed Windows Urwid screen also brackets each changed sidebar paint in
 application-side DEC synchronized output. tmux can therefore collect the many
@@ -164,11 +175,10 @@ by `railmux runtime status` and `railmux doctor`.
 That text-frame contract does not make Codex's hardware-cursor state atomic.
 A Windows Terminal 1.24 control-sequence trace showed correctly paired Codex
 synchronized frames while cursor hide/show, style, and alternating final-row
-updates remained outside their boundaries. Managed-Windows Codex processes
-therefore receive a process-local `tui.animations=false` override. It applies
-to new, resumed, and private Help processes without rewriting the user's Codex
-configuration or any provider history; POSIX, WSL, and already-running provider
-processes keep their existing argv.
+updates remained outside their boundaries. The entry-side cursor coalescer
+above contains that presentation defect without changing Codex argv or config;
+new, resumed, and private Help processes retain normal provider animation and
+timer behavior on every platform.
 
 The verified base is immutable after publication. Railmux never runs an
 in-place `pacman -Syu`, replaces a live tmux binary, or kills a server to meet
@@ -319,6 +329,10 @@ parameterized scroll-up, scroll-down, and repeat-character (`CSI S/T/b`) and
 uses the same model for live frames and styled history. Tests against a real
 isolated tmux PTY must compare the reconstructed pane with tmux's own captured
 state whenever that advertised capability boundary changes.
+Wide glyphs consume their declared terminal width exactly once. The renderer
+skips a physical continuation cell only when it is empty or repeats the wide
+glyph's data. Different content from a partial repaint is preserved, and a
+legitimate adjacent CJK glyph remains distinct.
 
 ### SSH local history and rewind generations
 

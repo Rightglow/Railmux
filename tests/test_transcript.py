@@ -95,6 +95,27 @@ def test_render_user_plain_text():
     assert "\033[36m" in result  # CYAN
 
 
+def test_codex_transcript_preserves_each_cjk_glyph_once():
+    text = "基本通了，但发现一个真 bug：P1 和 P2 会撞端口。"
+    source = io.StringIO(json.dumps({
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}],
+        },
+    }, ensure_ascii=False) + "\n")
+
+    rendered = "".join(format_transcript(source, "codex"))
+
+    assert text in rendered
+    assert all(
+        rendered.count(character) == text.count(character)
+        for character in set(text)
+        if ord(character) > 127
+    )
+
+
 def test_render_user_with_leading_trailing_whitespace():
     result = _render_user(
         {"type": "user", "message": {"role": "user", "content": "  hi  "}}

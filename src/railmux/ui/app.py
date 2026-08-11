@@ -44,7 +44,6 @@ from railmux.help_workspace import (
     materialize_help_workspace,
 )
 from railmux.provider_paths import (
-    running_in_managed_windows_wrapper,
     running_in_windows_wrapper,
 )
 from railmux.settings import LayoutProfile, Settings
@@ -171,18 +170,6 @@ def _screen_class_for_platform():
     if running_in_windows_wrapper():
         return _SynchronizedOutputScreen
     return urwid.raw_display.Screen
-
-
-def _reduce_codex_motion_for_terminal() -> bool:
-    """Keep Codex's frame-final cursor stable in managed Windows Terminal.
-
-    Codex places cursor visibility and final-position changes outside its DEC
-    synchronized-output frames. tmux 3.7 makes the text frame atomic, but a
-    Windows Terminal client can still expose those alternating frame-final
-    coordinates. This process-local override changes neither user config nor
-    provider history.
-    """
-    return running_in_managed_windows_wrapper()
 
 
 def _tmux_batch_argv(commands: list[list[str]]) -> list[str]:
@@ -2524,7 +2511,8 @@ class App:
         )
 
     def _ensure_detached_agent(self, name: str, shell_cmd: str,
-                               env: dict[str, str] | None = None
+                               env: dict[str, str] | None = None,
+                               initial_size: tuple[int, int] | None = None,
                                ) -> tuple[bool, str | None]:
         """Create a detached agent tmux session unless it already exists.
 
@@ -2536,7 +2524,8 @@ class App:
         secret-free)."""
         if tmux_ctl.session_exists(name):
             return True, None
-        return tmux_ctl.new_detached_session(name, shell_cmd, env=env)
+        return tmux_ctl.new_detached_session(
+            name, shell_cmd, env=env, initial_size=initial_size)
 
     def _ensure_detached_claude(self, name: str, shell_cmd: str,
                                 env: dict[str, str] | None = None
@@ -5190,6 +5179,10 @@ class App:
                      if env else None)
         shell_cmd = self._shellify(cmd, cwd=cwd, env=shell_env,
                                    login_shell=login_shell)
+        initial_size = (
+            tmux_ctl.pane_size(slot.pane_id)
+            if slot.pane_id is not None else None
+        )
         launch_marker: orphan_marker.Marker | None = None
         if placeholder_path is not None:
             owner = getattr(self, "_restart_identity", None)
@@ -5198,7 +5191,8 @@ class App:
                 ok, err = False, "exact outer tmux identity is unavailable"
             else:
                 created_at = time.time()
-                holder, err = tmux_ctl.create_detached_holder(tmux_name, env=env)
+                holder, err = tmux_ctl.create_detached_holder(
+                    tmux_name, env=env, initial_size=initial_size)
                 ok = holder is not None
                 if holder is not None:
                     launch_marker = orphan_marker.Marker(
@@ -5226,7 +5220,12 @@ class App:
                             if self._write_orphan_marker(unresolved):
                                 launch_marker = unresolved
         else:
-            ok, err = self._ensure_detached_agent(tmux_name, shell_cmd, env=env)
+            ok, err = self._ensure_detached_agent(
+                tmux_name,
+                shell_cmd,
+                env=env,
+                initial_size=initial_size,
+            )
         if not ok:
             if lease_claim is not None:
                 lease_claim.close()
@@ -5419,7 +5418,6 @@ class App:
                 session_id=session_meta.session_id,
                 cwd=cwd,
                 yolo=self._codex_yolo_enabled(),
-                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5489,7 +5487,6 @@ class App:
                 codex_binary=self._config.codex_binary,
                 cwd=proj.real_path,
                 yolo=self._codex_yolo_enabled(),
-                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5530,7 +5527,6 @@ class App:
                 codex_binary=self._config.codex_binary,
                 cwd=path,
                 yolo=self._codex_yolo_enabled(),
-                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             env = self._codex_env()
         else:
@@ -5689,7 +5685,6 @@ class App:
                 binary,
                 workspace,
                 yolo=False,
-                reduce_motion=_reduce_codex_motion_for_terminal(),
             )
             # Keep the dedicated help workspace out of Codex's normal history,
             # and never inherit Railmux's optional YOLO choice.

@@ -2017,11 +2017,27 @@ def _style_key(char: object) -> tuple[object, ...]:
 def render_rows(screen: object) -> tuple[bytes, ...]:
     """Render independently paintable rows with allowlisted SGR controls."""
     rendered_rows: list[bytes] = []
+    character_width = getattr(screen, "_character_width", lambda _value: 1)
     for row_index in range(screen.lines):
         rendered = [b"\033[0m"]
         previous_style: tuple[object, ...] | None = None
         row = screen.buffer[row_index]
+        continuation_cells = 0
+        continuation_data = ""
         for column in range(screen.columns):
+            if continuation_cells:
+                continuation_cells -= 1
+                continuation = row[column]
+                if (
+                    not continuation.data
+                    or continuation.data == continuation_data
+                ):
+                    continue
+                # A partial repaint may put real, different content over a
+                # former wide-glyph continuation cell. Preserve that content;
+                # only empty or repeated physical cells are continuations.
+                continuation_cells = 0
+                continuation_data = ""
             char = row[column]
             style = _style_key(char)
             if style != previous_style:
@@ -2039,6 +2055,17 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
                     for value in char.data
                 )
                 rendered.append(safe_data.encode("utf-8", errors="replace"))
+                # A conforming pyte screen leaves the continuation cell of a
+                # wide glyph empty. Some terminal-model/capture combinations
+                # instead repeat the glyph's data in that physical cell. The
+                # real terminal advances by the glyph width already, so never
+                # serialize continuation-cell data as a second character.
+                cell_width = max(
+                    (character_width(value) for value in char.data),
+                    default=1,
+                )
+                continuation_cells = max(0, cell_width - 1)
+                continuation_data = char.data
         rendered.append(b"\033[0m")
         rendered_rows.append(b"".join(rendered))
     return tuple(rendered_rows)

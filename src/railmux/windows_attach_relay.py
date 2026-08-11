@@ -55,6 +55,7 @@ _HEARTBEAT_TIMEOUT = 45.0
 _DRAIN_TIMEOUT = 0.25
 _CHILD_EXIT_GRACE = 0.2
 _PTY_INPUT_TIMEOUT = 5.0
+_CURSOR_QUIET_INTERVAL = 0.1
 _STALE_ENDPOINT_AGE = 5 * 60
 _MAX_STALE_ENDPOINTS = 64
 _RELAY_NAME = re.compile(r"windows-attach-[0-9a-f]{16}\.sock\Z")
@@ -62,6 +63,167 @@ _RELAY_NAME = re.compile(r"windows-attach-[0-9a-f]{16}\.sock\Z")
 
 class WindowsAttachRelayError(RuntimeError):
     """A bounded relay setup or transport failure."""
+
+
+class _CursorVisibilityCoalescer:
+    """Hide the hardware cursor across one burst of opaque tmux output.
+
+    Codex emits cursor show/hide controls outside its synchronized-output
+    frames. Windows Terminal can therefore paint the cursor at several
+    frame-final coordinates even though every text frame is atomic. Keep all
+    terminal bytes byte-for-byte except DECTCEM, hide once at burst start, and
+    restore the last requested visibility after a short quiet interval.
+
+    The parser retains only one bounded CSI candidate, never printable text or
+    a terminal frame. It tracks OSC/DCS-style string boundaries solely so an
+    identical byte sequence inside opaque payload is not altered. It remains
+    unaware of Codex, pane content, and synchronized-output framing.
+    """
+
+    _HIDE = b"\033[?25l"
+    _SHOW = b"\033[?25h"
+    _MAX_CONTROL = 256
+
+    def __init__(self, quiet_interval: float = _CURSOR_QUIET_INTERVAL) -> None:
+        self.quiet_interval = quiet_interval
+        self._pending = bytearray()
+        self._state = "ground"
+        self._string_allows_bel = False
+        self._desired_visible = True
+        self._physical_visible = True
+        self._deadline: float | None = None
+
+    def feed(self, data: bytes, now: float) -> bytes:
+        if not data:
+            return b""
+        rendered = bytearray()
+        for value in data:
+            if self._state == "ground":
+                if value == 0x1B:
+                    self._pending.append(value)
+                    self._state = "escape"
+                else:
+                    rendered.append(value)
+                continue
+
+            if self._state == "escape":
+                if value == 0x1B:
+                    rendered.extend(self._pending)
+                    self._pending[:] = bytes((value,))
+                    continue
+                self._pending.append(value)
+                if value == ord("["):
+                    self._state = "csi"
+                    continue
+                if value in {ord("]"), ord("P"), ord("X"), ord("^"), ord("_")}:
+                    rendered.extend(self._pending)
+                    self._pending.clear()
+                    self._state = "string"
+                    self._string_allows_bel = value == ord("]")
+                    continue
+                rendered.extend(self._pending)
+                self._pending.clear()
+                self._state = "ground"
+                continue
+
+            if self._state == "csi":
+                if value == 0x1B:
+                    rendered.extend(self._pending)
+                    self._pending[:] = bytes((value,))
+                    self._state = "escape"
+                    continue
+                self._pending.append(value)
+                if 0x40 <= value <= 0x7E:
+                    sequence = bytes(self._pending)
+                    self._pending.clear()
+                    self._state = "ground"
+                    if sequence in (self._HIDE, self._SHOW):
+                        requested_visible = sequence == self._SHOW
+                        if (
+                            self._deadline is None
+                            and requested_visible == self._desired_visible
+                            and requested_visible == self._physical_visible
+                        ):
+                            continue
+                        self._desired_visible = requested_visible
+                        self._deadline = now + self.quiet_interval
+                        if not requested_visible and self._physical_visible:
+                            rendered.extend(self._HIDE)
+                            self._physical_visible = False
+                    else:
+                        rendered.extend(sequence)
+                    continue
+                if len(self._pending) > self._MAX_CONTROL:
+                    rendered.extend(self._pending)
+                    self._pending.clear()
+                    self._state = "csi_passthrough"
+                continue
+
+            if self._state == "csi_passthrough":
+                if value == 0x1B:
+                    self._pending.append(value)
+                    self._state = "escape"
+                    continue
+                rendered.append(value)
+                if 0x40 <= value <= 0x7E:
+                    self._state = "ground"
+                continue
+
+            if self._state == "string":
+                rendered.append(value)
+                if value == 0x9C or (
+                    self._string_allows_bel and value == 0x07
+                ):
+                    self._state = "ground"
+                elif value == 0x1B:
+                    self._state = "string_escape"
+                continue
+
+            # OSC/DCS/APC/PM/SOS strings terminate only at ST (ESC \\),
+            # except OSC which also accepts BEL. Bytes inside them are opaque;
+            # an apparent DECTCEM sequence there is payload, not terminal state.
+            rendered.append(value)
+            if value == ord("\\"):
+                self._state = "ground"
+            elif value != 0x1B:
+                self._state = "string"
+        return bytes(rendered)
+
+    def next_timeout(self, maximum: float, now: float) -> float:
+        if self._deadline is None:
+            return maximum
+        if now >= self._deadline and self._state != "ground":
+            # A partial CSI/string must wait for more PTY bytes (or child
+            # exit); do not busy-spin on an already-due visibility deadline.
+            return maximum
+        return max(0.0, min(maximum, self._deadline - now))
+
+    def flush_due(self, now: float, *, force: bool = False) -> bytes:
+        if not force:
+            if self._deadline is None or now < self._deadline:
+                return b""
+        elif self._deadline is None and self._state == "ground":
+            return b""
+        if self._state != "ground":
+            if not force:
+                return b""
+            rendered = bytearray(self._pending)
+            self._pending.clear()
+            # A terminated child can leave a partial control/string sequence.
+            # Cancel or close it before terminal recovery bytes are emitted.
+            rendered.extend(
+                b"\033\\"
+                if self._state in {"string", "string_escape"}
+                else b"\030"
+            )
+            self._state = "ground"
+        else:
+            rendered = bytearray()
+        if self._physical_visible != self._desired_visible:
+            rendered.extend(self._SHOW if self._desired_visible else self._HIDE)
+            self._physical_visible = self._desired_visible
+        self._deadline = None
+        return bytes(rendered)
 
 
 @dataclass(frozen=True)
@@ -281,6 +443,46 @@ def _spawn_tmux_client(
     return pid, master_fd
 
 
+def _spawn_local_pty_process(
+    argv: Sequence[str],
+    environ: Mapping[str, str],
+    *,
+    width: int,
+    height: int,
+    suppress_stderr: bool = False,
+) -> tuple[int, int]:
+    """Run one ordinary tmux client behind a same-session private PTY."""
+    if not argv or not argv[0]:
+        raise WindowsAttachRelayError("tmux client command is unavailable")
+    master_fd, slave_fd = os.openpty()
+    _set_winsize(slave_fd, width, height)
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - exercised by real managed Windows tests
+        try:
+            os.close(master_fd)
+            os.setsid()
+            fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+            for target_fd in (0, 1):
+                os.dup2(slave_fd, target_fd)
+            if suppress_stderr:
+                null_fd = os.open(os.devnull, os.O_WRONLY)
+                try:
+                    os.dup2(null_fd, 2)
+                finally:
+                    if null_fd > 2:
+                        os.close(null_fd)
+            else:
+                os.dup2(slave_fd, 2)
+            if slave_fd > 2:
+                os.close(slave_fd)
+            os.execvpe(argv[0], list(argv), dict(environ))
+        except BaseException:
+            os._exit(127)
+    os.close(slave_fd)
+    os.set_blocking(master_fd, False)
+    return pid, master_fd
+
+
 def _child_status(pid: int) -> int | None:
     try:
         waited, status = os.waitpid(pid, os.WNOHANG)
@@ -337,6 +539,16 @@ def _write_pty_input(master_fd: int, payload: bytes) -> None:
         if written <= 0:
             raise WindowsAttachRelayError(
                 "terminal bridge could not forward input")
+        view = view[written:]
+
+
+def _write_terminal_output(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise WindowsAttachRelayError(
+                "terminal proxy could not forward output")
         view = view[written:]
 
 
@@ -652,6 +864,200 @@ class RelayClient:
         self.connection.close()
         self.listener.close()
         _unlink_owned_endpoint(self.endpoint, self.identity)
+
+
+class LocalPtyClient:
+    """Process-like same-session tmux proxy with cursor burst coalescing."""
+
+    def __init__(
+        self,
+        pid: int,
+        master_fd: int,
+        *,
+        stdin_fd: int,
+        stdout_fd: int,
+    ) -> None:
+        self.pid = pid
+        self.master_fd = master_fd
+        self.stdin_fd = stdin_fd
+        self.stdout_fd = stdout_fd
+        self.returncode: int | None = None
+        self._selector = selectors.DefaultSelector()
+        self._selector.register(master_fd, selectors.EVENT_READ, "tmux")
+        self._selector.register(stdin_fd, selectors.EVENT_READ, "terminal")
+        self._size = _terminal_size(stdin_fd)
+        self._cursor = _CursorVisibilityCoalescer()
+        self._closed = False
+
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def _resize_if_needed(self) -> None:
+        size = _terminal_size(self.stdin_fd)
+        if size == self._size:
+            return
+        _set_winsize(self.master_fd, *size)
+        self._size = size
+        try:
+            os.killpg(self.pid, signal.SIGWINCH)
+        except ProcessLookupError:
+            pass
+
+    def _forward_tmux_output(self, data: bytes, now: float) -> None:
+        rendered = self._cursor.feed(data, now)
+        if rendered:
+            _write_terminal_output(self.stdout_fd, rendered)
+
+    def _flush_cursor(self, now: float, *, force: bool = False) -> None:
+        rendered = self._cursor.flush_due(now, force=force)
+        if rendered:
+            _write_terminal_output(self.stdout_fd, rendered)
+
+    def _drain_after_exit(self) -> None:
+        deadline = time.monotonic() + _DRAIN_TIMEOUT
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            readable, _writable, _exceptional = select.select(
+                [self.master_fd], [], [], remaining)
+            if not readable:
+                return
+            try:
+                data = os.read(self.master_fd, 65536)
+            except BlockingIOError:
+                continue
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    return
+                raise
+            if not data:
+                return
+            self._forward_tmux_output(data, time.monotonic())
+
+    def pump(self, timeout: float) -> None:
+        if self.returncode is not None:
+            return
+        self._resize_if_needed()
+        now = time.monotonic()
+        wait = self._cursor.next_timeout(max(0.0, timeout), now)
+        for key, _events in self._selector.select(timeout=wait):
+            if key.data == "terminal":
+                data = os.read(self.stdin_fd, 65536)
+                if not data:
+                    self.terminate()
+                    return
+                _write_pty_input(self.master_fd, data)
+                continue
+            try:
+                data = os.read(self.master_fd, 65536)
+            except BlockingIOError:
+                continue
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise
+                data = b""
+            if data:
+                self._forward_tmux_output(data, time.monotonic())
+        self._flush_cursor(time.monotonic())
+        self.returncode = _child_status(self.pid)
+        if self.returncode is not None:
+            # tmux normally writes its restore tail before exiting. Drain every
+            # byte already queued on the PTY, then release any partial cursor
+            # prefix and the final requested visibility.
+            self._drain_after_exit()
+            self._flush_cursor(time.monotonic(), force=True)
+
+    def terminate(self) -> None:
+        if self.returncode is None:
+            self.returncode = _stop_child(self.pid)
+        try:
+            self._drain_after_exit()
+            self._flush_cursor(time.monotonic(), force=True)
+        except (OSError, RuntimeError):
+            # Termination and reaping remain authoritative even when the
+            # presentation channel that triggered cleanup is already broken.
+            pass
+
+    def kill(self) -> None:
+        if self.returncode is not None:
+            return
+        try:
+            os.killpg(self.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            _waited, status = os.waitpid(self.pid, 0)
+        except ChildProcessError:
+            self.returncode = 127
+        else:
+            self.returncode = _normalized_wait_status(status)
+        try:
+            self._drain_after_exit()
+            self._flush_cursor(time.monotonic(), force=True)
+        except (OSError, RuntimeError):
+            pass
+
+    def wait(self, timeout: float | None = None) -> int:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while self.returncode is None:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("windows terminal proxy", timeout)
+            self.pump(0.05)
+        return self.returncode
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self.returncode is None:
+            self.terminate()
+        try:
+            self._flush_cursor(time.monotonic(), force=True)
+            if not self._cursor._physical_visible:
+                _write_terminal_output(self.stdout_fd, self._cursor._SHOW)
+                self._cursor._physical_visible = True
+        finally:
+            self._selector.close()
+            try:
+                os.close(self.master_fd)
+            except OSError:
+                pass
+
+
+def start_local_pty_client(
+    argv: Sequence[str],
+    *,
+    environ: Mapping[str, str],
+    stdin_fd: int,
+    stdout_fd: int,
+    suppress_stderr: bool = False,
+) -> LocalPtyClient:
+    """Start the managed-Windows visual proxy without addressing a server."""
+    if not running_in_managed_windows_wrapper(environ):
+        raise WindowsAttachRelayError("terminal proxy is unavailable")
+    width, height = _terminal_size(stdin_fd)
+    pid, master_fd = _spawn_local_pty_process(
+        argv,
+        environ,
+        width=width,
+        height=height,
+        suppress_stderr=suppress_stderr,
+    )
+    try:
+        return LocalPtyClient(
+            pid,
+            master_fd,
+            stdin_fd=stdin_fd,
+            stdout_fd=stdout_fd,
+        )
+    except BaseException:
+        _stop_child(pid)
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        raise
 
 
 def start_relay_client(

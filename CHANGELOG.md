@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc11] - 2026-08-11
+
+### Fixed
+
+- Remove rc10's process-local `tui.animations=false` argument so native Codex
+  Working timers and animations remain active. The managed Windows entry keeps
+  the Windows Terminal hardware cursor stable by leaving ordinary output
+  byte-exact and coalescing only observed high-frequency cursor visibility
+  across a short visibility burst inside a same-session private PTY; it does
+  not change Codex argv, user configuration, provider history, input, or SSH
+  display behavior, and falls back to the ordinary direct tmux client if the
+  visual proxy is unavailable.
+- Start new and resumed detached provider sessions at the destination pane's
+  exact dimensions. Long Codex histories no longer replay first at tmux's
+  80x24 detached default and then visibly scroll and reflow a second time when
+  the pane opens; invalid or unavailable geometry retains the safe tmux
+  fallback.
+- Render every CJK wide glyph once even when a terminal model repeats its data
+  in the physical continuation cell. Adjacent wide characters remain distinct,
+  and transcript/session files are never rewritten.
+
 ## [0.4.0rc10] - 2026-08-11
 
 ### Fixed
