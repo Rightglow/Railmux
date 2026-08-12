@@ -43,6 +43,7 @@ from railmux.fast_display_history import (
     LocalHistoryView,
 )
 from railmux.fast_display_input import (
+    BracketedPasteInput,
     SgrMouseEvent,
     TermuxTouchKeyboard,
     TerminalInputDecoder,
@@ -109,7 +110,12 @@ def test_input_protocol_decodes_bytes_resize_and_keyframe_request():
 
 
 def test_large_bracketed_paste_survives_many_terminal_and_protocol_reads():
-    payload = b"\033[200~" + ("诊断-line\n" * 12000).encode() + b"\033[201~"
+    payload = (
+        b"\033[200~"
+        + ("诊断-line\n" * 12000).encode()
+        + b"embedded:\x1d:\033[5~:\033[<0;4;5M"
+        + b"\033[201~"
+    )
     assert len(payload) > 64 * 1024
     terminal_decoder = TerminalInputDecoder()
     protocol_stream = bytearray()
@@ -124,12 +130,13 @@ def test_large_bracketed_paste_survives_many_terminal_and_protocol_reads():
     terminal_reads.append(payload[-4:])
     for chunk in terminal_reads:
         for part in terminal_decoder.feed(chunk):
-            assert isinstance(part, bytes)
-            forwarded.extend(part)
-            protocol_stream.extend(encode_client_input(part))
+            assert isinstance(part, BracketedPasteInput)
+            forwarded.extend(part.raw)
+            protocol_stream.extend(encode_client_input(part.raw))
     for part in terminal_decoder.flush_pending(delay=0):
-        forwarded.extend(part)
-        protocol_stream.extend(encode_client_input(part))
+        assert isinstance(part, BracketedPasteInput)
+        forwarded.extend(part.raw)
+        protocol_stream.extend(encode_client_input(part.raw))
 
     protocol_decoder = InputFrameDecoder()
     decoded = bytearray()
@@ -140,6 +147,20 @@ def test_large_bracketed_paste_survives_many_terminal_and_protocol_reads():
 
     assert bytes(forwarded) == payload
     assert bytes(decoded) == payload
+
+
+def test_bracketed_paste_decoder_restores_control_parsing_after_split_end():
+    decoder = TerminalInputDecoder()
+
+    first = decoder.feed(b"before\033[20")
+    second = decoder.feed(b"0~paste\033[<0;2;3M\033[5~\x1d\033[20")
+    third = decoder.feed(b"1~after\033[<0;4;5M")
+
+    assert first == [b"before"]
+    assert second == [BracketedPasteInput(b"\033[200~paste\033[<0;2;3M\033[5~\x1d")]
+    assert third[:2] == [BracketedPasteInput(b"\033[201~"), b"after"]
+    assert isinstance(third[2], SgrMouseEvent)
+    assert third[2].raw == b"\033[<0;4;5M"
 
 
 def test_screen_model_applies_patch_and_rejects_gap_or_wrong_geometry():

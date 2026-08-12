@@ -8,6 +8,7 @@ one helper in its own Windows session.  That helper owns the real tmux PTY;
 the entry process forwards bytes and resize messages without rendering or
 interpreting the Railmux UI.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,6 +57,8 @@ _DRAIN_TIMEOUT = 0.25
 _CHILD_EXIT_GRACE = 0.2
 _PTY_INPUT_TIMEOUT = 5.0
 _CURSOR_QUIET_INTERVAL = 0.1
+_SYNC_OUTPUT_BEGIN = b"\033[?2026h"
+_SYNC_OUTPUT_END = b"\033[?2026l"
 _STALE_ENDPOINT_AGE = 5 * 60
 _MAX_STALE_ENDPOINTS = 64
 _RELAY_NAME = re.compile(r"windows-attach-[0-9a-f]{16}\.sock\Z")
@@ -104,6 +107,28 @@ class _CursorVisibilityCoalescer:
         self._burst_saw_show = False
         self._exact_cursor_position: bytes | None = None
         self._visible_cursor_position: bytes | None = None
+        self._frame_final_cursor_position: bytes | None = None
+        # Windows Terminal anchors IME pre-edit text to its logical cursor even
+        # while DECTCEM hides the hardware cursor. Codex moves that cursor
+        # through Working, prompt, and footer rows inside consecutive atomic
+        # paints. Keep the last quiet visible prompt anchor as the final cursor
+        # of each synchronized paint; all frame content remains byte-exact.
+        self._stable_cursor_position: bytes | None = None
+        self._sync_depth = 0
+
+    def note_input(self, payload: bytes) -> None:
+        """Invalidate an IME anchor when explicit terminal input can move it."""
+        if not payload or payload in {b"\r", b"\n"}:
+            return
+        self._stable_cursor_position = None
+        self._frame_final_cursor_position = None
+
+    def note_resize(self) -> None:
+        """Drop coordinates expressed in the previous terminal geometry."""
+        self._stable_cursor_position = None
+        self._visible_cursor_position = None
+        self._frame_final_cursor_position = None
+        self._exact_cursor_position = None
 
     def _invalidate_cursor_position(self, value: int) -> None:
         # Printable bytes and the C0 controls that move the cursor make a prior
@@ -111,6 +136,7 @@ class _CursorVisibilityCoalescer:
         # controls do not.
         if value >= 0x20 or value in {0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D}:
             self._exact_cursor_position = None
+            self._frame_final_cursor_position = None
 
     def _observe_csi_cursor_position(self, sequence: bytes) -> None:
         final = sequence[-1:]
@@ -119,12 +145,14 @@ class _CursorVisibilityCoalescer:
             value in b"0123456789;" for value in parameters
         ):
             self._exact_cursor_position = sequence
+            self._frame_final_cursor_position = None
             return
         if final not in {b"J", b"K", b"S", b"T", b"h", b"l", b"m", b"q"}:
             # Keep an anchor only across CSI operations known not to move the
             # hardware cursor. Unknown/private operations fail safely by using
             # the terminal's eventual position rather than replaying stale CUP.
             self._exact_cursor_position = None
+            self._frame_final_cursor_position = None
 
     def feed(self, data: bytes, now: float) -> bytes:
         if not data:
@@ -176,6 +204,15 @@ class _CursorVisibilityCoalescer:
                     self._state = "ground"
                     if sequence in (self._HIDE, self._SHOW):
                         requested_visible = sequence == self._SHOW
+                        visible_position = (
+                            self._frame_final_cursor_position
+                            or self._exact_cursor_position
+                        )
+                        self._frame_final_cursor_position = None
+                        if requested_visible and visible_position is not None:
+                            self._visible_cursor_position = visible_position
+                            if self._stable_cursor_position is None:
+                                self._stable_cursor_position = visible_position
                         if (
                             self._deadline is None
                             and requested_visible == self._desired_visible
@@ -185,15 +222,39 @@ class _CursorVisibilityCoalescer:
                         self._visibility_transitions += 1
                         self._burst_saw_show |= requested_visible
                         self._burst_saw_hide |= not requested_visible
-                        if requested_visible:
-                            self._visible_cursor_position = (
-                                self._exact_cursor_position
-                            )
                         self._desired_visible = requested_visible
                         self._deadline = now + self.quiet_interval
                         if not requested_visible and self._physical_visible:
                             rendered.extend(self._HIDE)
                             self._physical_visible = False
+                    elif sequence == _SYNC_OUTPUT_BEGIN:
+                        rendered.extend(sequence)
+                        self._sync_depth += 1
+                    elif sequence == _SYNC_OUTPUT_END:
+                        if self._sync_depth:
+                            self._sync_depth -= 1
+                            if (
+                                self._sync_depth == 0
+                                and not self._physical_visible
+                                and self._stable_cursor_position is not None
+                                and self._exact_cursor_position is not None
+                                and self._exact_cursor_position
+                                != self._stable_cursor_position
+                            ):
+                                # Place the logical cursor at the stable IME
+                                # anchor *inside* the atomic frame. Windows
+                                # Terminal never observes the intermediate
+                                # Working/footer coordinates, while tmux and
+                                # the provider still receive every original
+                                # draw operation.
+                                self._frame_final_cursor_position = (
+                                    self._exact_cursor_position
+                                )
+                                rendered.extend(self._stable_cursor_position)
+                                self._exact_cursor_position = (
+                                    self._stable_cursor_position
+                                )
+                        rendered.extend(sequence)
                     else:
                         rendered.extend(sequence)
                         self._observe_csi_cursor_position(sequence)
@@ -217,9 +278,7 @@ class _CursorVisibilityCoalescer:
 
             if self._state == "string":
                 rendered.append(value)
-                if value == 0x9C or (
-                    self._string_allows_bel and value == 0x07
-                ):
+                if value == 0x9C or (self._string_allows_bel and value == 0x07):
                     self._state = "ground"
                 elif value == 0x1B:
                     self._state = "string_escape"
@@ -258,9 +317,7 @@ class _CursorVisibilityCoalescer:
             # A terminated child can leave a partial control/string sequence.
             # Cancel or close it before terminal recovery bytes are emitted.
             rendered.extend(
-                b"\033\\"
-                if self._state in {"string", "string_escape"}
-                else b"\030"
+                b"\033\\" if self._state in {"string", "string_escape"} else b"\030"
             )
             self._state = "ground"
         else:
@@ -274,6 +331,7 @@ class _CursorVisibilityCoalescer:
             if self._visible_cursor_position is not None:
                 rendered.extend(self._visible_cursor_position)
                 self._exact_cursor_position = self._visible_cursor_position
+                self._stable_cursor_position = self._visible_cursor_position
             rendered.extend(self._SHOW)
             self._physical_visible = True
         elif not stable_visible and self._physical_visible:
@@ -284,6 +342,7 @@ class _CursorVisibilityCoalescer:
         self._burst_saw_hide = False
         self._burst_saw_show = False
         self._visible_cursor_position = None
+        self._frame_final_cursor_position = None
         return bytes(rendered)
 
 
@@ -301,13 +360,13 @@ class _FrameDecoder:
         self._buffer.extend(data)
         frames: list[tuple[int, bytes]] = []
         while len(self._buffer) >= _HEADER.size:
-            kind, size = _HEADER.unpack(self._buffer[:_HEADER.size])
+            kind, size = _HEADER.unpack(self._buffer[: _HEADER.size])
             if size > _MAX_FRAME_BYTES:
                 raise WindowsAttachRelayError("terminal bridge frame is too large")
             end = _HEADER.size + size
             if len(self._buffer) < end:
                 break
-            frames.append((kind, bytes(self._buffer[_HEADER.size:end])))
+            frames.append((kind, bytes(self._buffer[_HEADER.size : end])))
             del self._buffer[:end]
         return frames
 
@@ -320,9 +379,8 @@ def _frame(kind: int, payload: bytes = b"") -> bytes:
 
 def _terminal_capability(value: str | None, default: str, limit: int) -> str:
     candidate = value or default
-    if (
-        not 1 <= len(candidate) <= limit
-        or any(ord(char) < 0x20 or ord(char) > 0x7e for char in candidate)
+    if not 1 <= len(candidate) <= limit or any(
+        ord(char) < 0x20 or ord(char) > 0x7E for char in candidate
     ):
         return default
     return candidate
@@ -593,13 +651,11 @@ def _write_pty_input(master_fd: int, payload: bytes) -> None:
             written = os.write(master_fd, view)
         except BlockingIOError:
             if time.monotonic() >= deadline:
-                raise WindowsAttachRelayError(
-                    "terminal bridge input remained blocked")
+                raise WindowsAttachRelayError("terminal bridge input remained blocked")
             time.sleep(0.005)
             continue
         if written <= 0:
-            raise WindowsAttachRelayError(
-                "terminal bridge could not forward input")
+            raise WindowsAttachRelayError("terminal bridge could not forward input")
         view = view[written:]
 
 
@@ -608,8 +664,7 @@ def _write_terminal_output(fd: int, payload: bytes) -> None:
     while view:
         written = os.write(fd, view)
         if written <= 0:
-            raise WindowsAttachRelayError(
-                "terminal proxy could not forward output")
+            raise WindowsAttachRelayError("terminal proxy could not forward output")
         view = view[written:]
 
 
@@ -624,7 +679,8 @@ def _drain_pty_output(
         if remaining <= 0:
             return
         readable, _writable, _exceptional = select.select(
-            [master_fd], [], [], remaining)
+            [master_fd], [], [], remaining
+        )
         if not readable:
             return
         try:
@@ -710,7 +766,8 @@ def _relay_server_loop(
                         break
                     else:
                         raise WindowsAttachRelayError(
-                            "terminal bridge received an invalid client frame")
+                            "terminal bridge received an invalid client frame"
+                        )
             else:
                 if status is None:
                     status = _child_status(pid)
@@ -785,19 +842,16 @@ def _relay_server_main(argv: Sequence[str]) -> int:
         or not 1 <= args.width <= 65535
         or not 1 <= args.height <= 65535
         or not 1 <= len(args.term) <= 128
-        or any(ord(char) < 0x20 or ord(char) > 0x7e for char in args.term)
+        or any(ord(char) < 0x20 or ord(char) > 0x7E for char in args.term)
         or len(args.colorterm) > 64
         or not _validate_endpoint(endpoint)
     ):
         return 2
     os.environ[tmux_server.SOCKET_LABEL_ENV] = args.label
-    target = tmux_server.TmuxServerTarget(
-        args.socket_path, args.server_pid)
-    if (
-        not tmux_server.target_is_live(target, timeout=1.0)
-        or not tmux_server.target_has_session(
-            target, args.session_id, timeout=1.0)
-    ):
+    target = tmux_server.TmuxServerTarget(args.socket_path, args.server_pid)
+    if not tmux_server.target_is_live(
+        target, timeout=1.0
+    ) or not tmux_server.target_has_session(target, args.session_id, timeout=1.0):
         return 2
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     connection.settimeout(_CONNECT_TIMEOUT)
@@ -845,6 +899,7 @@ class RelayClient:
         *,
         stdin_fd: int,
         stdout_fd: int,
+        stabilize_cursor: bool = False,
     ) -> None:
         self.connection = connection
         self.listener = listener
@@ -859,6 +914,7 @@ class RelayClient:
         self._selector.register(stdin_fd, selectors.EVENT_READ, "terminal")
         self._size = _terminal_size(stdin_fd)
         self._next_heartbeat = time.monotonic() + _HEARTBEAT_INTERVAL
+        self._cursor = _CursorVisibilityCoalescer() if stabilize_cursor else None
 
     def poll(self) -> int | None:
         return self.returncode
@@ -869,27 +925,36 @@ class RelayClient:
         now = time.monotonic()
         size = _terminal_size(self.stdin_fd)
         if size != self._size:
-            self.connection.sendall(
-                _frame(_TYPE_RESIZE, struct.pack(">HH", *size)))
+            self.connection.sendall(_frame(_TYPE_RESIZE, struct.pack(">HH", *size)))
             self._size = size
+            if self._cursor is not None:
+                self._cursor.note_resize()
         if now >= self._next_heartbeat:
             self.connection.sendall(_frame(_TYPE_HEARTBEAT))
             self._next_heartbeat = now + _HEARTBEAT_INTERVAL
-        for key, _events in self._selector.select(timeout=max(0.0, timeout)):
+        wait = max(0.0, timeout)
+        if self._cursor is not None:
+            wait = self._cursor.next_timeout(wait, now)
+        for key, _events in self._selector.select(timeout=wait):
             if key.data == "terminal":
                 data = os.read(self.stdin_fd, 65536)
                 if not data:
                     self._selector.unregister(self.stdin_fd)
                     self.connection.sendall(_frame(_TYPE_CLOSE))
                     continue
+                if self._cursor is not None:
+                    self._cursor.note_input(data)
                 self.connection.sendall(_frame(_TYPE_INPUT, data))
                 continue
             data = self.connection.recv(65536)
             if not data:
                 raise WindowsAttachRelayError(
-                    "terminal bridge connection ended unexpectedly")
+                    "terminal bridge connection ended unexpectedly"
+                )
             for kind, payload in self._decoder.feed(data):
                 if kind == _TYPE_OUTPUT:
+                    if self._cursor is not None:
+                        payload = self._cursor.feed(payload, time.monotonic())
                     view = memoryview(payload)
                     while view:
                         written = os.write(self.stdout_fd, view)
@@ -898,7 +963,12 @@ class RelayClient:
                     self.returncode = struct.unpack(">i", payload)[0]
                 else:
                     raise WindowsAttachRelayError(
-                        "terminal bridge received an invalid relay frame")
+                        "terminal bridge received an invalid relay frame"
+                    )
+        if self._cursor is not None:
+            rendered = self._cursor.flush_due(time.monotonic())
+            if rendered:
+                _write_terminal_output(self.stdout_fd, rendered)
 
     def terminate(self) -> None:
         if self.returncode is not None:
@@ -921,6 +991,16 @@ class RelayClient:
         return self.returncode
 
     def close(self) -> None:
+        if self._cursor is not None:
+            rendered = self._cursor.flush_due(time.monotonic(), force=True)
+            if not self._cursor._physical_visible:
+                rendered += self._cursor._SHOW
+                self._cursor._physical_visible = True
+            if rendered:
+                try:
+                    _write_terminal_output(self.stdout_fd, rendered)
+                except OSError:
+                    pass
         self._selector.close()
         self.connection.close()
         self.listener.close()
@@ -959,6 +1039,7 @@ class LocalPtyClient:
             return
         _set_winsize(self.master_fd, *size)
         self._size = size
+        self._cursor.note_resize()
         try:
             os.killpg(self.pid, signal.SIGWINCH)
         except ProcessLookupError:
@@ -981,7 +1062,8 @@ class LocalPtyClient:
             if remaining <= 0:
                 return
             readable, _writable, _exceptional = select.select(
-                [self.master_fd], [], [], remaining)
+                [self.master_fd], [], [], remaining
+            )
             if not readable:
                 return
             try:
@@ -1008,6 +1090,7 @@ class LocalPtyClient:
                 if not data:
                     self.terminate()
                     return
+                self._cursor.note_input(data)
                 _write_pty_input(self.master_fd, data)
                 continue
             try:
@@ -1153,12 +1236,9 @@ def start_relay_client(
         label = tmux_server.socket_label(environ)
         tmux_path = shutil.which("tmux", path=environ.get("PATH"))
         if tmux_path is None or not os.path.isabs(tmux_path):
-            raise WindowsAttachRelayError(
-                "managed tmux executable is unavailable")
-        term = _terminal_capability(
-            environ.get("TERM"), "xterm-256color", 128)
-        colorterm = _terminal_capability(
-            environ.get("COLORTERM"), "", 64)
+            raise WindowsAttachRelayError("managed tmux executable is unavailable")
+        term = _terminal_capability(environ.get("TERM"), "xterm-256color", 128)
+        colorterm = _terminal_capability(environ.get("COLORTERM"), "", 64)
         helper = [
             sys.executable,
             "-I",
@@ -1226,8 +1306,7 @@ def start_relay_client(
                     continue
                 challenge = secrets.token_bytes(hashlib.sha256().digest_size)
                 candidate.sendall(challenge)
-                response = _recv_exact(
-                    candidate, hashlib.sha256().digest_size)
+                response = _recv_exact(candidate, hashlib.sha256().digest_size)
                 if not hmac.compare_digest(
                     response, _challenge_response(token, challenge)
                 ):
@@ -1241,8 +1320,7 @@ def start_relay_client(
         if connection is None:
             raise WindowsAttachRelayError("terminal bridge did not become ready")
         connection.settimeout(_SEND_TIMEOUT)
-        connection.sendall(
-            _frame(_TYPE_RESIZE, struct.pack(">HH", width, height)))
+        connection.sendall(_frame(_TYPE_RESIZE, struct.pack(">HH", width, height)))
         return RelayClient(
             connection,
             listener,
@@ -1250,14 +1328,14 @@ def start_relay_client(
             identity,
             stdin_fd=stdin_fd,
             stdout_fd=stdout_fd,
+            stabilize_cursor=bool(environ.get("WT_SESSION")),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         if connection is not None:
             connection.close()
         listener.close()
         _unlink_owned_endpoint(endpoint, identity)
-        raise WindowsAttachRelayError(
-            "terminal bridge setup failed") from exc
+        raise WindowsAttachRelayError("terminal bridge setup failed") from exc
     except BaseException:
         if connection is not None:
             connection.close()

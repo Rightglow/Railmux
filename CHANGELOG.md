@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc14] - 2026-08-12
+
+### Fixed
+
+- Keep Windows Terminal's logical cursor at the last quiet input anchor while
+  a native Codex synchronized repaint is active. Railmux still forwards every
+  provider draw and preserves Working timers and animation, then restores the
+  provider's latest authoritative cursor after output becomes quiet; IME
+  pre-edit text no longer follows intermediate Working, prompt, and footer
+  coordinates. The same capability-gated behavior applies to the direct
+  private PTY and cross-Terminal-Services bridge, while unsupported terminals
+  remain byte-exact.
+- Treat a complete `railmux ssh` bracketed paste as opaque input across every
+  terminal and protocol read. Embedded `Ctrl-]`, Page Up/Down, focus-like
+  bytes, or SGR mouse-shaped text can no longer be mistaken for local Railmux
+  controls, and the ordinary emergency escape and pointer paths remain
+  unchanged outside the paste boundary.
+
 ## [0.4.0rc13] - 2026-08-12
 
 ### Fixed
@@ -2845,7 +2863,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc13...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc14...HEAD
+[0.4.0rc14]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc13...v0.4.0rc14
 [0.4.0rc13]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc12...v0.4.0rc13
 [0.4.0rc12]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc11...v0.4.0rc12
 [0.4.0rc11]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc10...v0.4.0rc11

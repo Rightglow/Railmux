@@ -16,10 +16,8 @@ from railmux.tmux_server import TmuxServerTarget
 
 
 def test_frame_decoder_preserves_partial_and_multiple_frames():
-    first = windows_attach_relay._frame(
-        windows_attach_relay._TYPE_OUTPUT, b"first")
-    second = windows_attach_relay._frame(
-        windows_attach_relay._TYPE_EXIT, b"done")
+    first = windows_attach_relay._frame(windows_attach_relay._TYPE_OUTPUT, b"first")
+    second = windows_attach_relay._frame(windows_attach_relay._TYPE_EXIT, b"done")
     decoder = windows_attach_relay._FrameDecoder()
 
     assert decoder.feed(first[:3]) == []
@@ -41,17 +39,22 @@ def test_frame_decoder_rejects_oversized_payload():
 
 
 def test_terminal_capability_rejects_control_and_oversized_values():
-    assert windows_attach_relay._terminal_capability(
-        "xterm-256color", "fallback", 32) == "xterm-256color"
-    assert windows_attach_relay._terminal_capability(
-        "bad\nvalue", "fallback", 32) == "fallback"
-    assert windows_attach_relay._terminal_capability(
-        "x" * 33, "fallback", 32) == "fallback"
+    assert (
+        windows_attach_relay._terminal_capability("xterm-256color", "fallback", 32)
+        == "xterm-256color"
+    )
+    assert (
+        windows_attach_relay._terminal_capability("bad\nvalue", "fallback", 32)
+        == "fallback"
+    )
+    assert (
+        windows_attach_relay._terminal_capability("x" * 33, "fallback", 32)
+        == "fallback"
+    )
 
 
 def test_cursor_coalescer_preserves_text_and_partial_sequences():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     assert cursor.feed(b"left\033[?2", 1.0) == b"left"
     assert cursor.feed(b"5lright", 1.02) == b"\033[?25lright"
@@ -61,8 +64,7 @@ def test_cursor_coalescer_preserves_text_and_partial_sequences():
 
 
 def test_cursor_coalescer_keeps_cursor_hidden_across_an_output_burst():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     first = cursor.feed(b"A\033[?25l", 1.0)
     second = cursor.feed(b"\033[2;2HB\033[?25h", 1.08)
@@ -74,16 +76,14 @@ def test_cursor_coalescer_keeps_cursor_hidden_across_an_output_burst():
 
 
 def test_cursor_coalescer_retains_a_final_hidden_state():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     assert cursor.feed(b"frame\033[?25l", 1.0) == b"frame\033[?25l"
     assert cursor.flush_due(1.2) == b""
 
 
 def test_cursor_coalescer_restores_visible_anchor_after_flicker_signature():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     rendered = cursor.feed(
         b"\033[?25l\033[55;3H\033[?25h\033[57;1H\033[?25l",
@@ -94,19 +94,61 @@ def test_cursor_coalescer_restores_visible_anchor_after_flicker_signature():
     assert cursor.flush_due(1.2) == b"\033[55;3H\033[?25h"
 
 
-def test_cursor_coalescer_does_not_override_one_intentional_hide():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+def test_cursor_coalescer_keeps_ime_anchor_inside_synchronized_repaints():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
-    assert cursor.feed(b"\033[4;7H\033[?25l", 1.0) == (
-        b"\033[4;7H\033[?25l"
+    # Establish the quiet prompt cursor. A redundant SHOW is still useful
+    # semantic evidence even though it need not reach the terminal.
+    assert cursor.feed(b"\033[55;3H\033[?25h", 0.9) == b"\033[55;3H"
+    rendered = cursor.feed(
+        b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h",
+        1.0,
     )
+
+    assert rendered == (
+        b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[55;3H\033[?2026l"
+    )
+    # Once output becomes quiet, restore the provider's latest authoritative
+    # frame cursor rather than pinning the prompt forever.
+    assert cursor.flush_due(1.2) == b"\033[57;1H\033[?25h"
+
+
+def test_cursor_coalescer_leaves_visible_synchronized_output_byte_exact():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    payload = b"\033[?2026h\033[4;2Hframe\033[4;7H\033[?2026l"
+
+    assert cursor.feed(payload, 1.0) == payload
+    assert cursor.flush_due(2.0) == b""
+
+
+def test_cursor_coalescer_does_not_guess_after_relative_frame_output():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.9)
+    payload = b"\033[?25l\033[?2026hrelative text\033[?2026l\033[?25h"
+
+    assert cursor.feed(payload, 1.0) == (
+        b"\033[?25l\033[?2026hrelative text\033[?2026l"
+    )
+
+
+def test_cursor_coalescer_relearns_anchor_after_explicit_input():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.9)
+    cursor.note_input("中".encode())
+
+    assert cursor.feed(b"\033[55;5H\033[?25h", 1.0) == b"\033[55;5H"
+    assert cursor._stable_cursor_position == b"\033[55;5H"
+
+
+def test_cursor_coalescer_does_not_override_one_intentional_hide():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+
+    assert cursor.feed(b"\033[4;7H\033[?25l", 1.0) == (b"\033[4;7H\033[?25l")
     assert cursor.flush_due(1.2) == b""
 
 
 def test_cursor_coalescer_invalidates_stale_visible_anchor_after_text():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     cursor.feed(
         b"\033[?25l\033[55;3Htext\033[?25h\033[57;1H\033[?25l",
@@ -117,8 +159,7 @@ def test_cursor_coalescer_invalidates_stale_visible_anchor_after_text():
 
 
 def test_cursor_coalescer_leaves_ordinary_output_byte_exact():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     payload = b"typing and ordinary \033[31mterminal output\033[0m"
 
     assert cursor.feed(payload, 1.0) == payload
@@ -126,16 +167,14 @@ def test_cursor_coalescer_leaves_ordinary_output_byte_exact():
 
 
 def test_cursor_coalescer_suppresses_a_redundant_show_without_blinking():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     assert cursor.feed(b"before\033[?25hafter", 1.0) == b"beforeafter"
     assert cursor.flush_due(2.0) == b""
 
 
 def test_cursor_coalescer_does_not_parse_dectcem_inside_osc_payload():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     payload = b"\033]0;opaque-\033[?25h-payload\007after"
 
     assert cursor.feed(payload, 1.0) == payload
@@ -143,8 +182,7 @@ def test_cursor_coalescer_does_not_parse_dectcem_inside_osc_payload():
 
 
 def test_cursor_coalescer_never_injects_inside_a_split_control_sequence():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(
-        quiet_interval=0.1)
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     assert cursor.feed(b"\033[?25l", 1.0) == b"\033[?25l"
     assert cursor.feed(b"\033[?25h", 1.01) == b""
@@ -159,8 +197,7 @@ def test_local_proxy_close_restores_a_visible_terminal_cursor(monkeypatch):
     input_read, input_write = os.pipe()
     output_read, output_write = os.pipe()
     master_read, master_write = os.pipe()
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
     client = windows_attach_relay.LocalPtyClient(
         999999,
         master_read,
@@ -206,14 +243,61 @@ def test_local_proxy_requires_managed_windows(monkeypatch):
         )
 
 
+def test_local_proxy_preserves_large_bracketed_paste_byte_exact(monkeypatch):
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    payload = (
+        b"\033[200~"
+        + ("本地粘贴-line\n" * 9000).encode()
+        + b"\x1d\033[5~\033[<0;4;5M\033[201~"
+    )
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    proxy_fd = proxy_socket.detach()
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+    )
+
+    def write_payload() -> None:
+        pending = memoryview(payload)
+        while pending:
+            pending = pending[os.write(input_write, pending) :]
+
+    writer = threading.Thread(target=write_payload, daemon=True)
+    writer.start()
+    received = bytearray()
+    child_socket.setblocking(False)
+    try:
+        deadline = time.monotonic() + 3.0
+        while len(received) < len(payload) and time.monotonic() < deadline:
+            client.pump(0.01)
+            try:
+                received.extend(child_socket.recv(65536))
+            except BlockingIOError:
+                pass
+        writer.join(timeout=1.0)
+        assert not writer.is_alive()
+        assert bytes(received) == payload
+    finally:
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+
 def test_local_proxy_starts_at_exact_entry_geometry(monkeypatch):
     monkeypatch.setattr(
         windows_attach_relay,
         "running_in_managed_windows_wrapper",
         lambda _environ=None: True,
     )
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (164, 46))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (164, 46))
     spawn = MagicMock(return_value=(77, 12))
     client = MagicMock()
     client_type = MagicMock(return_value=client)
@@ -221,12 +305,15 @@ def test_local_proxy_starts_at_exact_entry_geometry(monkeypatch):
     monkeypatch.setattr(windows_attach_relay, "LocalPtyClient", client_type)
     env = {"RAILMUX_WINDOWS_RUNTIME": "msys2"}
 
-    assert windows_attach_relay.start_local_pty_client(
-        ["tmux", "-L", "railmux"],
-        environ=env,
-        stdin_fd=10,
-        stdout_fd=11,
-    ) is client
+    assert (
+        windows_attach_relay.start_local_pty_client(
+            ["tmux", "-L", "railmux"],
+            environ=env,
+            stdin_fd=10,
+            stdout_fd=11,
+        )
+        is client
+    )
 
     spawn.assert_called_once_with(
         ["tmux", "-L", "railmux"],
@@ -242,8 +329,7 @@ def test_local_proxy_starts_at_exact_entry_geometry(monkeypatch):
 def test_local_proxy_forwards_real_pty_output_and_settles_cursor(monkeypatch):
     input_read, input_write = os.pipe()
     output_read, output_write = os.pipe()
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
     pid, master_fd = windows_attach_relay._spawn_local_pty_process(
         [
             "/bin/sh",
@@ -279,14 +365,12 @@ def test_local_proxy_forwards_real_pty_output_and_settles_cursor(monkeypatch):
 def test_local_proxy_restores_ime_anchor_after_noisy_final_hide(monkeypatch):
     input_read, input_write = os.pipe()
     output_read, output_write = os.pipe()
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
     pid, master_fd = windows_attach_relay._spawn_local_pty_process(
         [
             "/bin/sh",
             "-c",
-            "printf '\033[?25l\033[20;4H\033[?25h"
-            "\033[24;1H\033[?25l'; sleep 0.15",
+            "printf '\033[?25l\033[20;4H\033[?25h\033[24;1H\033[?25l'; sleep 0.15",
         ],
         os.environ,
         width=80,
@@ -310,17 +394,53 @@ def test_local_proxy_restores_ime_anchor_after_noisy_final_hide(monkeypatch):
             if fd >= 0:
                 os.close(fd)
 
-    assert rendered == (
-        b"\033[?25l\033[20;4H\033[24;1H\033[20;4H\033[?25h"
+    assert rendered == (b"\033[?25l\033[20;4H\033[24;1H\033[20;4H\033[?25h")
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
+def test_local_proxy_stabilizes_ime_anchor_inside_real_sync_frame(monkeypatch):
+    input_read, input_write = os.pipe()
+    output_read, output_write = os.pipe()
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    pid, master_fd = windows_attach_relay._spawn_local_pty_process(
+        [
+            "/bin/sh",
+            "-c",
+            "printf '\033[20;4H\033[?25h'; sleep 0.02; "
+            "printf '\033[?25l\033[?2026h\033[18;1Hworking"
+            "\033[24;1H\033[?2026l\033[?25h'; sleep 0.15",
+        ],
+        os.environ,
+        width=80,
+        height=24,
     )
+    client = windows_attach_relay.LocalPtyClient(
+        pid,
+        master_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_write,
+    )
+    try:
+        assert client.wait(timeout=2.0) == 0
+        client.close()
+        os.close(output_write)
+        output_write = -1
+        rendered = os.read(output_read, 4096)
+    finally:
+        client.close()
+        for fd in (input_read, input_write, output_read, output_write):
+            if fd >= 0:
+                os.close(fd)
+
+    assert (b"\033[?2026h\033[18;1Hworking\033[24;1H\033[20;4H\033[?2026l") in rendered
+    assert rendered.endswith(b"\033[24;1H\033[?25h")
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
 def test_local_proxy_drains_terminal_restore_tail_when_terminated(monkeypatch):
     input_read, input_write = os.pipe()
     output_read, output_write = os.pipe()
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
     pid, master_fd = windows_attach_relay._spawn_local_pty_process(
         [
             "/bin/sh",
@@ -358,7 +478,9 @@ def test_local_proxy_drains_terminal_restore_tail_when_terminated(monkeypatch):
 
 @pytest.mark.parametrize("with_wt_marker", [True, False])
 def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
-    monkeypatch, tmp_path, with_wt_marker,
+    monkeypatch,
+    tmp_path,
+    with_wt_marker,
 ):
     runtime_root = tmp_path.parent / f"rx-{os.getpid()}"
     runtime_root.mkdir(mode=0o700)
@@ -372,8 +494,7 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
         "running_in_managed_windows_wrapper",
         lambda _environ=None: True,
     )
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (100, 35))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (100, 35))
     observed = {}
     peer_threads = []
 
@@ -391,8 +512,7 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
             peer.connect(endpoint)
             peer.sendall(windows_attach_relay._PROTOCOL_MAGIC)
             challenge = peer.recv(4096)
-            peer.sendall(windows_attach_relay._challenge_response(
-                token, challenge))
+            peer.sendall(windows_attach_relay._challenge_response(token, challenge))
             peer.recv(4096)
             peer.close()
 
@@ -403,7 +523,8 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
 
     monkeypatch.setattr(windows_attach_relay.subprocess, "run", run)
     monkeypatch.setattr(
-        windows_attach_relay, "_peer_is_same_user", lambda _connection: True)
+        windows_attach_relay, "_peer_is_same_user", lambda _connection: True
+    )
     read_fd, write_fd = os.pipe()
     target = TmuxServerTarget("/tmp/private/railmux", 77)
 
@@ -425,7 +546,10 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
         endpoint = client.endpoint
         assert endpoint.exists()
         assert observed["argv"][:4] == [
-            "tmux", "-S", "/tmp/private/railmux", "run-shell",
+            "tmux",
+            "-S",
+            "/tmp/private/railmux",
+            "run-shell",
         ]
         assert observed["argv"][4] == "-b"
         assert observed["argv"][-1].startswith("exec env -u PYTHONPATH ")
@@ -436,9 +560,8 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
         assert os.path.isabs(helper[helper.index("--tmux-path") + 1])
         assert ("--synchronized-output" in helper) is with_wt_marker
         assert "opaque-and-never-forwarded" not in helper
-        assert observed["kwargs"]["env"]["RAILMUX_TMUX_LABEL"] == (
-            "railmux-test"
-        )
+        assert observed["kwargs"]["env"]["RAILMUX_TMUX_LABEL"] == ("railmux-test")
+        assert (client._cursor is not None) is with_wt_marker
         client.close()
         assert not endpoint.exists()
     finally:
@@ -456,20 +579,37 @@ def test_relay_server_rejects_non_managed_runtime(monkeypatch):
         lambda: False,
     )
 
-    assert windows_attach_relay.relay_server_main([
-        "--endpoint", "/tmp/railmux-1/railmux/windows-attach-0123456789abcdef.sock",
-        "--token", "00" * windows_attach_relay._TOKEN_BYTES,
-        "--label", "railmux",
-        "--runtime-id", "msys2-test",
-        "--app-id", f"railmux-{__version__}",
-        "--socket-path", "/tmp/tmux-1/railmux",
-        "--tmux-path", "/usr/bin/tmux",
-        "--server-pid", "123",
-        "--session-id", "$1",
-        "--width", "80",
-        "--height", "24",
-        "--term", "xterm-256color",
-    ]) == 2
+    assert (
+        windows_attach_relay.relay_server_main(
+            [
+                "--endpoint",
+                "/tmp/railmux-1/railmux/windows-attach-0123456789abcdef.sock",
+                "--token",
+                "00" * windows_attach_relay._TOKEN_BYTES,
+                "--label",
+                "railmux",
+                "--runtime-id",
+                "msys2-test",
+                "--app-id",
+                f"railmux-{__version__}",
+                "--socket-path",
+                "/tmp/tmux-1/railmux",
+                "--tmux-path",
+                "/usr/bin/tmux",
+                "--server-pid",
+                "123",
+                "--session-id",
+                "$1",
+                "--width",
+                "80",
+                "--height",
+                "24",
+                "--term",
+                "xterm-256color",
+            ]
+        )
+        == 2
+    )
 
 
 def test_normalized_wait_status_uses_shell_signal_convention():
@@ -507,8 +647,14 @@ def test_relay_tmux_client_adds_sync_before_attach(monkeypatch):
 
     argv = observed.call_args.args[1]
     assert argv == [
-        "/usr/bin/tmux", "-S", target.socket_path, "-T", "sync",
-        "attach-session", "-t", "$5",
+        "/usr/bin/tmux",
+        "-S",
+        target.socket_path,
+        "-T",
+        "sync",
+        "attach-session",
+        "-t",
+        "$5",
     ]
 
 
@@ -519,8 +665,7 @@ def test_pty_input_write_has_a_deadline(monkeypatch):
         MagicMock(side_effect=BlockingIOError),
     )
     times = iter((0.0, windows_attach_relay._PTY_INPUT_TIMEOUT + 1))
-    monkeypatch.setattr(
-        windows_attach_relay.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(windows_attach_relay.time, "monotonic", lambda: next(times))
 
     with pytest.raises(
         windows_attach_relay.WindowsAttachRelayError,
@@ -553,8 +698,7 @@ def test_stale_endpoint_cleanup_preserves_live_listener(tmp_path):
 
 
 def test_terminal_eof_sends_close_once(monkeypatch, tmp_path):
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
     client_socket, peer_socket = socket.socketpair()
     listener = socket.socket()
     read_fd, write_fd = os.pipe()
@@ -573,10 +717,11 @@ def test_terminal_eof_sends_close_once(monkeypatch, tmp_path):
         client.pump(0.1)
         raw = peer_socket.recv(1024)
         kind, size = windows_attach_relay._HEADER.unpack(
-            raw[:windows_attach_relay._HEADER.size])
+            raw[: windows_attach_relay._HEADER.size]
+        )
         assert kind == windows_attach_relay._TYPE_CLOSE
         assert size == 0
-        assert raw[windows_attach_relay._HEADER.size:] == b""
+        assert raw[windows_attach_relay._HEADER.size :] == b""
         # The EOF descriptor was unregistered, so a second pump emits nothing.
         peer_socket.settimeout(0.05)
         client.pump(0.01)
@@ -590,10 +735,10 @@ def test_terminal_eof_sends_close_once(monkeypatch, tmp_path):
 
 
 def test_relay_socket_eof_is_an_explicit_transport_error(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ):
-    monkeypatch.setattr(
-        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
     client_socket, peer_socket = socket.socketpair()
     listener = socket.socket()
     read_fd, write_fd = os.pipe()

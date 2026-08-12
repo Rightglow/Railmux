@@ -42,6 +42,7 @@ from railmux.fast_display_history import (
     input_may_change_routes,
 )
 from railmux.fast_display_input import (
+    BracketedPasteInput,
     ClickTarget,
     LocalTextSelection,
     SelectionSegment,
@@ -573,9 +574,7 @@ class TerminalSurface:
         self.terminal_modes = TerminalMode.NONE
         self.physical_size: os.terminal_size | None = None
         self._last_screen: AppliedScreen | None = None
-        self._last_overlays: tuple[
-            tuple[HistorySnapshot, tuple[bytes, ...]], ...
-        ] = ()
+        self._last_overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...] = ()
         # A disconnected frame is never input authority, but retaining its
         # status row lets local reconnect feedback use Railmux's normal
         # status-right placement instead of replacing status-left.
@@ -759,9 +758,7 @@ class TerminalSurface:
         restore_cursor = self._last_screen is not None
         rendered = [self._render_local_status(hide_cursor=not restore_cursor)]
         if self._last_screen is not None:
-            projection_top, visible_height = self._projection(
-                self._last_screen.height
-            )
+            projection_top, visible_height = self._projection(self._last_screen.height)
             self._append_cursor(
                 rendered,
                 self._last_screen,
@@ -785,8 +782,7 @@ class TerminalSurface:
                 safe = safe[: self.physical_size.columns]
             self._local_status_bounds = (max(1, height), 1, max(1, len(safe)))
             rendered = (
-                f"\033[?7l\033[0m\033[{max(1, height)};1H\033[2K{safe}"
-                "\033[0m\033[?7h"
+                f"\033[?7l\033[0m\033[{max(1, height)};1H\033[2K{safe}\033[0m\033[?7h"
             ).encode("utf-8")
             if hide_cursor:
                 rendered += b"\033[?25l"
@@ -1142,15 +1138,17 @@ class TerminalSurface:
             and cursor_in_projection
             and not self._cursor_is_covered(screen, overlays)
         )
-        rendered.extend((
-            b"\033[0m\033[?7h",
+        rendered.extend(
             (
-                f"\033[{screen.cursor_y - projection_top + 1};"
-                f"{screen.cursor_x + 1}H"
-            ).encode()
-            if cursor_in_projection
-            else b"\033[1;1H",
-        ))
+                b"\033[0m\033[?7h",
+                (
+                    f"\033[{screen.cursor_y - projection_top + 1};"
+                    f"{screen.cursor_x + 1}H"
+                ).encode()
+                if cursor_in_projection
+                else b"\033[1;1H",
+            )
+        )
         if force_visibility or self._painted_cursor_visible is not visible:
             rendered.append(b"\033[?25h" if visible else b"\033[?25l")
             self._painted_cursor_visible = visible
@@ -1268,16 +1266,19 @@ class TerminalSurface:
         self._last_overlays = overlays
         projection_top, visible_height = self._projection(screen.height)
         rows = frozenset(
-            row for row in changed_rows
+            row
+            for row in changed_rows
             if projection_top <= row < projection_top + visible_height
         )
         rendered: list[bytes] = [b"\033[?7l"]
         for row in sorted(rows):
-            rendered.extend((
-                f"\033[{row - projection_top + 1};1H".encode(),
-                b"\033[2K",
-                screen.rows[row],
-            ))
+            rendered.extend(
+                (
+                    f"\033[{row - projection_top + 1};1H".encode(),
+                    b"\033[2K",
+                    screen.rows[row],
+                )
+            )
         self._append_overlay_rows(
             rendered,
             overlays,
@@ -1383,13 +1384,8 @@ class _DeferredHistoryPaint:
         force: bool = False,
     ) -> bool:
         checked_at = time.monotonic() if now is None else now
-        if (
-            not self.render_history
-            or (
-                not force
-                and self.deadline is not None
-                and checked_at < self.deadline
-            )
+        if not self.render_history or (
+            not force and self.deadline is not None and checked_at < self.deadline
         ):
             return False
         if screen is not None:
@@ -2066,8 +2062,7 @@ def prepare_remote_process(
             if decision.action == "prompt" and decision.prompt == "local_upgrade":
                 reveal_terminal()
                 consents["local_upgrade"] = _confirm(
-                    f"{decision.reason} Upgrade local Railmux to "
-                    f"{hello.version}?"
+                    f"{decision.reason} Upgrade local Railmux to {hello.version}?"
                 )
                 continue
             if decision.action == "upgrade_local":
@@ -2172,9 +2167,7 @@ def prepare_remote_process(
         RemoteStartKind.TIMEOUT,
     ):
         _stop_unstarted_remote(process)
-        user_install_failure = _remote_install_failure(
-            startup, environment="user-site"
-        )
+        user_install_failure = _remote_install_failure(startup, environment="user-site")
         if not _confirm_remote_private_venv_install(
             args,
             install_version,
@@ -2312,10 +2305,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         action=ExtendSshArguments,
         dest="ssh_arg",
         metavar="ARGS",
-        help=(
-            "a quoted group of ssh arguments, split locally without running "
-            "a shell"
-        ),
+        help=("a quoted group of ssh arguments, split locally without running a shell"),
     )
     args = parser.parse_args(raw_argv)
     args.raw_argv = tuple(raw_argv)
@@ -2399,9 +2389,7 @@ def run(args: argparse.Namespace) -> int:
     )
     history_paint = _DeferredHistoryPaint()
     selection = LocalTextSelection()
-    touch_keyboard = TermuxTouchKeyboard(
-        enabled=not args.no_mouse and termux_touch
-    )
+    touch_keyboard = TermuxTouchKeyboard(enabled=not args.no_mouse and termux_touch)
     selector = selectors.DefaultSelector()
     selector.register(process.stdout.fileno(), selectors.EVENT_READ, "remote")
     selector.register(sys.stdin.fileno(), selectors.EVENT_READ, "local")
@@ -2432,12 +2420,8 @@ def run(args: argparse.Namespace) -> int:
     claude_history_runtime_choice: str | None = None
     path_request_id = 0
     pending_path_open: dict[int, _PendingPathOpen] = {}
-    pending_path_actions: dict[
-        int, tuple[_PendingPathOpen, PathResult, str]
-    ] = {}
-    path_open_prompt: tuple[
-        int, _PendingPathOpen, PathResult
-    ] | None = None
+    pending_path_actions: dict[int, tuple[_PendingPathOpen, PathResult, str]] = {}
+    path_open_prompt: tuple[int, _PendingPathOpen, PathResult] | None = None
     path_open_prompt_mouse_button: int | None = None
     local_status_mouse_button: int | None = None
     periodic_prefetch = PeriodicPrefetchGate()
@@ -2485,19 +2469,19 @@ def run(args: argparse.Namespace) -> int:
         nonlocal history_info_until
         pending = _PendingPathOpen(pending.target, time.monotonic())
         pending_path_actions[request_id] = (pending, resolved, policy)
-        send_protocol_frame(encode_path_open_request(
-            request_id,
-            pending.target.pane_id,
-            pending.target.value,
-            policy=policy,
-            persistent=persistent,
-            line=pending.target.line,
-            column=pending.target.column,
-        ))
-        scope = "Saving" if persistent else "Using"
-        destination = (
-            "managed Vim" if policy == "internal" else "separate terminal"
+        send_protocol_frame(
+            encode_path_open_request(
+                request_id,
+                pending.target.pane_id,
+                pending.target.value,
+                policy=policy,
+                persistent=persistent,
+                line=pending.target.line,
+                column=pending.target.column,
+            )
         )
+        scope = "Saving" if persistent else "Using"
+        destination = "managed Vim" if policy == "internal" else "separate terminal"
         surface.show_local_status(f"{scope} {destination}…")
         history_info_until = None
 
@@ -2554,7 +2538,7 @@ def run(args: argparse.Namespace) -> int:
             history_info_until = None
 
     def handle_terminal_part(
-        part: bytes | SgrMouseEvent,
+        part: bytes | SgrMouseEvent | BracketedPasteInput,
         input_batch: _LocalInputBatch,
     ) -> None:
         nonlocal route_refresh_needed
@@ -2566,6 +2550,9 @@ def run(args: argparse.Namespace) -> int:
         nonlocal selection_clear_at
         nonlocal path_open_prompt, path_open_prompt_mouse_button
         nonlocal local_status_mouse_button
+        opaque_paste = isinstance(part, BracketedPasteInput)
+        if opaque_paste:
+            part = part.raw
         if surface.dismiss_interruptible_local_status():
             history_info_until = None
             if latest_screen is not None:
@@ -2586,19 +2573,14 @@ def run(args: argparse.Namespace) -> int:
                 and part.button & 3 in (0, 2)
             ):
                 if surface.copy_local_status_at(part):
-                    history_info_until = (
-                        time.monotonic() + _HISTORY_INFO_SECONDS
-                    )
+                    history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
                     local_status_mouse_button = part.button & 3
                     return
         if isinstance(part, SgrMouseEvent) and part.is_hover_motion:
             # DECSET 1003 reports local pointer movement even without a
             # pressed button. Consume it locally: hover must never become SSH
             # input or disturb a modal choice.
-            if (
-                path_open_prompt is not None
-                or claude_history_prompt_input is not None
-            ):
+            if path_open_prompt is not None or claude_history_prompt_input is not None:
                 return
             displayed_height = (
                 latest_screen.height
@@ -2685,8 +2667,7 @@ def run(args: argparse.Namespace) -> int:
             path_open_prompt_mouse_button is not None
         ):
             suppress = (
-                not part.pressed
-                and part.button & 3 == path_open_prompt_mouse_button
+                not part.pressed and part.button & 3 == path_open_prompt_mouse_button
             )
             path_open_prompt_mouse_button = None
             if suppress:
@@ -2770,9 +2751,7 @@ def run(args: argparse.Namespace) -> int:
                 )
             )
             status_row = (
-                compact_status_row(latest_screen)
-                if latest_screen is not None
-                else None
+                compact_status_row(latest_screen) if latest_screen is not None else None
             )
             touch_action = termux_prompt_touch_action(
                 touch_keyboard,
@@ -2877,7 +2856,7 @@ def run(args: argparse.Namespace) -> int:
             return
         if not part:
             return
-        if touch_keyboard.consumes_focus_out(part):
+        if not opaque_paste and touch_keyboard.consumes_focus_out(part):
             # Opening Android's input view can briefly remove focus from the
             # terminal View even though the user is still interacting with
             # this SSH client. Forwarding that synthetic focus-out makes
@@ -2886,7 +2865,8 @@ def run(args: argparse.Namespace) -> int:
             # reasserts the authoritative focus-in instead.
             return
         if (
-            part not in (b"\x1b[I", b"\x1b[O")
+            not opaque_paste
+            and part not in (b"\x1b[I", b"\x1b[O")
             and touch_keyboard.keyboard_input()
         ):
             surface.resume_mouse()
@@ -2905,6 +2885,7 @@ def run(args: argparse.Namespace) -> int:
             )
         if (
             latest_screen is not None
+            and not opaque_paste
             and page_key_direction(part)
             and history.pane_id_at_position(
                 latest_screen.cursor_x,
@@ -2921,13 +2902,13 @@ def run(args: argparse.Namespace) -> int:
                 )
             )
             return
-        may_change_routes = screen_input_may_change_routes(
-            part,
-            history,
-            latest_screen,
+        may_change_routes = (
+            False
+            if opaque_paste
+            else screen_input_may_change_routes(part, history, latest_screen)
         )
         if history.active or history.pending:
-            if part == b"\x1b":
+            if not opaque_paste and part == b"\x1b":
                 restore = history.cancel()
                 apply_history_action(HistoryAction(restore_live=restore))
                 return
@@ -2951,7 +2932,7 @@ def run(args: argparse.Namespace) -> int:
         if may_change_routes:
             history.invalidate_routes()
             route_refresh_needed = True
-        if termux_touch and part == b"\033[I":
+        if not opaque_paste and termux_touch and part == b"\033[I":
             # Android may restore the terminal View with its cursor a few
             # cells away from the last painted application cursor. A remote
             # patch would correct it, but an idle provider can otherwise leave
@@ -2969,9 +2950,12 @@ def run(args: argparse.Namespace) -> int:
     )
     history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
     try:
-        with RawTerminal(sys.stdin.fileno()), _ActiveWindowsInterruptForwarder(
-            running_in_windows_wrapper()
-        ) as windows_interrupts:
+        with (
+            RawTerminal(sys.stdin.fileno()),
+            _ActiveWindowsInterruptForwarder(
+                running_in_windows_wrapper()
+            ) as windows_interrupts,
+        ):
             while True:
                 pending_interrupts = windows_interrupts.consume()
                 if pending_interrupts:
@@ -3072,10 +3056,12 @@ def run(args: argparse.Namespace) -> int:
                         )
                         current_size = observed_size
                         awaiting_keyframe = True
-                events = selector.select(timeout=min(
-                    terminal_input.next_timeout(),
-                    history_paint.next_timeout(),
-                ))
+                events = selector.select(
+                    timeout=min(
+                        terminal_input.next_timeout(),
+                        history_paint.next_timeout(),
+                    )
+                )
                 for key, _mask in events:
                     if key.data == "remote":
                         chunk = os.read(process.stdout.fileno(), 65536)
@@ -3096,11 +3082,13 @@ def run(args: argparse.Namespace) -> int:
                                 if pending is None:
                                     continue
                                 if message.kind is PathKind.UNAVAILABLE:
-                                    show_open_result(local_open.OpenResult(
-                                        False,
-                                        "Path is not available in this remote workspace",
-                                        "warning",
-                                    ))
+                                    show_open_result(
+                                        local_open.OpenResult(
+                                            False,
+                                            "Path is not available in this remote workspace",
+                                            "warning",
+                                        )
+                                    )
                                     continue
                                 if message.policy == "ask":
                                     pending_path_open[message.request_id] = pending
@@ -3129,19 +3117,21 @@ def run(args: argparse.Namespace) -> int:
                                     continue
                                 pending, resolved, policy = action
                                 if message.applied and policy == "external":
-                                    show_open_result(local_open.open_remote_path(
-                                        args.destination,
-                                        ssh_args=args.ssh_arg,
-                                        path=resolved.path,
-                                        directory=(
-                                            resolved.kind is PathKind.DIRECTORY
-                                        ),
-                                        regular_file=(
-                                            resolved.kind is PathKind.FILE
-                                        ),
-                                        line=pending.target.line,
-                                        column=pending.target.column,
-                                    ))
+                                    show_open_result(
+                                        local_open.open_remote_path(
+                                            args.destination,
+                                            ssh_args=args.ssh_arg,
+                                            path=resolved.path,
+                                            directory=(
+                                                resolved.kind is PathKind.DIRECTORY
+                                            ),
+                                            regular_file=(
+                                                resolved.kind is PathKind.FILE
+                                            ),
+                                            line=pending.target.line,
+                                            column=pending.target.column,
+                                        )
+                                    )
                                 else:
                                     surface.show_local_status(
                                         message.message,
@@ -3263,14 +3253,18 @@ def run(args: argparse.Namespace) -> int:
                         if not data:
                             local_exit = True
                             break
-                        data, emergency_exit = split_local_escape(data)
-                        if emergency_exit:
-                            local_exit = True
                         input_batch = _LocalInputBatch(history_paint)
                         for part in terminal_input.feed(data):
-                            if isinstance(part, bytes):
-                                for key_part in split_page_key_input(part):
-                                    handle_terminal_part(key_part, input_batch)
+                            if isinstance(part, BracketedPasteInput):
+                                handle_terminal_part(part, input_batch)
+                            elif isinstance(part, bytes):
+                                forwarded, emergency_exit = split_local_escape(part)
+                                if forwarded:
+                                    for key_part in split_page_key_input(forwarded):
+                                        handle_terminal_part(key_part, input_batch)
+                                if emergency_exit:
+                                    local_exit = True
+                                    break
                             else:
                                 handle_terminal_part(part, input_batch)
                         input_batch.flush(
@@ -3285,8 +3279,14 @@ def run(args: argparse.Namespace) -> int:
                 if not local_exit:
                     for part in terminal_input.flush_pending():
                         input_batch = _LocalInputBatch(history_paint)
-                        for key_part in split_page_key_input(part):
-                            handle_terminal_part(key_part, input_batch)
+                        if isinstance(part, BracketedPasteInput):
+                            handle_terminal_part(part, input_batch)
+                        else:
+                            forwarded, emergency_exit = split_local_escape(part)
+                            for key_part in split_page_key_input(forwarded):
+                                handle_terminal_part(key_part, input_batch)
+                            if emergency_exit:
+                                local_exit = True
                         input_batch.flush(
                             surface,
                             latest_screen,
@@ -3322,33 +3322,37 @@ def run(args: argparse.Namespace) -> int:
                     request_id
                     for request_id, pending in pending_path_open.items()
                     if now - pending.requested_at >= _PATH_OPEN_TIMEOUT
-                    and (
-                        path_open_prompt is None
-                        or path_open_prompt[0] != request_id
-                    )
+                    and (path_open_prompt is None or path_open_prompt[0] != request_id)
                 )
                 if expired_paths:
                     for request_id in expired_paths:
                         pending_path_open.pop(request_id, None)
-                    show_open_result(local_open.OpenResult(
-                        False,
-                        "Remote path check timed out",
-                        "warning",
-                    ))
+                    show_open_result(
+                        local_open.OpenResult(
+                            False,
+                            "Remote path check timed out",
+                            "warning",
+                        )
+                    )
                 expired_actions = tuple(
                     request_id
-                    for request_id, (pending, _resolved, _policy)
-                    in pending_path_actions.items()
+                    for request_id, (
+                        pending,
+                        _resolved,
+                        _policy,
+                    ) in pending_path_actions.items()
                     if now - pending.requested_at >= _PATH_OPEN_TIMEOUT
                 )
                 if expired_actions:
                     for request_id in expired_actions:
                         pending_path_actions.pop(request_id, None)
-                    show_open_result(local_open.OpenResult(
-                        False,
-                        "Remote path open timed out",
-                        "warning",
-                    ))
+                    show_open_result(
+                        local_open.OpenResult(
+                            False,
+                            "Remote path open timed out",
+                            "warning",
+                        )
+                    )
                 restore_local_status = surface.expire_local_status(now) or (
                     history_info_until is not None and now >= history_info_until
                 )

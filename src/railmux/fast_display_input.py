@@ -20,6 +20,20 @@ _SGR_MOUSE_PREFIX = b"\x1b[<"
 _SGR_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
 _PAGE_UP = b"\x1b[5~"
 _PAGE_DOWN = b"\x1b[6~"
+_BRACKETED_PASTE_BEGIN = b"\x1b[200~"
+_BRACKETED_PASTE_END = b"\x1b[201~"
+
+
+@dataclass(frozen=True)
+class BracketedPasteInput:
+    """One opaque fragment of a terminal-owned bracketed paste.
+
+    Fragments retain their framing bytes.  The client may therefore forward a
+    paste incrementally without interpreting an embedded mouse report, Page
+    key, focus event, or Railmux emergency escape as local input.
+    """
+
+    raw: bytes
 
 
 @dataclass(frozen=True)
@@ -116,11 +130,7 @@ class TermuxTouchKeyboard:
 
     @staticmethod
     def _is_plain_left_press(event: SgrMouseEvent) -> bool:
-        return (
-            event.pressed
-            and event.button == 0
-            and event.wheel_direction == 0
-        )
+        return event.pressed and event.button == 0 and event.wheel_direction == 0
 
     def pointer_event(
         self,
@@ -135,10 +145,7 @@ class TermuxTouchKeyboard:
     ) -> TouchKeyboardAction:
         """Consume a prompt tap and its paired release when assistance applies."""
         if self._release_button is not None:
-            if (
-                not event.pressed
-                and event.button & 3 == self._release_button
-            ):
+            if not event.pressed and event.button & 3 == self._release_button:
                 self._release_button = None
                 return TouchKeyboardAction(handled=True)
             # Termux normally emits only the paired release after the press.
@@ -186,9 +193,7 @@ class TermuxTouchKeyboard:
             observed_at = time.monotonic() if now is None else now
             restored = self.cancel()
             if restored:
-                self._post_close_reassert_at = (
-                    observed_at + self.close_reassert_delay
-                )
+                self._post_close_reassert_at = observed_at + self.close_reassert_delay
             return restored
         if not self._active:
             return False
@@ -211,9 +216,7 @@ class TermuxTouchKeyboard:
             observed_at = time.monotonic() if now is None else now
             restored = self.cancel()
             if restored:
-                self._post_close_reassert_at = (
-                    observed_at + self.close_reassert_delay
-                )
+                self._post_close_reassert_at = observed_at + self.close_reassert_delay
             return restored
         return False
 
@@ -249,9 +252,8 @@ class TermuxTouchKeyboard:
     def cancel(self, *, preserve_close_reassert: bool = False) -> bool:
         """Clear local touch state and report whether tracking must resume."""
         was_active = self._active or self._close_reassert_pending
-        keep_close_reassert = (
-            preserve_close_reassert
-            and (self._keyboard_projected or self._close_reassert_pending)
+        keep_close_reassert = preserve_close_reassert and (
+            self._keyboard_projected or self._close_reassert_pending
         )
         self._active = False
         self._keyboard_projected = False
@@ -263,16 +265,17 @@ class TermuxTouchKeyboard:
 
 
 class TerminalInputDecoder:
-    """Split bounded SGR mouse reports while retaining partial terminal keys."""
+    """Split controls while keeping bracketed-paste payload completely opaque."""
 
     def __init__(self) -> None:
         self._buffer = bytearray()
         self._pending_since: float | None = None
+        self._in_bracketed_paste = False
 
     def _finish(
         self,
-        parts: list[bytes | SgrMouseEvent],
-    ) -> list[bytes | SgrMouseEvent]:
+        parts: list[bytes | SgrMouseEvent | BracketedPasteInput],
+    ) -> list[bytes | SgrMouseEvent | BracketedPasteInput]:
         if self._buffer:
             if self._pending_since is None:
                 self._pending_since = time.monotonic()
@@ -281,7 +284,9 @@ class TerminalInputDecoder:
         return parts
 
     @staticmethod
-    def _append_bytes(parts: list[bytes | SgrMouseEvent], data: bytes) -> None:
+    def _append_bytes(
+        parts: list[bytes | SgrMouseEvent | BracketedPasteInput], data: bytes
+    ) -> None:
         if not data:
             return
         if parts and isinstance(parts[-1], bytes):
@@ -289,27 +294,63 @@ class TerminalInputDecoder:
         else:
             parts.append(data)
 
-    def feed(self, data: bytes) -> list[bytes | SgrMouseEvent]:
+    @staticmethod
+    def _partial_suffix(data: bytearray, prefixes: tuple[bytes, ...]) -> int:
+        keep = 0
+        for prefix in prefixes:
+            for size in range(1, min(len(data), len(prefix) - 1) + 1):
+                if data[-size:] == prefix[:size]:
+                    keep = max(keep, size)
+        return keep
+
+    def feed(self, data: bytes) -> list[bytes | SgrMouseEvent | BracketedPasteInput]:
         self._buffer.extend(data)
-        parts: list[bytes | SgrMouseEvent] = []
+        parts: list[bytes | SgrMouseEvent | BracketedPasteInput] = []
         while self._buffer:
-            marker = self._buffer.find(_SGR_MOUSE_PREFIX)
-            if marker < 0:
-                keep = 0
-                for prefix in (_SGR_MOUSE_PREFIX, _PAGE_UP, _PAGE_DOWN):
-                    for size in range(
-                        1,
-                        min(len(self._buffer), len(prefix) - 1) + 1,
-                    ):
-                        if self._buffer[-size:] == prefix[:size]:
-                            keep = max(keep, size)
+            if self._in_bracketed_paste:
+                end = self._buffer.find(_BRACKETED_PASTE_END)
+                if end >= 0:
+                    end += len(_BRACKETED_PASTE_END)
+                    parts.append(BracketedPasteInput(bytes(self._buffer[:end])))
+                    del self._buffer[:end]
+                    self._in_bracketed_paste = False
+                    continue
+                keep = self._partial_suffix(self._buffer, (_BRACKETED_PASTE_END,))
+                emit = len(self._buffer) - keep
+                if emit:
+                    parts.append(BracketedPasteInput(bytes(self._buffer[:emit])))
+                    del self._buffer[:emit]
+                return self._finish(parts)
+
+            paste_marker = self._buffer.find(_BRACKETED_PASTE_BEGIN)
+            mouse_marker = self._buffer.find(_SGR_MOUSE_PREFIX)
+            markers = tuple(
+                marker for marker in (paste_marker, mouse_marker) if marker >= 0
+            )
+            if not markers:
+                keep = self._partial_suffix(
+                    self._buffer,
+                    (
+                        _SGR_MOUSE_PREFIX,
+                        _PAGE_UP,
+                        _PAGE_DOWN,
+                        _BRACKETED_PASTE_BEGIN,
+                    ),
+                )
                 emit = len(self._buffer) - keep
                 self._append_bytes(parts, bytes(self._buffer[:emit]))
                 del self._buffer[:emit]
                 return self._finish(parts)
+
+            marker = min(markers)
             if marker:
                 self._append_bytes(parts, bytes(self._buffer[:marker]))
                 del self._buffer[:marker]
+                paste_marker -= marker
+                mouse_marker -= marker
+            if paste_marker == 0:
+                self._in_bracketed_paste = True
+                continue
             end = next(
                 (
                     index
@@ -347,11 +388,12 @@ class TerminalInputDecoder:
         remaining = delay - (time.monotonic() - self._pending_since)
         return max(0.0, min(maximum, remaining))
 
-    def flush_pending(self, delay: float = 0.02) -> list[bytes]:
+    def flush_pending(self, delay: float = 0.02) -> list[bytes | BracketedPasteInput]:
         if (
             not self._buffer
             or self._pending_since is None
             or time.monotonic() - self._pending_since < delay
+            or self._in_bracketed_paste
         ):
             return []
         data = bytes(self._buffer)
@@ -435,9 +477,7 @@ def _plain_display_cells(line: bytes, width: int) -> tuple[str | None, ...]:
 
 
 _CLICK_TOKEN_RE = re.compile(r"""[^\s<>"'`]+""")
-_PATH_LINE_COLUMN_RE = re.compile(
-    r"^(.*):([1-9][0-9]*):([1-9][0-9]*)$"
-)
+_PATH_LINE_COLUMN_RE = re.compile(r"^(.*):([1-9][0-9]*):([1-9][0-9]*)$")
 _PATH_LINE_RE = re.compile(r"^(.*):([1-9][0-9]*)$")
 _BARE_PATH_RE = re.compile(r"^[A-Za-z0-9_.@+~-]+\.[A-Za-z][A-Za-z0-9]{0,11}$")
 _HIDDEN_PATH_RE = re.compile(r"^\.[A-Za-z0-9][A-Za-z0-9_.@+~-]*$")
@@ -450,9 +490,7 @@ _URL_ASCII_CHARACTERS = frozenset(
     "0123456789"
     "-._~:/?#[]@!$&()*+,;=%"
 )
-_EMBEDDED_ABSOLUTE_PATH_RE = re.compile(
-    r"(?:^|(?<=[^A-Za-z0-9_.@+~/-]))/"
-)
+_EMBEDDED_ABSOLUTE_PATH_RE = re.compile(r"(?:^|(?<=[^A-Za-z0-9_.@+~/-]))/")
 
 
 def _clicked_character_index(
@@ -526,12 +564,7 @@ def _path_parts(token: str) -> tuple[str, int | None, int | None] | None:
         if location is not None:
             path = location.group(1)
             line = min(int(location.group(2)), 2_147_483_647)
-    if (
-        not path
-        or len(path.encode("utf-8")) > 4096
-        or "\x00" in path
-        or "://" in path
-    ):
+    if not path or len(path.encode("utf-8")) > 4096 or "\x00" in path or "://" in path:
         return None
     name = path.rsplit("/", 1)[-1]
     path_like = (
@@ -583,8 +616,7 @@ def click_target_at(
                 and len(candidate.encode("utf-8")) <= 8192
             ):
                 start_cell = sum(
-                    _display_width(character)
-                    for character in text[:candidate_start]
+                    _display_width(character) for character in text[:candidate_start]
                 )
                 return ClickTarget(
                     "url",
@@ -603,9 +635,7 @@ def click_target_at(
         path = _path_parts(token)
         if path is not None:
             value, line, target_column = path
-            start_cell = sum(
-                _display_width(character) for character in text[:start]
-            )
+            start_cell = sum(_display_width(character) for character in text[:start])
             return ClickTarget(
                 "path",
                 value,
@@ -634,9 +664,7 @@ def _pane_cells(
     for index in range(start, min(end, route.height)):
         line = source.rows[index] if index < len(source.rows) else b""
         cells = _plain_display_cells(line, decode_width)
-        decoded.append(
-            cells[source.row_x_offset : source.row_x_offset + route.width]
-        )
+        decoded.append(cells[source.row_x_offset : source.row_x_offset + route.width])
     return tuple(decoded)
 
 
@@ -699,9 +727,7 @@ def _hard_wrapped_target(
             or not target.highlight_text
         ):
             continue
-        first_fragment = target.highlight_text.decode(
-            "utf-8", errors="replace"
-        )
+        first_fragment = target.highlight_text.decode("utf-8", errors="replace")
         fragments: list[tuple[int, int, str]] = [
             (first, target.highlight_column, first_fragment)
         ]
@@ -725,28 +751,17 @@ def _hard_wrapped_target(
             )
             if (
                 not fragment
-                or (
-                    fragment[0] not in "._~"
-                    and not fragment[0].isalnum()
-                )
-                or (
-                    "/" not in fragment
-                    and _path_parts(fragment) is None
-                )
+                or (fragment[0] not in "._~" and not fragment[0].isalnum())
+                or ("/" not in fragment and _path_parts(fragment) is None)
             ):
                 break
             # A trailing slash explicitly promises a continuation. Otherwise
             # require the prior fragment to end close to the pane edge, which
             # distinguishes visual wrapping from unrelated adjacent lines.
             explicit_continuation = joined.endswith(("/", "-"))
-            if (
-                not explicit_continuation
-                and route.width - previous_end > 8
-            ):
+            if not explicit_continuation and route.width - previous_end > 8:
                 break
-            fragment_column = _display_column(
-                following_text, len(indent)
-            )
+            fragment_column = _display_column(following_text, len(indent))
             fragments.append((following, fragment_column, fragment))
             joined += fragment
             previous_end = fragment_column + sum(
@@ -819,11 +834,7 @@ def _highlight_runs(
     route_y: int,
 ) -> tuple[SelectionSegment, ...]:
     """Split one logical wrapped highlight back into physical pane rows."""
-    if (
-        target.highlight_column is None
-        or not target.highlight_text
-        or width <= 0
-    ):
+    if target.highlight_column is None or not target.highlight_text or width <= 0:
         return ()
     text = target.highlight_text.decode("utf-8", errors="replace")
     row = first_row + target.highlight_column // width
@@ -836,11 +847,13 @@ def _highlight_runs(
         cell_width = _display_width(character)
         if cell_width > 0 and column + cell_width > width:
             if chunk:
-                chunks.append((
-                    route_y + chunk_row,
-                    route_x + chunk_column,
-                    "".join(chunk).encode("utf-8"),
-                ))
+                chunks.append(
+                    (
+                        route_y + chunk_row,
+                        route_x + chunk_column,
+                        "".join(chunk).encode("utf-8"),
+                    )
+                )
             row += 1
             column = 0
             chunk_row = row
@@ -849,22 +862,26 @@ def _highlight_runs(
         chunk.append(character)
         column += cell_width
         if column == width:
-            chunks.append((
-                route_y + chunk_row,
-                route_x + chunk_column,
-                "".join(chunk).encode("utf-8"),
-            ))
+            chunks.append(
+                (
+                    route_y + chunk_row,
+                    route_x + chunk_column,
+                    "".join(chunk).encode("utf-8"),
+                )
+            )
             row += 1
             column = 0
             chunk_row = row
             chunk_column = 0
             chunk = []
     if chunk:
-        chunks.append((
-            route_y + chunk_row,
-            route_x + chunk_column,
-            "".join(chunk).encode("utf-8"),
-        ))
+        chunks.append(
+            (
+                route_y + chunk_row,
+                route_x + chunk_column,
+                "".join(chunk).encode("utf-8"),
+            )
+        )
     return tuple(chunks)
 
 
@@ -883,9 +900,7 @@ def _target_in_rows(
     # heuristic accept a shorter prefix first: on a three-row URL that made
     # rows one and two resolve only the first two fragments, while hovering
     # the final row happened to resolve the complete URL.
-    soft_wrapped = (
-        row > 0 and _rows_are_wrapped(rows, row - 1)
-    ) or (
+    soft_wrapped = (row > 0 and _rows_are_wrapped(rows, row - 1)) or (
         row + 1 < len(rows) and _rows_are_wrapped(rows, row)
     )
     if not soft_wrapped:
@@ -898,18 +913,10 @@ def _target_in_rows(
         if hard_wrapped is not None:
             return hard_wrapped
     first = row
-    while (
-        first > 0
-        and row - first < 7
-        and _rows_are_wrapped(rows, first - 1)
-    ):
+    while first > 0 and row - first < 7 and _rows_are_wrapped(rows, first - 1):
         first -= 1
     last = row
-    while (
-        last + 1 < len(rows)
-        and last - first < 7
-        and _rows_are_wrapped(rows, last)
-    ):
+    while last + 1 < len(rows) and last - first < 7 and _rows_are_wrapped(rows, last):
         last += 1
     cells = tuple(cell for pane_row in rows[first : last + 1] for cell in pane_row)
     target = click_target_at(
@@ -984,10 +991,7 @@ class LocalTextSelection:
         event: SgrMouseEvent,
         source: SelectionSource | None,
     ) -> ClickTarget | None:
-        if (
-            source is None
-            or source.route.pane_id is None
-        ):
+        if source is None or source.route.pane_id is None:
             return None
         row = event.y - 1 - source.route.y
         column = event.x - 1 - source.route.x
@@ -1030,11 +1034,13 @@ class LocalTextSelection:
             or duration <= 0
         ):
             return False
-        self._flash = target.highlight_segments or ((
-            target.highlight_row,
-            target.highlight_column,
-            target.highlight_text,
-        ),)
+        self._flash = target.highlight_segments or (
+            (
+                target.highlight_row,
+                target.highlight_column,
+                target.highlight_text,
+            ),
+        )
         if any(
             row is None or column is None or not text
             for row, column, text in self._flash
@@ -1042,18 +1048,13 @@ class LocalTextSelection:
             self._flash = ()
             return False
         self._flash = tuple(
-            (int(row), int(column), text)
-            for row, column, text in self._flash
+            (int(row), int(column), text) for row, column, text in self._flash
         )
         self._flash_until = now + duration
         return True
 
     def clear_expired_flash(self, now: float) -> bool:
-        if (
-            not self._flash
-            or self._flash_until is None
-            or now < self._flash_until
-        ):
+        if not self._flash or self._flash_until is None or now < self._flash_until:
             return False
         self._flash = ()
         self._flash_until = None

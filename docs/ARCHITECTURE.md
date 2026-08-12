@@ -139,18 +139,26 @@ marker but keep the generic `xterm-256color` terminal name, so tmux cannot
 infer synchronized-output support from `TERM`. Managed clients add tmux's
 per-client `sync` feature when that marker is present. The ordinary same-session
 client runs behind a private PTY and still addresses the selected tmux server
-directly. Its entry-side proxy forwards every byte except DECTCEM cursor
-visibility: only a real visibility transition starts a coalesced burst, ordinary
-output remains byte-exact, and the last requested state is restored after 100 ms
-of visibility quiet. A bounded VT control-state parser prevents injection into
-partial CSI or opaque OSC/DCS payload. The proxy does not interpret text,
-frames, panes, input, or provider history. This preserves Codex's Working timer
-and animations while preventing Windows Terminal from painting the cursor at
-each intermediate frame-final row. If private-PTY setup fails, the unfiltered
-direct client remains the fail-safe. A cross-Terminal-
+directly. Its entry-side proxy forwards every byte except bounded cursor
+presentation controls: only a real DECTCEM visibility transition starts a
+coalesced burst, ordinary output remains byte-exact, and the last requested
+state is restored after 100 ms of visibility quiet. While that cursor is
+hidden, the proxy recognizes only paired DEC synchronized-output boundaries
+and proven absolute CUP coordinates. It places the last quiet visible input
+anchor immediately before the outer frame commit, so Windows Terminal's
+logical IME anchor does not follow Codex through intermediate Working, prompt,
+and footer coordinates. It never removes a frame draw, guesses after relative
+or printable cursor movement, or pins the cursor after output becomes quiet;
+explicit input and resize invalidate the saved coordinate. A bounded VT
+control-state parser prevents injection into partial CSI or opaque OSC/DCS
+payload. The proxy does not interpret text, panes, provider state, or provider
+history. This preserves Codex's Working timer and animations while preventing
+Windows Terminal from painting or anchoring IME text at each intermediate
+frame-final row. If private-PTY setup fails, the unfiltered direct client
+remains the fail-safe. A cross-Terminal-
 Services fallback bridge carries only the resulting capability bit into its
 server-session PTY—never the opaque marker—and applies the same per-client
-feature before attach.
+feature and entry-side cursor stabilization before attach.
 
 The managed Windows Urwid screen also brackets each changed sidebar paint in
 application-side DEC synchronized output. tmux can therefore collect the many
@@ -341,6 +349,11 @@ observe the renderer's intermediate clear state. The marker is a local
 capability bit only: its opaque value is never persisted or sent remotely, and
 POSIX, WSL, Termux, and unvalidated Windows terminal hosts keep the ordinary
 byte-exact repaint path.
+Bracketed-paste begin/end boundaries are retained across arbitrary local and
+wire read splits. Their enclosed bytes are opaque provider input: Railmux does
+not reinterpret an embedded emergency escape, Page key, focus sequence, or SGR
+mouse-shaped payload as a local action. Outside that exact boundary, the
+ordinary local escape, history, pointer, and focus routes remain authoritative.
 
 ### SSH local history and rewind generations
 
