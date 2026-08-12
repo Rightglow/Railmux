@@ -60,10 +60,10 @@ runtime_bridges = "Clipboard, browser, separate-terminal, self-update ownership,
 unicode_profile = "The managed runtime path and provider history must still be exercised with a real non-ASCII Windows profile name."
 
 [release_validation]
-date = "2026-08-11"
-candidate = "0.4.0rc12"
-scope = "Rc12 keeps the immutable r2 runtime and rc11 provider geometry/CJK fixes, restores a stable visible cursor and exact validated IME anchor after noisy Codex visibility bursts, makes Claude metadata scans append-incremental, and advances exact-match SSH display protocol v16 with absolute history row coordinates plus a bounded read-only history worker. Provider files remain read-only; cursor handling changes only presentation controls; old SSH peers enter the explicit upgrade flow."
-remaining_rc_gate = "On the affected real Windows profile, install rc12 without deleting the managed runtime or provider/lock data. Resume Codex, confirm the cursor is visible at input and IME pre-edit no longer jumps within the input region. From Windows and macOS/Linux clients, accept the exact rc12 remote upgrade, paste or generate structured output beyond 300 rows while output continues, and verify wheel/Page Up deep history is coherent and the live agent remains responsive. The non-ASCII Windows profile-name case remains a documented limitation rather than a 0.4 blocker."
+date = "2026-08-12"
+candidate = "0.4.0rc13"
+scope = "Rc13 keeps the immutable r2 runtime and protocol v16, validates a grouped swap keeper through the immutable outer-session pane snapshot instead of a pane-targeted session alias, and commits complete managed-Windows SSH repaints through the validated Windows Terminal synchronized-output capability. It also reduces read-only SSH history discovery and repeated transcript-format cost without changing provider files, session authority, or non-Windows terminal output."
+remaining_rc_gate = "On the affected real Windows profile, install rc13 without deleting the managed runtime or provider/lock data. From Windows Terminal run railmux ssh to Linux with an existing swap keeper, confirm attach succeeds, then type through a Chinese IME while Codex Working/output frames continue and verify pre-edit text remains stable. Recheck wheel/Page Up history, paste, resize, Ctrl-C delivery, Ctrl-] disconnect, and terminal restoration. The non-ASCII Windows profile-name case remains a documented limitation rather than a 0.4 blocker."
 
 [[scenarios]]
 id = "WW-PACKAGE-DISPATCH"

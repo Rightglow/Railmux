@@ -695,6 +695,40 @@ def test_server_classifies_remote_lifecycle(
     assert fast_display_server._classify_remote_exit("$4") is expected
 
 
+def test_server_controller_snapshot_is_scoped_to_managed_session(monkeypatch):
+    monkeypatch.setattr(
+        fast_display_server,
+        "_tmux_output",
+        lambda *_args: (
+            "$4\t%1\t0\t%1\n"
+            "$4\t%8\t0\t%1"
+        ),
+    )
+
+    assert fast_display_server._session_controller_pane("$4") == "%1"
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        "$5\t%1\t0\t%1",
+        "$4\t%1\t1\t%1",
+        "$4\t%1\t0\t%9",
+        "$4\t%1\t0\t%1\n$4\t%8\t0\t%8",
+        "$4\t%1\t0\tinvalid",
+        "$4\t%1\t0",
+    ],
+)
+def test_server_controller_snapshot_fails_closed(monkeypatch, snapshot):
+    monkeypatch.setattr(
+        fast_display_server,
+        "_tmux_output",
+        lambda *_args: snapshot,
+    )
+
+    assert fast_display_server._session_controller_pane("$4") is None
+
+
 def test_observed_soft_quit_intent_skips_tmux_requery(monkeypatch):
     target = fast_display_server.tmux_server.TmuxServerTarget("/tmp/tmux/railmux", 123)
     intended = MagicMock(return_value=True)
@@ -811,14 +845,24 @@ def test_remote_watchdog_records_only_after_consecutive_failures(monkeypatch):
 
 
 def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
+    monkeypatch.setattr(
+        fast_display_server,
+        "_live_controller",
+        lambda _session: pytest.fail("pane routing repeated controller probes"),
+    )
+    calls = []
+
+    def list_panes(*args, **kwargs):
+        calls.append((args, kwargs))
+        return (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %1\n"
+        )
+
     monkeypatch.setattr(
         subprocess,
         "check_output",
-        lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1    \n"
-        ),
+        list_panes,
     )
 
     assert (
@@ -831,19 +875,34 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     assert pane == fast_display_server._PaneGeometry(
         "%8", 31, 0, 49, 20, mouse_forwardable=True
     )
+    assert len(calls) == 2
+
+
+def test_server_rejects_incoherent_controller_identity_in_pane_snapshot(monkeypatch):
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: (
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %9\n"
+        ),
+    )
+
+    assert fast_display_server._list_agent_panes(
+        "$4", claude_history_policy="ask"
+    ) == ()
 
 
 def test_history_worker_topology_cache_reuses_one_gesture_snapshot(monkeypatch):
     fast_display_server._PANE_GEOMETRY_CACHE.clear()
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     calls = 0
 
     def list_panes(*_args, **_kwargs):
         nonlocal calls
         calls += 1
         return (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1    \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %1\n"
         )
 
     monkeypatch.setattr(subprocess, "check_output", list_panes)
@@ -866,13 +925,12 @@ def test_history_worker_topology_cache_reuses_one_gesture_snapshot(monkeypatch):
 
 def test_server_projects_bounded_codex_history_generation(monkeypatch):
     marker = "019fc7c1-a27c-7ae0-9937-7570552a112a"
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker} \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001 %1\n"
         ),
     )
 
@@ -880,7 +938,7 @@ def test_server_projects_bounded_codex_history_generation(monkeypatch):
 
     assert len(panes) == 1
     assert panes[0].history_generation == fast_display_server._history_generation(
-        marker
+        marker, "9001"
     )
     assert panes[0].history_generation != 0
     assert not panes[0].canonical_history
@@ -888,13 +946,12 @@ def test_server_projects_bounded_codex_history_generation(monkeypatch):
 
 def test_server_restart_changes_history_generation(monkeypatch):
     marker = "019fc7c1-a27c-7ae0-9937-7570552a112a"
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001\n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001 %1\n"
         ),
     )
 
@@ -926,14 +983,13 @@ def test_server_accepts_canonical_history_only_for_matching_transcript(
     )
     assert transcript is not None
     generation = f"{tmux_ctl.RAILMUX_CANONICAL_HISTORY_PREFIX}{session_id}"
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
             f"$4 @1 0 0 %8 108 31 0 49 20 10 0 1  "
-            f"{transcript} {generation} \n"
+            f"{transcript} {generation}  9001 %1\n"
         ),
     )
 
@@ -973,14 +1029,13 @@ def test_server_released_canonical_marker_fails_back_to_raw(
     )
     assert transcript is not None
     generation = f"{legacy_prefix}{session_id}"
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
             f"$4 @1 0 0 %8 108 31 0 49 20 10 0 1  "
-            f"{transcript} {generation} \n"
+            f"{transcript} {generation}  9001 %1\n"
         ),
     )
 
@@ -1002,13 +1057,12 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
         sort_keys=True,
         separators=(",", ":"),
     )
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1    {marker}\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1    {marker} 9001 %1\n"
         ),
     )
 
@@ -1025,18 +1079,18 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
     ("rows", "expected"),
     [
         (
-            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0    \n"
-            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0    \n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1\n"
+            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0     9001 %1\n",
             (),
         ),
         (
-            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0    \n"
-            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0    \n",
+            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0     9001 %1\n",
             (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
         ),
         (
-            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0    \n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0    \n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1\n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0     9001 %1\n",
             (),
         ),
     ],
@@ -1044,7 +1098,6 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
 def test_server_exposes_only_coherent_visible_panes_when_zoomed(
     monkeypatch, rows, expected
 ):
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: rows)
 
     assert (
@@ -1055,27 +1108,19 @@ def test_server_exposes_only_coherent_visible_panes_when_zoomed(
 
 def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
     target = fast_display_server.tmux_server.TmuxServerTarget("/tmp/default", 44)
-    monkeypatch.setattr(fast_display_server, "_live_controller", lambda _session: "%1")
     monkeypatch.setattr(
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0    \n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
             "$4 @1 0 0 %8 108 31 0 49 20 0 0 1 "
-            '{"source":1}   \n'
+            '{"source":1}    9001 %1\n'
         ),
     )
     monkeypatch.setattr(
         fast_display_server.tmux_server,
-        "resolve_history_source",
-        lambda marker, **_kwargs: (target, "$7") if marker else None,
-    )
-    monkeypatch.setattr(
-        fast_display_server.tmux_server,
-        "target_single_pane_id",
-        lambda candidate, session, **_kwargs: (
-            "%2" if (candidate, session) == (target, "$7") else None
-        ),
+        "resolve_history_pane",
+        lambda marker, **_kwargs: (target, "%2") if marker else None,
     )
 
     assert fast_display_server._list_agent_panes("$4", claude_history_policy="ask") == (
@@ -1563,6 +1608,90 @@ def test_transcript_cache_evicts_least_recent_file_width(monkeypatch, tmp_path):
         assert tuple(fast_display_server._TRANSCRIPT_CACHE) == tuple(keys[-2:])
     finally:
         fast_display_server._TRANSCRIPT_CACHE.clear()
+
+
+def test_transcript_format_cache_reuses_exact_identity_across_widths(
+    monkeypatch, tmp_path,
+):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    path = tmp_path / f"{session_id}.jsonl"
+    path.write_text('{"type":"user"}\n')
+    marker = fast_display_server.tmux_server.encode_transcript_source(
+        "claude", session_id, path
+    )
+    assert marker is not None
+    calls = []
+
+    def format_transcript(*_args, **_kwargs):
+        calls.append(True)
+        return iter(("formatted transcript",))
+
+    monkeypatch.setattr(
+        fast_display_server.transcript_renderer,
+        "format_transcript",
+        format_transcript,
+    )
+    fast_display_server._TRANSCRIPT_CACHE.clear()
+    fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+    try:
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 40, allow_stale=False
+        ) is not None
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 10, allow_stale=False
+        ) is not None
+        assert len(calls) == 1
+
+        path.write_text('{"type":"user","changed":true}\n')
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 20, allow_stale=False
+        ) is not None
+        assert len(calls) == 2
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+        fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+
+
+def test_transcript_format_cache_does_not_retain_oversized_projection(
+    monkeypatch, tmp_path,
+):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    path = tmp_path / f"{session_id}.jsonl"
+    path.write_text('{"type":"user"}\n')
+    marker = fast_display_server.tmux_server.encode_transcript_source(
+        "claude", session_id, path
+    )
+    assert marker is not None
+    calls = []
+
+    def format_transcript(*_args, **_kwargs):
+        calls.append(True)
+        return iter(("too large",))
+
+    monkeypatch.setattr(
+        fast_display_server.transcript_renderer,
+        "format_transcript",
+        format_transcript,
+    )
+    monkeypatch.setattr(
+        fast_display_server, "_TRANSCRIPT_FORMAT_CACHE_MAX_CHARS", 3,
+    )
+    fast_display_server._TRANSCRIPT_CACHE.clear()
+    fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+    try:
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 40, allow_stale=False
+        ) is not None
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 10, allow_stale=False
+        ) is not None
+        assert len(calls) == 2
+        assert not fast_display_server._TRANSCRIPT_FORMAT_CACHE
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+        fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
 
 
 def test_transcript_rows_render_codex_locator_with_codex_formatter(tmp_path):

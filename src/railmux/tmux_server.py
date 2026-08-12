@@ -446,12 +446,12 @@ def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
     return source, fd
 
 
-def resolve_history_source(
+def resolve_history_pane(
     raw: str,
     *,
     timeout: float = 0.5,
 ) -> tuple[TmuxServerTarget, str] | None:
-    """Resolve and revalidate one bounded nested-history locator."""
+    """Resolve a nested source and its sole live pane with one session probe."""
     if not raw or len(raw) > 256:
         return None
     try:
@@ -484,13 +484,12 @@ def resolve_history_source(
         )
     except TmuxServerError:
         return None
-    if (
-        target is None
-        or target.server_pid != server_pid
-        or not target_has_session(target, session_id, timeout=timeout)
-    ):
+    if target is None or target.server_pid != server_pid:
         return None
-    return target, session_id
+    pane_id = target_single_pane_id(target, session_id, timeout=timeout)
+    if pane_id is None:
+        return None
+    return target, pane_id
 
 
 def target_single_pane_id(

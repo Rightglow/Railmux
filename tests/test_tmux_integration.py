@@ -759,6 +759,63 @@ def test_real_remote_path_resolution_is_bound_to_visible_agent(
     ) == PathResult(9, PathKind.UNAVAILABLE)
 
 
+def test_real_remote_validation_accepts_grouped_swap_keeper(
+    isolated_tmux,
+    monkeypatch,
+):
+    session_name, controller_pane, socket_path = isolated_tmux
+    monkeypatch.setattr(
+        tmux_server,
+        "tmux_argv",
+        lambda *args, **_kwargs: ["tmux", "-S", socket_path, *args],
+    )
+    subprocess.run(
+        tmux_server.tmux_argv(
+            "set-window-option",
+            "-t",
+            session_name,
+            "@railmux_controller_pane",
+            controller_pane,
+        ),
+        check=True,
+    )
+    session_id = subprocess.check_output(
+        tmux_server.tmux_argv(
+            "display-message", "-p", "-t", session_name, "#{session_id}"
+        ),
+        text=True,
+    ).strip()
+    keeper = f"railmux-keep-validation-{os.getpid()}"
+    subprocess.run(
+        tmux_server.tmux_argv(
+            "new-session", "-d", "-t", session_name, "-s", keeper
+        ),
+        check=True,
+    )
+
+    # A pane-targeted identity is allowed to format under the grouped keeper,
+    # but validation through the immutable main session must remain healthy.
+    pane_target_session = subprocess.check_output(
+        tmux_server.tmux_argv(
+            "display-message", "-p", "-t", controller_pane, "#{session_id}"
+        ),
+        text=True,
+    ).strip()
+    keeper_id = subprocess.check_output(
+        tmux_server.tmux_argv(
+            "display-message", "-p", "-t", keeper, "#{session_id}"
+        ),
+        text=True,
+    ).strip()
+    assert pane_target_session in {session_id, keeper_id}
+    assert fast_display_server._live_controller(session_id) == controller_pane
+    assert fast_display_server._validate_railmux(session_name) == session_id
+    assert subprocess.run(
+        tmux_server.tmux_argv("has-session", "-t", keeper),
+        check=False,
+    ).returncode == 0
+
+
 def _script_command(command: str) -> list[str]:
     """Run *command* under a PTY with the platform's script(1) syntax."""
     if sys.platform == "darwin":

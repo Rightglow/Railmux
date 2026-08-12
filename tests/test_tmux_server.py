@@ -457,18 +457,23 @@ def test_nested_history_source_round_trip_revalidates_exact_legacy_target(
     marker = tmux_server.encode_history_source(target, "$7", legacy=True)
     monkeypatch.setattr(
         tmux_server, "discover_legacy_target", lambda **_kwargs: target)
-    has_session = []
+    panes = []
     monkeypatch.setattr(
         tmux_server,
         "target_has_session",
+        lambda *_args, **_kwargs: pytest.fail("session was probed twice"),
+    )
+    monkeypatch.setattr(
+        tmux_server,
+        "target_single_pane_id",
         lambda candidate, session, **_kwargs: (
-            has_session.append((candidate, session)) or True
+            panes.append((candidate, session)) or "%2"
         ),
     )
 
     assert marker is not None
-    assert tmux_server.resolve_history_source(marker) == (target, "$7")
-    assert has_session == [(target, "$7")]
+    assert tmux_server.resolve_history_pane(marker) == (target, "%2")
+    assert panes == [(target, "$7")]
 
 
 def test_nested_history_source_rejects_changed_server_or_extra_fields(monkeypatch):
@@ -481,8 +486,8 @@ def test_nested_history_source_rejects_changed_server_or_extra_fields(monkeypatc
     )
 
     assert marker is not None
-    assert tmux_server.resolve_history_source(marker) is None
-    assert tmux_server.resolve_history_source(
+    assert tmux_server.resolve_history_pane(marker) is None
+    assert tmux_server.resolve_history_pane(
         marker[:-1] + ',"unexpected":true}'
     ) is None
 

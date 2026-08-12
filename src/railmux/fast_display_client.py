@@ -22,7 +22,7 @@ import sys
 import termios
 import time
 import tty
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import BinaryIO, Optional, Sequence
@@ -138,6 +138,15 @@ _KNOWN_REMOTE_EXITS = {
     int(RemoteExit.SOFT_QUIT): "soft-quit; agent sessions were left running",
     int(RemoteExit.HARD_QUIT): "hard-quit; the managed Railmux session ended",
 }
+_SYNC_OUTPUT_BEGIN = b"\033[?2026h"
+_SYNC_OUTPUT_END = b"\033[?2026l"
+
+
+def _use_local_synchronized_output(
+    environ: Mapping[str, str] = os.environ,
+) -> bool:
+    """Gate atomic local repainting to the validated Windows Terminal route."""
+    return running_in_windows_wrapper(environ) and bool(environ.get("WT_SESSION"))
 
 
 def _local_history_wheel_lines() -> int:
@@ -546,10 +555,12 @@ class TerminalSurface:
         *,
         mouse: bool = True,
         mouse_hover: bool = True,
+        synchronized_output: bool = False,
     ) -> None:
         self.stream = stream
         self.mouse = mouse
         self.mouse_tracking_mode = 1003 if mouse_hover else 1002
+        self.synchronized_output = synchronized_output
         self.active = False
         self.interaction_active = False
         self.mouse_active = False
@@ -576,6 +587,14 @@ class TerminalSurface:
         self._local_status_bounds: tuple[int, int, int] | None = None
         self._local_status_interruptible = False
         self._local_status_expires_at: float | None = None
+
+    def _write_frame(self, rendered: Sequence[bytes]) -> None:
+        """Write one complete local repaint, atomically where supported."""
+        payload = b"".join(rendered)
+        if self.synchronized_output:
+            payload = _SYNC_OUTPUT_BEGIN + payload + _SYNC_OUTPUT_END
+        self.stream.write(payload)
+        self.stream.flush()
 
     def _mouse_mode(self, enabled: bool) -> bytes:
         suffix = b"h" if enabled else b"l"
@@ -750,8 +769,7 @@ class TerminalSurface:
                 projection_top=projection_top,
                 visible_height=visible_height,
             )
-        self.stream.write(b"".join(rendered))
-        self.stream.flush()
+        self._write_frame(rendered)
 
     def _render_local_status(self, *, hide_cursor: bool = True) -> bytes:
         """Render and locate the current local status-right replacement."""
@@ -922,8 +940,7 @@ class TerminalSurface:
             rendered.append(
                 f"\033[{top + offset};{left}H{row}\033[?25l".encode("utf-8")
             )
-        self.stream.write(b"".join(rendered))
-        self.stream.flush()
+        self._write_frame(rendered)
         self._painted_cursor_visible = False
 
     def claude_history_prompt_choice(
@@ -984,8 +1001,7 @@ class TerminalSurface:
             rendered.append(
                 f"\033[{top + offset};{left}H{row}\033[?25l".encode("utf-8")
             )
-        self.stream.write(b"".join(rendered))
-        self.stream.flush()
+        self._write_frame(rendered)
         self._painted_cursor_visible = False
 
     def path_open_prompt_choice(
@@ -1196,8 +1212,7 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
-        self.stream.write(b"".join(rendered))
-        self.stream.flush()
+        self._write_frame(rendered)
         return bool(enabled_modes & TerminalMode.FOCUS_EVENTS)
 
     def paint_overlays(
@@ -1232,8 +1247,7 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
-        self.stream.write(b"".join(rendered))
-        self.stream.flush()
+        self._write_frame(rendered)
 
     def paint_changed_rows(
         self,
@@ -1286,8 +1300,7 @@ class TerminalSurface:
             projection_top=projection_top,
             visible_height=visible_height,
         )
-        self.stream.write(b"".join(rendered))
-        self.stream.flush()
+        self._write_frame(rendered)
 
     def reassert_cursor(self) -> None:
         """Restore the last authoritative cursor without repainting the frame."""
@@ -2354,6 +2367,7 @@ def run(args: argparse.Namespace) -> int:
         sys.stdout.buffer,
         mouse=not args.no_mouse,
         mouse_hover=not termux_touch,
+        synchronized_output=_use_local_synchronized_output(),
     )
     surface.show_startup(current_size, "Connecting to remote host…")
     try:

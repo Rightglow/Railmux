@@ -333,6 +333,14 @@ Wide glyphs consume their declared terminal width exactly once. The renderer
 skips a physical continuation cell only when it is empty or repeats the wide
 glyph's data. Different content from a partial repaint is preserved, and a
 legitimate adjacent CJK glyph remains distinct.
+On the managed-Windows client, a validated Windows Terminal marker enables one
+local synchronized-output boundary around every complete SSH repaint. Row
+cleanup, replacement content, overlays, status, and the final authoritative
+cursor are committed as one terminal frame so an IME pre-edit surface cannot
+observe the renderer's intermediate clear state. The marker is a local
+capability bit only: its opaque value is never persisted or sent remotely, and
+POSIX, WSL, Termux, and unvalidated Windows terminal hosts keep the ordinary
+byte-exact repaint path.
 
 ### SSH local history and rewind generations
 
@@ -405,10 +413,16 @@ read-only worker owns tmux capture, transcript formatting, and history-row
 rendering, then wakes the PTY select loop through a self-pipe. Pending routing
 prefetches coalesce to the newest request; deep requests remain individually
 identified, and stale results are rejected by the client's request/route
-epoch. A short per-policy pane-topology cache avoids repeating serial tmux
-discovery within one gesture, while a config file identity check reloads TOML
-only after an actual change. The worker never writes provider transcripts or
-session metadata.
+epoch. The pane snapshot describes and validates the controller identity with
+the geometry in one tmux result; a nested history marker resolves its sole live
+pane with one exact session probe. A short per-policy pane-topology cache avoids
+repeating that discovery within one gesture, while a config file identity check
+reloads TOML only after an actual change. The worker never writes provider
+transcripts or session metadata. One bounded provider-formatted transcript
+projection may be reused across widths only for the same provider plus exact
+device, inode, mtime, and size identity; each width is still wrapped
+independently. Append, replacement, truncation, provider change, or an
+oversized projection forces the normal read-only format path.
 Styled raw capture is decoded as one chronological terminal stream because
 tmux may carry SGR foreground, background, and text attributes across physical
 row boundaries. Each decoded row is then reset and re-encoded as an
@@ -1176,6 +1190,12 @@ session from destroying a displayed agent. Versioned, slot-specific tmux window
 user options record every transaction. Startup recovery may move only exact
 marked identities; it must never infer ownership from a `cc-*`, `cx-*`, pane
 title, or session-name resemblance.
+Remote-display controller validation is scoped through the immutable outer
+session and its pane list. A shared pane formatted directly may legitimately
+name the keeper session, so pane-targeted `#{session_id}` is not an ownership
+authority. The outer snapshot must still contain exactly one live controller
+and one consistent controller marker; ambiguity or foreign membership fails
+closed without deleting the keeper or provider pane.
 
 Every swap is validate -> mark prepared -> move -> verify -> mark displayed.
 Return is mark returning -> move home -> verify -> clear. A failed post-move

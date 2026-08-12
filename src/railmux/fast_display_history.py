@@ -1063,14 +1063,33 @@ class LocalHistoryView:
         # Prefer an exact whole-viewport match. This is both cheapest and
         # preserves the strongest ambiguity check when the live pane did not
         # change while the deeper capture was in flight.
-        matched_offset: int | None = None
-        for start in range(len(snapshot.lines) - len(anchor), -1, -1):
-            if snapshot.lines[start : start + len(anchor)] == anchor:
-                if matched_offset is not None:
+        # KMP keeps this compatibility path linear even for long repeated
+        # captures. Protocol-v16 coordinates normally bypass it, but bounded
+        # transcript tails and older peers still require exact content proof.
+        prefix = [0] * len(anchor)
+        matched = 0
+        for index in range(1, len(anchor)):
+            while matched and anchor[index] != anchor[matched]:
+                matched = prefix[matched - 1]
+            if anchor[index] == anchor[matched]:
+                matched += 1
+                prefix[index] = matched
+
+        matched_start: int | None = None
+        matched = 0
+        for index, line in enumerate(snapshot.lines):
+            while matched and line != anchor[matched]:
+                matched = prefix[matched - 1]
+            if line == anchor[matched]:
+                matched += 1
+            if matched == len(anchor):
+                start = index + 1 - len(anchor)
+                if matched_start is not None:
                     return None
-                matched_offset = len(snapshot.lines) - (start + len(anchor))
-        if matched_offset is not None:
-            return matched_offset
+                matched_start = start
+                matched = prefix[matched - 1]
+        if matched_start is not None:
+            return len(snapshot.lines) - (matched_start + len(anchor))
 
         # Agent status rows (for example a Codex spinner) can change between
         # the hot snapshot and a deep response. Requiring the

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc13] - 2026-08-12
+
+### Fixed
+
+- Validate the remote Railmux controller from one immutable main-session pane
+  snapshot. A swap keeper may share the same window and cause a pane-targeted
+  tmux format to report the keeper's session ID; that healthy topology no
+  longer makes `railmux ssh` reject attach, while missing, dead, duplicated,
+  foreign, or inconsistent controller identities still fail closed.
+- Wrap each complete managed-Windows `railmux ssh` repaint in Windows
+  Terminal's synchronized-output boundary. Changed rows, overlays, local
+  prompts, status, and the authoritative cursor now become visible together
+  instead of exposing an intermediate clear/rewrite that can disturb IME
+  pre-edit rendering. Other local terminals retain their byte-exact path.
+
+### Changed
+
+- Reduce first-use `railmux ssh` history latency without changing history
+  authority or provider files. One tmux pane snapshot now validates the outer
+  controller together with pane geometry, nested history resolution validates
+  its sole live pane without a redundant session probe, and the legacy content
+  alignment fallback is linear for long repeated captures.
+- Reuse a bounded provider-formatted transcript projection across window widths
+  only while the exact device, inode, mtime, and size identity remains
+  unchanged. Resize still performs width-correct wrapping, while replacement,
+  append, truncation, provider changes, and oversized projections re-enter the
+  ordinary read-only formatter.
+
 ## [0.4.0rc12] - 2026-08-11
 
 ### Changed
@@ -2817,7 +2845,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc6...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc13...HEAD
+[0.4.0rc13]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc12...v0.4.0rc13
 [0.4.0rc12]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc11...v0.4.0rc12
 [0.4.0rc11]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc10...v0.4.0rc11
 [0.4.0rc10]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc9...v0.4.0rc10

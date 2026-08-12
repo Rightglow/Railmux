@@ -186,6 +186,49 @@ def test_terminal_surface_paints_only_changed_patch_rows_and_restores_mouse():
     assert b"\033[2J" in rendered  # alternate-screen initialization only
 
 
+def test_terminal_surface_wraps_windows_repaint_in_synchronized_output():
+    decoder = ClientScreenUpdateDecoder()
+    screen = ScreenModel().apply(
+        decoder.feed(encode_update(_keyframe()))[0],
+        os.terminal_size((4, 2)),
+    )
+    assert screen is not None
+    stream = io.BytesIO()
+    surface = TerminalSurface(
+        stream,
+        mouse=False,
+        synchronized_output=True,
+    )
+    surface.start()
+    stream.seek(0)
+    stream.truncate()
+
+    surface.paint(screen)
+
+    rendered = stream.getvalue()
+    assert rendered.startswith(fast_display_client._SYNC_OUTPUT_BEGIN)
+    assert rendered.endswith(fast_display_client._SYNC_OUTPUT_END)
+    assert rendered.count(fast_display_client._SYNC_OUTPUT_BEGIN) == 1
+    assert rendered.count(fast_display_client._SYNC_OUTPUT_END) == 1
+    assert b"\033[1;1H\033[2Krow-0" in rendered
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}, True),
+        ({"RAILMUX_WINDOWS_RUNTIME": "msys2"}, False),
+        ({"WT_SESSION": "opaque"}, False),
+        ({}, False),
+    ],
+)
+def test_local_synchronized_output_requires_managed_windows_terminal(
+    environ,
+    expected,
+):
+    assert fast_display_client._use_local_synchronized_output(environ) is expected
+
+
 def test_terminal_surface_can_leave_mouse_to_the_local_terminal():
     stream = io.BytesIO()
     surface = TerminalSurface(stream, mouse=False)

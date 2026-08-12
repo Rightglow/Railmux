@@ -591,8 +591,20 @@ class _TranscriptCacheEntry:
     timeline_stable: bool = True
 
 
+@dataclass(frozen=True)
+class _TranscriptFormatCacheEntry:
+    identity: tuple[int, int, int, int]
+    formatted: str
+    truncated: bool
+
+
 _TRANSCRIPT_CACHE: OrderedDict[tuple[str, int], _TranscriptCacheEntry] = OrderedDict()
 _TRANSCRIPT_CACHE_LIMIT = 4
+_TRANSCRIPT_FORMAT_CACHE: OrderedDict[
+    tuple[str, str], _TranscriptFormatCacheEntry
+] = OrderedDict()
+_TRANSCRIPT_FORMAT_CACHE_LIMIT = 2
+_TRANSCRIPT_FORMAT_CACHE_MAX_CHARS = 4 * 1024 * 1024
 _INFERRED_TRANSCRIPTS: OrderedDict[tuple[str, int], tuple[bool, str | None]] = (
     OrderedDict()
 )
@@ -708,32 +720,59 @@ def _try_session_id(session: str) -> str | None:
     return value
 
 
-def _live_controller(session_id: str) -> str | None:
-    """Return the controller pane only when both stored identities are live."""
+def _session_controller_pane(session_id: str) -> str | None:
+    """Return the unique live controller in an exact session-scoped snapshot.
+
+    A swap keeper is a grouped tmux session sharing the Railmux window.  When
+    that keeper exists, formatting ``#{session_id}`` with the shared pane as
+    the target may report the keeper's ID even though the pane is also visible
+    through the managed Railmux session.  Listing panes through the immutable
+    managed session ID preserves the intended session scope and lets us check
+    membership without confusing a healthy grouped window for identity drift.
+    """
     try:
-        controller = _tmux_output(
-            "show-window-options",
-            "-v",
+        snapshot = _tmux_output(
+            "list-panes",
             "-t",
             session_id,
-            "@railmux_controller_pane",
-        )
-        identity = _tmux_output(
-            "display-message",
-            "-p",
-            "-t",
-            controller,
-            "#{session_id} #{pane_id}",
+            "-F",
+            "#{session_id}\t#{pane_id}\t#{pane_dead}\t"
+            "#{@railmux_controller_pane}",
         )
     except DisplayServerError:
         return None
-    if (
-        controller.startswith("%")
-        and controller[1:].isdigit()
-        and identity == f"{session_id} {controller}"
-    ):
-        return controller
-    return None
+
+    panes: dict[str, bool] = {}
+    controllers: set[str] = set()
+    for row in snapshot.splitlines():
+        parts = row.split("\t")
+        if len(parts) != 4:
+            return None
+        row_session, pane_id, pane_dead, controller = parts
+        if (
+            row_session != session_id
+            or not pane_id.startswith("%")
+            or not pane_id[1:].isdigit()
+            or pane_id in panes
+            or pane_dead not in {"0", "1"}
+            or not controller.startswith("%")
+            or not controller[1:].isdigit()
+        ):
+            return None
+        panes[pane_id] = pane_dead == "1"
+        controllers.add(controller)
+
+    if len(controllers) != 1:
+        return None
+    controller = next(iter(controllers))
+    if controller not in panes or panes[controller]:
+        return None
+    return controller
+
+
+def _live_controller(session_id: str) -> str | None:
+    """Return the controller pane only when its managed identity is live."""
+    return _session_controller_pane(session_id)
 
 
 def _ensure_railmux_session(session: str, timeout: float = 15.0) -> str:
@@ -791,24 +830,8 @@ def _validate_railmux(session: str) -> str:
     if not session_id.startswith("$") or not session_id[1:].isdigit():
         raise DisplayServerError("tmux returned an invalid session identity")
 
-    controller = _tmux_output(
-        "show-window-options",
-        "-v",
-        "-t",
-        session_id,
-        "@railmux_controller_pane",
-    )
-    if not controller.startswith("%") or not controller[1:].isdigit():
+    if _session_controller_pane(session_id) is None:
         raise DisplayServerError("the target is not a live managed Railmux window")
-    controller_identity = _tmux_output(
-        "display-message",
-        "-p",
-        "-t",
-        controller,
-        "#{session_id} #{pane_id}",
-    )
-    if controller_identity != f"{session_id} {controller}":
-        raise DisplayServerError("the Railmux controller identity changed")
 
     return session_id
 
@@ -1035,9 +1058,6 @@ def _list_agent_panes(
     if cached is not None and now - cached[0] <= _PANE_GEOMETRY_CACHE_TTL:
         _PANE_GEOMETRY_CACHE.move_to_end(cache_key)
         return cached[1]
-    controller = _live_controller(session_id)
-    if controller is None:
-        return ()
     try:
         output = subprocess.check_output(
             tmux_server.tmux_argv(
@@ -1052,7 +1072,8 @@ def _list_agent_panes(
                 f"#{{{tmux_server.HISTORY_SOURCE_OPTION}}} "
                 f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}} "
                 f"#{{{tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION}}} "
-                f"#{{{TOOL_PANE_OPTION}}} #{{pid}}",
+                f"#{{{TOOL_PANE_OPTION}}} #{{pid}} "
+                "#{@railmux_controller_pane}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -1062,17 +1083,24 @@ def _list_agent_panes(
         return ()
     rows: list[tuple[bool, bool, _PaneGeometry]] = []
     seen: set[str] = set()
+    controller: str | None = None
     for raw_row in output.splitlines():
         fields = raw_row.split(" ")
         if (
-            len(fields) not in (17, 18)
+            len(fields) != 19
             or fields[0] != session_id
             or fields[2] not in ("0", "1")
             or fields[3] not in ("0", "1")
             or fields[11] not in ("0", "1")
             or fields[12] not in ("0", "1")
-            or (len(fields) == 18 and not fields[17].isdigit())
+            or not fields[17].isdigit()
+            or not fields[18].startswith("%")
+            or not fields[18][1:].isdigit()
         ):
+            return ()
+        if controller is None:
+            controller = fields[18]
+        elif fields[18] != controller:
             return ()
         window_id = fields[1]
         pane_id = fields[4]
@@ -1103,14 +1131,9 @@ def _list_agent_panes(
         history_pane_id = None
         marker = fields[13]
         if marker:
-            source = tmux_server.resolve_history_source(marker, timeout=0.25)
+            source = tmux_server.resolve_history_pane(marker, timeout=0.25)
             if source is not None:
-                history_server, history_session_id = source
-                history_pane_id = tmux_server.target_single_pane_id(
-                    history_server, history_session_id, timeout=0.25
-                )
-                if history_pane_id is None:
-                    history_server = None
+                history_server, history_pane_id = source
         transcript_marker = fields[14] or None
         transcript_locator = (
             tmux_server.decode_transcript_source(transcript_marker)
@@ -1172,15 +1195,18 @@ def _list_agent_panes(
                             str(history_server.server_pid)
                             if history_server is not None
                             else fields[17]
-                            if len(fields) == 18
-                            else ""
                         ),
                     ),
                     canonical_history=canonical_history,
                 ),
             )
         )
-    if not rows or len({zoomed for zoomed, _active, _pane in rows}) != 1:
+    if (
+        not rows
+        or controller is None
+        or controller not in seen
+        or len({zoomed for zoomed, _active, _pane in rows}) != 1
+    ):
         return ()
     active = [pane for _zoomed, is_active, pane in rows if is_active]
     if len(active) != 1:
@@ -1517,17 +1543,37 @@ def _transcript_rows(
         ):
             _TRANSCRIPT_CACHE.move_to_end(key)
             return cached
-        try:
-            raw, truncated = _read_transcript_tail(fd)
-        except OSError:
-            return None
-        formatted = "".join(
-            transcript_renderer.format_transcript(
-                io.StringIO(raw),
-                source.provider,
-                claude_native=source.provider == "claude",
+        format_key = (str(source.path), source.provider)
+        formatted_entry = _TRANSCRIPT_FORMAT_CACHE.get(format_key)
+        if formatted_entry is not None and formatted_entry.identity == identity:
+            _TRANSCRIPT_FORMAT_CACHE.move_to_end(format_key)
+            formatted = formatted_entry.formatted
+            truncated = formatted_entry.truncated
+        else:
+            try:
+                raw, truncated = _read_transcript_tail(fd)
+            except OSError:
+                return None
+            formatted = "".join(
+                transcript_renderer.format_transcript(
+                    io.StringIO(raw),
+                    source.provider,
+                    claude_native=source.provider == "claude",
+                )
             )
-        )
+            if len(formatted) <= _TRANSCRIPT_FORMAT_CACHE_MAX_CHARS:
+                _TRANSCRIPT_FORMAT_CACHE[format_key] = _TranscriptFormatCacheEntry(
+                    identity,
+                    formatted,
+                    truncated,
+                )
+                _TRANSCRIPT_FORMAT_CACHE.move_to_end(format_key)
+                while (
+                    len(_TRANSCRIPT_FORMAT_CACHE) > _TRANSCRIPT_FORMAT_CACHE_LIMIT
+                ):
+                    _TRANSCRIPT_FORMAT_CACHE.popitem(last=False)
+            else:
+                _TRANSCRIPT_FORMAT_CACHE.pop(format_key, None)
         rows, dropped, total_rows = _wrap_transcript_rows(pyte, formatted, width)
         entry = _TranscriptCacheEntry(
             identity,
