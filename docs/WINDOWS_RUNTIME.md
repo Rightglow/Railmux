@@ -175,15 +175,21 @@ opens a WSL shell and runs the ordinary POSIX product there.
 - tmux 3.7 makes Codex text frames atomic but cannot absorb the provider's
   cursor visibility and final-position changes when Codex emits them outside
   those frames. On supported Windows Terminal, the same-session tmux client
-  therefore runs behind a private entry-side PTY that leaves ordinary output
-  byte-exact and coalesces only observed DECTCEM cursor visibility across
+  therefore runs behind a private entry-side PTY that coalesces observed
+  DECTCEM cursor visibility across
   100 ms visibility bursts. Paired repaint noise keeps the hardware cursor
   visible, while an uncontradicted hide remains authoritative after quiet. A
   proven quiet prompt row is restored inside each synchronized repaint; the
   real provider coordinate is retained as position debt and restored inside
   the next atomic frame or before relative output. Same-row caret movement is
   accepted, resize drops saved geometry, and a bounded control-state parser
-  keeps corrections outside partial CSI and OSC/DCS payload. Normal Codex
+  keeps corrections outside partial CSI and OSC/DCS payload, including UTF-8
+  continuation bytes that equal an eight-bit string terminator. During that
+  same burst, one complete prompt-row `EL 2 + row` repaint may be retained and
+  an identical successor omitted only when a following absolute CUP proves
+  that final cells, cursor semantics, and replayed SGR state remain unchanged.
+  Changed, incomplete, unknown, screen-wide, resized, and post-quiet output is
+  never coalesced. Normal Codex
   animation and Working timers remain enabled; Railmux does not edit Codex
   configuration, argv, or history. If this visual proxy cannot be created, the
   normal direct client remains available.

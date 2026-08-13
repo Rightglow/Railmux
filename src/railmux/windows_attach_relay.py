@@ -57,6 +57,7 @@ _DRAIN_TIMEOUT = 0.25
 _CHILD_EXIT_GRACE = 0.2
 _PTY_INPUT_TIMEOUT = 5.0
 _CURSOR_QUIET_INTERVAL = 0.1
+_ANCHOR_LINE_HOLD_INTERVAL = 0.02
 _SYNC_OUTPUT_BEGIN = b"\033[?2026h"
 _SYNC_OUTPUT_END = b"\033[?2026l"
 _STALE_ENDPOINT_AGE = 5 * 60
@@ -73,12 +74,14 @@ class _CursorVisibilityCoalescer:
 
     Codex emits cursor show/hide controls outside its synchronized-output
     frames. Windows Terminal can therefore paint the cursor at several
-    frame-final coordinates even though every text frame is atomic. Keep all
-    terminal bytes byte-for-byte except DECTCEM, delay a requested hide until
-    the output becomes quiet, and restore the provider's final visibility then.
+    frame-final coordinates even though every text frame is atomic. Coalesce
+    DECTCEM presentation noise, delay a requested hide until the output becomes
+    quiet, and restore the provider's final visibility then.
     While the cursor remains visible, finish synchronized frames at the last
     quiet user-facing coordinate so Windows IME pre-edit does not chase the
-    provider's transient Working and footer rows.
+    provider's transient Working and footer rows. Within that same bounded
+    burst, omit only a complete byte-identical repaint of the proven anchor row
+    when a following absolute CUP makes its cursor effect irrelevant.
 
     A Codex repaint can finish with one extra HIDE after repeatedly alternating
     HIDE/SHOW.  Treat that three-or-more transition signature as rendering
@@ -103,6 +106,7 @@ class _CursorVisibilityCoalescer:
         self._pending = bytearray()
         self._state = "ground"
         self._string_allows_bel = False
+        self._string_utf8_remaining = 0
         self._desired_visible = True
         self._physical_visible = True
         self._deadline: float | None = None
@@ -116,9 +120,21 @@ class _CursorVisibilityCoalescer:
         # while DECTCEM hides the hardware cursor. Codex moves that cursor
         # through Working, prompt, and footer rows inside consecutive atomic
         # paints. Keep the last quiet visible prompt anchor as the final cursor
-        # of each synchronized paint; all frame content remains byte-exact.
+        # of each synchronized paint; changed frame content remains authoritative.
         self._stable_cursor_position: bytes | None = None
         self._in_sync_frame = False
+        # Windows Terminal draws IME pre-edit text in the terminal grid.  A
+        # full-screen agent can therefore erase and recreate an unchanged
+        # prompt row on every animation frame even after the cursor itself is
+        # stable.  Retain at most one narrowly recognized ``EL 2 + row``
+        # candidate so an identical repaint can be omitted when a following
+        # absolute CUP proves that its cursor side effect is irrelevant.
+        self._anchor_line_candidate: bytearray | None = None
+        self._anchor_line_controls = bytearray()
+        self._anchor_line_row: int | None = None
+        self._anchor_line_deadline: float | None = None
+        self._anchor_line_cache: tuple[int, bytes] | None = None
+        self._frame_saw_anchor_line = False
 
     def note_input(self, payload: bytes) -> None:
         """Keep the proven anchor until output publishes its replacement."""
@@ -138,6 +154,12 @@ class _CursorVisibilityCoalescer:
         self._exact_cursor_position = None
         self._position_debt = None
         self._in_sync_frame = False
+        self._anchor_line_candidate = None
+        self._anchor_line_controls.clear()
+        self._anchor_line_row = None
+        self._anchor_line_deadline = None
+        self._anchor_line_cache = None
+        self._frame_saw_anchor_line = False
 
     @staticmethod
     def _cursor_row(position: bytes | None) -> int | None:
@@ -153,7 +175,60 @@ class _CursorVisibilityCoalescer:
         stable_row = self._cursor_row(self._stable_cursor_position)
         candidate_row = self._cursor_row(position)
         if quiet or (stable_row is not None and candidate_row == stable_row):
+            if stable_row is not None and candidate_row != stable_row:
+                self._anchor_line_cache = None
             self._stable_cursor_position = position
+
+    @staticmethod
+    def _is_absolute_cup(sequence: bytes) -> bool:
+        return sequence[-1:] in {b"H", b"f"} and all(
+            value in b"0123456789;" for value in sequence[2:-1]
+        )
+
+    def _can_hold_anchor_line(self, sequence: bytes) -> bool:
+        return bool(
+            sequence == b"\033[2K"
+            and self._in_sync_frame
+            and self._deadline is not None
+            and self._burst_saw_hide
+            and self._exact_cursor_position is not None
+            and self._cursor_row(self._exact_cursor_position)
+            == self._cursor_row(self._stable_cursor_position)
+        )
+
+    def _start_anchor_line_candidate(self, sequence: bytes, now: float) -> None:
+        self._anchor_line_candidate = bytearray(sequence)
+        self._anchor_line_controls.clear()
+        self._anchor_line_row = self._cursor_row(self._exact_cursor_position)
+        self._anchor_line_deadline = now + _ANCHOR_LINE_HOLD_INTERVAL
+        self._frame_saw_anchor_line = True
+
+    def _finish_anchor_line_candidate(
+        self,
+        rendered: bytearray,
+        *,
+        comparable: bool,
+    ) -> None:
+        candidate = self._anchor_line_candidate
+        row = self._anchor_line_row
+        if candidate is None:
+            return
+        payload = bytes(candidate)
+        if comparable and row is not None and self._anchor_line_cache == (row, payload):
+            # SGR controls have state beyond the rewritten cells. Replaying
+            # only those controls preserves the provider's terminal state
+            # while leaving the already-identical physical row untouched.
+            rendered.extend(self._anchor_line_controls)
+        else:
+            rendered.extend(payload)
+            self._anchor_line_cache = (row, payload) if comparable and row else None
+        self._anchor_line_candidate = None
+        self._anchor_line_controls.clear()
+        self._anchor_line_row = None
+        self._anchor_line_deadline = None
+
+    def _invalidate_anchor_line(self) -> None:
+        self._anchor_line_cache = None
 
     def _repay_position_debt(self, rendered: bytearray) -> None:
         if self._position_debt is None:
@@ -197,6 +272,15 @@ class _CursorVisibilityCoalescer:
                     self._pending.append(value)
                     self._state = "escape"
                 else:
+                    if self._anchor_line_candidate is not None:
+                        if value >= 0x20:
+                            self._anchor_line_candidate.append(value)
+                            self._invalidate_cursor_position(value)
+                            continue
+                        self._finish_anchor_line_candidate(
+                            rendered,
+                            comparable=False,
+                        )
                     if value >= 0x20 or value in {
                         0x08,
                         0x09,
@@ -212,6 +296,10 @@ class _CursorVisibilityCoalescer:
 
             if self._state == "escape":
                 if value == 0x1B:
+                    self._finish_anchor_line_candidate(
+                        rendered,
+                        comparable=False,
+                    )
                     rendered.extend(self._pending)
                     self._pending[:] = bytes((value,))
                     continue
@@ -220,17 +308,23 @@ class _CursorVisibilityCoalescer:
                     self._state = "csi"
                     continue
                 if value in {ord("]"), ord("P"), ord("X"), ord("^"), ord("_")}:
+                    self._finish_anchor_line_candidate(
+                        rendered,
+                        comparable=False,
+                    )
                     if value != ord("]"):
                         self._repay_position_debt(rendered)
                     rendered.extend(self._pending)
                     self._pending.clear()
                     self._state = "string"
                     self._string_allows_bel = value == ord("]")
+                    self._string_utf8_remaining = 0
                     if value != ord("]"):
                         self._exact_cursor_position = None
                         self._stable_cursor_position = None
                     continue
                 self._repay_position_debt(rendered)
+                self._finish_anchor_line_candidate(rendered, comparable=False)
                 rendered.extend(self._pending)
                 self._pending.clear()
                 self._exact_cursor_position = None
@@ -240,6 +334,10 @@ class _CursorVisibilityCoalescer:
 
             if self._state == "csi":
                 if value == 0x1B:
+                    self._finish_anchor_line_candidate(
+                        rendered,
+                        comparable=False,
+                    )
                     rendered.extend(self._pending)
                     self._pending[:] = bytes((value,))
                     self._state = "escape"
@@ -249,6 +347,21 @@ class _CursorVisibilityCoalescer:
                     sequence = bytes(self._pending)
                     self._pending.clear()
                     self._state = "ground"
+                    if self._anchor_line_candidate is not None:
+                        if self._is_absolute_cup(sequence):
+                            self._finish_anchor_line_candidate(
+                                rendered,
+                                comparable=True,
+                            )
+                        elif sequence[-1:] == b"m":
+                            self._anchor_line_candidate.extend(sequence)
+                            self._anchor_line_controls.extend(sequence)
+                            continue
+                        else:
+                            self._finish_anchor_line_candidate(
+                                rendered,
+                                comparable=False,
+                            )
                     if sequence in (self._HIDE, self._SHOW):
                         requested_visible = sequence == self._SHOW
                         if (
@@ -284,11 +397,14 @@ class _CursorVisibilityCoalescer:
                     elif sequence == _SYNC_OUTPUT_BEGIN:
                         rendered.extend(sequence)
                         self._in_sync_frame = True
+                        self._frame_saw_anchor_line = False
                         self._repay_position_debt(rendered)
                     elif sequence == _SYNC_OUTPUT_END:
                         was_in_sync_frame = self._in_sync_frame
                         if was_in_sync_frame:
                             self._in_sync_frame = False
+                            if not self._frame_saw_anchor_line:
+                                self._invalidate_anchor_line()
                         if (
                             was_in_sync_frame
                             and self._deadline is not None
@@ -314,18 +430,24 @@ class _CursorVisibilityCoalescer:
                         rendered.extend(sequence)
                     else:
                         final = sequence[-1:]
-                        parameters = sequence[2:-1]
-                        absolute_position = final in {b"H", b"f"} and all(
-                            value in b"0123456789;" for value in parameters
-                        )
+                        absolute_position = self._is_absolute_cup(sequence)
                         if absolute_position:
                             self._position_debt = None
                         elif final not in {b"S", b"T", b"m", b"q"}:
                             self._repay_position_debt(rendered)
-                        rendered.extend(sequence)
+                        if self._can_hold_anchor_line(sequence):
+                            self._start_anchor_line_candidate(sequence, now)
+                        else:
+                            rendered.extend(sequence)
+                            if final in {b"J", b"S", b"T"}:
+                                self._invalidate_anchor_line()
                         self._observe_csi_cursor_position(sequence)
                     continue
                 if len(self._pending) > self._MAX_CONTROL:
+                    self._finish_anchor_line_candidate(
+                        rendered,
+                        comparable=False,
+                    )
                     self._repay_position_debt(rendered)
                     rendered.extend(self._pending)
                     self._pending.clear()
@@ -346,7 +468,19 @@ class _CursorVisibilityCoalescer:
 
             if self._state == "string":
                 rendered.append(value)
-                if value == 0x9C or (self._string_allows_bel and value == 0x07):
+                c1_st = value == 0x9C and self._string_utf8_remaining == 0
+                if self._string_utf8_remaining:
+                    if 0x80 <= value <= 0xBF:
+                        self._string_utf8_remaining -= 1
+                    else:
+                        self._string_utf8_remaining = 0
+                elif 0xC2 <= value <= 0xDF:
+                    self._string_utf8_remaining = 1
+                elif 0xE0 <= value <= 0xEF:
+                    self._string_utf8_remaining = 2
+                elif 0xF0 <= value <= 0xF4:
+                    self._string_utf8_remaining = 3
+                if c1_st or (self._string_allows_bel and value == 0x07):
                     self._state = "ground"
                 elif value == 0x1B:
                     self._state = "string_escape"
@@ -363,24 +497,50 @@ class _CursorVisibilityCoalescer:
         return bytes(rendered)
 
     def next_timeout(self, maximum: float, now: float) -> float:
-        if self._deadline is None:
+        deadlines = tuple(
+            deadline
+            for deadline in (self._deadline, self._anchor_line_deadline)
+            if deadline is not None
+        )
+        if not deadlines:
             return maximum
-        if now >= self._deadline and self._state != "ground":
+        deadline = min(deadlines)
+        if now >= deadline and self._state != "ground":
             # A partial CSI/string must wait for more PTY bytes (or child
             # exit); do not busy-spin on an already-due visibility deadline.
             return maximum
-        return max(0.0, min(maximum, self._deadline - now))
+        return max(0.0, min(maximum, deadline - now))
 
     def flush_due(self, now: float, *, force: bool = False) -> bytes:
-        if not force:
-            if self._deadline is None or now < self._deadline:
-                return b""
-        elif self._deadline is None and self._state == "ground":
+        line_due = bool(
+            self._anchor_line_candidate is not None
+            and (
+                force
+                or (
+                    self._anchor_line_deadline is not None
+                    and now >= self._anchor_line_deadline
+                )
+            )
+        )
+        visibility_due = bool(
+            self._deadline is not None and (force or now >= self._deadline)
+        )
+        if not line_due and not visibility_due and not (
+            force and self._state != "ground"
+        ):
             return b""
+        if self._state != "ground" and not force:
+            # A held row followed by a split CSI/string must remain in source
+            # order until the control is complete. Do not consume either one
+            # merely because the row hold deadline elapsed first.
+            return b""
+        rendered = bytearray()
+        if line_due:
+            # The held row bytes precede any partial control sequence in the
+            # original stream. Preserve that ordering during forced teardown.
+            self._finish_anchor_line_candidate(rendered, comparable=False)
         if self._state != "ground":
-            if not force:
-                return b""
-            rendered = bytearray(self._pending)
+            rendered.extend(self._pending)
             self._pending.clear()
             # A terminated child can leave a partial control/string sequence.
             # Cancel or close it before terminal recovery bytes are emitted.
@@ -388,8 +548,8 @@ class _CursorVisibilityCoalescer:
                 b"\033\\" if self._state in {"string", "string_escape"} else b"\030"
             )
             self._state = "ground"
-        else:
-            rendered = bytearray()
+        if not visibility_due:
+            return bytes(rendered)
         stable_visible = self._desired_visible or (
             self._visibility_transitions >= 3
             and self._burst_saw_hide
@@ -431,6 +591,7 @@ class _CursorVisibilityCoalescer:
         self._burst_saw_hide = False
         self._burst_saw_show = False
         self._frame_final_cursor_position = None
+        self._invalidate_anchor_line()
         return bytes(rendered)
 
 

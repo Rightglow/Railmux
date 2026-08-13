@@ -9,6 +9,7 @@ import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pyte
 import pytest
 
 from railmux import __version__, windows_attach_relay
@@ -113,6 +114,118 @@ def test_cursor_coalescer_keeps_ime_anchor_inside_synchronized_repaints():
     assert cursor._stable_cursor_position == b"\033[55;3H"
 
 
+def test_cursor_coalescer_omits_only_identical_anchor_line_repaints():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    prompt = b"\033[55;1H\033[2K\033[32m> prompt\033[0m"
+
+    first = cursor.feed(
+        b"\033[?25l\033[?2026h"
+        + prompt
+        + b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.0,
+    )
+    second = cursor.feed(
+        b"\033[?25l\033[?2026h"
+        + prompt
+        + b"\033[57;1Hfooter-2\033[?2026l\033[?25h",
+        1.05,
+    )
+
+    assert first.count(b"\033[2K") == 1
+    assert b"> prompt" in first
+    assert b"\033[2K" not in second
+    assert b"> prompt" not in second
+    # Stateful SGR still follows the provider's stream after the physical row
+    # rewrite itself is proven redundant.
+    assert b"\033[32m\033[0m" in second
+
+
+def test_cursor_coalescer_keeps_a_changed_anchor_line_authoritative():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+
+    def frame(prompt: bytes) -> bytes:
+        return (
+            b"\033[?25l\033[?2026h\033[55;1H\033[2K"
+            + prompt
+            + b"\033[57;1Hfooter\033[?2026l\033[?25h"
+        )
+
+    cursor.feed(frame(b"first"), 1.0)
+    changed = cursor.feed(frame("第二行“保留”".encode()), 1.05)
+
+    assert b"\033[2K" in changed
+    assert "第二行“保留”".encode() in changed
+
+
+def test_cursor_coalescer_redundant_line_filter_preserves_final_screen_cells():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    initial = b"\033[55;3H\033[?25h"
+    frames = (
+        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
+        b"\033[57;1Hfooter-2\033[?2026l\033[?25h",
+    )
+    transformed = bytearray(cursor.feed(initial, 0.8))
+    transformed.extend(cursor.feed(frames[0], 1.0))
+    transformed.extend(cursor.feed(frames[1], 1.05))
+
+    original_screen = pyte.Screen(80, 60)
+    original_stream = pyte.Stream(original_screen)
+    filtered_screen = pyte.Screen(80, 60)
+    filtered_stream = pyte.Stream(filtered_screen)
+    original_stream.feed((initial + b"".join(frames)).decode("utf-8"))
+    filtered_stream.feed(bytes(transformed).decode("utf-8"))
+
+    assert filtered_screen.display == original_screen.display
+    for row in range(60):
+        assert filtered_screen.buffer[row] == original_screen.buffer[row]
+
+
+def test_cursor_coalescer_flushes_an_unterminated_anchor_line_promptly():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+
+    held = cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Kpartial",
+        1.0,
+    )
+
+    assert b"\033[2Kpartial" not in held
+    assert cursor.next_timeout(1.0, 1.0) == pytest.approx(0.02)
+    assert cursor.flush_due(1.03) == b"\033[2Kpartial"
+
+
+def test_cursor_coalescer_force_flush_keeps_held_row_before_partial_control():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    held = cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Kprompt\033[38;2;1",
+        1.0,
+    )
+
+    assert b"\033[2Kprompt" not in held
+    assert cursor.flush_due(1.01, force=True).startswith(
+        b"\033[2Kprompt\033[38;2;1"
+    )
+
+
+def test_cursor_coalescer_waits_for_split_control_after_a_held_row():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    held = cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Kprompt\033[38;2;1",
+        1.0,
+    )
+
+    assert b"\033[2Kprompt" not in held
+    assert cursor.flush_due(1.03) == b""
+    completed = cursor.feed(b";2;3m styled\033[57;1H", 1.04)
+    assert completed.startswith(b"\033[2Kprompt\033[38;2;1;2;3m styled")
+
+
 def test_cursor_coalescer_leaves_visible_synchronized_output_byte_exact():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     payload = b"\033[?2026h\033[4;2Hframe\033[4;7H\033[?2026l"
@@ -176,6 +289,18 @@ def test_cursor_coalescer_does_not_parse_dectcem_inside_osc_payload():
     payload = b"\033]0;opaque-\033[?25h-payload\007after"
 
     assert cursor.feed(payload, 1.0) == payload
+    assert cursor.flush_due(2.0) == b""
+
+
+def test_cursor_coalescer_treats_utf8_c1_bytes_inside_osc_as_text():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    # U+201C ends in the byte 0x9c. It is a UTF-8 continuation byte here, not
+    # an eight-bit String Terminator that can expose later OSC payload as CSI.
+    payload = b"\033]0;title " + "“quoted”".encode() + b"\033[?25l\033\\"
+
+    split = payload.index(b"\x9c")
+    assert cursor.feed(payload[:split], 1.0) == payload[:split]
+    assert cursor.feed(payload[split:], 1.01) == payload[split:]
     assert cursor.flush_due(2.0) == b""
 
 
@@ -404,7 +529,7 @@ def test_local_proxy_preserves_large_bracketed_paste_byte_exact(monkeypatch):
     proxy_socket, child_socket = socket.socketpair()
     payload = (
         b"\033[200~"
-        + ("本地粘贴-line\n" * 9000).encode()
+        + ("本地“粘贴”‘line’「保留」\n" * 9000).encode()
         + b"\x1d\033[5~\033[<0;4;5M\033[201~"
     )
     monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))

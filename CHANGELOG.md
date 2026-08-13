@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc16] - 2026-08-13
+
+### Fixed
+
+- Stop a native Windows Codex output burst from repeatedly erasing and
+  recreating an unchanged prompt row underneath inline IME pre-edit text. The
+  private PTY coalesces only a byte-identical, complete anchored-row repaint
+  whose cursor side effect is superseded by an absolute position; changed,
+  partial, unknown, resized, and quiet output remains authoritative.
+- Keep UTF-8 punctuation such as curly Chinese quotes opaque inside terminal
+  OSC strings instead of mistaking their continuation byte for an eight-bit
+  string terminator. Native input and bracketed paste remain byte-exact for
+  `“”‘’「」` and other UTF-8 text.
+
 ## [0.4.0rc15] - 2026-08-13
 
 ### Fixed
@@ -2879,7 +2893,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc15...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc16...HEAD
+[0.4.0rc16]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc15...v0.4.0rc16
 [0.4.0rc15]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc14...v0.4.0rc15
 [0.4.0rc14]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc13...v0.4.0rc14
 [0.4.0rc13]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc12...v0.4.0rc13

@@ -139,9 +139,9 @@ marker but keep the generic `xterm-256color` terminal name, so tmux cannot
 infer synchronized-output support from `TERM`. Managed clients add tmux's
 per-client `sync` feature when that marker is present. The ordinary same-session
 client runs behind a private PTY and still addresses the selected tmux server
-directly. Its entry-side proxy forwards every byte except bounded cursor
-presentation controls: only a real DECTCEM visibility transition starts a
-coalesced burst and ordinary output remains byte-exact. A paired repaint burst
+directly. Its entry-side proxy limits presentation filtering to bounded cursor
+controls and one proven redundant prompt-row form: only a real DECTCEM
+visibility transition starts a coalesced burst. A paired repaint burst
 keeps the hardware cursor visible; one uncontradicted HIDE becomes authoritative
 after 100 ms of visibility quiet. The proxy recognizes only DEC
 synchronized-output boundaries and proven absolute CUP coordinates. It places
@@ -154,7 +154,17 @@ resize discards all saved geometry. When an atomic frame is anchored, the
 provider's true final coordinate becomes bounded position debt: it is restored
 inside the next atomic frame, before cursor-dependent relative output, or
 superseded by a new absolute CUP. A bounded VT control-state parser prevents
-injection into partial CSI or opaque OSC/DCS payload. The proxy does not
+injection into partial CSI or opaque OSC/DCS payload and distinguishes an
+eight-bit string terminator from the same byte used as UTF-8 continuation data.
+Within one active synchronized burst, the proxy may retain one complete
+`EL 2 + row` segment for the proven prompt row. It omits a later segment only
+when the row and every byte are identical and a following absolute CUP makes
+the skipped write's cursor advance irrelevant; SGR state is still replayed.
+Changed content, an incomplete segment, unknown control, screen-wide change,
+resize, or quiet-boundary transition is forwarded and invalidates the proof.
+This leaves the final terminal cells and provider state unchanged while
+preventing Windows Terminal from erasing an inline IME pre-edit merely to draw
+the same underlying prompt again. The proxy does not
 interpret text, panes, provider state, or provider history. This preserves
 Codex's Working timer and animations while preventing Windows Terminal from
 painting or anchoring IME text at each intermediate frame-final row. If
