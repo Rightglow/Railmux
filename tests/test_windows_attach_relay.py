@@ -57,41 +57,43 @@ def test_cursor_coalescer_preserves_text_and_partial_sequences():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     assert cursor.feed(b"left\033[?2", 1.0) == b"left"
-    assert cursor.feed(b"5lright", 1.02) == b"\033[?25lright"
+    assert cursor.feed(b"5lright", 1.02) == b"right"
     assert cursor.feed(b"\033[?25h", 1.04) == b""
     assert cursor.flush_due(1.11) == b""
-    assert cursor.flush_due(1.15) == b"\033[?25h"
+    assert cursor.flush_due(1.15) == b""
 
 
-def test_cursor_coalescer_keeps_cursor_hidden_across_an_output_burst():
+def test_cursor_coalescer_keeps_cursor_visible_across_an_output_burst():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
     first = cursor.feed(b"A\033[?25l", 1.0)
     second = cursor.feed(b"\033[2;2HB\033[?25h", 1.08)
 
-    assert first == b"A\033[?25l"
+    assert first == b"A"
     assert second == b"\033[2;2HB"
     assert cursor.flush_due(1.15) == b""
-    assert cursor.flush_due(1.19) == b"\033[?25h"
+    assert cursor.flush_due(1.19) == b""
 
 
 def test_cursor_coalescer_retains_a_final_hidden_state():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
-    assert cursor.feed(b"frame\033[?25l", 1.0) == b"frame\033[?25l"
-    assert cursor.flush_due(1.2) == b""
+    assert cursor.feed(b"frame\033[?25l", 1.0) == b"frame"
+    assert cursor.flush_due(1.05) == b""
+    assert cursor.flush_due(1.2) == b"\033[?25l"
 
 
 def test_cursor_coalescer_restores_visible_anchor_after_flicker_signature():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
 
     rendered = cursor.feed(
         b"\033[?25l\033[55;3H\033[?25h\033[57;1H\033[?25l",
         1.0,
     )
 
-    assert rendered == b"\033[?25l\033[55;3H\033[57;1H"
-    assert cursor.flush_due(1.2) == b"\033[55;3H\033[?25h"
+    assert rendered == b"\033[55;3H\033[57;1H"
+    assert cursor.flush_due(1.2) == (b"\033[?2026h\033[55;3H\033[?2026l")
 
 
 def test_cursor_coalescer_keeps_ime_anchor_inside_synchronized_repaints():
@@ -105,12 +107,10 @@ def test_cursor_coalescer_keeps_ime_anchor_inside_synchronized_repaints():
         1.0,
     )
 
-    assert rendered == (
-        b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[55;3H\033[?2026l"
-    )
-    # Once output becomes quiet, restore the provider's latest authoritative
-    # frame cursor rather than pinning the prompt forever.
-    assert cursor.flush_due(1.2) == b"\033[57;1H\033[?25h"
+    assert rendered == (b"\033[?2026h\033[52;1Hworking\033[57;1H\033[55;3H\033[?2026l")
+    # The transient frame-final footer must not replace the quiet prompt row.
+    assert cursor.flush_due(1.2) == b""
+    assert cursor._stable_cursor_position == b"\033[55;3H"
 
 
 def test_cursor_coalescer_leaves_visible_synchronized_output_byte_exact():
@@ -126,9 +126,7 @@ def test_cursor_coalescer_does_not_guess_after_relative_frame_output():
     cursor.feed(b"\033[55;3H\033[?25h", 0.9)
     payload = b"\033[?25l\033[?2026hrelative text\033[?2026l\033[?25h"
 
-    assert cursor.feed(payload, 1.0) == (
-        b"\033[?25l\033[?2026hrelative text\033[?2026l"
-    )
+    assert cursor.feed(payload, 1.0) == (b"\033[?2026hrelative text\033[?2026l")
 
 
 def test_cursor_coalescer_relearns_anchor_after_explicit_input():
@@ -143,8 +141,8 @@ def test_cursor_coalescer_relearns_anchor_after_explicit_input():
 def test_cursor_coalescer_does_not_override_one_intentional_hide():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
-    assert cursor.feed(b"\033[4;7H\033[?25l", 1.0) == (b"\033[4;7H\033[?25l")
-    assert cursor.flush_due(1.2) == b""
+    assert cursor.feed(b"\033[4;7H\033[?25l", 1.0) == b"\033[4;7H"
+    assert cursor.flush_due(1.2) == b"\033[?25l"
 
 
 def test_cursor_coalescer_invalidates_stale_visible_anchor_after_text():
@@ -155,7 +153,7 @@ def test_cursor_coalescer_invalidates_stale_visible_anchor_after_text():
         1.0,
     )
 
-    assert cursor.flush_due(1.2) == b"\033[?25h"
+    assert cursor.flush_due(1.2) == b""
 
 
 def test_cursor_coalescer_leaves_ordinary_output_byte_exact():
@@ -184,13 +182,170 @@ def test_cursor_coalescer_does_not_parse_dectcem_inside_osc_payload():
 def test_cursor_coalescer_never_injects_inside_a_split_control_sequence():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
 
-    assert cursor.feed(b"\033[?25l", 1.0) == b"\033[?25l"
+    assert cursor.feed(b"\033[?25l", 1.0) == b""
     assert cursor.feed(b"\033[?25h", 1.01) == b""
     assert cursor.feed(b"\033[38;2;12", 1.02) == b""
     assert cursor.flush_due(1.2) == b""
     assert cursor.next_timeout(0.25, 1.2) == 0.25
     assert cursor.feed(b"0;30mtext", 1.21) == b"\033[38;2;120;30mtext"
-    assert cursor.flush_due(1.21) == b"\033[?25h"
+    assert cursor.flush_due(1.21) == b""
+
+
+def test_cursor_coalescer_retains_quiet_ime_anchor_after_committed_input():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    assert cursor.feed(b"\033[55;3H\033[?25h", 0.8) == b"\033[55;3H"
+
+    cursor.note_input("中".encode())
+    rendered = cursor.feed(
+        b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert rendered.endswith(b"\033[55;3H\033[?2026l")
+    assert b"\033[?25" not in rendered
+    assert cursor.flush_due(1.2) == b""
+    assert cursor._stable_cursor_position == b"\033[55;3H"
+
+
+def test_cursor_coalescer_does_not_move_a_cursor_that_settled_hidden():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[20;4H\033[?25h", 0.8)
+    assert cursor.feed(b"\033[?25l", 1.0) == b""
+    assert cursor.flush_due(1.2) == b"\033[?25l"
+
+    payload = b"\033[?2026h\033[18;1Hworking\033[24;1H\033[?2026l"
+    assert cursor.feed(payload, 1.3) == payload
+    assert cursor.flush_due(1.5) == b""
+
+
+def test_cursor_coalescer_repays_position_before_showing_from_hidden_state():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor._physical_visible = False
+    cursor._desired_visible = False
+    cursor._stable_cursor_position = b"\033[20;4H"
+    cursor._exact_cursor_position = b"\033[20;4H"
+    cursor._position_debt = b"\033[24;1H"
+
+    assert cursor.feed(b"\033[?25h", 1.0) == b"\033[24;1H"
+    assert cursor.flush_due(1.2) == b"\033[24;1H\033[?25h"
+    assert cursor._stable_cursor_position == b"\033[24;1H"
+
+
+def test_cursor_coalescer_does_not_replay_anchor_after_resize():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.note_resize()
+    payload = b"\033[?25l\033[?2026h\033[18;1Hworking\033[24;1H\033[?2026l\033[?25h"
+
+    assert cursor.feed(payload, 1.0) == (
+        b"\033[?2026h\033[18;1Hworking\033[24;1H\033[?2026l"
+    )
+    assert cursor.flush_due(1.2) == b""
+    assert cursor._stable_cursor_position is None
+
+
+def test_cursor_coalescer_repays_overridden_position_inside_next_frame():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    first = b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h"
+    cursor.feed(first, 1.0)
+    assert cursor.flush_due(1.2) == b""
+
+    assert cursor.feed(b"\033[?2026h\033[52;1H", 1.3) == (
+        b"\033[?2026h\033[57;1H\033[52;1H"
+    )
+
+
+def test_cursor_coalescer_repays_overridden_position_before_relative_output():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert cursor.feed(b"text", 1.02) == b"\033[57;1Htext"
+
+
+def test_cursor_coalescer_repays_position_before_unknown_private_mode():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert cursor.feed(b"\033[?6h", 1.02) == b"\033[57;1H\033[?6h"
+    assert cursor._exact_cursor_position is None
+
+
+@pytest.mark.parametrize("erase", [b"\033[J", b"\033[K"])
+def test_cursor_coalescer_repays_position_before_cursor_relative_erase(erase):
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert cursor.feed(erase, 1.02) == b"\033[57;1H" + erase
+    assert cursor._exact_cursor_position == b"\033[57;1H"
+
+
+def test_cursor_coalescer_invalidates_position_across_alt_screen_restore():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert cursor.feed(b"\033[?1049l", 1.02) == b"\033[57;1H\033[?1049l"
+    assert cursor._exact_cursor_position is None
+    assert cursor._stable_cursor_position is None
+
+
+def test_cursor_coalescer_does_not_inject_on_stray_sync_end():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    rendered = cursor.feed(
+        b"\033[?25l\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert rendered == b"\033[57;1H\033[?2026l"
+    assert cursor._position_debt is None
+
+
+def test_cursor_coalescer_treats_synchronized_output_as_a_latch():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    rendered = cursor.feed(
+        b"\033[?25l\033[?2026h\033[?2026h\033[57;1H\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert rendered.endswith(b"\033[57;1H\033[55;3H\033[?2026l")
+    assert not cursor._in_sync_frame
+
+
+def test_cursor_coalescer_keeps_long_repaint_stream_visible():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    rendered = bytearray()
+    now = 1.0
+    for row in range(20, 40):
+        rendered.extend(cursor.flush_due(now))
+        rendered.extend(
+            cursor.feed(
+                f"\033[?25l\033[{row};1H\033[?25h".encode(),
+                now,
+            )
+        )
+        now += 0.04
+
+    assert b"\033[?25l" not in rendered
+    assert b"\033[?25h" not in rendered
+    assert cursor._physical_visible
 
 
 def test_local_proxy_close_restores_a_visible_terminal_cursor(monkeypatch):
@@ -358,7 +513,7 @@ def test_local_proxy_forwards_real_pty_output_and_settles_cursor(monkeypatch):
             if fd >= 0:
                 os.close(fd)
 
-    assert rendered == b"left\033[?25lmidright\033[?25h"
+    assert rendered == b"leftmidright"
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
@@ -370,7 +525,9 @@ def test_local_proxy_restores_ime_anchor_after_noisy_final_hide(monkeypatch):
         [
             "/bin/sh",
             "-c",
-            "printf '\033[?25l\033[20;4H\033[?25h\033[24;1H\033[?25l'; sleep 0.15",
+            "printf '\033[20;4H\033[?25h'; sleep 0.02; "
+            "printf '\033[?25l\033[20;4H\033[?25h\033[24;1H\033[?25l'; "
+            "sleep 0.15",
         ],
         os.environ,
         width=80,
@@ -394,7 +551,9 @@ def test_local_proxy_restores_ime_anchor_after_noisy_final_hide(monkeypatch):
             if fd >= 0:
                 os.close(fd)
 
-    assert rendered == (b"\033[?25l\033[20;4H\033[24;1H\033[20;4H\033[?25h")
+    assert rendered == (
+        b"\033[20;4H\033[20;4H\033[24;1H\033[?2026h\033[20;4H\033[?2026l"
+    )
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
@@ -433,7 +592,7 @@ def test_local_proxy_stabilizes_ime_anchor_inside_real_sync_frame(monkeypatch):
                 os.close(fd)
 
     assert (b"\033[?2026h\033[18;1Hworking\033[24;1H\033[20;4H\033[?2026l") in rendered
-    assert rendered.endswith(b"\033[24;1H\033[?25h")
+    assert rendered.endswith(b"\033[20;4H\033[?2026l")
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")

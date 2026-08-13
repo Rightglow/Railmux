@@ -69,25 +69,29 @@ class WindowsAttachRelayError(RuntimeError):
 
 
 class _CursorVisibilityCoalescer:
-    """Hide the hardware cursor across one burst of opaque tmux output.
+    """Keep the Windows hardware cursor stable across one tmux repaint burst.
 
     Codex emits cursor show/hide controls outside its synchronized-output
     frames. Windows Terminal can therefore paint the cursor at several
     frame-final coordinates even though every text frame is atomic. Keep all
-    terminal bytes byte-for-byte except DECTCEM, hide once at burst start, and
-    restore the stable user-facing visibility after a short quiet interval.
+    terminal bytes byte-for-byte except DECTCEM, delay a requested hide until
+    the output becomes quiet, and restore the provider's final visibility then.
+    While the cursor remains visible, finish synchronized frames at the last
+    quiet user-facing coordinate so Windows IME pre-edit does not chase the
+    provider's transient Working and footer rows.
 
     A Codex repaint can finish with one extra HIDE after repeatedly alternating
     HIDE/SHOW.  Treat that three-or-more transition signature as rendering
     noise and restore the most recent visible cursor anchor.  A lone HIDE (for
     example when Railmux intentionally focuses a cursorless surface) remains
-    authoritative.  Replaying the last exact CUP used by SHOW also gives
-    Windows Terminal a stable anchor for IME pre-edit text.
+    authoritative after the quiet interval. Replaying the last exact CUP used
+    by SHOW also gives Windows Terminal a stable anchor for IME pre-edit text.
 
     The parser retains only one bounded CSI candidate, never printable text or
     a terminal frame. It tracks OSC/DCS-style string boundaries solely so an
     identical byte sequence inside opaque payload is not altered. It remains
-    unaware of Codex, pane content, and synchronized-output framing.
+    unaware of Codex and pane content; synchronized-output boundaries are used
+    only to place an anchor correction inside the provider's atomic paint.
     """
 
     _HIDE = b"\033[?25l"
@@ -106,29 +110,57 @@ class _CursorVisibilityCoalescer:
         self._burst_saw_hide = False
         self._burst_saw_show = False
         self._exact_cursor_position: bytes | None = None
-        self._visible_cursor_position: bytes | None = None
         self._frame_final_cursor_position: bytes | None = None
+        self._position_debt: bytes | None = None
         # Windows Terminal anchors IME pre-edit text to its logical cursor even
         # while DECTCEM hides the hardware cursor. Codex moves that cursor
         # through Working, prompt, and footer rows inside consecutive atomic
         # paints. Keep the last quiet visible prompt anchor as the final cursor
         # of each synchronized paint; all frame content remains byte-exact.
         self._stable_cursor_position: bytes | None = None
-        self._sync_depth = 0
+        self._in_sync_frame = False
 
     def note_input(self, payload: bytes) -> None:
-        """Invalidate an IME anchor when explicit terminal input can move it."""
-        if not payload or payload in {b"\r", b"\n"}:
+        """Keep the proven anchor until output publishes its replacement."""
+        if not payload:
             return
-        self._stable_cursor_position = None
+        # Windows Terminal owns IME pre-edit and does not expose composition
+        # state through the PTY.  Clearing the last quiet anchor on committed
+        # input lets the first subsequent Working/footer repaint become the
+        # replacement anchor.  Retain it through the repaint burst instead;
+        # the provider's next quiet visible cursor supersedes it below.
         self._frame_final_cursor_position = None
 
     def note_resize(self) -> None:
         """Drop coordinates expressed in the previous terminal geometry."""
         self._stable_cursor_position = None
-        self._visible_cursor_position = None
         self._frame_final_cursor_position = None
         self._exact_cursor_position = None
+        self._position_debt = None
+        self._in_sync_frame = False
+
+    @staticmethod
+    def _cursor_row(position: bytes | None) -> int | None:
+        if position is None or not position.startswith(b"\033["):
+            return None
+        try:
+            parameters = position[2:-1].split(b";")
+            return int(parameters[0] or b"1")
+        except (TypeError, ValueError):
+            return None
+
+    def _accept_visible_position(self, position: bytes, *, quiet: bool) -> None:
+        stable_row = self._cursor_row(self._stable_cursor_position)
+        candidate_row = self._cursor_row(position)
+        if quiet or (stable_row is not None and candidate_row == stable_row):
+            self._stable_cursor_position = position
+
+    def _repay_position_debt(self, rendered: bytearray) -> None:
+        if self._position_debt is None:
+            return
+        rendered.extend(self._position_debt)
+        self._exact_cursor_position = self._position_debt
+        self._position_debt = None
 
     def _invalidate_cursor_position(self, value: int) -> None:
         # Printable bytes and the C0 controls that move the cursor make a prior
@@ -147,12 +179,13 @@ class _CursorVisibilityCoalescer:
             self._exact_cursor_position = sequence
             self._frame_final_cursor_position = None
             return
-        if final not in {b"J", b"K", b"S", b"T", b"h", b"l", b"m", b"q"}:
+        if final not in {b"J", b"K", b"S", b"T", b"m", b"q"}:
             # Keep an anchor only across CSI operations known not to move the
             # hardware cursor. Unknown/private operations fail safely by using
             # the terminal's eventual position rather than replaying stale CUP.
             self._exact_cursor_position = None
             self._frame_final_cursor_position = None
+            self._stable_cursor_position = None
 
     def feed(self, data: bytes, now: float) -> bytes:
         if not data:
@@ -164,6 +197,15 @@ class _CursorVisibilityCoalescer:
                     self._pending.append(value)
                     self._state = "escape"
                 else:
+                    if value >= 0x20 or value in {
+                        0x08,
+                        0x09,
+                        0x0A,
+                        0x0B,
+                        0x0C,
+                        0x0D,
+                    }:
+                        self._repay_position_debt(rendered)
                     rendered.append(value)
                     self._invalidate_cursor_position(value)
                 continue
@@ -178,16 +220,21 @@ class _CursorVisibilityCoalescer:
                     self._state = "csi"
                     continue
                 if value in {ord("]"), ord("P"), ord("X"), ord("^"), ord("_")}:
+                    if value != ord("]"):
+                        self._repay_position_debt(rendered)
                     rendered.extend(self._pending)
                     self._pending.clear()
                     self._state = "string"
                     self._string_allows_bel = value == ord("]")
                     if value != ord("]"):
                         self._exact_cursor_position = None
+                        self._stable_cursor_position = None
                     continue
+                self._repay_position_debt(rendered)
                 rendered.extend(self._pending)
                 self._pending.clear()
                 self._exact_cursor_position = None
+                self._stable_cursor_position = None
                 self._state = "ground"
                 continue
 
@@ -204,15 +251,25 @@ class _CursorVisibilityCoalescer:
                     self._state = "ground"
                     if sequence in (self._HIDE, self._SHOW):
                         requested_visible = sequence == self._SHOW
+                        if (
+                            requested_visible
+                            and self._deadline is None
+                            and not self._physical_visible
+                        ):
+                            # Repay while the hardware cursor is hidden. A
+                            # later authoritative SHOW must start from the
+                            # provider's true coordinate, not our old anchor.
+                            self._repay_position_debt(rendered)
                         visible_position = (
                             self._frame_final_cursor_position
                             or self._exact_cursor_position
                         )
                         self._frame_final_cursor_position = None
                         if requested_visible and visible_position is not None:
-                            self._visible_cursor_position = visible_position
-                            if self._stable_cursor_position is None:
-                                self._stable_cursor_position = visible_position
+                            self._accept_visible_position(
+                                visible_position,
+                                quiet=self._deadline is None,
+                            )
                         if (
                             self._deadline is None
                             and requested_visible == self._desired_visible
@@ -224,45 +281,56 @@ class _CursorVisibilityCoalescer:
                         self._burst_saw_hide |= not requested_visible
                         self._desired_visible = requested_visible
                         self._deadline = now + self.quiet_interval
-                        if not requested_visible and self._physical_visible:
-                            rendered.extend(self._HIDE)
-                            self._physical_visible = False
                     elif sequence == _SYNC_OUTPUT_BEGIN:
                         rendered.extend(sequence)
-                        self._sync_depth += 1
+                        self._in_sync_frame = True
+                        self._repay_position_debt(rendered)
                     elif sequence == _SYNC_OUTPUT_END:
-                        if self._sync_depth:
-                            self._sync_depth -= 1
-                            if (
-                                self._sync_depth == 0
-                                and not self._physical_visible
-                                and self._stable_cursor_position is not None
-                                and self._exact_cursor_position is not None
-                                and self._exact_cursor_position
-                                != self._stable_cursor_position
-                            ):
-                                # Place the logical cursor at the stable IME
-                                # anchor *inside* the atomic frame. Windows
-                                # Terminal never observes the intermediate
-                                # Working/footer coordinates, while tmux and
-                                # the provider still receive every original
-                                # draw operation.
-                                self._frame_final_cursor_position = (
-                                    self._exact_cursor_position
-                                )
-                                rendered.extend(self._stable_cursor_position)
-                                self._exact_cursor_position = (
-                                    self._stable_cursor_position
-                                )
+                        was_in_sync_frame = self._in_sync_frame
+                        if was_in_sync_frame:
+                            self._in_sync_frame = False
+                        if (
+                            was_in_sync_frame
+                            and self._deadline is not None
+                            and self._burst_saw_hide
+                            and self._physical_visible
+                            and self._stable_cursor_position is not None
+                            and self._exact_cursor_position is not None
+                            and self._exact_cursor_position
+                            != self._stable_cursor_position
+                        ):
+                            # Place the logical cursor at the stable IME
+                            # anchor *inside* the atomic frame. Windows
+                            # Terminal never observes the intermediate
+                            # Working/footer coordinates. Remember the true
+                            # provider coordinate and repay it inside the next
+                            # atomic frame (or before relative output).
+                            self._frame_final_cursor_position = (
+                                self._exact_cursor_position
+                            )
+                            self._position_debt = self._exact_cursor_position
+                            rendered.extend(self._stable_cursor_position)
+                            self._exact_cursor_position = self._stable_cursor_position
                         rendered.extend(sequence)
                     else:
+                        final = sequence[-1:]
+                        parameters = sequence[2:-1]
+                        absolute_position = final in {b"H", b"f"} and all(
+                            value in b"0123456789;" for value in parameters
+                        )
+                        if absolute_position:
+                            self._position_debt = None
+                        elif final not in {b"S", b"T", b"m", b"q"}:
+                            self._repay_position_debt(rendered)
                         rendered.extend(sequence)
                         self._observe_csi_cursor_position(sequence)
                     continue
                 if len(self._pending) > self._MAX_CONTROL:
+                    self._repay_position_debt(rendered)
                     rendered.extend(self._pending)
                     self._pending.clear()
                     self._exact_cursor_position = None
+                    self._stable_cursor_position = None
                     self._state = "csi_passthrough"
                 continue
 
@@ -327,21 +395,41 @@ class _CursorVisibilityCoalescer:
             and self._burst_saw_hide
             and self._burst_saw_show
         )
-        if stable_visible and not self._physical_visible:
-            if self._visible_cursor_position is not None:
-                rendered.extend(self._visible_cursor_position)
-                self._exact_cursor_position = self._visible_cursor_position
-                self._stable_cursor_position = self._visible_cursor_position
-            rendered.extend(self._SHOW)
-            self._physical_visible = True
+        if stable_visible:
+            if (
+                self._physical_visible
+                and self._position_debt is None
+                and self._visibility_transitions >= 3
+                and self._burst_saw_hide
+                and self._stable_cursor_position is not None
+                and self._exact_cursor_position is not None
+                and self._exact_cursor_position != self._stable_cursor_position
+            ):
+                # A provider that paints without synchronized-output framing
+                # still gets one atomic quiet-boundary correction. Preserve
+                # its true position as debt so later relative output remains
+                # correct.
+                self._position_debt = self._exact_cursor_position
+                rendered.extend(_SYNC_OUTPUT_BEGIN)
+                rendered.extend(self._stable_cursor_position)
+                rendered.extend(_SYNC_OUTPUT_END)
+                self._exact_cursor_position = self._stable_cursor_position
+            if not self._physical_visible:
+                show_position = self._position_debt or self._stable_cursor_position
+                if show_position is not None:
+                    rendered.extend(show_position)
+                    self._exact_cursor_position = show_position
+                    self._position_debt = None
+                rendered.extend(self._SHOW)
+                self._physical_visible = True
         elif not stable_visible and self._physical_visible:
             rendered.extend(self._HIDE)
             self._physical_visible = False
+        self._desired_visible = stable_visible
         self._deadline = None
         self._visibility_transitions = 0
         self._burst_saw_hide = False
         self._burst_saw_show = False
-        self._visible_cursor_position = None
         self._frame_final_cursor_position = None
         return bytes(rendered)
 

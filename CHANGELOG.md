@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc15] - 2026-08-13
+
+### Fixed
+
+- Keep the native Windows hardware cursor visible through Codex's continuous
+  hide/show repaint stream instead of hiding it until the provider becomes
+  quiet. A lone intentional hide still takes effect after the bounded quiet
+  interval.
+- Pin Windows IME pre-edit to the last quiet prompt row across synchronized
+  Working/footer paints, retain that proven row after committed input, and
+  update same-row caret columns without learning a transient frame-final row.
+  Cursor-position corrections stay inside atomic output boundaries; the
+  provider's true position is repaid inside the next frame or before relative
+  output, preserving terminal semantics. Resize and unknown positioning still
+  fail closed without replaying stale coordinates.
+
 ## [0.4.0rc14] - 2026-08-12
 
 ### Fixed
@@ -2863,7 +2879,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc14...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc15...HEAD
+[0.4.0rc15]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc14...v0.4.0rc15
 [0.4.0rc14]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc13...v0.4.0rc14
 [0.4.0rc13]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc12...v0.4.0rc13
 [0.4.0rc12]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc11...v0.4.0rc12

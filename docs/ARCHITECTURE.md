@@ -141,21 +141,25 @@ per-client `sync` feature when that marker is present. The ordinary same-session
 client runs behind a private PTY and still addresses the selected tmux server
 directly. Its entry-side proxy forwards every byte except bounded cursor
 presentation controls: only a real DECTCEM visibility transition starts a
-coalesced burst, ordinary output remains byte-exact, and the last requested
-state is restored after 100 ms of visibility quiet. While that cursor is
-hidden, the proxy recognizes only paired DEC synchronized-output boundaries
-and proven absolute CUP coordinates. It places the last quiet visible input
-anchor immediately before the outer frame commit, so Windows Terminal's
-logical IME anchor does not follow Codex through intermediate Working, prompt,
-and footer coordinates. It never removes a frame draw, guesses after relative
-or printable cursor movement, or pins the cursor after output becomes quiet;
-explicit input and resize invalidate the saved coordinate. A bounded VT
-control-state parser prevents injection into partial CSI or opaque OSC/DCS
-payload. The proxy does not interpret text, panes, provider state, or provider
-history. This preserves Codex's Working timer and animations while preventing
-Windows Terminal from painting or anchoring IME text at each intermediate
-frame-final row. If private-PTY setup fails, the unfiltered direct client
-remains the fail-safe. A cross-Terminal-
+coalesced burst and ordinary output remains byte-exact. A paired repaint burst
+keeps the hardware cursor visible; one uncontradicted HIDE becomes authoritative
+after 100 ms of visibility quiet. The proxy recognizes only DEC
+synchronized-output boundaries and proven absolute CUP coordinates. It places
+the last quiet visible input anchor immediately before the outer frame commit,
+so Windows Terminal's logical IME anchor does not follow Codex through
+intermediate Working and footer coordinates. Same-row SHOW coordinates may
+advance the caret column, while a different row becomes authoritative only
+from a quiet SHOW; committed input does not discard the proven prompt row and
+resize discards all saved geometry. When an atomic frame is anchored, the
+provider's true final coordinate becomes bounded position debt: it is restored
+inside the next atomic frame, before cursor-dependent relative output, or
+superseded by a new absolute CUP. A bounded VT control-state parser prevents
+injection into partial CSI or opaque OSC/DCS payload. The proxy does not
+interpret text, panes, provider state, or provider history. This preserves
+Codex's Working timer and animations while preventing Windows Terminal from
+painting or anchoring IME text at each intermediate frame-final row. If
+private-PTY setup fails, the unfiltered direct client remains the fail-safe. A
+cross-Terminal-
 Services fallback bridge carries only the resulting capability bit into its
 server-session PTY—never the opaque marker—and applies the same per-client
 feature and entry-side cursor stabilization before attach.

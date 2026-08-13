@@ -177,11 +177,16 @@ opens a WSL shell and runs the ordinary POSIX product there.
   those frames. On supported Windows Terminal, the same-session tmux client
   therefore runs behind a private entry-side PTY that leaves ordinary output
   byte-exact and coalesces only observed DECTCEM cursor visibility across
-  100 ms visibility bursts. A bounded control-state parser keeps inserted
-  visibility outside partial CSI and OSC/DCS payload. Normal Codex animation
-  and Working timers remain enabled; Railmux does not edit Codex configuration,
-  argv, or history. If this visual proxy cannot be created, the normal direct
-  client remains available.
+  100 ms visibility bursts. Paired repaint noise keeps the hardware cursor
+  visible, while an uncontradicted hide remains authoritative after quiet. A
+  proven quiet prompt row is restored inside each synchronized repaint; the
+  real provider coordinate is retained as position debt and restored inside
+  the next atomic frame or before relative output. Same-row caret movement is
+  accepted, resize drops saved geometry, and a bounded control-state parser
+  keeps corrections outside partial CSI and OSC/DCS payload. Normal Codex
+  animation and Working timers remain enabled; Railmux does not edit Codex
+  configuration, argv, or history. If this visual proxy cannot be created, the
+  normal direct client remains available.
 - A published base is never upgraded in place. A pacman core transition can
   temporarily replace DLLs needed by the updater itself, so mutating the base
   that owns a live detached tmux server would turn a visual improvement into a
