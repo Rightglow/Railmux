@@ -118,7 +118,7 @@ revalidates the managed base/application markers, exact socket path, absolute
 tmux executable, server PID, socket label, and immutable session ID before
 attaching. It owns a new PTY and one additional tmux client; the entry process
 forwards only opaque terminal bytes, resize dimensions, heartbeats, and an exit
-status. It does not render through pyte,
+status. The server-side helper does not render through pyte,
 persist an origin choice, create a parallel workspace, detach another client,
 or mutate provider/session files. The endpoint name is independent from the
 random secret; a nonce challenge proves possession without sending that secret
@@ -139,52 +139,44 @@ marker but keep the generic `xterm-256color` terminal name, so tmux cannot
 infer synchronized-output support from `TERM`. Managed clients add tmux's
 per-client `sync` feature when that marker is present. The ordinary same-session
 client runs behind a private PTY and still addresses the selected tmux server
-directly. Its entry-side proxy limits presentation filtering to bounded cursor
-controls and one proven redundant prompt-row form: only a real DECTCEM
-visibility transition starts a coalesced burst. A paired repaint burst
-keeps the hardware cursor visible; one uncontradicted HIDE becomes authoritative
-after 100 ms of visibility quiet. The proxy recognizes only DEC
-synchronized-output boundaries and proven absolute CUP coordinates. It places
-the last quiet visible input anchor immediately before the outer frame commit,
-so Windows Terminal's logical IME anchor does not follow Codex through
-intermediate Working and footer coordinates. Same-row SHOW coordinates may
-advance the caret column, while a different row becomes authoritative only
-from a quiet SHOW; committed input does not discard the proven prompt row and
-resize discards all saved geometry. When an atomic frame is anchored, the
-provider's true final coordinate becomes bounded position debt: it is restored
-inside the next atomic frame, before cursor-dependent relative output, or
-superseded by a new absolute CUP. A bounded VT control-state parser prevents
-injection into partial CSI or opaque OSC/DCS payload and distinguishes an
-eight-bit string terminator from the same byte used as UTF-8 continuation data.
-Within one active synchronized burst, the proxy may retain the newest complete
-`EL 2 + row` segment for the proven prompt row when a following absolute CUP
-makes its immediate cursor advance irrelevant. SGR state is still replayed,
-and the newest authoritative row is committed once at the 100 ms quiet
-boundary. Field evidence showed that a Codex repaint may scroll the complete
-terminal grid while Windows Terminal owns inline IME pre-edit, so a guessed
-prompt-row guard is not sufficient. The entry proxy instead forwards input to
-the tmux PTY immediately while briefly retaining the complete provider-output
-stream after composition-shaped ASCII/`DEL` input. UTF-8 text, which proves a
-committed character, uses a much shorter release boundary; Enter and Ctrl-C
-release immediately. The retained byte-exact output is then presented inside
-one outer synchronized-output transaction. A bounded two-MiB ceiling fails
-open atomically rather than dropping output.
-An incomplete segment, unknown control, screen-wide change, resize, or lost
-anchor is forwarded and invalidates the deferred repaint. This leaves the
-final terminal cells and provider state authoritative while preventing Windows
-Terminal from painting a partially updated grid underneath inline IME pre-edit.
-The proxy does not interpret text, panes, provider state, or provider history.
-Provider animation remains live outside the bounded interval in which the user
-is composing text. Native Windows may deliver Ctrl-C as `SIGINT` instead of a
-TTY byte; while either private-PTY client is active, the entry process converts
-that signal into byte `0x03` for the focused tmux pane and restores the prior
-handler on exit. The controller pane retains its ordinary Ctrl-C quit action
-when it owns focus. If
-private-PTY setup fails, the unfiltered direct client remains the fail-safe. A
-cross-Terminal-
-Services fallback bridge carries only the resulting capability bit into its
-server-session PTY—never the opaque marker—and applies the same per-client
-feature and entry-side cursor stabilization before attach.
+directly. The entry process consumes that PTY stream into the same extended
+pyte terminal model and SGR-preserving row serializer used by `railmux ssh`.
+It publishes an initial keyframe and then only rows whose final rendered cells
+changed, followed by one authoritative cursor and terminal-mode state inside a
+DEC synchronized-output transaction. A provider Working tick can therefore
+keep its animation and elapsed timer live without repeatedly clearing an
+unchanged input row underneath Windows Terminal's inline IME pre-edit.
+
+The producer defers sampling while an application DEC synchronized-output
+frame is open. A transient `EL 2` observed before the provider restores its
+prompt is therefore not physical output. An unclosed frame has a bounded 250 ms hold;
+after that ceiling the client continues publishing semantic latest-state
+updates rather than freezing interactive input, and it never falls back to raw
+VT passthrough. This is terminal-state normalization, not a
+provider-specific prompt heuristic: it has no knowledge of Codex, Claude,
+panes, transcripts, or IME bytes. Input remains byte-exact and immediate in the
+opposite direction, including bracketed paste, focus, SGR mouse events, and
+ordinary tmux copy mode. Resize still changes only the launcher-owned tmux PTY,
+and bounded OSC 52 requests retain the existing native-clipboard/OSC fallback.
+Native Windows may deliver Ctrl-C as `SIGINT` instead of a TTY byte; while
+either private-PTY client is active, the entry process converts that signal
+into byte `0x03` for the focused tmux pane and restores the prior handler on
+exit. The controller pane retains its ordinary Ctrl-C quit action when it owns
+focus.
+
+Because this semantic client, rather than raw tmux output, owns the physical
+terminal, it keeps bracketed paste plus SGR mouse motion enabled for the whole
+interactive lifetime and restores both on exit. tmux remains the input router:
+it filters/re-encodes those reports for the focused pane, while continuous
+motion is required for Railmux's established hover targets and context menus.
+
+The Windows Terminal route deliberately has no raw-output fallback: silently
+switching presentation models would restore the same IME corruption after a
+setup or transport fault. Such a fault stops only the attach client, restores
+the outer terminal, reports an actionable error, and leaves the workspace and
+providers running. The cross-Terminal-Services bridge continues to carry only
+opaque PTY bytes between its two trusted endpoints, but its Windows Terminal
+entry applies the same semantic producer and renderer before painting.
 
 The managed Windows Urwid screen also brackets each changed sidebar paint in
 application-side DEC synchronized output. tmux can therefore collect the many
@@ -206,13 +198,11 @@ Windows floor does not change Railmux's shared macOS/Linux/WSL tmux 2.7 core
 floor. The recorded package and effective tmux classification remain exposed
 by `railmux runtime status` and `railmux doctor`.
 
-That text-frame contract does not make Codex's hardware-cursor state atomic.
-A Windows Terminal 1.24 control-sequence trace showed correctly paired Codex
-synchronized frames while cursor hide/show, style, and alternating final-row
-updates remained outside their boundaries. The entry-side cursor coalescer
-above contains that presentation defect without changing Codex argv or config;
-new, resumed, and private Help processes retain normal provider animation and
-timer behavior on every platform.
+The semantic producer does not change Codex argv or config; new, resumed, and
+private Help processes retain normal provider animation and timer behavior on
+every platform. The producer and `railmux ssh` share VT compatibility fixes,
+CJK cell-width handling, indexed-colour preservation, and final-row diff
+semantics so the two display paths cannot drift into separate renderers.
 
 The verified base is immutable after publication. Railmux never runs an
 in-place `pacman -Syu`, replaces a live tmux binary, or kills a server to meet
@@ -814,6 +804,12 @@ validate it before touching tmux. The SSH hello carries only bounded config
 validity and configured-tmux booleans, allowing the local client and
 `doctor --remote` to distinguish remote configuration repair from package or
 system-tmux installation without disclosing paths or environment values.
+Every environment variable owned by Railmux uses the `RAILMUX_` prefix. Names
+defined by an external contract retain that contract's spelling: examples
+include POSIX/XDG locale and path variables, tmux's `TMUX`/`TMUX_PANE`, Windows
+Terminal's `WT_SESSION`, and provider-owned `CODEX_HOME` or
+`CLAUDE_CONFIG_DIR`. Reading one of those names is capability discovery or
+provider integration, not a Railmux environment-variable API.
 
 Remote subcommands use `--remote HOST` as their public destination spelling.
 The released `doctor --ssh HOST` spelling is a hidden compatibility alias only;

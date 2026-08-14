@@ -14,8 +14,6 @@ path exists solely to recover older helpers which held the attach lock for life.
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
 import errno
 import fcntl
 import hashlib
@@ -39,7 +37,6 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Callable, Sequence
 
 from railmux import (
@@ -57,7 +54,6 @@ from railmux.fast_display_protocol import (
     HistorySnapshot,
     InputKind,
     InputFrameDecoder,
-    MAX_CLIPBOARD_BYTES,
     MAX_HISTORY_LINES,
     PathKind,
     PathOpenResult,
@@ -69,9 +65,6 @@ from railmux.fast_display_protocol import (
     REMOTE_HELLO_PREFIX,
     REMOTE_START,
     RemoteExit,
-    ScreenUpdate,
-    TerminalMode,
-    UpdateKind,
     decode_claude_history_choice,
     decode_history_prefetch,
     decode_history_request,
@@ -84,6 +77,13 @@ from railmux.fast_display_protocol import (
     encode_path_result,
     encode_path_open_result,
     encode_update,
+)
+from railmux.terminal_screen import (
+    Osc52ClipboardDecoder as _Osc52ClipboardDecoder,
+    ScreenState as _ScreenState,
+    build_screen_update,
+    extended_pyte as _extended_pyte,
+    render_rows,
 )
 from railmux.ui.workspace import (
     COMPACT_ENTER_HEIGHT,
@@ -163,10 +163,6 @@ _WINDOW_SIZE_ATTEMPTS = 3
 # scrollback may therefore return fewer lines than requested, which the client
 # treats as the effective end instead of allowing the helper to fail.
 _HISTORY_SNAPSHOT_RAW_BUDGET = 12 * 1024 * 1024
-_OSC52_PREFIX = b"\033]52;"
-_OSC52_MAX_ENCODED = ((MAX_CLIPBOARD_BYTES + 2) // 3) * 4
-
-
 @dataclass(frozen=True)
 class _HistoryJob:
     kind: str
@@ -288,56 +284,6 @@ class _HistoryWorker:
                 pass
 
 
-class _Osc52ClipboardDecoder:
-    """Extract bounded tmux clipboard replies across arbitrary PTY chunks."""
-
-    def __init__(self) -> None:
-        self._buffer = bytearray()
-
-    def feed(self, data: bytes) -> tuple[bytes, ...]:
-        self._buffer.extend(data)
-        decoded: list[bytes] = []
-        while True:
-            start = self._buffer.find(_OSC52_PREFIX)
-            if start < 0:
-                keep = min(len(self._buffer), len(_OSC52_PREFIX) - 1)
-                if len(self._buffer) > keep:
-                    del self._buffer[:-keep]
-                break
-            if start:
-                del self._buffer[:start]
-            selection_end = self._buffer.find(b";", len(_OSC52_PREFIX))
-            if selection_end < 0:
-                if len(self._buffer) > len(_OSC52_PREFIX) + 16:
-                    del self._buffer[0]
-                    continue
-                break
-            bel = self._buffer.find(b"\007", selection_end + 1)
-            st = self._buffer.find(b"\033\\", selection_end + 1)
-            endings = [
-                (position, length)
-                for position, length in ((bel, 1), (st, 2))
-                if position >= 0
-            ]
-            if not endings:
-                if len(self._buffer) - selection_end - 1 > _OSC52_MAX_ENCODED:
-                    del self._buffer[0]
-                    continue
-                break
-            end, terminator_length = min(endings)
-            payload = bytes(self._buffer[selection_end + 1 : end])
-            del self._buffer[: end + terminator_length]
-            if not payload or len(payload) > _OSC52_MAX_ENCODED:
-                continue
-            try:
-                value = base64.b64decode(payload, validate=True)
-            except (binascii.Error, ValueError):
-                continue
-            if 0 < len(value) <= MAX_CLIPBOARD_BYTES:
-                decoded.append(value)
-        return tuple(decoded)
-
-
 def _fast_dependency_ready() -> bool:
     """Return whether the installed SSH display dependency is usable."""
     try:
@@ -392,174 +338,6 @@ def _await_client_start(timeout: float = _START_HANDSHAKE_TIMEOUT) -> bool:
     if not readable:
         return False
     return sys.stdin.buffer.readline(len(REMOTE_START) + 1) == REMOTE_START
-
-
-class _ExtendedScreenMixin:
-    """Fill the row-mutating xterm gaps in pyte 0.8.2.
-
-    tmux's ``xterm-256color`` client capabilities include parameterized
-    scroll-up, scroll-down, and repeat-character sequences (CSI S/T/b). pyte
-    0.8.2 silently dispatches all three to ``Screen.debug``, permanently
-    diverging the headless display from tmux. Keep the compatibility layer
-    local to the private remote display instead of changing the terminal
-    advertised to tmux or forwarding raw control sequences to the client.
-    """
-
-    _last_graphic_character = ""
-    _character_width = staticmethod(lambda _character: 1)
-
-    def reset(self) -> None:
-        self._last_graphic_character = ""
-        super().reset()
-
-    def draw(self, data: str) -> None:
-        super().draw(data)
-        # ByteStream has already removed control syntax. pyte stops drawing at
-        # an unprintable character, so retain only the last graphic character
-        # that can be repeated with the current rendition attributes.
-        for character in reversed(data):
-            if self._character_width(character) > 0:
-                self._last_graphic_character = character
-                break
-
-    def scroll_up(self, count: int | None = None) -> None:
-        """Scroll the current DECSTBM region up without moving the cursor."""
-        top = 0 if self.margins is None else self.margins.top
-        bottom = self.lines - 1 if self.margins is None else self.margins.bottom
-        amount = min(max(1, count or 1), bottom - top + 1)
-        for row in range(top, bottom - amount + 1):
-            source = row + amount
-            if source in self.buffer:
-                self.buffer[row] = self.buffer[source]
-            else:
-                self.buffer.pop(row, None)
-        for row in range(bottom - amount + 1, bottom + 1):
-            self.buffer.pop(row, None)
-        self.dirty.update(range(top, bottom + 1))
-
-    def scroll_down(self, count: int | None = None) -> None:
-        """Scroll the current DECSTBM region down without moving the cursor."""
-        top = 0 if self.margins is None else self.margins.top
-        bottom = self.lines - 1 if self.margins is None else self.margins.bottom
-        amount = min(max(1, count or 1), bottom - top + 1)
-        for row in range(bottom, top + amount - 1, -1):
-            source = row - amount
-            if source in self.buffer:
-                self.buffer[row] = self.buffer[source]
-            else:
-                self.buffer.pop(row, None)
-        for row in range(top, top + amount):
-            self.buffer.pop(row, None)
-        self.dirty.update(range(top, bottom + 1))
-
-    def repeat_character(self, count: int | None = None) -> None:
-        """Repeat the preceding graphic character (REP / CSI Ps b)."""
-        if self._last_graphic_character:
-            self.draw(self._last_graphic_character * max(1, count or 1))
-
-    def report_device_status(self, mode: int, **kwargs: bool) -> None:
-        """Ignore private DSR queries that pyte 0.8.2 cannot dispatch."""
-        if kwargs.get("private"):
-            return
-        super().report_device_status(mode)
-
-    def select_graphic_rendition(self, *attrs: int) -> None:
-        """Retain 256-colour indices instead of baking in pyte's palette.
-
-        pyte 0.8.2 expands ``38/48;5;N`` into its fixed xterm RGB table.  If
-        Railmux serializes that value as true colour, a locally customised
-        terminal palette is bypassed and history can look noticeably more
-        saturated than the provider's live output.  The symbolic value stays
-        private to the headless model and :func:`_colour_codes` restores the
-        original indexed SGR on the wire.
-        """
-        super().select_graphic_rendition(*attrs)
-        values = list(attrs)
-        indexed: dict[str, int] = {}
-        index = 0
-        while index < len(values):
-            attr = values[index]
-            index += 1
-            if attr == 0:
-                indexed.clear()
-                continue
-            if 30 <= attr <= 37 or attr == 39 or 90 <= attr <= 97:
-                indexed.pop("fg", None)
-                continue
-            if 40 <= attr <= 47 or attr == 49 or 100 <= attr <= 107:
-                indexed.pop("bg", None)
-                continue
-            if attr not in (38, 48):
-                continue
-            key = "fg" if attr == 38 else "bg"
-            indexed.pop(key, None)
-            if index >= len(values):
-                continue
-            mode = values[index]
-            index += 1
-            if mode == 5 and index < len(values):
-                colour = values[index]
-                index += 1
-                if 0 <= colour <= 255:
-                    indexed[key] = colour
-            elif mode == 2:
-                index = min(len(values), index + 3)
-        if indexed:
-            self.cursor.attrs = self.cursor.attrs._replace(
-                **{key: f"ansi256:{colour}" for key, colour in indexed.items()}
-            )
-
-
-@lru_cache(maxsize=4)
-def _build_extended_pyte(pyte: object) -> object:
-    """Return cached pyte-compatible types with Railmux's bounded fixes."""
-
-    class ExtendedScreen(_ExtendedScreenMixin, pyte.Screen):
-        _character_width = staticmethod(pyte.screens.wcwidth)
-
-    class ExtendedDiffScreen(_ExtendedScreenMixin, pyte.DiffScreen):
-        _character_width = staticmethod(pyte.screens.wcwidth)
-
-    class ExtendedByteStream(pyte.ByteStream):
-        csi = dict(pyte.ByteStream.csi)
-        csi.update(
-            {
-                "S": "scroll_up",
-                "T": "scroll_down",
-                "b": "repeat_character",
-            }
-        )
-        events = frozenset(
-            set(pyte.ByteStream.events)
-            | {"scroll_up", "scroll_down", "repeat_character"}
-        )
-
-    return SimpleNamespace(
-        Screen=ExtendedScreen,
-        DiffScreen=ExtendedDiffScreen,
-        ByteStream=ExtendedByteStream,
-        screens=pyte.screens,
-        _railmux_extended=True,
-    )
-
-
-def _extended_pyte(pyte: object) -> object:
-    """Idempotently adapt one imported pyte module for tmux's VT stream."""
-    if getattr(pyte, "_railmux_extended", False):
-        return pyte
-    return _build_extended_pyte(pyte)
-
-
-@dataclass(frozen=True)
-class _ScreenState:
-    sequence: int
-    width: int
-    height: int
-    cursor_x: int
-    cursor_y: int
-    cursor_visible: bool
-    terminal_modes: TerminalMode
-    rows: tuple[bytes, ...]
 
 
 @dataclass(frozen=True)
@@ -638,48 +416,6 @@ def _history_generation(marker: str, server_identity: str = "") -> int:
         ).digest(),
         "big",
     )
-
-
-_ANSI_FG = {
-    "default": 39,
-    "black": 30,
-    "red": 31,
-    "green": 32,
-    "brown": 33,
-    "blue": 34,
-    "magenta": 35,
-    "cyan": 36,
-    "white": 37,
-    "brightblack": 90,
-    "brightred": 91,
-    "brightgreen": 92,
-    "brightbrown": 93,
-    "brightblue": 94,
-    "brightmagenta": 95,
-    "bfightmagenta": 95,  # pyte 0.8.2 compatibility typo
-    "brightcyan": 96,
-    "brightwhite": 97,
-}
-_ANSI_BG = {
-    "default": 49,
-    "black": 40,
-    "red": 41,
-    "green": 42,
-    "brown": 43,
-    "blue": 44,
-    "magenta": 45,
-    "cyan": 46,
-    "white": 47,
-    "brightblack": 100,
-    "brightred": 101,
-    "brightgreen": 102,
-    "brightbrown": 103,
-    "brightblue": 104,
-    "brightmagenta": 105,
-    "bfightmagenta": 105,
-    "brightcyan": 106,
-    "brightwhite": 107,
-}
 
 
 def _tmux_output(*args: str) -> str:
@@ -2242,121 +1978,6 @@ def _use_smallest_window_size(session_id: str) -> None:
         )
 
 
-def _colour_codes(value: str, *, foreground: bool) -> list[str]:
-    named = _ANSI_FG if foreground else _ANSI_BG
-    if value in named:
-        return [str(named[value])]
-    indexed = re.fullmatch(r"ansi256:([0-9]{1,3})", value)
-    if indexed is not None and int(indexed.group(1)) <= 255:
-        return ["38" if foreground else "48", "5", indexed.group(1)]
-    if len(value) == 6:
-        try:
-            red, green, blue = (
-                int(value[0:2], 16),
-                int(value[2:4], 16),
-                int(value[4:6], 16),
-            )
-        except ValueError:
-            pass
-        else:
-            return ["38" if foreground else "48", "2", str(red), str(green), str(blue)]
-    return ["39" if foreground else "49"]
-
-
-def _style(char: object) -> bytes:
-    codes: list[str] = ["0"]
-    for enabled, code in (
-        (char.bold, "1"),
-        (char.italics, "3"),
-        (char.underscore, "4"),
-        (char.blink, "5"),
-        (char.reverse, "7"),
-        (char.strikethrough, "9"),
-    ):
-        if enabled:
-            codes.append(code)
-    codes.extend(_colour_codes(char.fg, foreground=True))
-    codes.extend(_colour_codes(char.bg, foreground=False))
-    return f"\033[{';'.join(codes)}m".encode()
-
-
-def _style_key(char: object) -> tuple[object, ...]:
-    return (
-        char.fg,
-        char.bg,
-        char.bold,
-        char.italics,
-        char.underscore,
-        char.strikethrough,
-        char.reverse,
-        char.blink,
-    )
-
-
-def render_rows(screen: object) -> tuple[bytes, ...]:
-    """Render independently paintable rows with allowlisted SGR controls."""
-    rendered_rows: list[bytes] = []
-    character_width = getattr(screen, "_character_width", lambda _value: 1)
-    for row_index in range(screen.lines):
-        rendered = [b"\033[0m"]
-        previous_style: tuple[object, ...] | None = None
-        row = screen.buffer[row_index]
-        continuation_cells = 0
-        continuation_data = ""
-        for column in range(screen.columns):
-            if continuation_cells:
-                continuation_cells -= 1
-                continuation = row[column]
-                if not continuation.data or continuation.data == continuation_data:
-                    continue
-                # A partial repaint may put real, different content over a
-                # former wide-glyph continuation cell. Preserve that content;
-                # only empty or repeated physical cells are continuations.
-                continuation_cells = 0
-                continuation_data = ""
-            char = row[column]
-            style = _style_key(char)
-            if style != previous_style:
-                rendered.append(_style(char))
-                previous_style = style
-            # pyte represents the second cell of a wide glyph as empty data;
-            # the real terminal already advances two columns for the glyph.
-            if char.data:
-                safe_data = "".join(
-                    value
-                    if value >= " "
-                    and value != "\x7f"
-                    and not "\x80" <= value <= "\x9f"
-                    else "�"
-                    for value in char.data
-                )
-                rendered.append(safe_data.encode("utf-8", errors="replace"))
-                # A conforming pyte screen leaves the continuation cell of a
-                # wide glyph empty. Some terminal-model/capture combinations
-                # instead repeat the glyph's data in that physical cell. The
-                # real terminal advances by the glyph width already, so never
-                # serialize continuation-cell data as a second character.
-                cell_width = max(
-                    (character_width(value) for value in char.data),
-                    default=1,
-                )
-                continuation_cells = max(0, cell_width - 1)
-                continuation_data = char.data
-        rendered.append(b"\033[0m")
-        rendered_rows.append(b"".join(rendered))
-    return tuple(rendered_rows)
-
-
-def terminal_modes_for_screen(screen: object) -> TerminalMode:
-    """Project pyte's private-mode set onto the bounded v16 wire allowlist."""
-    terminal_modes = TerminalMode.NONE
-    if 2004 << 5 in screen.mode:
-        terminal_modes |= TerminalMode.BRACKETED_PASTE
-    if 1004 << 5 in screen.mode:
-        terminal_modes |= TerminalMode.FOCUS_EVENTS
-    return terminal_modes
-
-
 def _child_exited(pid: int) -> bool:
     try:
         found, _status = os.waitpid(pid, os.WNOHANG)
@@ -2647,60 +2268,22 @@ def _serve_attached(
         nonlocal force_keyframe, next_frame
         if pending_packet is not None or not (screen_changed or force_keyframe):
             return
-        rows = render_rows(screen)
-        cursor_x = min(screen.cursor.x, width - 1)
-        cursor_y = min(screen.cursor.y, height - 1)
-        cursor_visible = modes.DECTCEM in screen.mode
-        terminal_modes = terminal_modes_for_screen(screen)
-        keyframe = (
-            force_keyframe
-            or delivered is None
-            or delivered.width != width
-            or delivered.height != height
-        )
-        if keyframe:
-            changed_rows = tuple(enumerate(rows))
-            kind = UpdateKind.KEYFRAME
-        else:
-            assert delivered is not None
-            changed_rows = tuple(
-                (index, row)
-                for index, row in enumerate(rows)
-                if row != delivered.rows[index]
-            )
-            kind = UpdateKind.PATCH
-            if not changed_rows and (
-                cursor_x == delivered.cursor_x
-                and cursor_y == delivered.cursor_y
-                and cursor_visible == delivered.cursor_visible
-                and terminal_modes == delivered.terminal_modes
-            ):
-                screen_changed = False
-                next_frame = now + interval
-                return
-        sequence = 1 if delivered is None else (delivered.sequence + 1) & 0xFFFFFFFF
-        update = ScreenUpdate(
-            kind=kind,
-            sequence=sequence,
+        update, state = build_screen_update(
+            screen,
+            modes,
             width=width,
             height=height,
-            cursor_x=cursor_x,
-            cursor_y=cursor_y,
-            cursor_visible=cursor_visible,
-            rows=changed_rows,
-            terminal_modes=terminal_modes,
+            delivered=delivered,
+            force_keyframe=force_keyframe,
         )
+        if update is None:
+            screen_changed = False
+            force_keyframe = False
+            next_frame = now + interval
+            return
         pending_packet = encode_update(update)
-        pending_state = _ScreenState(
-            sequence=sequence,
-            width=width,
-            height=height,
-            cursor_x=cursor_x,
-            cursor_y=cursor_y,
-            cursor_visible=cursor_visible,
-            terminal_modes=terminal_modes,
-            rows=rows,
-        )
+        assert state is not None
+        pending_state = state
         screen_changed = False
         force_keyframe = False
         next_frame = now + interval

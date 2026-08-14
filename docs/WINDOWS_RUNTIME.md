@@ -178,34 +178,21 @@ opens a WSL shell and runs the ordinary POSIX product there.
   application frames are consequently part of the supported native-Windows
   rendering contract. The global macOS/Linux/WSL tmux requirement stays at
   2.7; only the Railmux-owned Windows generation has the higher floor.
-- tmux 3.7 makes Codex text frames atomic but cannot absorb the provider's
-  cursor visibility and final-position changes when Codex emits them outside
-  those frames. On supported Windows Terminal, the same-session tmux client
-  therefore runs behind a private entry-side PTY that coalesces observed
-  DECTCEM cursor visibility across
-  100 ms visibility bursts. Paired repaint noise keeps the hardware cursor
-  visible, while an uncontradicted hide remains authoritative after quiet. A
-  proven quiet prompt row is restored inside each synchronized repaint; the
-  real provider coordinate is retained as position debt and restored inside
-  the next atomic frame or before relative output. Same-row caret movement is
-  accepted, resize drops saved geometry, and a bounded control-state parser
-  keeps corrections outside partial CSI and OSC/DCS payload, including UTF-8
-  continuation bytes that equal an eight-bit string terminator. During that
-  same burst, the newest complete prompt-row `EL 2 + row` repaint may be
-  retained until the 100 ms quiet boundary when a following absolute CUP
-  proves that its immediate cursor advance is irrelevant. Field evidence also
-  showed that Codex may scroll the complete grid while Windows Terminal owns
-  inline IME pre-edit, so input-time protection cannot be scoped to one guessed
-  row. Composition-shaped ASCII/`DEL` input therefore starts a bounded complete
-  output gate while the same input bytes reach the PTY immediately. Committed
-  UTF-8 uses a short release deadline; Enter and Ctrl-C release immediately.
-  The byte-exact retained stream is presented in one outer synchronized-output
-  transaction, and a two-MiB ceiling fails open atomically without dropping
-  bytes. Resize and exit flush in source order before changing geometry or
-  restoring terminal modes. Later SGR controls remain authoritative. Normal
-  Codex animation and Working timers remain enabled outside active composition;
-  Railmux does not edit Codex configuration, argv, or history. If this visual
-  proxy cannot be created, the normal direct client remains available.
+- On supported Windows Terminal, the same-session tmux client runs behind a
+  private entry-side PTY whose output is consumed by the shared `railmux ssh`
+  VT screen model. It defers sampling through bounded application DEC
+  synchronized frames, emits an initial keyframe, and then atomically paints
+  only rows whose final cells changed plus one authoritative cursor. This
+  preserves Codex's animation and Working timer while an unchanged prompt row
+  is not repeatedly erased beneath Windows Terminal's inline IME pre-edit. The
+  producer is provider-neutral and shares CJK width, indexed-colour,
+  scroll-region, REP, bracketed-paste/focus-mode, and OSC 52 behavior with the
+  SSH display path.
+  Input remains immediate and byte-exact; resize still targets only this PTY;
+  Ctrl-C still reaches the focused tmux pane. Railmux does not edit provider
+  configuration, argv, or history. The supported Windows Terminal route has no
+  raw-output fallback: renderer failure restores the outer terminal and stops
+  only the attach client, leaving the workspace and providers alive.
 - A published base is never upgraded in place. A pacman core transition can
   temporarily replace DLLs needed by the updater itself, so mutating the base
   that owns a live detached tmux server would turn a visual improvement into a

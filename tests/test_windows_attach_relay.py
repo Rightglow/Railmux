@@ -9,7 +9,6 @@ import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pyte
 import pytest
 
 from railmux import __version__, windows_attach_relay
@@ -113,557 +112,6 @@ def test_terminal_capability_rejects_control_and_oversized_values():
     )
 
 
-def test_cursor_coalescer_preserves_text_and_partial_sequences():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    assert cursor.feed(b"left\033[?2", 1.0) == b"left"
-    assert cursor.feed(b"5lright", 1.02) == b"right"
-    assert cursor.feed(b"\033[?25h", 1.04) == b""
-    assert cursor.flush_due(1.11) == b""
-    assert cursor.flush_due(1.15) == b""
-
-
-def test_cursor_coalescer_keeps_cursor_visible_across_an_output_burst():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    first = cursor.feed(b"A\033[?25l", 1.0)
-    second = cursor.feed(b"\033[2;2HB\033[?25h", 1.08)
-
-    assert first == b"A"
-    assert second == b"\033[2;2HB"
-    assert cursor.flush_due(1.15) == b""
-    assert cursor.flush_due(1.19) == b""
-
-
-def test_cursor_coalescer_retains_a_final_hidden_state():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    assert cursor.feed(b"frame\033[?25l", 1.0) == b"frame"
-    assert cursor.flush_due(1.05) == b""
-    assert cursor.flush_due(1.2) == b"\033[?25l"
-
-
-def test_cursor_coalescer_restores_visible_anchor_after_flicker_signature():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-
-    rendered = cursor.feed(
-        b"\033[?25l\033[55;3H\033[?25h\033[57;1H\033[?25l",
-        1.0,
-    )
-
-    assert rendered == b"\033[55;3H\033[57;1H"
-    assert cursor.flush_due(1.2) == (b"\033[?2026h\033[55;3H\033[?2026l")
-
-
-def test_cursor_coalescer_keeps_ime_anchor_inside_synchronized_repaints():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    # Establish the quiet prompt cursor. A redundant SHOW is still useful
-    # semantic evidence even though it need not reach the terminal.
-    assert cursor.feed(b"\033[55;3H\033[?25h", 0.9) == b"\033[55;3H"
-    rendered = cursor.feed(
-        b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert rendered == (b"\033[?2026h\033[52;1Hworking\033[57;1H\033[55;3H\033[?2026l")
-    # The transient frame-final footer must not replace the quiet prompt row.
-    assert cursor.flush_due(1.2) == b""
-    assert cursor._stable_cursor_position == b"\033[55;3H"
-
-
-def test_cursor_coalescer_defers_anchor_line_repaints_until_quiet():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    prompt = b"\033[55;1H\033[2K\033[32m> prompt\033[0m"
-
-    first = cursor.feed(
-        b"\033[?25l\033[?2026h"
-        + prompt
-        + b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.0,
-    )
-    second = cursor.feed(
-        b"\033[?25l\033[?2026h"
-        + prompt
-        + b"\033[57;1Hfooter-2\033[?2026l\033[?25h",
-        1.05,
-    )
-
-    assert b"\033[2K" not in first
-    assert b"> prompt" not in first
-    assert b"\033[2K" not in second
-    assert b"> prompt" not in second
-    # Stateful SGR still follows the provider's stream after the physical row
-    # rewrite itself is proven redundant.
-    assert b"\033[32m\033[0m" in second
-    settled = cursor.flush_due(1.2)
-    assert settled.count(b"\033[2K") == 1
-    assert b"> prompt" in settled
-    assert b"footer-2" not in settled
-
-
-def test_cursor_coalescer_does_not_defer_working_rows_away_from_anchor():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-
-    first = cursor.feed(
-        b"\033[?25l\033[?2026h\033[52;1H\033[2KWorking 1.0s"
-        b"\033[55;1H\033[2Kprompt\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.0,
-    )
-    second = cursor.feed(
-        b"\033[?25l\033[?2026h\033[52;1H\033[2KWorking 1.1s"
-        b"\033[55;1H\033[2Kprompt\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.05,
-    )
-
-    assert b"Working 1.0s" in first
-    assert b"Working 1.1s" in second
-    assert b"prompt" not in first + second
-
-
-def test_cursor_coalescer_quiet_repaint_restores_following_sgr_state():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    initial = b"\033[55;3H\033[?25h"
-    frame = (
-        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[31mprompt"
-        b"\033[57;1H\033[34mfooter\033[57;7H\033[?2026l\033[?25h"
-    )
-
-    transformed = cursor.feed(initial, 0.8) + cursor.feed(frame, 1.0)
-    transformed += cursor.flush_due(1.2)
-    # One later printable byte reveals whether the delayed red prompt row
-    # accidentally replaced the provider's final blue rendition state.
-    tail = b"X"
-    transformed += cursor.feed(tail, 1.21)
-    original_screen = pyte.Screen(80, 60)
-    original_stream = pyte.Stream(original_screen)
-    filtered_screen = pyte.Screen(80, 60)
-    filtered_stream = pyte.Stream(filtered_screen)
-    original_stream.feed((initial + frame + tail).decode())
-    filtered_stream.feed(transformed.decode())
-
-    assert filtered_screen.display == original_screen.display
-    assert filtered_screen.buffer[56][6] == original_screen.buffer[56][6]
-    assert filtered_screen.buffer[56][6].fg == "blue"
-
-
-def test_cursor_coalescer_keeps_latest_changed_anchor_line_for_quiet():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-
-    def frame(prompt: bytes) -> bytes:
-        return (
-            b"\033[?25l\033[?2026h\033[55;1H\033[2K"
-            + prompt
-            + b"\033[57;1Hfooter\033[?2026l\033[?25h"
-        )
-
-    cursor.feed(frame(b"first"), 1.0)
-    changed = cursor.feed(frame("第二行“保留”".encode()), 1.05)
-
-    assert b"\033[2K" not in changed
-    assert "第二行“保留”".encode() not in changed
-    settled = cursor.flush_due(1.2)
-    assert b"\033[2K" in settled
-    assert "第二行“保留”".encode() in settled
-
-
-def test_ime_output_gate_holds_complete_grid_while_ascii_composition_is_active():
-    gate = windows_attach_relay._ImeOutputGate()
-    gate.note_input(b"n\x7fi", 1.0)
-
-    first, atomic = gate.hold(b"Working 1\nfull-screen-scroll-1", 1.1)
-    second, second_atomic = gate.hold(b"Working 2\nfull-screen-scroll-2", 1.4)
-
-    assert first == b""
-    assert second == b""
-    assert not atomic
-    assert not second_atomic
-    assert gate.flush_due(1.499) == b""
-    assert gate.flush_due(1.501) == (
-        b"Working 1\nfull-screen-scroll-1Working 2\nfull-screen-scroll-2"
-    )
-
-
-def test_ime_output_gate_committed_utf8_releases_without_composition_delay():
-    gate = windows_attach_relay._ImeOutputGate()
-    gate.note_input(b"ni", 1.0)
-    assert gate.hold(b"old-frame", 1.1) == (b"", False)
-
-    gate.note_input("你“”‘’「」".encode(), 1.2)
-    assert gate.hold(b"committed-frame", 1.21) == (b"", False)
-    assert gate.flush_due(1.239) == b""
-    assert gate.flush_due(1.241) == b"old-framecommitted-frame"
-
-
-def test_ime_output_gate_ctrl_c_and_enter_release_immediately():
-    for control in (b"\x03", b"\r", b"\n"):
-        gate = windows_attach_relay._ImeOutputGate()
-        gate.note_input(b"compose", 1.0)
-        assert gate.hold(b"pending", 1.1) == (b"", False)
-
-        gate.note_input(control, 1.2)
-
-        assert gate.flush_due(1.2) == b"pending"
-
-
-def test_ime_output_gate_never_changes_or_drops_input_bytes():
-    gate = windows_attach_relay._ImeOutputGate()
-    payload = "A“B”C‘D’E「F」G".encode()
-
-    gate.note_input(payload, 1.0)
-
-    assert payload == "A“B”C‘D’E「F」G".encode()
-    assert gate.hold(b"screen", 1.01) == (b"", False)
-    assert gate.flush_due(1.041) == b"screen"
-
-
-def test_cursor_coalescer_repeated_cursor_presentation_is_idempotent():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    rendered = cursor.feed(
-        b"\033[?12h\033[?12h\033[5 q\033[5 q\033[3 q\033[?12l\033[?12l",
-        1.0,
-    )
-
-    assert rendered == b"\033[?12h\033[5 q\033[3 q\033[?12l"
-    cursor.note_resize()
-    assert cursor.feed(b"\033[?12l\033[3 q", 1.1) == b"\033[?12l\033[3 q"
-
-
-def test_cursor_coalescer_unknown_mode_discards_deferred_anchor_row():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    frame = cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Kdeferred"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert b"deferred" not in frame
-    assert cursor.feed(b"\033[?1049l", 1.02).endswith(b"\033[?1049l")
-    assert b"deferred" not in cursor.flush_due(1.2)
-
-
-def test_cursor_coalescer_deferred_line_preserves_final_screen_cells():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    initial = b"\033[55;3H\033[?25h"
-    frames = (
-        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
-        b"\033[57;1Hfooter-2\033[?2026l\033[?25h",
-    )
-    transformed = bytearray(cursor.feed(initial, 0.8))
-    transformed.extend(cursor.feed(frames[0], 1.0))
-    transformed.extend(cursor.feed(frames[1], 1.05))
-    transformed.extend(cursor.flush_due(1.2))
-
-    original_screen = pyte.Screen(80, 60)
-    original_stream = pyte.Stream(original_screen)
-    filtered_screen = pyte.Screen(80, 60)
-    filtered_stream = pyte.Stream(filtered_screen)
-    original_stream.feed((initial + b"".join(frames)).decode("utf-8"))
-    filtered_stream.feed(bytes(transformed).decode("utf-8"))
-
-    assert filtered_screen.display == original_screen.display
-    for row in range(60):
-        assert filtered_screen.buffer[row] == original_screen.buffer[row]
-
-
-def test_cursor_coalescer_flushes_an_unterminated_anchor_line_promptly():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-
-    held = cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Kpartial",
-        1.0,
-    )
-
-    assert b"\033[2Kpartial" not in held
-    assert cursor.next_timeout(1.0, 1.0) == pytest.approx(0.1)
-    assert cursor.flush_due(1.05) == b""
-    assert cursor.flush_due(1.11) == b"\033[2Kpartial\033[?25l"
-
-
-def test_cursor_coalescer_force_flush_keeps_held_row_before_partial_control():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    held = cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Kprompt\033[38;2;1",
-        1.0,
-    )
-
-    assert b"\033[2Kprompt" not in held
-    assert cursor.flush_due(1.01, force=True).startswith(
-        b"\033[2Kprompt\033[38;2;1"
-    )
-
-
-def test_cursor_coalescer_waits_for_split_control_after_a_held_row():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    held = cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Kprompt\033[38;2;1",
-        1.0,
-    )
-
-    assert b"\033[2Kprompt" not in held
-    assert cursor.flush_due(1.05) == b""
-    completed = cursor.feed(b";2;3m styled\033[57;1H", 1.06)
-    assert completed == b"\033[38;2;1;2;3m\033[57;1H"
-    settled = cursor.flush_due(1.2)
-    assert b"\033[2Kprompt\033[38;2;1;2;3m styled" in settled
-
-
-def test_cursor_coalescer_leaves_visible_synchronized_output_byte_exact():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    payload = b"\033[?2026h\033[4;2Hframe\033[4;7H\033[?2026l"
-
-    assert cursor.feed(payload, 1.0) == payload
-    assert cursor.flush_due(2.0) == b""
-
-
-def test_cursor_coalescer_does_not_guess_after_relative_frame_output():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.9)
-    payload = b"\033[?25l\033[?2026hrelative text\033[?2026l\033[?25h"
-
-    assert cursor.feed(payload, 1.0) == (b"\033[?2026hrelative text\033[?2026l")
-
-
-def test_cursor_coalescer_relearns_anchor_after_same_row_caret_move():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.9)
-
-    assert cursor.feed(b"\033[55;5H\033[?25h", 1.0) == b"\033[55;5H"
-    assert cursor._stable_cursor_position == b"\033[55;5H"
-
-
-def test_cursor_coalescer_does_not_override_one_intentional_hide():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    assert cursor.feed(b"\033[4;7H\033[?25l", 1.0) == b"\033[4;7H"
-    assert cursor.flush_due(1.2) == b"\033[?25l"
-
-
-def test_cursor_coalescer_invalidates_stale_visible_anchor_after_text():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    cursor.feed(
-        b"\033[?25l\033[55;3Htext\033[?25h\033[57;1H\033[?25l",
-        1.0,
-    )
-
-    assert cursor.flush_due(1.2) == b""
-
-
-def test_cursor_coalescer_leaves_ordinary_output_byte_exact():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    payload = b"typing and ordinary \033[31mterminal output\033[0m"
-
-    assert cursor.feed(payload, 1.0) == payload
-    assert cursor.flush_due(2.0) == b""
-
-
-def test_cursor_coalescer_suppresses_a_redundant_show_without_blinking():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    assert cursor.feed(b"before\033[?25hafter", 1.0) == b"beforeafter"
-    assert cursor.flush_due(2.0) == b""
-
-
-def test_cursor_coalescer_does_not_parse_dectcem_inside_osc_payload():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    payload = b"\033]0;opaque-\033[?25h-payload\007after"
-
-    assert cursor.feed(payload, 1.0) == payload
-    assert cursor.flush_due(2.0) == b""
-
-
-def test_cursor_coalescer_treats_utf8_c1_bytes_inside_osc_as_text():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    # U+201C ends in the byte 0x9c. It is a UTF-8 continuation byte here, not
-    # an eight-bit String Terminator that can expose later OSC payload as CSI.
-    payload = b"\033]0;title " + "“quoted”".encode() + b"\033[?25l\033\\"
-
-    split = payload.index(b"\x9c")
-    assert cursor.feed(payload[:split], 1.0) == payload[:split]
-    assert cursor.feed(payload[split:], 1.01) == payload[split:]
-    assert cursor.flush_due(2.0) == b""
-
-
-def test_cursor_coalescer_never_injects_inside_a_split_control_sequence():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-
-    assert cursor.feed(b"\033[?25l", 1.0) == b""
-    assert cursor.feed(b"\033[?25h", 1.01) == b""
-    assert cursor.feed(b"\033[38;2;12", 1.02) == b""
-    assert cursor.flush_due(1.2) == b""
-    assert cursor.next_timeout(0.25, 1.2) == 0.25
-    assert cursor.feed(b"0;30mtext", 1.21) == b"\033[38;2;120;30mtext"
-    assert cursor.flush_due(1.21) == b""
-
-
-def test_cursor_coalescer_retains_quiet_ime_anchor_during_working_frame():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    assert cursor.feed(b"\033[55;3H\033[?25h", 0.8) == b"\033[55;3H"
-
-    rendered = cursor.feed(
-        b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert rendered.endswith(b"\033[55;3H\033[?2026l")
-    assert b"\033[?25" not in rendered
-    assert cursor.flush_due(1.2) == b""
-    assert cursor._stable_cursor_position == b"\033[55;3H"
-
-
-def test_cursor_coalescer_does_not_move_a_cursor_that_settled_hidden():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[20;4H\033[?25h", 0.8)
-    assert cursor.feed(b"\033[?25l", 1.0) == b""
-    assert cursor.flush_due(1.2) == b"\033[?25l"
-
-    payload = b"\033[?2026h\033[18;1Hworking\033[24;1H\033[?2026l"
-    assert cursor.feed(payload, 1.3) == payload
-    assert cursor.flush_due(1.5) == b""
-
-
-def test_cursor_coalescer_repays_position_before_showing_from_hidden_state():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor._physical_visible = False
-    cursor._desired_visible = False
-    cursor._stable_cursor_position = b"\033[20;4H"
-    cursor._exact_cursor_position = b"\033[20;4H"
-    cursor._position_debt = b"\033[24;1H"
-
-    assert cursor.feed(b"\033[?25h", 1.0) == b"\033[24;1H"
-    assert cursor.flush_due(1.2) == b"\033[24;1H\033[?25h"
-    assert cursor._stable_cursor_position == b"\033[24;1H"
-
-
-def test_cursor_coalescer_does_not_replay_anchor_after_resize():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.note_resize()
-    payload = b"\033[?25l\033[?2026h\033[18;1Hworking\033[24;1H\033[?2026l\033[?25h"
-
-    assert cursor.feed(payload, 1.0) == (
-        b"\033[?2026h\033[18;1Hworking\033[24;1H\033[?2026l"
-    )
-    assert cursor.flush_due(1.2) == b""
-    assert cursor._stable_cursor_position is None
-
-
-def test_cursor_coalescer_repays_overridden_position_inside_next_frame():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    first = b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h"
-    cursor.feed(first, 1.0)
-    assert cursor.flush_due(1.2) == b""
-
-    assert cursor.feed(b"\033[?2026h\033[52;1H", 1.3) == (
-        b"\033[?2026h\033[57;1H\033[52;1H"
-    )
-
-
-def test_cursor_coalescer_repays_overridden_position_before_relative_output():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert cursor.feed(b"text", 1.02) == b"\033[57;1Htext"
-
-
-def test_cursor_coalescer_repays_position_before_unknown_private_mode():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert cursor.feed(b"\033[?6h", 1.02) == b"\033[57;1H\033[?6h"
-    assert cursor._exact_cursor_position is None
-
-
-@pytest.mark.parametrize("erase", [b"\033[J", b"\033[K"])
-def test_cursor_coalescer_repays_position_before_cursor_relative_erase(erase):
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert cursor.feed(erase, 1.02) == b"\033[57;1H" + erase
-    assert cursor._exact_cursor_position == b"\033[57;1H"
-
-
-def test_cursor_coalescer_invalidates_position_across_alt_screen_restore():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert cursor.feed(b"\033[?1049l", 1.02) == b"\033[57;1H\033[?1049l"
-    assert cursor._exact_cursor_position is None
-    assert cursor._stable_cursor_position is None
-
-
-def test_cursor_coalescer_does_not_inject_on_stray_sync_end():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    rendered = cursor.feed(
-        b"\033[?25l\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert rendered == b"\033[57;1H\033[?2026l"
-    assert cursor._position_debt is None
-
-
-def test_cursor_coalescer_treats_synchronized_output_as_a_latch():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    rendered = cursor.feed(
-        b"\033[?25l\033[?2026h\033[?2026h\033[57;1H\033[?2026l\033[?25h",
-        1.0,
-    )
-
-    assert rendered.endswith(b"\033[57;1H\033[55;3H\033[?2026l")
-    assert not cursor._in_sync_frame
-
-
-def test_cursor_coalescer_keeps_long_repaint_stream_visible():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    rendered = bytearray()
-    now = 1.0
-    for row in range(20, 40):
-        rendered.extend(cursor.flush_due(now))
-        rendered.extend(
-            cursor.feed(
-                f"\033[?25l\033[{row};1H\033[?25h".encode(),
-                now,
-            )
-        )
-        now += 0.04
-
-    assert b"\033[?25l" not in rendered
-    assert b"\033[?25h" not in rendered
-    assert cursor._physical_visible
-
-
 def test_local_proxy_close_restores_a_visible_terminal_cursor(monkeypatch):
     input_read, input_write = os.pipe()
     output_read, output_write = os.pipe()
@@ -676,12 +124,13 @@ def test_local_proxy_close_restores_a_visible_terminal_cursor(monkeypatch):
         stdout_fd=output_write,
     )
     try:
-        client._cursor._physical_visible = False
-        client._cursor._desired_visible = False
+        client._renderer.surface.start()
         client.close()
         os.close(output_write)
         output_write = -1
-        assert os.read(output_read, 4096) == b"\033[?25h"
+        rendered = os.read(output_read, 4096)
+        assert rendered.endswith(b"\033[?1049l")
+        assert b"\033[?25h" in rendered
     finally:
         client.close()
         for fd in (
@@ -837,86 +286,117 @@ def test_local_proxy_forwards_real_pty_output_and_settles_cursor(monkeypatch):
             if fd >= 0:
                 os.close(fd)
 
-    assert rendered == b"leftmidright"
+    assert b"leftmidright" in rendered
+    assert rendered.endswith(b"\033[?1049l")
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
-def test_local_proxy_restores_ime_anchor_after_noisy_final_hide(monkeypatch):
-    input_read, input_write = os.pipe()
+def test_semantic_renderer_does_not_repaint_unchanged_prompt_for_working_tick():
     output_read, output_write = os.pipe()
-    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
-    pid, master_fd = windows_attach_relay._spawn_local_pty_process(
-        [
-            "/bin/sh",
-            "-c",
-            "printf '\033[20;4H\033[?25h'; sleep 0.02; "
-            "printf '\033[?25l\033[20;4H\033[?25h\033[24;1H\033[?25l'; "
-            "sleep 0.15",
-        ],
-        os.environ,
-        width=80,
-        height=24,
-    )
-    client = windows_attach_relay.LocalPtyClient(
-        pid,
-        master_fd,
-        stdin_fd=input_read,
-        stdout_fd=output_write,
-    )
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_write, 30, 4)
     try:
-        assert client.wait(timeout=2.0) == 0
-        client.close()
-        os.close(output_write)
-        output_write = -1
-        rendered = os.read(output_read, 4096)
+        renderer.feed(b"\033[2J\033[1;1HWorking\033[4;1HPROMPT\033[4;7H")
+        renderer.paint_due(1.0, force=True)
+        os.set_blocking(output_read, False)
+        while True:
+            try:
+                os.read(output_read, 65536)
+            except BlockingIOError:
+                break
+
+        renderer.feed(
+            b"\033[?2026h\033[1;1H\033[2KWorking."
+            b"\033[4;7H\033[?2026l"
+        )
+        renderer.paint_due(2.0)
+        rendered = os.read(output_read, 65536)
     finally:
-        client.close()
-        for fd in (input_read, input_write, output_read, output_write):
-            if fd >= 0:
-                os.close(fd)
+        renderer.close()
+        os.close(output_read)
+        os.close(output_write)
 
-    assert rendered == (
-        b"\033[20;4H\033[20;4H\033[24;1H\033[?2026h\033[20;4H\033[?2026l"
-    )
+    assert b"Working." in rendered
+    assert b"PROMPT" not in rendered
+    assert b"\033[4;1H\033[2K" not in rendered
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
-def test_local_proxy_stabilizes_ime_anchor_inside_real_sync_frame(monkeypatch):
-    input_read, input_write = os.pipe()
+def test_semantic_renderer_never_paints_a_partial_synchronized_frame():
     output_read, output_write = os.pipe()
-    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
-    pid, master_fd = windows_attach_relay._spawn_local_pty_process(
-        [
-            "/bin/sh",
-            "-c",
-            "printf '\033[20;4H\033[?25h'; sleep 0.02; "
-            "printf '\033[?25l\033[?2026h\033[18;1Hworking"
-            "\033[24;1H\033[?2026l\033[?25h'; sleep 0.15",
-        ],
-        os.environ,
-        width=80,
-        height=24,
-    )
-    client = windows_attach_relay.LocalPtyClient(
-        pid,
-        master_fd,
-        stdin_fd=input_read,
-        stdout_fd=output_write,
-    )
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_write, 30, 4)
     try:
-        assert client.wait(timeout=2.0) == 0
-        client.close()
-        os.close(output_write)
-        output_write = -1
-        rendered = os.read(output_read, 4096)
-    finally:
-        client.close()
-        for fd in (input_read, input_write, output_read, output_write):
-            if fd >= 0:
-                os.close(fd)
+        renderer.feed(b"\033[2J\033[4;1HPROMPT\033[4;7H")
+        renderer.paint_due(1.0, force=True)
+        os.set_blocking(output_read, False)
+        while True:
+            try:
+                os.read(output_read, 65536)
+            except BlockingIOError:
+                break
 
-    assert (b"\033[?2026h\033[18;1Hworking\033[24;1H\033[20;4H\033[?2026l") in rendered
-    assert rendered.endswith(b"\033[20;4H\033[?2026l")
+        renderer.feed(b"\033[?2026h\033[4;1H\033[2K")
+        assert renderer.next_timeout(0.5, 2.0) == (
+            windows_attach_relay._SYNCHRONIZED_UPDATE_MAX_HOLD
+        )
+        renderer.paint_due(2.0)
+        with pytest.raises(BlockingIOError):
+            os.read(output_read, 65536)
+
+        renderer.feed(b"PROMPT\033[4;7H\033[?2026l")
+        renderer.paint_due(2.1)
+        with pytest.raises(BlockingIOError):
+            os.read(output_read, 65536)
+    finally:
+        renderer.close()
+        os.close(output_read)
+        os.close(output_write)
+
+    # The completed frame restored the exact prior prompt and cursor, so the
+    # semantic differ has nothing at all to send to the physical terminal.
+
+
+def test_semantic_renderer_bounds_an_unclosed_synchronized_frame():
+    output_read, output_write = os.pipe()
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_write, 30, 4)
+    try:
+        renderer.feed(b"\033[2J\033[4;1HPROMPT\033[4;7H")
+        renderer.paint_due(1.0, force=True)
+        os.set_blocking(output_read, False)
+        while True:
+            try:
+                os.read(output_read, 65536)
+            except BlockingIOError:
+                break
+
+        renderer.feed(b"\033[?2026h\033[1;1HWorking")
+        renderer.paint_due(2.0)
+        with pytest.raises(BlockingIOError):
+            os.read(output_read, 65536)
+
+        renderer.paint_due(
+            2.0 + windows_attach_relay._SYNCHRONIZED_UPDATE_MAX_HOLD
+        )
+        rendered = os.read(output_read, 65536)
+    finally:
+        renderer.close()
+        os.close(output_read)
+        os.close(output_write)
+
+    assert b"Working" in rendered
+    assert b"PROMPT" not in rendered
+
+
+def test_semantic_renderer_preserves_split_osc52_clipboard_requests():
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 30, 4)
+    copy = MagicMock()
+    renderer.surface.copy_to_clipboard = copy
+    try:
+        renderer.feed(b"before\033]52;c;dGV")
+        renderer.feed(b"zdA==\007after")
+    finally:
+        renderer.close()
+        os.close(output_fd)
+
+    copy.assert_called_once_with(b"test")
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
@@ -956,7 +436,7 @@ def test_local_proxy_drains_terminal_restore_tail_when_terminated(monkeypatch):
 
     assert b"ready" in rendered
     assert b"\033[?1049l" in rendered
-    assert client._cursor._physical_visible
+    assert not client._renderer.surface.active
 
 
 @pytest.mark.parametrize("with_wt_marker", [True, False])
@@ -1008,7 +488,8 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
     monkeypatch.setattr(
         windows_attach_relay, "_peer_is_same_user", lambda _connection: True
     )
-    read_fd, write_fd = os.pipe()
+    read_fd, input_write = os.pipe()
+    write_fd = os.open(os.devnull, os.O_WRONLY)
     target = TmuxServerTarget("/tmp/private/railmux", 77)
 
     try:
@@ -1044,11 +525,12 @@ def test_client_uses_identity_pinned_run_shell_and_cleans_endpoint(
         assert ("--synchronized-output" in helper) is with_wt_marker
         assert "opaque-and-never-forwarded" not in helper
         assert observed["kwargs"]["env"]["RAILMUX_TMUX_LABEL"] == ("railmux-test")
-        assert (client._cursor is not None) is with_wt_marker
+        assert (client._renderer is not None) is with_wt_marker
         client.close()
         assert not endpoint.exists()
     finally:
         os.close(read_fd)
+        os.close(input_write)
         os.close(write_fd)
         for thread in peer_threads:
             thread.join(timeout=2)

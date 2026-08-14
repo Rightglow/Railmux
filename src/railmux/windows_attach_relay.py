@@ -1,12 +1,13 @@
-"""Transparent same-host PTY relay for cross-session MSYS2 tmux clients.
+"""Managed-Windows PTY clients and cross-session byte relay.
 
 Windows OpenSSH and an interactive Windows desktop can run under different
 Terminal Services sessions.  MSYS2 can keep tmux's AF_UNIX control socket
 reachable across that boundary while failing to transfer the later client's
 terminal handle.  This module asks the already-validated tmux server to spawn
 one helper in its own Windows session.  That helper owns the real tmux PTY;
-the entry process forwards bytes and resize messages without rendering or
-interpreting the Railmux UI.
+the helper forwards opaque bytes and resize messages. A supported Windows
+Terminal entry consumes those bytes into Railmux's shared semantic screen
+model before painting; it does not interpret Railmux panes or providers.
 """
 
 from __future__ import annotations
@@ -36,7 +37,9 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from railmux import restart_state, tmux_server
+from railmux.fast_display_client import ScreenModel, TerminalSurface
 from railmux.provider_paths import running_in_managed_windows_wrapper
+from railmux.terminal_screen import ScreenProducer
 
 
 _PROTOCOL_MAGIC = b"RMUX-WPTY-1\0"
@@ -56,21 +59,111 @@ _HEARTBEAT_TIMEOUT = 45.0
 _DRAIN_TIMEOUT = 0.25
 _CHILD_EXIT_GRACE = 0.2
 _PTY_INPUT_TIMEOUT = 5.0
-_CURSOR_QUIET_INTERVAL = 0.1
-_ANCHOR_LINE_HOLD_INTERVAL = _CURSOR_QUIET_INTERVAL
-_IME_COMPOSITION_HOLD_INTERVAL = 0.5
-_IME_COMMIT_HOLD_INTERVAL = 0.04
-_MAX_IME_OUTPUT_BYTES = 2 * 1024 * 1024
-_SYNC_OUTPUT_BEGIN = b"\033[?2026h"
-_SYNC_OUTPUT_END = b"\033[?2026l"
 _STALE_ENDPOINT_AGE = 5 * 60
 _MAX_STALE_ENDPOINTS = 64
+_LOCAL_FRAME_INTERVAL = 1.0 / 30.0
+_SYNCHRONIZED_UPDATE_MAX_HOLD = 0.25
 _RELAY_NAME = re.compile(r"windows-attach-[0-9a-f]{16}\.sock\Z")
 
 
 def _terminal_events_first(events):
     """Order one selector batch so input guards same-batch PTY output."""
     return sorted(events, key=lambda event: event[0].data != "terminal")
+
+
+class _TerminalFdWriter:
+    """Minimal binary stream adapter which never assumes ownership of stdout."""
+
+    def __init__(self, fd: int) -> None:
+        self.fd = fd
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, payload: bytes) -> int:
+        _write_terminal_output(self.fd, payload)
+        return len(payload)
+
+    def flush(self) -> None:
+        return None
+
+
+class _SemanticTerminalRenderer:
+    """Render only final changed rows from one local tmux PTY stream."""
+
+    def __init__(self, stdout_fd: int, width: int, height: int) -> None:
+        self.producer = ScreenProducer(width, height)
+        self.model = ScreenModel()
+        self.surface = TerminalSurface(
+            _TerminalFdWriter(stdout_fd),
+            synchronized_output=True,
+        )
+        self.surface.set_physical_size(os.terminal_size((width, height)))
+        self._next_frame = 0.0
+        self._synchronized_since: float | None = None
+        self._synchronized_bypassed = False
+
+    def feed(self, payload: bytes) -> None:
+        self.producer.feed(payload)
+        for clipboard_data in self.producer.drain_clipboard():
+            self.surface.copy_to_clipboard(clipboard_data)
+
+    def resize(self, width: int, height: int) -> None:
+        self.producer.resize(width, height)
+        self.surface.set_physical_size(os.terminal_size((width, height)))
+        self._next_frame = 0.0
+
+    def _synchronized_update_blocked(self, now: float) -> bool:
+        """Avoid partial frames, but never let a malformed frame freeze input."""
+        if not self.producer.synchronized_update_active:
+            self._synchronized_since = None
+            self._synchronized_bypassed = False
+            return False
+        if self._synchronized_bypassed:
+            return False
+        if self._synchronized_since is None:
+            self._synchronized_since = now
+        if now - self._synchronized_since >= _SYNCHRONIZED_UPDATE_MAX_HOLD:
+            # Stay in semantic latest-state mode. This is not a raw-output
+            # fallback: it merely stops trusting one unclosed source frame.
+            self._synchronized_bypassed = True
+            return False
+        return True
+
+    def next_timeout(self, maximum: float, now: float) -> float:
+        if self._synchronized_update_blocked(now):
+            assert self._synchronized_since is not None
+            remaining = (
+                self._synchronized_since
+                + _SYNCHRONIZED_UPDATE_MAX_HOLD
+                - now
+            )
+            return max(0.0, min(maximum, remaining))
+        if not self.producer.dirty or now >= self._next_frame:
+            return 0.0 if self.producer.dirty else maximum
+        return max(0.0, min(maximum, self._next_frame - now))
+
+    def paint_due(self, now: float, *, force: bool = False) -> None:
+        if not force and now < self._next_frame:
+            return
+        if self._synchronized_update_blocked(now):
+            return
+        update = self.producer.take_update()
+        if update is None:
+            return
+        screen = self.model.apply(
+            update,
+            os.terminal_size((self.producer.width, self.producer.height)),
+        )
+        if screen is None:
+            raise WindowsAttachRelayError("local terminal screen lost its update base")
+        self.surface.paint(screen)
+        self._next_frame = now + _LOCAL_FRAME_INTERVAL
+
+    def close(self) -> None:
+        if self.producer.received_output:
+            self.paint_due(time.monotonic(), force=True)
+        self.surface.close()
 
 
 class _ActiveWindowsInterruptForwarder:
@@ -105,704 +198,8 @@ class _ActiveWindowsInterruptForwarder:
         self._previous = None
 
 
-class _ImeOutputGate:
-    """Keep terminal-owned IME pre-edit stable without delaying PTY input.
-
-    Windows Terminal renders pre-edit inside the terminal grid.  Codex can
-    scroll that complete grid while it is producing output, so protecting one
-    guessed prompt row is insufficient.  Buffer provider output briefly after
-    composition-shaped input, then publish the byte-exact batch atomically.
-    UTF-8 input is evidence of a committed character and therefore uses a much
-    shorter deadline.  Controls such as Enter and Ctrl-C release immediately.
-    """
-
-    def __init__(self) -> None:
-        self._deadline: float | None = None
-        self._buffer = bytearray()
-
-    @staticmethod
-    def _has_text(payload: bytes) -> bool:
-        return any(value >= 0x20 or value in {0x08, 0x7F} for value in payload)
-
-    @staticmethod
-    def _has_committed_utf8(payload: bytes) -> bool:
-        return any(value >= 0x80 for value in payload)
-
-    def note_input(self, payload: bytes, now: float) -> None:
-        if not payload:
-            return
-        if any(value in {0x03, 0x0A, 0x0D} for value in payload):
-            self._deadline = now
-            return
-        if not self._has_text(payload):
-            return
-        interval = (
-            _IME_COMMIT_HOLD_INTERVAL
-            if self._has_committed_utf8(payload)
-            else _IME_COMPOSITION_HOLD_INTERVAL
-        )
-        self._deadline = now + interval
-
-    def hold(self, payload: bytes, now: float) -> tuple[bytes, bool]:
-        if not payload:
-            return b"", False
-        if self._deadline is None:
-            return payload, False
-        if now >= self._deadline:
-            atomic = bool(self._buffer)
-            released = bytes(self._buffer) + payload
-            self._buffer.clear()
-            self._deadline = None
-            return released, atomic
-        if len(self._buffer) + len(payload) > _MAX_IME_OUTPUT_BYTES:
-            released = bytes(self._buffer) + payload
-            self._buffer.clear()
-            self._deadline = None
-            return released, True
-        self._buffer.extend(payload)
-        return b"", False
-
-    def next_timeout(self, maximum: float, now: float) -> float:
-        if self._deadline is None:
-            return maximum
-        return max(0.0, min(maximum, self._deadline - now))
-
-    def flush_due(self, now: float, *, force: bool = False) -> bytes:
-        if self._deadline is None or (not force and now < self._deadline):
-            return b""
-        self._deadline = None
-        released = bytes(self._buffer)
-        self._buffer.clear()
-        return released
-
-
 class WindowsAttachRelayError(RuntimeError):
     """A bounded relay setup or transport failure."""
-
-
-class _CursorVisibilityCoalescer:
-    """Keep the Windows hardware cursor stable across one tmux repaint burst.
-
-    Codex emits cursor show/hide controls outside its synchronized-output
-    frames. Windows Terminal can therefore paint the cursor at several
-    frame-final coordinates even though every text frame is atomic. Coalesce
-    DECTCEM presentation noise, delay a requested hide until the output becomes
-    quiet, and restore the provider's final visibility then.
-    While the cursor remains visible, finish synchronized frames at the last
-    quiet user-facing coordinate so Windows IME pre-edit does not chase the
-    provider's transient Working and footer rows. Within that same bounded
-    burst, defer repainting the proven anchor row until output becomes quiet.
-    A Codex repaint can finish with one extra HIDE after repeatedly alternating
-    HIDE/SHOW.  Treat that three-or-more transition signature as rendering
-    noise and restore the most recent visible cursor anchor.  A lone HIDE (for
-    example when Railmux intentionally focuses a cursorless surface) remains
-    authoritative after the quiet interval. Replaying the last exact CUP used
-    by SHOW also gives Windows Terminal a stable anchor for IME pre-edit text.
-
-    The parser retains at most one bounded prompt-row candidate, not a terminal
-    frame. It tracks OSC/DCS-style string boundaries solely so byte sequences
-    inside opaque payload are never altered. It remains unaware of Codex,
-    panes, and provider history; synchronized-output boundaries are used only
-    to place an anchor correction and quiet repaint inside atomic output.
-    """
-
-    _HIDE = b"\033[?25l"
-    _SHOW = b"\033[?25h"
-    _BLINK_ON = b"\033[?12h"
-    _BLINK_OFF = b"\033[?12l"
-    _CURSOR_STYLE_RE = re.compile(rb"\033\[[0-9;]* q\Z")
-    _SGR_RE = re.compile(rb"\033\[[0-9:;]*m")
-    _ANCHOR_LINE_ERASES = (b"\033[K", b"\033[0K", b"\033[2K")
-    _MAX_CONTROL = 256
-    _MAX_ANCHOR_LINE = 64 * 1024
-
-    def __init__(self, quiet_interval: float = _CURSOR_QUIET_INTERVAL) -> None:
-        self.quiet_interval = quiet_interval
-        self._pending = bytearray()
-        self._state = "ground"
-        self._string_allows_bel = False
-        self._string_utf8_remaining = 0
-        self._desired_visible = True
-        self._physical_visible = True
-        self._physical_cursor_blink: bool | None = None
-        self._physical_cursor_style: bytes | None = None
-        self._deadline: float | None = None
-        self._visibility_transitions = 0
-        self._burst_saw_hide = False
-        self._burst_saw_show = False
-        self._exact_cursor_position: bytes | None = None
-        self._frame_final_cursor_position: bytes | None = None
-        self._position_debt: bytes | None = None
-        # Windows Terminal anchors IME pre-edit text to its logical cursor even
-        # while DECTCEM hides the hardware cursor. Codex moves that cursor
-        # through Working, prompt, and footer rows inside consecutive atomic
-        # paints. Keep the last quiet visible prompt anchor as the final cursor
-        # of each synchronized paint; changed frame content remains authoritative.
-        self._stable_cursor_position: bytes | None = None
-        self._in_sync_frame = False
-        # Windows Terminal draws IME pre-edit text in the terminal grid.  A
-        # full-screen agent can therefore erase and recreate an unchanged
-        # prompt row on every animation frame even after the cursor itself is
-        # stable.  Retain at most one narrowly recognized ``EL 2 + row``
-        # candidate so repeated repaint bursts can settle once at the quiet
-        # boundary when a following absolute CUP proves that its immediate
-        # cursor side effect is irrelevant.
-        self._anchor_line_candidate: bytearray | None = None
-        self._anchor_line_controls = bytearray()
-        self._anchor_line_row: int | None = None
-        self._anchor_line_deadline: float | None = None
-        self._anchor_line_position: bytes | None = None
-        self._deferred_anchor_line: tuple[bytes, bytes] | None = None
-        # SGR controls after a deferred row have already reached the physical
-        # terminal. Replay them after the quiet repaint so the delayed row
-        # cannot leave a different active rendition for later output.
-        self._deferred_following_sgr = bytearray()
-        # Remember what Railmux last allowed onto the physical prompt row so a
-        # byte-identical quiet result does not cause one final redundant erase.
-        self._visible_anchor_signature: bytes | None = None
-        self._visible_anchor_render_signature: bytes | None = None
-
-    def note_resize(self) -> None:
-        """Drop coordinates expressed in the previous terminal geometry."""
-        self._stable_cursor_position = None
-        self._frame_final_cursor_position = None
-        self._exact_cursor_position = None
-        self._position_debt = None
-        self._in_sync_frame = False
-        self._physical_cursor_blink = None
-        self._physical_cursor_style = None
-        self._anchor_line_candidate = None
-        self._anchor_line_controls.clear()
-        self._anchor_line_row = None
-        self._anchor_line_deadline = None
-        self._anchor_line_position = None
-        self._deferred_anchor_line = None
-        self._deferred_following_sgr.clear()
-        self._forget_visible_anchor_line()
-
-    @staticmethod
-    def _cursor_row(position: bytes | None) -> int | None:
-        if position is None or not position.startswith(b"\033["):
-            return None
-        try:
-            parameters = position[2:-1].split(b";")
-            return int(parameters[0] or b"1")
-        except (TypeError, ValueError):
-            return None
-
-    @staticmethod
-    def _cursor_column(position: bytes | None) -> int | None:
-        if position is None or not position.startswith(b"\033["):
-            return None
-        try:
-            parameters = position[2:-1].split(b";")
-            return int(parameters[1] or b"1") if len(parameters) > 1 else 1
-        except (TypeError, ValueError):
-            return None
-
-    @classmethod
-    def _anchor_line_render_signature(cls, payload: bytes) -> bytes | None:
-        erase = next(
-            (
-                candidate
-                for candidate in cls._ANCHOR_LINE_ERASES
-                if payload.startswith(candidate)
-            ),
-            None,
-        )
-        if erase is None:
-            return None
-        return payload[len(erase):]
-
-    @classmethod
-    def _anchor_line_signature(cls, payload: bytes) -> bytes | None:
-        rendered = cls._anchor_line_render_signature(payload)
-        return None if rendered is None else cls._SGR_RE.sub(b"", rendered)
-
-    def _forget_visible_anchor_line(self) -> None:
-        self._visible_anchor_signature = None
-        self._visible_anchor_render_signature = None
-
-    def _accept_visible_position(self, position: bytes, *, quiet: bool) -> None:
-        stable_row = self._cursor_row(self._stable_cursor_position)
-        candidate_row = self._cursor_row(position)
-        if quiet or (stable_row is not None and candidate_row == stable_row):
-            if stable_row is not None and candidate_row != stable_row:
-                self._invalidate_anchor_line()
-                self._forget_visible_anchor_line()
-            self._stable_cursor_position = position
-
-    @staticmethod
-    def _is_absolute_cup(sequence: bytes) -> bool:
-        return sequence[-1:] in {b"H", b"f"} and all(
-            value in b"0123456789;" for value in sequence[2:-1]
-        )
-
-    def _can_hold_anchor_line(self, sequence: bytes) -> bool:
-        return bool(
-            sequence in self._ANCHOR_LINE_ERASES
-            and self._in_sync_frame
-            and self._deadline is not None
-            and self._burst_saw_hide
-            and self._exact_cursor_position is not None
-            and self._cursor_row(self._exact_cursor_position)
-            == self._cursor_row(self._stable_cursor_position)
-            and self._cursor_column(self._exact_cursor_position) == 1
-        )
-
-    def _start_anchor_line_candidate(self, sequence: bytes, now: float) -> None:
-        self._anchor_line_candidate = bytearray(sequence)
-        self._anchor_line_controls.clear()
-        self._anchor_line_row = self._cursor_row(self._exact_cursor_position)
-        self._anchor_line_position = self._exact_cursor_position
-        self._anchor_line_deadline = now + _ANCHOR_LINE_HOLD_INTERVAL
-
-    def _finish_anchor_line_candidate(
-        self,
-        rendered: bytearray,
-        *,
-        comparable: bool,
-    ) -> None:
-        candidate = self._anchor_line_candidate
-        row = self._anchor_line_row
-        if candidate is None:
-            return
-        payload = bytes(candidate)
-        signature = self._anchor_line_signature(payload)
-        position = self._anchor_line_position
-        if comparable and row is not None and position is not None:
-            # Preserve SGR state now, but retain only the newest authoritative
-            # row for a quiet-boundary repaint. Repeated Working frames cannot
-            # erase Windows Terminal's inline IME pre-edit in the meantime.
-            self._deferred_anchor_line = (position, payload)
-            self._deferred_following_sgr.clear()
-            rendered.extend(self._anchor_line_controls)
-        else:
-            rendered.extend(payload)
-            if row is not None and position is not None and signature is not None:
-                self._visible_anchor_signature = signature
-                self._visible_anchor_render_signature = (
-                    self._anchor_line_render_signature(payload)
-                )
-            self._deferred_anchor_line = None
-            self._deferred_following_sgr.clear()
-        self._anchor_line_candidate = None
-        self._anchor_line_controls.clear()
-        self._anchor_line_row = None
-        self._anchor_line_position = None
-        self._anchor_line_deadline = None
-
-    def _invalidate_anchor_line(self) -> None:
-        self._deferred_anchor_line = None
-        self._deferred_following_sgr.clear()
-
-    def _repay_position_debt(self, rendered: bytearray) -> None:
-        if self._position_debt is None:
-            return
-        rendered.extend(self._position_debt)
-        self._exact_cursor_position = self._position_debt
-        self._position_debt = None
-
-    def _invalidate_cursor_position(self, value: int) -> None:
-        # Printable bytes and the C0 controls that move the cursor make a prior
-        # absolute CUP unsuitable as an IME anchor.  BEL and other non-moving
-        # controls do not.
-        if value >= 0x20 or value in {0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D}:
-            self._exact_cursor_position = None
-            self._frame_final_cursor_position = None
-
-    def _observe_csi_cursor_position(self, sequence: bytes) -> None:
-        final = sequence[-1:]
-        parameters = sequence[2:-1]
-        if final in {b"H", b"f"} and all(
-            value in b"0123456789;" for value in parameters
-        ):
-            self._exact_cursor_position = sequence
-            self._frame_final_cursor_position = None
-            return
-        if final not in {b"J", b"K", b"S", b"T", b"m", b"q"}:
-            # Keep an anchor only across CSI operations known not to move the
-            # hardware cursor. Unknown/private operations fail safely by using
-            # the terminal's eventual position rather than replaying stale CUP.
-            self._exact_cursor_position = None
-            self._frame_final_cursor_position = None
-            self._stable_cursor_position = None
-            self._invalidate_anchor_line()
-            self._forget_visible_anchor_line()
-
-    def feed(self, data: bytes, now: float) -> bytes:
-        if not data:
-            return b""
-        rendered = bytearray()
-        for value in data:
-            if self._state == "ground":
-                if value == 0x1B:
-                    self._pending.append(value)
-                    self._state = "escape"
-                else:
-                    if self._anchor_line_candidate is not None:
-                        if value >= 0x20:
-                            self._anchor_line_candidate.append(value)
-                            self._invalidate_cursor_position(value)
-                            if (
-                                len(self._anchor_line_candidate)
-                                > self._MAX_ANCHOR_LINE
-                            ):
-                                self._finish_anchor_line_candidate(
-                                    rendered,
-                                    comparable=False,
-                                )
-                            continue
-                        self._finish_anchor_line_candidate(
-                            rendered,
-                            comparable=False,
-                        )
-                    if value >= 0x20 or value in {
-                        0x08,
-                        0x09,
-                        0x0A,
-                        0x0B,
-                        0x0C,
-                        0x0D,
-                    }:
-                        self._repay_position_debt(rendered)
-                    rendered.append(value)
-                    self._invalidate_cursor_position(value)
-                continue
-
-            if self._state == "escape":
-                if value == 0x1B:
-                    self._finish_anchor_line_candidate(
-                        rendered,
-                        comparable=False,
-                    )
-                    rendered.extend(self._pending)
-                    self._pending[:] = bytes((value,))
-                    continue
-                self._pending.append(value)
-                if value == ord("["):
-                    self._state = "csi"
-                    continue
-                if value in {ord("]"), ord("P"), ord("X"), ord("^"), ord("_")}:
-                    self._finish_anchor_line_candidate(
-                        rendered,
-                        comparable=False,
-                    )
-                    if value != ord("]"):
-                        self._repay_position_debt(rendered)
-                    rendered.extend(self._pending)
-                    self._pending.clear()
-                    self._state = "string"
-                    self._string_allows_bel = value == ord("]")
-                    self._string_utf8_remaining = 0
-                    if value != ord("]"):
-                        self._exact_cursor_position = None
-                        self._stable_cursor_position = None
-                        self._invalidate_anchor_line()
-                    continue
-                self._repay_position_debt(rendered)
-                self._finish_anchor_line_candidate(rendered, comparable=False)
-                rendered.extend(self._pending)
-                self._pending.clear()
-                self._exact_cursor_position = None
-                self._stable_cursor_position = None
-                self._invalidate_anchor_line()
-                self._state = "ground"
-                continue
-
-            if self._state == "csi":
-                if value == 0x1B:
-                    self._finish_anchor_line_candidate(
-                        rendered,
-                        comparable=False,
-                    )
-                    rendered.extend(self._pending)
-                    self._pending[:] = bytes((value,))
-                    self._state = "escape"
-                    continue
-                self._pending.append(value)
-                if 0x40 <= value <= 0x7E:
-                    sequence = bytes(self._pending)
-                    self._pending.clear()
-                    self._state = "ground"
-                    if self._anchor_line_candidate is not None:
-                        if self._is_absolute_cup(sequence):
-                            self._finish_anchor_line_candidate(
-                                rendered,
-                                comparable=True,
-                            )
-                        elif sequence[-1:] == b"m":
-                            self._anchor_line_candidate.extend(sequence)
-                            self._anchor_line_controls.extend(sequence)
-                            continue
-                        else:
-                            self._finish_anchor_line_candidate(
-                                rendered,
-                                comparable=False,
-                            )
-                    if sequence in (self._HIDE, self._SHOW):
-                        requested_visible = sequence == self._SHOW
-                        if (
-                            requested_visible
-                            and self._deadline is None
-                            and not self._physical_visible
-                        ):
-                            # Repay while the hardware cursor is hidden. A
-                            # later authoritative SHOW must start from the
-                            # provider's true coordinate, not our old anchor.
-                            self._repay_position_debt(rendered)
-                        visible_position = (
-                            self._frame_final_cursor_position
-                            or self._exact_cursor_position
-                        )
-                        self._frame_final_cursor_position = None
-                        if requested_visible and visible_position is not None:
-                            self._accept_visible_position(
-                                visible_position,
-                                quiet=self._deadline is None,
-                            )
-                        if (
-                            self._deadline is None
-                            and requested_visible == self._desired_visible
-                            and requested_visible == self._physical_visible
-                        ):
-                            continue
-                        self._visibility_transitions += 1
-                        self._burst_saw_show |= requested_visible
-                        self._burst_saw_hide |= not requested_visible
-                        self._desired_visible = requested_visible
-                        self._deadline = now + self.quiet_interval
-                    elif sequence in (self._BLINK_ON, self._BLINK_OFF):
-                        requested_blink = sequence == self._BLINK_ON
-                        if requested_blink != self._physical_cursor_blink:
-                            rendered.extend(sequence)
-                            self._physical_cursor_blink = requested_blink
-                    elif self._CURSOR_STYLE_RE.fullmatch(sequence):
-                        if sequence != self._physical_cursor_style:
-                            rendered.extend(sequence)
-                            self._physical_cursor_style = sequence
-                    elif sequence == _SYNC_OUTPUT_BEGIN:
-                        rendered.extend(sequence)
-                        self._in_sync_frame = True
-                        self._repay_position_debt(rendered)
-                    elif sequence == _SYNC_OUTPUT_END:
-                        was_in_sync_frame = self._in_sync_frame
-                        if was_in_sync_frame:
-                            self._in_sync_frame = False
-                        if (
-                            was_in_sync_frame
-                            and self._deadline is not None
-                            and self._burst_saw_hide
-                            and self._physical_visible
-                            and self._stable_cursor_position is not None
-                            and self._exact_cursor_position is not None
-                            and self._exact_cursor_position
-                            != self._stable_cursor_position
-                        ):
-                            # Place the logical cursor at the stable IME
-                            # anchor *inside* the atomic frame. Windows
-                            # Terminal never observes the intermediate
-                            # Working/footer coordinates. Remember the true
-                            # provider coordinate and repay it inside the next
-                            # atomic frame (or before relative output).
-                            self._frame_final_cursor_position = (
-                                self._exact_cursor_position
-                            )
-                            self._position_debt = self._exact_cursor_position
-                            rendered.extend(self._stable_cursor_position)
-                            self._exact_cursor_position = self._stable_cursor_position
-                        rendered.extend(sequence)
-                    else:
-                        final = sequence[-1:]
-                        absolute_position = self._is_absolute_cup(sequence)
-                        if absolute_position:
-                            self._position_debt = None
-                        elif final not in {b"S", b"T", b"m", b"q"}:
-                            self._repay_position_debt(rendered)
-                        if self._can_hold_anchor_line(sequence):
-                            self._start_anchor_line_candidate(sequence, now)
-                        else:
-                            rendered.extend(sequence)
-                            if (
-                                final == b"m"
-                                and self._deferred_anchor_line is not None
-                            ):
-                                self._deferred_following_sgr.extend(sequence)
-                            if final in {b"J", b"S", b"T"}:
-                                self._invalidate_anchor_line()
-                        self._observe_csi_cursor_position(sequence)
-                    continue
-                if len(self._pending) > self._MAX_CONTROL:
-                    self._finish_anchor_line_candidate(
-                        rendered,
-                        comparable=False,
-                    )
-                    self._repay_position_debt(rendered)
-                    rendered.extend(self._pending)
-                    self._pending.clear()
-                    self._exact_cursor_position = None
-                    self._stable_cursor_position = None
-                    self._invalidate_anchor_line()
-                    self._state = "csi_passthrough"
-                continue
-
-            if self._state == "csi_passthrough":
-                if value == 0x1B:
-                    self._pending.append(value)
-                    self._state = "escape"
-                    continue
-                rendered.append(value)
-                if 0x40 <= value <= 0x7E:
-                    self._state = "ground"
-                continue
-
-            if self._state == "string":
-                rendered.append(value)
-                c1_st = value == 0x9C and self._string_utf8_remaining == 0
-                if self._string_utf8_remaining:
-                    if 0x80 <= value <= 0xBF:
-                        self._string_utf8_remaining -= 1
-                    else:
-                        self._string_utf8_remaining = 0
-                elif 0xC2 <= value <= 0xDF:
-                    self._string_utf8_remaining = 1
-                elif 0xE0 <= value <= 0xEF:
-                    self._string_utf8_remaining = 2
-                elif 0xF0 <= value <= 0xF4:
-                    self._string_utf8_remaining = 3
-                if c1_st or (self._string_allows_bel and value == 0x07):
-                    self._state = "ground"
-                elif value == 0x1B:
-                    self._state = "string_escape"
-                continue
-
-            # OSC/DCS/APC/PM/SOS strings terminate only at ST (ESC \\),
-            # except OSC which also accepts BEL. Bytes inside them are opaque;
-            # an apparent DECTCEM sequence there is payload, not terminal state.
-            rendered.append(value)
-            if value == ord("\\"):
-                self._state = "ground"
-            elif value != 0x1B:
-                self._state = "string"
-        return bytes(rendered)
-
-    def next_timeout(self, maximum: float, now: float) -> float:
-        deadlines = tuple(
-            deadline
-            for deadline in (
-                self._deadline,
-                self._anchor_line_deadline,
-            )
-            if deadline is not None
-        )
-        if not deadlines:
-            return maximum
-        deadline = min(deadlines)
-        if now >= deadline and self._state != "ground":
-            # A partial CSI/string must wait for more PTY bytes (or child
-            # exit); do not busy-spin on an already-due visibility deadline.
-            return maximum
-        return max(0.0, min(maximum, deadline - now))
-
-    def flush_due(self, now: float, *, force: bool = False) -> bytes:
-        line_due = bool(
-            self._anchor_line_candidate is not None
-            and (
-                force
-                or (
-                    self._anchor_line_deadline is not None
-                    and now >= self._anchor_line_deadline
-                )
-            )
-        )
-        visibility_due = bool(
-            self._deadline is not None and (force or now >= self._deadline)
-        )
-        if not line_due and not visibility_due and not (
-            force and self._state != "ground"
-        ):
-            return b""
-        if self._state != "ground" and not force:
-            # A held row followed by a split CSI/string must remain in source
-            # order until the control is complete. Do not consume either one
-            # merely because the row hold deadline elapsed first.
-            return b""
-        rendered = bytearray()
-        if line_due:
-            # The held row bytes precede any partial control sequence in the
-            # original stream. Preserve that ordering during forced teardown.
-            self._finish_anchor_line_candidate(rendered, comparable=False)
-        if self._state != "ground":
-            rendered.extend(self._pending)
-            self._pending.clear()
-            # A terminated child can leave a partial control/string sequence.
-            # Cancel or close it before terminal recovery bytes are emitted.
-            rendered.extend(
-                b"\033\\" if self._state in {"string", "string_escape"} else b"\030"
-            )
-            self._state = "ground"
-        if visibility_due and self._deferred_anchor_line is not None:
-            position, payload = self._deferred_anchor_line
-            render_signature = self._anchor_line_render_signature(payload)
-            if render_signature != self._visible_anchor_render_signature:
-                restore = self._stable_cursor_position or self._exact_cursor_position
-                rendered.extend(_SYNC_OUTPUT_BEGIN)
-                rendered.extend(position)
-                rendered.extend(payload)
-                rendered.extend(self._deferred_following_sgr)
-                if restore is not None:
-                    rendered.extend(restore)
-                    self._exact_cursor_position = restore
-                rendered.extend(_SYNC_OUTPUT_END)
-                self._visible_anchor_signature = self._anchor_line_signature(payload)
-                self._visible_anchor_render_signature = render_signature
-            self._deferred_anchor_line = None
-            self._deferred_following_sgr.clear()
-        if not visibility_due:
-            return bytes(rendered)
-        stable_visible = self._desired_visible or (
-            self._visibility_transitions >= 3
-            and self._burst_saw_hide
-            and self._burst_saw_show
-        )
-        if stable_visible:
-            if (
-                self._physical_visible
-                and self._position_debt is None
-                and self._visibility_transitions >= 3
-                and self._burst_saw_hide
-                and self._stable_cursor_position is not None
-                and self._exact_cursor_position is not None
-                and self._exact_cursor_position != self._stable_cursor_position
-            ):
-                # A provider that paints without synchronized-output framing
-                # still gets one atomic quiet-boundary correction. Preserve
-                # its true position as debt so later relative output remains
-                # correct.
-                self._position_debt = self._exact_cursor_position
-                rendered.extend(_SYNC_OUTPUT_BEGIN)
-                rendered.extend(self._stable_cursor_position)
-                rendered.extend(_SYNC_OUTPUT_END)
-                self._exact_cursor_position = self._stable_cursor_position
-            if not self._physical_visible:
-                show_position = self._position_debt or self._stable_cursor_position
-                if show_position is not None:
-                    rendered.extend(show_position)
-                    self._exact_cursor_position = show_position
-                    self._position_debt = None
-                rendered.extend(self._SHOW)
-                self._physical_visible = True
-        elif not stable_visible and self._physical_visible:
-            rendered.extend(self._HIDE)
-            self._physical_visible = False
-        self._desired_visible = stable_visible
-        self._deadline = None
-        self._visibility_transitions = 0
-        self._burst_saw_hide = False
-        self._burst_saw_show = False
-        self._frame_final_cursor_position = None
-        self._invalidate_anchor_line()
-        return bytes(rendered)
 
 
 @dataclass(frozen=True)
@@ -1358,7 +755,7 @@ class RelayClient:
         *,
         stdin_fd: int,
         stdout_fd: int,
-        stabilize_cursor: bool = False,
+        semantic_rendering: bool = False,
         forward_interrupts: bool = False,
     ) -> None:
         self.connection = connection
@@ -1374,39 +771,27 @@ class RelayClient:
         self._selector.register(stdin_fd, selectors.EVENT_READ, "terminal")
         self._size = _terminal_size(stdin_fd)
         self._next_heartbeat = time.monotonic() + _HEARTBEAT_INTERVAL
-        self._cursor = _CursorVisibilityCoalescer() if stabilize_cursor else None
-        self._input_gate = _ImeOutputGate() if stabilize_cursor else None
+        self._renderer = (
+            _SemanticTerminalRenderer(stdout_fd, *self._size)
+            if semantic_rendering
+            else None
+        )
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
 
-    def _write_output(self, payload: bytes, now: float, *, atomic: bool) -> None:
-        if self._cursor is not None:
-            payload = self._cursor.feed(payload, now)
-            if atomic:
-                payload += self._cursor.flush_due(
-                    now + self._cursor.quiet_interval,
-                )
-        if atomic and payload:
-            payload = _SYNC_OUTPUT_BEGIN + payload + _SYNC_OUTPUT_END
-        if payload:
+    def _write_output(self, payload: bytes, now: float) -> None:
+        if self._renderer is None:
             _write_terminal_output(self.stdout_fd, payload)
-
-    def _flush_input_gate(self, now: float, *, force: bool = False) -> None:
-        if self._input_gate is None:
             return
-        payload = self._input_gate.flush_due(now, force=force)
-        if payload:
-            self._write_output(payload, now, atomic=True)
+        self._renderer.feed(payload)
+        self._renderer.paint_due(now)
 
-    def _forward_pending_interrupts(self, now: float) -> None:
+    def _forward_pending_interrupts(self) -> None:
         pending = self._interrupts.consume()
         if not pending:
             return
         payload = b"\x03" * pending
-        if self._input_gate is not None:
-            self._input_gate.note_input(payload, now)
         self.connection.sendall(_frame(_TYPE_INPUT, payload))
-        self._flush_input_gate(now)
 
     def poll(self) -> int | None:
         return self.returncode
@@ -1415,22 +800,19 @@ class RelayClient:
         if self.returncode is not None:
             return
         now = time.monotonic()
-        self._forward_pending_interrupts(now)
+        self._forward_pending_interrupts()
         size = _terminal_size(self.stdin_fd)
         if size != self._size:
-            self._flush_input_gate(now, force=True)
             self.connection.sendall(_frame(_TYPE_RESIZE, struct.pack(">HH", *size)))
             self._size = size
-            if self._cursor is not None:
-                self._cursor.note_resize()
+            if self._renderer is not None:
+                self._renderer.resize(*size)
         if now >= self._next_heartbeat:
             self.connection.sendall(_frame(_TYPE_HEARTBEAT))
             self._next_heartbeat = now + _HEARTBEAT_INTERVAL
         wait = max(0.0, timeout)
-        if self._cursor is not None:
-            wait = self._cursor.next_timeout(wait, now)
-        if self._input_gate is not None:
-            wait = self._input_gate.next_timeout(wait, now)
+        if self._renderer is not None:
+            wait = self._renderer.next_timeout(wait, now)
         events = _terminal_events_first(self._selector.select(timeout=wait))
         for key, _events in events:
             if key.data == "terminal":
@@ -1439,11 +821,7 @@ class RelayClient:
                     self._selector.unregister(self.stdin_fd)
                     self.connection.sendall(_frame(_TYPE_CLOSE))
                     continue
-                input_now = time.monotonic()
-                if self._input_gate is not None:
-                    self._input_gate.note_input(data, input_now)
                 self.connection.sendall(_frame(_TYPE_INPUT, data))
-                self._flush_input_gate(input_now)
                 continue
             data = self.connection.recv(65536)
             if not data:
@@ -1453,22 +831,16 @@ class RelayClient:
             for kind, payload in self._decoder.feed(data):
                 if kind == _TYPE_OUTPUT:
                     output_now = time.monotonic()
-                    atomic = False
-                    if self._input_gate is not None:
-                        payload, atomic = self._input_gate.hold(payload, output_now)
-                    self._write_output(payload, output_now, atomic=atomic)
+                    self._write_output(payload, output_now)
                 elif kind == _TYPE_EXIT and len(payload) == 4:
                     self.returncode = struct.unpack(">i", payload)[0]
                 else:
                     raise WindowsAttachRelayError(
                         "terminal bridge received an invalid relay frame"
                     )
-        self._forward_pending_interrupts(time.monotonic())
-        self._flush_input_gate(time.monotonic())
-        if self._cursor is not None:
-            rendered = self._cursor.flush_due(time.monotonic())
-            if rendered:
-                _write_terminal_output(self.stdout_fd, rendered)
+        self._forward_pending_interrupts()
+        if self._renderer is not None:
+            self._renderer.paint_due(time.monotonic())
 
     def terminate(self) -> None:
         if self.returncode is not None:
@@ -1491,17 +863,11 @@ class RelayClient:
         return self.returncode
 
     def close(self) -> None:
-        self._flush_input_gate(time.monotonic(), force=True)
-        if self._cursor is not None:
-            rendered = self._cursor.flush_due(time.monotonic(), force=True)
-            if not self._cursor._physical_visible:
-                rendered += self._cursor._SHOW
-                self._cursor._physical_visible = True
-            if rendered:
-                try:
-                    _write_terminal_output(self.stdout_fd, rendered)
-                except OSError:
-                    pass
+        if self._renderer is not None:
+            try:
+                self._renderer.close()
+            except OSError:
+                pass
         self._selector.close()
         self.connection.close()
         self.listener.close()
@@ -1510,7 +876,7 @@ class RelayClient:
 
 
 class LocalPtyClient:
-    """Process-like same-session tmux proxy with cursor burst coalescing."""
+    """Process-like local tmux proxy with a semantic latest-state renderer."""
 
     def __init__(
         self,
@@ -1530,8 +896,7 @@ class LocalPtyClient:
         self._selector.register(master_fd, selectors.EVENT_READ, "tmux")
         self._selector.register(stdin_fd, selectors.EVENT_READ, "terminal")
         self._size = _terminal_size(stdin_fd)
-        self._cursor = _CursorVisibilityCoalescer()
-        self._input_gate = _ImeOutputGate()
+        self._renderer = _SemanticTerminalRenderer(stdout_fd, *self._size)
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
         self._closed = False
@@ -1543,48 +908,19 @@ class LocalPtyClient:
         size = _terminal_size(self.stdin_fd)
         if size == self._size:
             return
-        self._flush_input_gate(time.monotonic(), force=True)
         _set_winsize(self.master_fd, *size)
         self._size = size
-        self._cursor.note_resize()
+        self._renderer.resize(*size)
         try:
             os.killpg(self.pid, signal.SIGWINCH)
         except ProcessLookupError:
             pass
 
-    def _forward_tmux_output(
-        self,
-        data: bytes,
-        now: float,
-        *,
-        atomic: bool = False,
-    ) -> None:
-        rendered = self._cursor.feed(data, now)
-        if atomic:
-            rendered += self._cursor.flush_due(now + self._cursor.quiet_interval)
-            if rendered:
-                rendered = _SYNC_OUTPUT_BEGIN + rendered + _SYNC_OUTPUT_END
-        if rendered:
-            _write_terminal_output(self.stdout_fd, rendered)
-
-    def _flush_input_gate(self, now: float, *, force: bool = False) -> None:
-        rendered = self._input_gate.flush_due(now, force=force)
-        if rendered:
-            self._forward_tmux_output(rendered, now, atomic=True)
-
-    def _forward_pending_interrupts(self, now: float) -> None:
+    def _forward_pending_interrupts(self) -> None:
         pending = self._interrupts.consume()
         if not pending:
             return
-        payload = b"\x03" * pending
-        self._input_gate.note_input(payload, now)
-        _write_pty_input(self.master_fd, payload)
-        self._flush_input_gate(now)
-
-    def _flush_cursor(self, now: float, *, force: bool = False) -> None:
-        rendered = self._cursor.flush_due(now, force=force)
-        if rendered:
-            _write_terminal_output(self.stdout_fd, rendered)
+        _write_pty_input(self.master_fd, b"\x03" * pending)
 
     def _drain_after_exit(self) -> None:
         deadline = time.monotonic() + _DRAIN_TIMEOUT
@@ -1607,16 +943,15 @@ class LocalPtyClient:
                 raise
             if not data:
                 return
-            self._forward_tmux_output(data, time.monotonic())
+            self._renderer.feed(data)
 
     def pump(self, timeout: float) -> None:
         if self.returncode is not None:
             return
         self._resize_if_needed()
         now = time.monotonic()
-        self._forward_pending_interrupts(now)
-        wait = self._cursor.next_timeout(max(0.0, timeout), now)
-        wait = self._input_gate.next_timeout(wait, now)
+        self._forward_pending_interrupts()
+        wait = self._renderer.next_timeout(max(0.0, timeout), now)
         events = _terminal_events_first(self._selector.select(timeout=wait))
         for key, _events in events:
             if key.data == "terminal":
@@ -1624,10 +959,7 @@ class LocalPtyClient:
                 if not data:
                     self.terminate()
                     return
-                input_now = time.monotonic()
-                self._input_gate.note_input(data, input_now)
                 _write_pty_input(self.master_fd, data)
-                self._flush_input_gate(input_now)
                 continue
             try:
                 data = os.read(self.master_fd, 65536)
@@ -1638,28 +970,20 @@ class LocalPtyClient:
                     raise
                 data = b""
             if data:
-                output_now = time.monotonic()
-                data, atomic = self._input_gate.hold(data, output_now)
-                self._forward_tmux_output(data, output_now, atomic=atomic)
-        self._forward_pending_interrupts(time.monotonic())
-        self._flush_input_gate(time.monotonic())
-        self._flush_cursor(time.monotonic())
+                self._renderer.feed(data)
+        self._forward_pending_interrupts()
+        self._renderer.paint_due(time.monotonic())
         self.returncode = _child_status(self.pid)
         if self.returncode is not None:
-            # tmux normally writes its restore tail before exiting. Drain every
-            # byte already queued on the PTY, then release any partial cursor
-            # prefix and the final requested visibility.
-            self._flush_input_gate(time.monotonic(), force=True)
             self._drain_after_exit()
-            self._flush_cursor(time.monotonic(), force=True)
+            self._renderer.paint_due(time.monotonic(), force=True)
 
     def terminate(self) -> None:
         if self.returncode is None:
             self.returncode = _stop_child(self.pid)
         try:
-            self._flush_input_gate(time.monotonic(), force=True)
             self._drain_after_exit()
-            self._flush_cursor(time.monotonic(), force=True)
+            self._renderer.paint_due(time.monotonic(), force=True)
         except (OSError, RuntimeError):
             # Termination and reaping remain authoritative even when the
             # presentation channel that triggered cleanup is already broken.
@@ -1679,9 +1003,8 @@ class LocalPtyClient:
         else:
             self.returncode = _normalized_wait_status(status)
         try:
-            self._flush_input_gate(time.monotonic(), force=True)
             self._drain_after_exit()
-            self._flush_cursor(time.monotonic(), force=True)
+            self._renderer.paint_due(time.monotonic(), force=True)
         except (OSError, RuntimeError):
             pass
 
@@ -1700,11 +1023,7 @@ class LocalPtyClient:
         if self.returncode is None:
             self.terminate()
         try:
-            self._flush_input_gate(time.monotonic(), force=True)
-            self._flush_cursor(time.monotonic(), force=True)
-            if not self._cursor._physical_visible:
-                _write_terminal_output(self.stdout_fd, self._cursor._SHOW)
-                self._cursor._physical_visible = True
+            self._renderer.close()
         finally:
             self._selector.close()
             try:
@@ -1722,7 +1041,7 @@ def start_local_pty_client(
     stdout_fd: int,
     suppress_stderr: bool = False,
 ) -> LocalPtyClient:
-    """Start the managed-Windows visual proxy without addressing a server."""
+    """Start the managed-Windows semantic PTY client without addressing a server."""
     if not running_in_managed_windows_wrapper(environ):
         raise WindowsAttachRelayError("terminal proxy is unavailable")
     width, height = _terminal_size(stdin_fd)
@@ -1874,7 +1193,7 @@ def start_relay_client(
             identity,
             stdin_fd=stdin_fd,
             stdout_fd=stdout_fd,
-            stabilize_cursor=bool(environ.get("WT_SESSION")),
+            semantic_rendering=bool(environ.get("WT_SESSION")),
             forward_interrupts=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:

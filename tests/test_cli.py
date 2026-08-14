@@ -1036,14 +1036,11 @@ def test_windows_cursor_proxy_keeps_watchdog_discovery_off_the_pty_pump(
     assert discovery_threads == ["railmux-tmux-health"]
 
 
-def test_windows_visual_proxy_failure_preserves_direct_attach(monkeypatch, capsys):
-    class SuccessfulDirect:
-        returncode = 0
-
-        def poll(self):
-            return self.returncode
-
-    popen = MagicMock(return_value=SuccessfulDirect())
+@pytest.mark.parametrize("failure", [RuntimeError("no pty"), ModuleNotFoundError("pyte")])
+def test_windows_semantic_renderer_setup_failure_does_not_use_raw_attach(
+    monkeypatch, capsys, failure,
+):
+    popen = MagicMock()
     monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
     monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
@@ -1055,7 +1052,7 @@ def test_windows_visual_proxy_failure_preserves_direct_attach(monkeypatch, capsy
         "railmux.provider_paths.running_in_managed_windows_wrapper",
         lambda: True,
     )
-    start = MagicMock(side_effect=RuntimeError("no pty"))
+    start = MagicMock(side_effect=failure)
     monkeypatch.setattr(
         "railmux.windows_attach_relay.start_local_pty_client", start)
     monkeypatch.setattr(
@@ -1064,17 +1061,14 @@ def test_windows_visual_proxy_failure_preserves_direct_attach(monkeypatch, capsy
     )
     env = {"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}
 
-    assert _run_tmux_client_with_watchdog(
-        ["tmux", "-L", "railmux"], env
-    ) == 0
+    assert _run_tmux_client_with_watchdog(["tmux", "-L", "railmux"], env) == 2
 
     start.assert_called_once()
-    popen.assert_called_once_with(
-        ["tmux", "-L", "railmux"], env=env)
-    assert capsys.readouterr().err == ""
+    popen.assert_not_called()
+    assert "terminal renderer could not start" in capsys.readouterr().err
 
 
-def test_windows_visual_proxy_transport_error_falls_back_to_direct(
+def test_windows_semantic_renderer_transport_error_does_not_use_raw_attach(
     monkeypatch, capsys,
 ):
     class FailedProxy:
@@ -1098,14 +1092,8 @@ def test_windows_visual_proxy_transport_error_falls_back_to_direct(
         def close(self):
             self.closed = True
 
-    class SuccessfulDirect:
-        returncode = 0
-
-        def poll(self):
-            return self.returncode
-
     proxy = FailedProxy()
-    popen = MagicMock(return_value=SuccessfulDirect())
+    popen = MagicMock()
     monkeypatch.setattr("railmux.cli.subprocess.Popen", popen)
     monkeypatch.setattr("railmux.cli.sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("railmux.cli.sys.stdout.isatty", lambda: True)
@@ -1128,14 +1116,11 @@ def test_windows_visual_proxy_transport_error_falls_back_to_direct(
     )
     env = {"RAILMUX_WINDOWS_RUNTIME": "msys2", "WT_SESSION": "opaque"}
 
-    assert _run_tmux_client_with_watchdog(
-        ["tmux", "-L", "railmux"], env
-    ) == 0
+    assert _run_tmux_client_with_watchdog(["tmux", "-L", "railmux"], env) == 2
 
     assert proxy.stopped and proxy.closed
-    popen.assert_called_once_with(
-        ["tmux", "-L", "railmux"], env=env)
-    assert capsys.readouterr().err == ""
+    popen.assert_not_called()
+    assert "terminal renderer stopped" in capsys.readouterr().err
 
 
 def test_managed_windows_attach_without_bridge_is_actionable(

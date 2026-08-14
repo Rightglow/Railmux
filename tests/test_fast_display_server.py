@@ -26,7 +26,7 @@ from railmux.fast_display_protocol import (
 )
 from railmux.fast_display_server import parse_args as parse_server_args
 from railmux.fast_display_server import render_rows
-from railmux.fast_display_server import terminal_modes_for_screen
+from railmux.terminal_screen import terminal_modes_for_screen
 from railmux import fast_display_client, fast_display_server, tmux_ctl
 from railmux.fast_display_client import (
     RemoteHello,

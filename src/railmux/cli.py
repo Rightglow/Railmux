@@ -140,10 +140,13 @@ def _run_tmux_client_with_watchdog(
                     stdout_fd=sys.stdout.fileno(),
                     suppress_stderr=expected_target is not None,
                 )
-            except (OSError, RuntimeError):
-                # The proxy is a visual optimization. A supported direct tmux
-                # client remains the fail-safe path if PTY setup is unavailable.
-                local_proxy = None
+            except (ImportError, OSError, RuntimeError) as exc:
+                # Windows Terminal requires the semantic renderer: falling
+                # through to the raw tmux stream would silently restore the
+                # IME/flicker bug this path exists to prevent.
+                raise RuntimeError(
+                    "the managed Windows terminal renderer could not start"
+                ) from exc
             else:
                 tty.setraw(sys.stdin.fileno())
         process: object = (
@@ -151,7 +154,7 @@ def _run_tmux_client_with_watchdog(
             if local_proxy is not None
             else subprocess.Popen(argv, **popen_kwargs)
         )
-    except (OSError, termios.error) as exc:
+    except (OSError, RuntimeError, termios.error) as exc:
         if local_proxy is not None:
             local_proxy.terminate()
             local_proxy.close()
@@ -279,24 +282,22 @@ def _run_tmux_client_with_watchdog(
         except (OSError, RuntimeError, termios.error):
             if local_proxy is None:
                 raise
-            # A local PTY is presentation-only. Stop exactly its child and
-            # retain the established direct-client behavior if forwarding
-            # fails before tmux exits.
+            # Do not silently replace the semantic Windows renderer with a raw
+            # tmux stream: that would reintroduce the IME corruption this
+            # supported path prevents. Stop only this attach client; the
+            # workspace and provider panes remain alive.
             _stop_tmux_client(local_proxy)
             local_proxy.close()
             local_proxy = None
             _restore_terminal(attributes)
             _reset_terminal_modes(sys.stdout.fileno())
-            try:
-                process = subprocess.Popen(argv, **popen_kwargs)
-            except OSError as exc:
-                print(
-                    f"error: could not start tmux client: {exc}",
-                    file=sys.stderr,
-                )
-                return 2
-            started_at = time.monotonic()
-            returncode, watchdog_failed = monitor_client(started_at)
+            print(
+                "error: the managed Windows terminal renderer stopped; the "
+                "existing workspace was left running; run 'railmux doctor' "
+                "for diagnostics",
+                file=sys.stderr,
+            )
+            return 2
         if watchdog_failed:
             return returncode
         failed_at = time.monotonic()
@@ -355,7 +356,12 @@ def _run_tmux_client_with_watchdog(
                         _reset_terminal_modes(sys.stdout.fileno())
                     if watchdog_failed:
                         return returncode
-                except (OSError, termios.error, WindowsAttachRelayError):
+                except (
+                    ImportError,
+                    OSError,
+                    termios.error,
+                    WindowsAttachRelayError,
+                ):
                     _reset_terminal_modes(sys.stdout.fileno())
                     _restore_terminal(attributes)
                     outcome = (

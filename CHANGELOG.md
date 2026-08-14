@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc21] - 2026-08-14
+
+### Fixed
+
+- Replace the native-Windows prompt/cursor heuristics and input-timed output
+  gate with the shared `railmux ssh` VT screen model. Local and bridged Windows
+  Terminal entries now avoid sampling inside provider synchronized frames and
+  atomically paint only final changed rows plus the authoritative cursor, so
+  Codex Working animation and elapsed time remain live without repeatedly
+  erasing an unchanged IME pre-edit row. Input, bracketed paste, mouse/focus,
+  resize, Ctrl-C, tmux copy mode, CJK width, indexed colours, and bounded OSC 52
+  clipboard requests retain their existing authority. Renderer failure leaves
+  the workspace running and no longer silently falls back to the corrupting raw
+  output path. A malformed unclosed synchronized frame fails open within 250 ms
+  while remaining in semantic mode, and a missing renderer dependency now gets
+  a bounded actionable launcher error instead of a Python traceback.
+
 ## [0.4.0rc20] - 2026-08-14
 
 ### Fixed

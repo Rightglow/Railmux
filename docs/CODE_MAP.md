@@ -23,7 +23,7 @@ moves, but do not copy invariants, defaults, timeouts, or release evidence here.
 | WSL clipboard, browser, or terminal | `local_clipboard.py`, `local_open.py` | `test_local_clipboard.py`, `test_local_open.py` | Support matrix platform IDs |
 | Native Windows dispatch | `entrypoint.py`, `windows_bootstrap.py`, `provider_paths.py` | `test_windows_bootstrap.py`, `test_provider_paths.py`, wrapper contract tests | Architecture: managed Windows ownership; support W/P IDs |
 | Managed MSYS2 install/update/prune | `windows_msys2.py`, `windows_pacman.py`, `windows_install_log.py`, `windows_paths.py` | matching Windows module test; native archive/MSYS2 CI before a support claim | Windows runtime document and parity ledger |
-| Windows local/cross-terminal attach | `cli._run_tmux_client_with_watchdog`, `windows_attach_relay.py`, `windows_tmux_lifecycle.py` | local PTY/cursor, relay, and lifecycle tests plus real Windows terminal validation | Architecture: managed Windows attach relay and terminal capabilities |
+| Windows local/cross-terminal attach | `cli._run_tmux_client_with_watchdog`, `windows_attach_relay.py`, `terminal_screen.py`, `windows_tmux_lifecycle.py` | local semantic PTY, relay, shared screen-model, and lifecycle tests plus real Windows terminal validation | Architecture: managed Windows attach relay and terminal capabilities |
 | Version, release, app-layer transition | `release_version.py`, `windows_ui_transition.py`, release workflow | release/version/transition/contract tests | `RELEASING.md` and Windows parity ledger |
 
 Use symbols, not line numbers, in issues and documentation. Line numbers move
