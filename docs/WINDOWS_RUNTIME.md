@@ -193,10 +193,13 @@ opens a WSL shell and runs the ordinary POSIX product there.
   continuation bytes that equal an eight-bit string terminator. During that
   same burst, the newest complete prompt-row `EL 2 + row` repaint may be
   retained until the 100 ms quiet boundary when a following absolute CUP
-  proves that its immediate cursor advance is irrelevant. Committed input
-  permits the next provider row through immediately; later SGR controls are
-  replayed after the deferred row so the provider's final rendition state
-  remains authoritative. Incomplete, unknown, screen-wide, resized, and
+  proves that its immediate cursor advance is irrelevant. Because Windows IME
+  composition can expose temporary ASCII and `DEL` bytes, every input read
+  extends an independent 100 ms guard for only that proven prompt row; its
+  newest contents publish when input quiets even if provider animation
+  continues. Later SGR controls are replayed after the deferred row so the
+  provider's final rendition state remains authoritative. Incomplete,
+  unknown, screen-wide, resized, and
   post-quiet output is never coalesced. Normal Codex
   animation and Working timers remain enabled; Railmux does not edit Codex
   configuration, argv, or history. If this visual proxy cannot be created, the

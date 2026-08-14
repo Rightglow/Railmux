@@ -65,6 +65,11 @@ _MAX_STALE_ENDPOINTS = 64
 _RELAY_NAME = re.compile(r"windows-attach-[0-9a-f]{16}\.sock\Z")
 
 
+def _terminal_events_first(events):
+    """Order one selector batch so input guards same-batch PTY output."""
+    return sorted(events, key=lambda event: event[0].data != "terminal")
+
+
 class WindowsAttachRelayError(RuntimeError):
     """A bounded relay setup or transport failure."""
 
@@ -81,9 +86,9 @@ class _CursorVisibilityCoalescer:
     quiet user-facing coordinate so Windows IME pre-edit does not chase the
     provider's transient Working and footer rows. Within that same bounded
     burst, defer repainting the proven anchor row until output becomes quiet.
-    Input permits the next genuinely changed authoritative row through
-    immediately. Input bytes whose provider row remains semantically unchanged
-    do not authorize another erase underneath terminal-owned IME pre-edit.
+    Each input read independently bounds that row's release to 100 ms after
+    input becomes quiet, because composition-shaped ASCII/DEL bytes do not
+    prove that Windows Terminal has committed its IME pre-edit.
 
     A Codex repaint can finish with one extra HIDE after repeatedly alternating
     HIDE/SHOW.  Treat that three-or-more transition signature as rendering
@@ -150,25 +155,29 @@ class _CursorVisibilityCoalescer:
         # terminal. Replay them after the quiet repaint so the delayed row
         # cannot leave a different active rendition for later output.
         self._deferred_following_sgr = bytearray()
-        self._anchor_line_passthrough_once = False
-        # Remember what Railmux last allowed onto the physical prompt row.
-        # Windows IME composition can produce input bytes without changing the
-        # provider's committed prompt text. In that case note_input() must not
-        # turn an otherwise redundant EL 2 repaint into a visible erase.
+        # Microsoft Pinyin may expose composition-shaped ASCII and DEL bytes
+        # to the PTY before the terminal-owned pre-edit is committed. Treat
+        # every input read as a short prompt-row guard rather than as proof of
+        # committed text. This deadline is independent from provider-output
+        # quiet so a continuously animated Working row cannot postpone the
+        # newest prompt row indefinitely.
+        self._input_guard_deadline: float | None = None
+        # Remember what Railmux last allowed onto the physical prompt row so a
+        # byte-identical quiet result does not cause one final redundant erase.
         self._visible_anchor_signature: bytes | None = None
         self._visible_anchor_render_signature: bytes | None = None
 
-    def note_input(self, payload: bytes) -> None:
-        """Permit the next semantically changed provider row after input."""
+    def note_input(self, payload: bytes, now: float) -> None:
+        """Hold the proven prompt row briefly after terminal input."""
         if not payload:
             return
         # The relay cannot distinguish committed input from composition-shaped
-        # letter/DEL bytes. Drop any stale deferred row and arm one guarded
-        # pass: a genuinely changed provider row may publish immediately, while
-        # a semantically identical row stays coalesced through the repaint burst.
+        # letter/DEL bytes. Drop any stale deferred row and retain only the
+        # newest authoritative provider repaint until input has been quiet for
+        # one bounded interval. Other rows continue to pass through normally.
         self._frame_final_cursor_position = None
         self._invalidate_anchor_line()
-        self._anchor_line_passthrough_once = True
+        self._input_guard_deadline = now + self.quiet_interval
 
     def note_resize(self) -> None:
         """Drop coordinates expressed in the previous terminal geometry."""
@@ -186,7 +195,7 @@ class _CursorVisibilityCoalescer:
         self._anchor_line_position = None
         self._deferred_anchor_line = None
         self._deferred_following_sgr.clear()
-        self._anchor_line_passthrough_once = False
+        self._input_guard_deadline = None
         self._forget_visible_anchor_line()
 
     @staticmethod
@@ -237,7 +246,7 @@ class _CursorVisibilityCoalescer:
         candidate_row = self._cursor_row(position)
         if quiet or (stable_row is not None and candidate_row == stable_row):
             if stable_row is not None and candidate_row != stable_row:
-                self._invalidate_anchor_line()
+                self._invalidate_anchor_line(clear_input_guard=True)
                 self._forget_visible_anchor_line()
             self._stable_cursor_position = position
 
@@ -279,19 +288,7 @@ class _CursorVisibilityCoalescer:
         payload = bytes(candidate)
         signature = self._anchor_line_signature(payload)
         position = self._anchor_line_position
-        same_visible_text = bool(
-            signature is not None
-            and signature == self._visible_anchor_signature
-        )
-        if (
-            comparable
-            and row is not None
-            and position is not None
-            and (
-                not self._anchor_line_passthrough_once
-                or same_visible_text
-            )
-        ):
+        if comparable and row is not None and position is not None:
             # Preserve SGR state now, but retain only the newest authoritative
             # row for a quiet-boundary repaint. Repeated Working frames cannot
             # erase Windows Terminal's inline IME pre-edit in the meantime.
@@ -307,17 +304,17 @@ class _CursorVisibilityCoalescer:
                 )
             self._deferred_anchor_line = None
             self._deferred_following_sgr.clear()
-            self._anchor_line_passthrough_once = False
         self._anchor_line_candidate = None
         self._anchor_line_controls.clear()
         self._anchor_line_row = None
         self._anchor_line_position = None
         self._anchor_line_deadline = None
 
-    def _invalidate_anchor_line(self) -> None:
+    def _invalidate_anchor_line(self, *, clear_input_guard: bool = False) -> None:
         self._deferred_anchor_line = None
         self._deferred_following_sgr.clear()
-        self._anchor_line_passthrough_once = False
+        if clear_input_guard:
+            self._input_guard_deadline = None
 
     def _repay_position_debt(self, rendered: bytearray) -> None:
         if self._position_debt is None:
@@ -350,7 +347,7 @@ class _CursorVisibilityCoalescer:
             self._exact_cursor_position = None
             self._frame_final_cursor_position = None
             self._stable_cursor_position = None
-            self._invalidate_anchor_line()
+            self._invalidate_anchor_line(clear_input_guard=True)
             self._forget_visible_anchor_line()
 
     def feed(self, data: bytes, now: float) -> bytes:
@@ -421,7 +418,7 @@ class _CursorVisibilityCoalescer:
                     if value != ord("]"):
                         self._exact_cursor_position = None
                         self._stable_cursor_position = None
-                        self._invalidate_anchor_line()
+                        self._invalidate_anchor_line(clear_input_guard=True)
                     continue
                 self._repay_position_debt(rendered)
                 self._finish_anchor_line_candidate(rendered, comparable=False)
@@ -429,7 +426,7 @@ class _CursorVisibilityCoalescer:
                 self._pending.clear()
                 self._exact_cursor_position = None
                 self._stable_cursor_position = None
-                self._invalidate_anchor_line()
+                self._invalidate_anchor_line(clear_input_guard=True)
                 self._state = "ground"
                 continue
 
@@ -552,7 +549,7 @@ class _CursorVisibilityCoalescer:
                             ):
                                 self._deferred_following_sgr.extend(sequence)
                             if final in {b"J", b"S", b"T"}:
-                                self._invalidate_anchor_line()
+                                self._invalidate_anchor_line(clear_input_guard=True)
                         self._observe_csi_cursor_position(sequence)
                     continue
                 if len(self._pending) > self._MAX_CONTROL:
@@ -565,7 +562,7 @@ class _CursorVisibilityCoalescer:
                     self._pending.clear()
                     self._exact_cursor_position = None
                     self._stable_cursor_position = None
-                    self._invalidate_anchor_line()
+                    self._invalidate_anchor_line(clear_input_guard=True)
                     self._state = "csi_passthrough"
                 continue
 
@@ -612,7 +609,11 @@ class _CursorVisibilityCoalescer:
     def next_timeout(self, maximum: float, now: float) -> float:
         deadlines = tuple(
             deadline
-            for deadline in (self._deadline, self._anchor_line_deadline)
+            for deadline in (
+                self._deadline,
+                self._anchor_line_deadline,
+                self._input_guard_deadline,
+            )
             if deadline is not None
         )
         if not deadlines:
@@ -638,7 +639,11 @@ class _CursorVisibilityCoalescer:
         visibility_due = bool(
             self._deadline is not None and (force or now >= self._deadline)
         )
-        if not line_due and not visibility_due and not (
+        input_due = bool(
+            self._input_guard_deadline is not None
+            and (force or now >= self._input_guard_deadline)
+        )
+        if not line_due and not visibility_due and not input_due and not (
             force and self._state != "ground"
         ):
             return b""
@@ -661,7 +666,7 @@ class _CursorVisibilityCoalescer:
                 b"\033\\" if self._state in {"string", "string_escape"} else b"\030"
             )
             self._state = "ground"
-        if visibility_due and self._deferred_anchor_line is not None:
+        if (visibility_due or input_due) and self._deferred_anchor_line is not None:
             position, payload = self._deferred_anchor_line
             render_signature = self._anchor_line_render_signature(payload)
             if render_signature != self._visible_anchor_render_signature:
@@ -678,6 +683,8 @@ class _CursorVisibilityCoalescer:
                 self._visible_anchor_render_signature = render_signature
             self._deferred_anchor_line = None
             self._deferred_following_sgr.clear()
+        if input_due:
+            self._input_guard_deadline = None
         if not visibility_due:
             return bytes(rendered)
         stable_visible = self._desired_visible or (
@@ -1314,7 +1321,8 @@ class RelayClient:
         wait = max(0.0, timeout)
         if self._cursor is not None:
             wait = self._cursor.next_timeout(wait, now)
-        for key, _events in self._selector.select(timeout=wait):
+        events = _terminal_events_first(self._selector.select(timeout=wait))
+        for key, _events in events:
             if key.data == "terminal":
                 data = os.read(self.stdin_fd, 65536)
                 if not data:
@@ -1322,7 +1330,7 @@ class RelayClient:
                     self.connection.sendall(_frame(_TYPE_CLOSE))
                     continue
                 if self._cursor is not None:
-                    self._cursor.note_input(data)
+                    self._cursor.note_input(data, time.monotonic())
                 self.connection.sendall(_frame(_TYPE_INPUT, data))
                 continue
             data = self.connection.recv(65536)
@@ -1463,13 +1471,14 @@ class LocalPtyClient:
         self._resize_if_needed()
         now = time.monotonic()
         wait = self._cursor.next_timeout(max(0.0, timeout), now)
-        for key, _events in self._selector.select(timeout=wait):
+        events = _terminal_events_first(self._selector.select(timeout=wait))
+        for key, _events in events:
             if key.data == "terminal":
                 data = os.read(self.stdin_fd, 65536)
                 if not data:
                     self.terminate()
                     return
-                self._cursor.note_input(data)
+                self._cursor.note_input(data, time.monotonic())
                 _write_pty_input(self.master_fd, data)
                 continue
             try:

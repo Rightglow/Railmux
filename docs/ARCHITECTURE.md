@@ -160,9 +160,12 @@ Within one active synchronized burst, the proxy may retain the newest complete
 `EL 2 + row` segment for the proven prompt row when a following absolute CUP
 makes its immediate cursor advance irrelevant. SGR state is still replayed,
 and the newest authoritative row is committed once at the 100 ms quiet
-boundary. A committed input byte discards any deferred row and permits the
-provider's next prompt row through immediately; terminal-owned IME pre-edit
-does not emit PTY bytes and therefore remains undisturbed during animation.
+boundary. Windows IME composition may expose temporary ASCII and `DEL` bytes
+to the PTY, so an input read starts an independent 100 ms prompt-row guard
+instead of proving that text was committed. Each further input extends the
+guard; only the newest complete prompt row is published when input becomes
+quiet, even if Working animation continues, while every non-prompt row remains
+live.
 An incomplete segment, unknown control, screen-wide change, resize, or lost
 anchor is forwarded and invalidates the deferred repaint. This leaves the
 final terminal cells and provider state authoritative while preventing Windows

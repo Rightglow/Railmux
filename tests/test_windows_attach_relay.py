@@ -16,6 +16,16 @@ from railmux import __version__, windows_attach_relay
 from railmux.tmux_server import TmuxServerTarget
 
 
+def test_terminal_selector_batch_processes_input_before_output():
+    output = (SimpleNamespace(data="tmux"), 1)
+    terminal = (SimpleNamespace(data="terminal"), 1)
+    relay = (SimpleNamespace(data="relay"), 1)
+
+    assert windows_attach_relay._terminal_events_first(
+        [output, relay, terminal]
+    ) == [terminal, output, relay]
+
+
 def test_frame_decoder_preserves_partial_and_multiple_frames():
     first = windows_attach_relay._frame(windows_attach_relay._TYPE_OUTPUT, b"first")
     second = windows_attach_relay._frame(windows_attach_relay._TYPE_EXIT, b"done")
@@ -212,7 +222,7 @@ def test_cursor_coalescer_keeps_latest_changed_anchor_line_for_quiet():
     assert "第二行“保留”".encode() in settled
 
 
-def test_cursor_coalescer_committed_input_publishes_next_anchor_row():
+def test_cursor_coalescer_input_guard_publishes_latest_anchor_row_after_quiet():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.8)
     cursor.feed(
@@ -221,34 +231,38 @@ def test_cursor_coalescer_committed_input_publishes_next_anchor_row():
         1.0,
     )
 
-    cursor.note_input("中".encode())
-    committed = cursor.feed(
+    cursor.note_input("中".encode(), 1.04)
+    guarded = cursor.feed(
         b"\033[?25l\033[?2026h\033[55;1H\033[2Knew"
         b"\033[57;1Hfooter\033[?2026l\033[?25h",
         1.05,
     )
 
+    assert b"\033[2Knew" not in guarded
+    assert cursor.flush_due(1.139) == b""
+    committed = cursor.flush_due(1.141)
     assert b"\033[2Knew" in committed
-    assert b"\033[2Kold" not in cursor.flush_due(1.2)
+    assert b"\033[2Kold" not in committed
 
 
 def test_cursor_coalescer_ime_input_does_not_repaint_unchanged_prompt():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.note_input(b"a")
     initial = cursor.feed(
         b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
         b"\033[57;1Hfooter\033[?2026l\033[?25h",
         0.9,
     )
-    assert b"> prompt" in initial
+    assert b"> prompt" not in initial
+    assert b"> prompt" in cursor.flush_due(1.01)
 
     # Windows IME composition may emit raw letters and DEL while its pre-edit
     # remains terminal-owned. Those bytes must not turn the same provider row
     # into a visible EL 2 erase on every animation frame.
     repeated = bytearray()
     for index in range(8):
-        cursor.note_input(b"n\x7fi")
+        now = 1.0 + index * 0.05
+        cursor.note_input(b"n\x7fi", now)
         erase = b"\033[0K" if index % 2 else b"\033[K"
         repeated.extend(
             cursor.feed(
@@ -257,7 +271,7 @@ def test_cursor_coalescer_ime_input_does_not_repaint_unchanged_prompt():
                 + b"\033[32m> prompt\033[0m\033[57;1Hfooter"
                 + str(index).encode()
                 + b"\033[?2026l\033[?25h",
-                1.0 + index * 0.05,
+                now,
             )
         )
 
@@ -266,6 +280,66 @@ def test_cursor_coalescer_ime_input_does_not_repaint_unchanged_prompt():
     assert b"> prompt" not in repeated
     assert repeated.count(b"\033[5 q") == 1
     assert b"> prompt" not in cursor.flush_due(1.5)
+
+
+def test_cursor_coalescer_ime_guard_keeps_working_live_and_latest_prompt_only():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2K> "
+        b"\033[52;1H\033[2KWorking 0.0s\033[57;1Hfooter"
+        b"\033[?2026l\033[?25h",
+        0.9,
+    )
+
+    visible = bytearray()
+    for now, input_bytes, prompt, timer in (
+        (1.00, b"n", b"> n", b"Working 0.1s"),
+        (1.04, b"\x7f", b"> ", b"Working 0.2s"),
+        (1.08, b"ni", b"> ni", b"Working 0.3s"),
+    ):
+        cursor.note_input(input_bytes, now)
+        visible.extend(
+            cursor.feed(
+                b"\033[?25l\033[?2026h\033[55;1H\033[2K"
+                + prompt
+                + b"\033[52;1H\033[2K"
+                + timer
+                + b"\033[57;1Hfooter\033[?2026l\033[?25h",
+                now,
+            )
+        )
+
+    assert b"> n" not in visible
+    assert b"> ni" not in visible
+    assert b"Working 0.1s" in visible
+    assert b"Working 0.2s" in visible
+    assert b"Working 0.3s" in visible
+    assert cursor.flush_due(1.179) == b""
+    settled = cursor.flush_due(1.181)
+    assert b"> ni" in settled
+    assert b"> n\033" not in settled
+
+
+def test_cursor_coalescer_resize_discards_guarded_prompt_row():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Kold"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        0.9,
+    )
+    cursor.note_input(b"x", 1.0)
+    assert b"new" not in cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Knew"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.01,
+    )
+
+    cursor.note_resize()
+
+    assert cursor.flush_due(2.0) == b""
+    assert cursor.feed(b"\033[20;1Hresized", 2.1) == b"\033[20;1Hresized"
 
 
 def test_cursor_coalescer_repeated_cursor_presentation_is_idempotent():
@@ -385,7 +459,7 @@ def test_cursor_coalescer_does_not_guess_after_relative_frame_output():
 def test_cursor_coalescer_relearns_anchor_after_explicit_input():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.9)
-    cursor.note_input("中".encode())
+    cursor.note_input("中".encode(), 0.95)
 
     assert cursor.feed(b"\033[55;5H\033[?25h", 1.0) == b"\033[55;5H"
     assert cursor._stable_cursor_position == b"\033[55;5H"
@@ -460,7 +534,7 @@ def test_cursor_coalescer_retains_quiet_ime_anchor_after_committed_input():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     assert cursor.feed(b"\033[55;3H\033[?25h", 0.8) == b"\033[55;3H"
 
-    cursor.note_input("中".encode())
+    cursor.note_input("中".encode(), 0.95)
     rendered = cursor.feed(
         b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h",
         1.0,

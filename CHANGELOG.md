@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc19] - 2026-08-14
+
+### Fixed
+
+- Keep the proven native-Windows prompt row stable for the bounded 100 ms
+  interval after each input read, even when Microsoft Pinyin composition
+  temporarily changes provider text through ASCII and `DEL` bytes. Railmux
+  publishes only the newest prompt row when input becomes quiet while Working
+  timers and every other row remain live; resize, unknown output, Enter-driven
+  transitions, and terminal restoration retain fail-safe authority.
+
 ## [0.4.0rc18] - 2026-08-14
 
 ### Fixed
@@ -2927,7 +2938,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc18...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc19...HEAD
+[0.4.0rc19]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc18...v0.4.0rc19
 [0.4.0rc18]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc17...v0.4.0rc18
 [0.4.0rc17]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc16...v0.4.0rc17
 [0.4.0rc16]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc15...v0.4.0rc16
