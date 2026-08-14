@@ -232,6 +232,55 @@ def test_cursor_coalescer_committed_input_publishes_next_anchor_row():
     assert b"\033[2Kold" not in cursor.flush_due(1.2)
 
 
+def test_cursor_coalescer_ime_input_does_not_repaint_unchanged_prompt():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.note_input(b"a")
+    initial = cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        0.9,
+    )
+    assert b"> prompt" in initial
+
+    # Windows IME composition may emit raw letters and DEL while its pre-edit
+    # remains terminal-owned. Those bytes must not turn the same provider row
+    # into a visible EL 2 erase on every animation frame.
+    repeated = bytearray()
+    for index in range(8):
+        cursor.note_input(b"n\x7fi")
+        erase = b"\033[0K" if index % 2 else b"\033[K"
+        repeated.extend(
+            cursor.feed(
+                b"\033[5 q\033[?25l\033[?2026h\033[55;1H"
+                + erase
+                + b"\033[32m> prompt\033[0m\033[57;1Hfooter"
+                + str(index).encode()
+                + b"\033[?2026l\033[?25h",
+                1.0 + index * 0.05,
+            )
+        )
+
+    assert b"\033[K" not in repeated
+    assert b"\033[0K" not in repeated
+    assert b"> prompt" not in repeated
+    assert repeated.count(b"\033[5 q") == 1
+    assert b"> prompt" not in cursor.flush_due(1.5)
+
+
+def test_cursor_coalescer_repeated_cursor_presentation_is_idempotent():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+
+    rendered = cursor.feed(
+        b"\033[?12h\033[?12h\033[5 q\033[5 q\033[3 q\033[?12l\033[?12l",
+        1.0,
+    )
+
+    assert rendered == b"\033[?12h\033[5 q\033[3 q\033[?12l"
+    cursor.note_resize()
+    assert cursor.feed(b"\033[?12l\033[3 q", 1.1) == b"\033[?12l\033[3 q"
+
+
 def test_cursor_coalescer_unknown_mode_discards_deferred_anchor_row():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.8)
@@ -282,8 +331,9 @@ def test_cursor_coalescer_flushes_an_unterminated_anchor_line_promptly():
     )
 
     assert b"\033[2Kpartial" not in held
-    assert cursor.next_timeout(1.0, 1.0) == pytest.approx(0.02)
-    assert cursor.flush_due(1.03) == b"\033[2Kpartial"
+    assert cursor.next_timeout(1.0, 1.0) == pytest.approx(0.1)
+    assert cursor.flush_due(1.05) == b""
+    assert cursor.flush_due(1.11) == b"\033[2Kpartial\033[?25l"
 
 
 def test_cursor_coalescer_force_flush_keeps_held_row_before_partial_control():
@@ -309,8 +359,8 @@ def test_cursor_coalescer_waits_for_split_control_after_a_held_row():
     )
 
     assert b"\033[2Kprompt" not in held
-    assert cursor.flush_due(1.03) == b""
-    completed = cursor.feed(b";2;3m styled\033[57;1H", 1.04)
+    assert cursor.flush_due(1.05) == b""
+    completed = cursor.feed(b";2;3m styled\033[57;1H", 1.06)
     assert completed == b"\033[38;2;1;2;3m\033[57;1H"
     settled = cursor.flush_due(1.2)
     assert b"\033[2Kprompt\033[38;2;1;2;3m styled" in settled

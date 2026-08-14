@@ -57,7 +57,7 @@ _DRAIN_TIMEOUT = 0.25
 _CHILD_EXIT_GRACE = 0.2
 _PTY_INPUT_TIMEOUT = 5.0
 _CURSOR_QUIET_INTERVAL = 0.1
-_ANCHOR_LINE_HOLD_INTERVAL = 0.02
+_ANCHOR_LINE_HOLD_INTERVAL = _CURSOR_QUIET_INTERVAL
 _SYNC_OUTPUT_BEGIN = b"\033[?2026h"
 _SYNC_OUTPUT_END = b"\033[?2026l"
 _STALE_ENDPOINT_AGE = 5 * 60
@@ -81,8 +81,9 @@ class _CursorVisibilityCoalescer:
     quiet user-facing coordinate so Windows IME pre-edit does not chase the
     provider's transient Working and footer rows. Within that same bounded
     burst, defer repainting the proven anchor row until output becomes quiet.
-    Committed input permits the next authoritative row through immediately;
-    terminal-owned IME pre-edit emits no PTY bytes and remains untouched.
+    Input permits the next genuinely changed authoritative row through
+    immediately. Input bytes whose provider row remains semantically unchanged
+    do not authorize another erase underneath terminal-owned IME pre-edit.
 
     A Codex repaint can finish with one extra HIDE after repeatedly alternating
     HIDE/SHOW.  Treat that three-or-more transition signature as rendering
@@ -100,6 +101,11 @@ class _CursorVisibilityCoalescer:
 
     _HIDE = b"\033[?25l"
     _SHOW = b"\033[?25h"
+    _BLINK_ON = b"\033[?12h"
+    _BLINK_OFF = b"\033[?12l"
+    _CURSOR_STYLE_RE = re.compile(rb"\033\[[0-9;]* q\Z")
+    _SGR_RE = re.compile(rb"\033\[[0-9:;]*m")
+    _ANCHOR_LINE_ERASES = (b"\033[K", b"\033[0K", b"\033[2K")
     _MAX_CONTROL = 256
     _MAX_ANCHOR_LINE = 64 * 1024
 
@@ -111,6 +117,8 @@ class _CursorVisibilityCoalescer:
         self._string_utf8_remaining = 0
         self._desired_visible = True
         self._physical_visible = True
+        self._physical_cursor_blink: bool | None = None
+        self._physical_cursor_style: bytes | None = None
         self._deadline: float | None = None
         self._visibility_transitions = 0
         self._burst_saw_hide = False
@@ -143,16 +151,21 @@ class _CursorVisibilityCoalescer:
         # cannot leave a different active rendition for later output.
         self._deferred_following_sgr = bytearray()
         self._anchor_line_passthrough_once = False
+        # Remember what Railmux last allowed onto the physical prompt row.
+        # Windows IME composition can produce input bytes without changing the
+        # provider's committed prompt text. In that case note_input() must not
+        # turn an otherwise redundant EL 2 repaint into a visible erase.
+        self._visible_anchor_signature: bytes | None = None
+        self._visible_anchor_render_signature: bytes | None = None
 
     def note_input(self, payload: bytes) -> None:
-        """Publish the next provider row after committed input bytes."""
+        """Permit the next semantically changed provider row after input."""
         if not payload:
             return
-        # Windows Terminal owns IME pre-edit and does not expose composition
-        # state through the PTY.  Clearing the last quiet anchor on committed
-        # input lets the first subsequent Working/footer repaint become the
-        # replacement anchor.  Retain it through the repaint burst instead;
-        # the provider's next quiet visible cursor supersedes it below.
+        # The relay cannot distinguish committed input from composition-shaped
+        # letter/DEL bytes. Drop any stale deferred row and arm one guarded
+        # pass: a genuinely changed provider row may publish immediately, while
+        # a semantically identical row stays coalesced through the repaint burst.
         self._frame_final_cursor_position = None
         self._invalidate_anchor_line()
         self._anchor_line_passthrough_once = True
@@ -164,6 +177,8 @@ class _CursorVisibilityCoalescer:
         self._exact_cursor_position = None
         self._position_debt = None
         self._in_sync_frame = False
+        self._physical_cursor_blink = None
+        self._physical_cursor_style = None
         self._anchor_line_candidate = None
         self._anchor_line_controls.clear()
         self._anchor_line_row = None
@@ -172,6 +187,7 @@ class _CursorVisibilityCoalescer:
         self._deferred_anchor_line = None
         self._deferred_following_sgr.clear()
         self._anchor_line_passthrough_once = False
+        self._forget_visible_anchor_line()
 
     @staticmethod
     def _cursor_row(position: bytes | None) -> int | None:
@@ -183,12 +199,46 @@ class _CursorVisibilityCoalescer:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _cursor_column(position: bytes | None) -> int | None:
+        if position is None or not position.startswith(b"\033["):
+            return None
+        try:
+            parameters = position[2:-1].split(b";")
+            return int(parameters[1] or b"1") if len(parameters) > 1 else 1
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _anchor_line_render_signature(cls, payload: bytes) -> bytes | None:
+        erase = next(
+            (
+                candidate
+                for candidate in cls._ANCHOR_LINE_ERASES
+                if payload.startswith(candidate)
+            ),
+            None,
+        )
+        if erase is None:
+            return None
+        return payload[len(erase):]
+
+    @classmethod
+    def _anchor_line_signature(cls, payload: bytes) -> bytes | None:
+        rendered = cls._anchor_line_render_signature(payload)
+        return None if rendered is None else cls._SGR_RE.sub(b"", rendered)
+
+    def _forget_visible_anchor_line(self) -> None:
+        self._visible_anchor_signature = None
+        self._visible_anchor_render_signature = None
+
     def _accept_visible_position(self, position: bytes, *, quiet: bool) -> None:
         stable_row = self._cursor_row(self._stable_cursor_position)
         candidate_row = self._cursor_row(position)
         if quiet or (stable_row is not None and candidate_row == stable_row):
             if stable_row is not None and candidate_row != stable_row:
                 self._invalidate_anchor_line()
+                self._forget_visible_anchor_line()
             self._stable_cursor_position = position
 
     @staticmethod
@@ -199,13 +249,14 @@ class _CursorVisibilityCoalescer:
 
     def _can_hold_anchor_line(self, sequence: bytes) -> bool:
         return bool(
-            sequence == b"\033[2K"
+            sequence in self._ANCHOR_LINE_ERASES
             and self._in_sync_frame
             and self._deadline is not None
             and self._burst_saw_hide
             and self._exact_cursor_position is not None
             and self._cursor_row(self._exact_cursor_position)
             == self._cursor_row(self._stable_cursor_position)
+            and self._cursor_column(self._exact_cursor_position) == 1
         )
 
     def _start_anchor_line_candidate(self, sequence: bytes, now: float) -> None:
@@ -226,12 +277,20 @@ class _CursorVisibilityCoalescer:
         if candidate is None:
             return
         payload = bytes(candidate)
+        signature = self._anchor_line_signature(payload)
         position = self._anchor_line_position
+        same_visible_text = bool(
+            signature is not None
+            and signature == self._visible_anchor_signature
+        )
         if (
             comparable
             and row is not None
             and position is not None
-            and not self._anchor_line_passthrough_once
+            and (
+                not self._anchor_line_passthrough_once
+                or same_visible_text
+            )
         ):
             # Preserve SGR state now, but retain only the newest authoritative
             # row for a quiet-boundary repaint. Repeated Working frames cannot
@@ -241,6 +300,11 @@ class _CursorVisibilityCoalescer:
             rendered.extend(self._anchor_line_controls)
         else:
             rendered.extend(payload)
+            if row is not None and position is not None and signature is not None:
+                self._visible_anchor_signature = signature
+                self._visible_anchor_render_signature = (
+                    self._anchor_line_render_signature(payload)
+                )
             self._deferred_anchor_line = None
             self._deferred_following_sgr.clear()
             self._anchor_line_passthrough_once = False
@@ -287,6 +351,7 @@ class _CursorVisibilityCoalescer:
             self._frame_final_cursor_position = None
             self._stable_cursor_position = None
             self._invalidate_anchor_line()
+            self._forget_visible_anchor_line()
 
     def feed(self, data: bytes, now: float) -> bytes:
         if not data:
@@ -430,6 +495,15 @@ class _CursorVisibilityCoalescer:
                         self._burst_saw_hide |= not requested_visible
                         self._desired_visible = requested_visible
                         self._deadline = now + self.quiet_interval
+                    elif sequence in (self._BLINK_ON, self._BLINK_OFF):
+                        requested_blink = sequence == self._BLINK_ON
+                        if requested_blink != self._physical_cursor_blink:
+                            rendered.extend(sequence)
+                            self._physical_cursor_blink = requested_blink
+                    elif self._CURSOR_STYLE_RE.fullmatch(sequence):
+                        if sequence != self._physical_cursor_style:
+                            rendered.extend(sequence)
+                            self._physical_cursor_style = sequence
                     elif sequence == _SYNC_OUTPUT_BEGIN:
                         rendered.extend(sequence)
                         self._in_sync_frame = True
@@ -589,15 +663,19 @@ class _CursorVisibilityCoalescer:
             self._state = "ground"
         if visibility_due and self._deferred_anchor_line is not None:
             position, payload = self._deferred_anchor_line
-            restore = self._stable_cursor_position or self._exact_cursor_position
-            rendered.extend(_SYNC_OUTPUT_BEGIN)
-            rendered.extend(position)
-            rendered.extend(payload)
-            rendered.extend(self._deferred_following_sgr)
-            if restore is not None:
-                rendered.extend(restore)
-                self._exact_cursor_position = restore
-            rendered.extend(_SYNC_OUTPUT_END)
+            render_signature = self._anchor_line_render_signature(payload)
+            if render_signature != self._visible_anchor_render_signature:
+                restore = self._stable_cursor_position or self._exact_cursor_position
+                rendered.extend(_SYNC_OUTPUT_BEGIN)
+                rendered.extend(position)
+                rendered.extend(payload)
+                rendered.extend(self._deferred_following_sgr)
+                if restore is not None:
+                    rendered.extend(restore)
+                    self._exact_cursor_position = restore
+                rendered.extend(_SYNC_OUTPUT_END)
+                self._visible_anchor_signature = self._anchor_line_signature(payload)
+                self._visible_anchor_render_signature = render_signature
             self._deferred_anchor_line = None
             self._deferred_following_sgr.clear()
         if not visibility_due:

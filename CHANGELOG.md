@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc18] - 2026-08-14
+
+### Fixed
+
+- Keep input received during Windows IME composition from unconditionally
+  authorizing another full prompt-row erase. A genuinely changed committed
+  prompt still publishes immediately, while semantically unchanged `EL 2`/`EL 0`
+  rows remain merged through Codex Working frames and byte-identical settled rows
+  are not repainted.
+- Deduplicate repeated native-Windows cursor-shape and cursor-blink controls,
+  and give split prompt-row repaints the complete 100 ms output-quiet window
+  before failing open. This removes another per-frame hardware-cursor reset
+  without freezing provider timers, changed rows, or terminal restoration.
+
 ## [0.4.0rc17] - 2026-08-14
 
 ### Fixed
@@ -2913,7 +2927,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc17...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc18...HEAD
+[0.4.0rc18]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc17...v0.4.0rc18
 [0.4.0rc17]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc16...v0.4.0rc17
 [0.4.0rc16]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc15...v0.4.0rc16
 [0.4.0rc15]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc14...v0.4.0rc15
