@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc17] - 2026-08-14
+
+### Fixed
+
+- Explicitly enable the managed MSYS2 ConPTY bridge for native Codex and
+  Claude children, even when a parent Git/MSYS environment exported
+  `disable_pcon`; unrelated `MSYS` options remain child-locally preserved.
+- Keep `railmux ssh` bracketed-paste ownership active for the complete raw
+  interaction instead of waiting for a sampled remote terminal-mode frame.
+  Slow split begin markers receive a bounded completion grace, while complete
+  pastes remain byte-exact through the SSH protocol and real tmux PTY; embedded
+  newlines can no longer escape as separate local Enter actions merely because
+  mode projection was late.
+- Defer the newest native-Windows prompt-row repaint through a Codex output
+  burst and commit it once at the quiet boundary, rather than requiring two
+  raw ANSI rows to be byte-identical. Committed input still publishes the next
+  authoritative row immediately, preserving caret updates and Working output.
+
 ## [0.4.0rc16] - 2026-08-13
 
 ### Fixed
@@ -2893,7 +2911,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc16...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc17...HEAD
+[0.4.0rc17]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc16...v0.4.0rc17
 [0.4.0rc16]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc15...v0.4.0rc16
 [0.4.0rc15]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc14...v0.4.0rc15
 [0.4.0rc14]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc13...v0.4.0rc14

@@ -38,6 +38,8 @@ from railmux.display_transport import (
     recover_interrupted_swaps,
 )
 from railmux.fast_display_protocol import (
+    InputFrameDecoder,
+    InputKind,
     PathKind,
     PathResult,
     PROTOCOL_VERSION,
@@ -2195,6 +2197,142 @@ def test_real_private_tmux_client_applies_runtime_pty_resize(isolated_tmux):
             os.close(master_fd)
         except OSError:
             pass
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2.0)
+
+
+@pytest.mark.parametrize("pane_requests_bracketed", [False, True])
+def test_real_private_tmux_client_routes_fragmented_bracketed_paste(
+    isolated_tmux,
+    tmp_path,
+    pane_requests_bracketed,
+):
+    """tmux strips or retains one opaque paste envelope for its active pane."""
+    session_name, _sidebar_pane, socket_path = isolated_tmux
+    received_path = tmp_path / "received.bin"
+    ready_path = tmp_path / "ready"
+    fixture = "A“B”C‘D’E「F」G"
+    body = ((f"mail-line-{fixture}\n") * 20).encode()
+    payload = b"\033[200~" + body + b"\033[201~"
+    expected = payload if pane_requests_bracketed else body
+    receiver = "\n".join(
+        (
+            "import os, pathlib, select, sys, time, tty",
+            "tty.setraw(0)",
+            "pathlib.Path(sys.argv[2]).touch()",
+            (
+                "os.write(1, b'\\x1b[?2004hREADY')"
+                if pane_requests_bracketed
+                else "os.write(1, b'READY')"
+            ),
+            "data = bytearray()",
+            "deadline = time.monotonic() + 5.0",
+            "expected = int(sys.argv[3])",
+            "while len(data) < expected and time.monotonic() < deadline:",
+            "    if select.select([0], [], [], 0.1)[0]:",
+            "        chunk = os.read(0, 4096)",
+            "        if chunk:",
+            "            data.extend(chunk)",
+            "pathlib.Path(sys.argv[1]).write_bytes(bytes(data))",
+        )
+    )
+    subprocess.run(
+        [
+            "tmux",
+            "respawn-pane",
+            "-k",
+            "-t",
+            session_name,
+            shlex.join(
+                (
+                    sys.executable,
+                    "-c",
+                    receiver,
+                    str(received_path),
+                    str(ready_path),
+                    str(len(expected)),
+                )
+            ),
+        ],
+        check=True,
+    )
+    assert _wait_until(ready_path.exists)
+    master_fd, slave_fd = pty.openpty()
+    fcntl.ioctl(
+        slave_fd,
+        termios.TIOCSWINSZ,
+        struct.pack("HHHH", 24, 80, 0, 0),
+    )
+    client_env = os.environ.copy()
+    client_env.pop("TMUX", None)
+    client_env.pop("TMUX_PANE", None)
+    client_env["TERM"] = "xterm-256color"
+    process = subprocess.Popen(
+        ["tmux", "-S", socket_path, "attach-session", "-t", session_name],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        env=client_env,
+        start_new_session=True,
+    )
+    os.close(slave_fd)
+    os.set_blocking(master_fd, False)
+    try:
+        assert _wait_until(
+            lambda: bool(
+                subprocess.check_output(
+                    ["tmux", "-S", socket_path, "list-clients", "-F", "#{client_name}"],
+                    text=True,
+                ).strip()
+            )
+        )
+        client_name = subprocess.check_output(
+            ["tmux", "-S", socket_path, "list-clients", "-F", "#{client_name}"],
+            text=True,
+        ).strip()
+        subprocess.run(
+            ["tmux", "-S", socket_path, "refresh-client", "-S", "-t", client_name],
+            check=True,
+        )
+        output = bytearray()
+        deadline = time.monotonic() + 3.0
+        while b"READY" not in output and time.monotonic() < deadline:
+            readable, _writable, _exceptional = select.select(
+                [master_fd], [], [], 0.05
+            )
+            if readable:
+                output.extend(os.read(master_fd, 65536))
+        # tmux itself requests bracketed paste from every attached client and
+        # decides whether its active pane receives the wrapper markers.
+        assert b"\033[?2004h" in output
+        assert b"READY" in output
+
+        wire = b"".join(
+            encode_input(payload[start : start + 4093])
+            for start in range(0, len(payload), 4093)
+        )
+        decoder = InputFrameDecoder()
+        for start in range(0, len(wire), 701):
+            for message in decoder.feed(wire[start : start + 701]):
+                assert message.kind is InputKind.BYTES
+                view = memoryview(message.data)
+                while view:
+                    try:
+                        written = os.write(master_fd, view)
+                    except BlockingIOError:
+                        select.select([], [master_fd], [], 0.05)
+                        continue
+                    view = view[written:]
+
+        assert _wait_until(received_path.exists)
+        assert received_path.read_bytes() == expected
+    finally:
+        os.close(master_fd)
         if process.poll() is None:
             process.terminate()
             try:

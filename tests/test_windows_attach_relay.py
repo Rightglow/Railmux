@@ -114,7 +114,7 @@ def test_cursor_coalescer_keeps_ime_anchor_inside_synchronized_repaints():
     assert cursor._stable_cursor_position == b"\033[55;3H"
 
 
-def test_cursor_coalescer_omits_only_identical_anchor_line_repaints():
+def test_cursor_coalescer_defers_anchor_line_repaints_until_quiet():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.8)
     prompt = b"\033[55;1H\033[2K\033[32m> prompt\033[0m"
@@ -132,16 +132,66 @@ def test_cursor_coalescer_omits_only_identical_anchor_line_repaints():
         1.05,
     )
 
-    assert first.count(b"\033[2K") == 1
-    assert b"> prompt" in first
+    assert b"\033[2K" not in first
+    assert b"> prompt" not in first
     assert b"\033[2K" not in second
     assert b"> prompt" not in second
     # Stateful SGR still follows the provider's stream after the physical row
     # rewrite itself is proven redundant.
     assert b"\033[32m\033[0m" in second
+    settled = cursor.flush_due(1.2)
+    assert settled.count(b"\033[2K") == 1
+    assert b"> prompt" in settled
+    assert b"footer-2" not in settled
 
 
-def test_cursor_coalescer_keeps_a_changed_anchor_line_authoritative():
+def test_cursor_coalescer_does_not_defer_working_rows_away_from_anchor():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+
+    first = cursor.feed(
+        b"\033[?25l\033[?2026h\033[52;1H\033[2KWorking 1.0s"
+        b"\033[55;1H\033[2Kprompt\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.0,
+    )
+    second = cursor.feed(
+        b"\033[?25l\033[?2026h\033[52;1H\033[2KWorking 1.1s"
+        b"\033[55;1H\033[2Kprompt\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.05,
+    )
+
+    assert b"Working 1.0s" in first
+    assert b"Working 1.1s" in second
+    assert b"prompt" not in first + second
+
+
+def test_cursor_coalescer_quiet_repaint_restores_following_sgr_state():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    initial = b"\033[55;3H\033[?25h"
+    frame = (
+        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[31mprompt"
+        b"\033[57;1H\033[34mfooter\033[57;7H\033[?2026l\033[?25h"
+    )
+
+    transformed = cursor.feed(initial, 0.8) + cursor.feed(frame, 1.0)
+    transformed += cursor.flush_due(1.2)
+    # One later printable byte reveals whether the delayed red prompt row
+    # accidentally replaced the provider's final blue rendition state.
+    tail = b"X"
+    transformed += cursor.feed(tail, 1.21)
+    original_screen = pyte.Screen(80, 60)
+    original_stream = pyte.Stream(original_screen)
+    filtered_screen = pyte.Screen(80, 60)
+    filtered_stream = pyte.Stream(filtered_screen)
+    original_stream.feed((initial + frame + tail).decode())
+    filtered_stream.feed(transformed.decode())
+
+    assert filtered_screen.display == original_screen.display
+    assert filtered_screen.buffer[56][6] == original_screen.buffer[56][6]
+    assert filtered_screen.buffer[56][6].fg == "blue"
+
+
+def test_cursor_coalescer_keeps_latest_changed_anchor_line_for_quiet():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.8)
 
@@ -155,11 +205,48 @@ def test_cursor_coalescer_keeps_a_changed_anchor_line_authoritative():
     cursor.feed(frame(b"first"), 1.0)
     changed = cursor.feed(frame("第二行“保留”".encode()), 1.05)
 
-    assert b"\033[2K" in changed
-    assert "第二行“保留”".encode() in changed
+    assert b"\033[2K" not in changed
+    assert "第二行“保留”".encode() not in changed
+    settled = cursor.flush_due(1.2)
+    assert b"\033[2K" in settled
+    assert "第二行“保留”".encode() in settled
 
 
-def test_cursor_coalescer_redundant_line_filter_preserves_final_screen_cells():
+def test_cursor_coalescer_committed_input_publishes_next_anchor_row():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Kold"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    cursor.note_input("中".encode())
+    committed = cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Knew"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.05,
+    )
+
+    assert b"\033[2Knew" in committed
+    assert b"\033[2Kold" not in cursor.flush_due(1.2)
+
+
+def test_cursor_coalescer_unknown_mode_discards_deferred_anchor_row():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    frame = cursor.feed(
+        b"\033[?25l\033[?2026h\033[55;1H\033[2Kdeferred"
+        b"\033[57;1Hfooter\033[?2026l\033[?25h",
+        1.0,
+    )
+
+    assert b"deferred" not in frame
+    assert cursor.feed(b"\033[?1049l", 1.02).endswith(b"\033[?1049l")
+    assert b"deferred" not in cursor.flush_due(1.2)
+
+
+def test_cursor_coalescer_deferred_line_preserves_final_screen_cells():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     initial = b"\033[55;3H\033[?25h"
     frames = (
@@ -171,6 +258,7 @@ def test_cursor_coalescer_redundant_line_filter_preserves_final_screen_cells():
     transformed = bytearray(cursor.feed(initial, 0.8))
     transformed.extend(cursor.feed(frames[0], 1.0))
     transformed.extend(cursor.feed(frames[1], 1.05))
+    transformed.extend(cursor.flush_due(1.2))
 
     original_screen = pyte.Screen(80, 60)
     original_stream = pyte.Stream(original_screen)
@@ -223,7 +311,9 @@ def test_cursor_coalescer_waits_for_split_control_after_a_held_row():
     assert b"\033[2Kprompt" not in held
     assert cursor.flush_due(1.03) == b""
     completed = cursor.feed(b";2;3m styled\033[57;1H", 1.04)
-    assert completed.startswith(b"\033[2Kprompt\033[38;2;1;2;3m styled")
+    assert completed == b"\033[38;2;1;2;3m\033[57;1H"
+    settled = cursor.flush_due(1.2)
+    assert b"\033[2Kprompt\033[38;2;1;2;3m styled" in settled
 
 
 def test_cursor_coalescer_leaves_visible_synchronized_output_byte_exact():

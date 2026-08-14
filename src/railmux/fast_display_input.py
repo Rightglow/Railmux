@@ -22,6 +22,8 @@ _PAGE_UP = b"\x1b[5~"
 _PAGE_DOWN = b"\x1b[6~"
 _BRACKETED_PASTE_BEGIN = b"\x1b[200~"
 _BRACKETED_PASTE_END = b"\x1b[201~"
+_CONTROL_PREFIX_GRACE = 0.25
+_SLOW_CONTROL_PREFIXES = (_BRACKETED_PASTE_BEGIN,)
 
 
 @dataclass(frozen=True)
@@ -385,15 +387,38 @@ class TerminalInputDecoder:
     def next_timeout(self, maximum: float = 0.1, delay: float = 0.02) -> float:
         if self._pending_since is None:
             return maximum
-        remaining = delay - (time.monotonic() - self._pending_since)
+        pending = bytes(self._buffer)
+        effective_delay = (
+            max(delay, _CONTROL_PREFIX_GRACE)
+            if len(pending) >= 4
+            and any(prefix.startswith(pending) for prefix in _SLOW_CONTROL_PREFIXES)
+            else delay
+        )
+        remaining = effective_delay - (time.monotonic() - self._pending_since)
         return max(0.0, min(maximum, remaining))
 
     def flush_pending(self, delay: float = 0.02) -> list[bytes | BracketedPasteInput]:
+        # A terminal can split one CSI marker across reads and scheduling
+        # delays. Flushing a still-valid bracketed-paste prefix as ordinary
+        # input permanently loses paste ownership: embedded newlines then look
+        # like separate Enter keys to the remote agent. Complete ordinary ESC
+        # input still expires below; only exact prefixes of controls owned by
+        # this decoder remain pending.
+        pending = bytes(self._buffer)
+        elapsed = (
+            0.0
+            if self._pending_since is None
+            else time.monotonic() - self._pending_since
+        )
+        slow_control_prefix = len(pending) >= 4 and any(
+            prefix.startswith(pending) for prefix in _SLOW_CONTROL_PREFIXES
+        )
         if (
             not self._buffer
             or self._pending_since is None
-            or time.monotonic() - self._pending_since < delay
+            or elapsed < delay
             or self._in_bracketed_paste
+            or (slow_control_prefix and elapsed < _CONTROL_PREFIX_GRACE)
         ):
             return []
         data = bytes(self._buffer)

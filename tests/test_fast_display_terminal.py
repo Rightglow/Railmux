@@ -23,7 +23,7 @@ from railmux.fast_display_protocol import (
     encode_heartbeat,
     encode_update,
 )
-from railmux import fast_display_client, fast_display_server
+from railmux import fast_display_client, fast_display_input, fast_display_server
 from railmux.fast_display_client import (
     AppliedScreen,
     LOCAL_ESCAPE,
@@ -161,6 +161,31 @@ def test_bracketed_paste_decoder_restores_control_parsing_after_split_end():
     assert third[:2] == [BracketedPasteInput(b"\033[201~"), b"after"]
     assert isinstance(third[2], SgrMouseEvent)
     assert third[2].raw == b"\033[<0;4;5M"
+
+
+def test_slow_split_bracketed_paste_begin_does_not_lose_paste_ownership(monkeypatch):
+    decoder = TerminalInputDecoder()
+    monkeypatch.setattr(fast_display_input.time, "monotonic", lambda: 10.0)
+
+    assert decoder.feed(b"\033[20") == []
+    assert decoder.next_timeout(maximum=1.0) > 0.2
+    assert decoder.flush_pending(delay=0) == []
+    completed = decoder.feed(b"0~line-1\nline-2\033[201~")
+
+    assert completed == [
+        BracketedPasteInput(b"\033[200~line-1\nline-2\033[201~")
+    ]
+
+
+def test_abandoned_control_prefix_still_expires_after_bounded_grace(monkeypatch):
+    decoder = TerminalInputDecoder()
+    now = [10.0]
+    monkeypatch.setattr(fast_display_input.time, "monotonic", lambda: now[0])
+
+    assert decoder.feed(b"\033[20") == []
+    now[0] += 0.3
+
+    assert decoder.flush_pending() == [b"\033[20"]
 
 
 def test_screen_model_applies_patch_and_rejects_gap_or_wrong_geometry():
@@ -956,6 +981,58 @@ def test_mode_only_patch_reconciles_terminal_modes_once_and_restores_them():
     assert rendered.index(b"\033[?1004l") < rendered.index(b"\033[?1049l")
 
 
+def test_transport_owns_bracketed_paste_before_remote_mode_is_observed():
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream)
+    screen = AppliedScreen(
+        width=4,
+        height=2,
+        cursor_x=1,
+        cursor_y=0,
+        cursor_visible=True,
+        terminal_modes=TerminalMode.NONE,
+        rows=(b"one", b"two"),
+        changed_rows=(0, 1),
+        clear=True,
+    )
+
+    surface.paint(screen)
+    surface.paint(screen)
+    surface.close()
+
+    rendered = stream.getvalue()
+    assert rendered.count(b"\033[?2004h") == 1
+    assert rendered.count(b"\033[?2004l") == 1
+    assert rendered.index(b"\033[?2004h") < rendered.index(b"one")
+    assert rendered.index(b"\033[?2004l") < rendered.index(b"\033[?1049l")
+
+
+def test_cooked_interaction_releases_and_next_raw_frame_rearms_paste_mode():
+    stream = io.BytesIO()
+    surface = TerminalSurface(stream)
+    screen = AppliedScreen(
+        width=4,
+        height=2,
+        cursor_x=1,
+        cursor_y=0,
+        cursor_visible=True,
+        terminal_modes=TerminalMode.NONE,
+        rows=(b"one", b"two"),
+        changed_rows=(0, 1),
+        clear=True,
+    )
+
+    surface.paint(screen)
+    surface.begin_interaction()
+    surface.show_startup(os.terminal_size((4, 2)))
+    surface.paint(screen)
+    surface.close()
+
+    rendered = stream.getvalue()
+    assert rendered.count(b"\033[?2004h") == 2
+    assert rendered.count(b"\033[?2004l") == 2
+
+
 def test_reconnect_releases_and_rearms_remote_input_modes():
     requested = TerminalMode.BRACKETED_PASTE | TerminalMode.FOCUS_EVENTS
     screen = AppliedScreen(
@@ -980,7 +1057,9 @@ def test_reconnect_releases_and_rearms_remote_input_modes():
     assert surface._last_screen is None
     assert surface._reconnect_status_screen is screen
     reconnect_rendered = stream.getvalue()
-    assert reconnect_rendered.count(b"\033[?2004l") == 1
+    # Bracketed paste belongs to the local transport and remains armed while
+    # reconnect input is still accepted; only the remote focus mode is reset.
+    assert b"\033[?2004l" not in reconnect_rendered
     assert reconnect_rendered.count(b"\033[?1004l") == 1
     surface.show_local_status("Reconnected; waiting for a fresh screen")
     stream.seek(0)
@@ -990,7 +1069,7 @@ def test_reconnect_releases_and_rearms_remote_input_modes():
     assert surface._reconnect_status_screen is None
 
     rendered = stream.getvalue()
-    assert rendered.count(b"\033[?2004h") == 1
+    assert b"\033[?2004h" not in rendered
     assert rendered.count(b"\033[?1004h") == 1
     assert b"\033[?2004l" not in rendered
     assert b"\033[?1004l" not in rendered

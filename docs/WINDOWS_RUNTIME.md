@@ -53,6 +53,12 @@ their metadata. Consequently the wrapper reads the same `.codex` and `.claude`
 directories as providers launched directly from PowerShell. It does not copy,
 migrate, or rewrite provider histories.
 
+Railmux also makes the private MSYS2-to-native-provider boundary explicitly use
+ConPTY. A parent Git/MSYS shell may export `MSYS=disable_pcon`; that option is
+removed only from the Railmux child environment and replaced with
+`enable_pcon`, while unrelated `MSYS` options are preserved. The parent process
+and user environment are not edited.
+
 Windows startup maintains a Railmux-private validity index for Claude JSONL
 files. The index stores only the encoded project directory, UUID filename,
 inode, modification time, size, and a validity bit. A cached result is accepted
@@ -185,11 +191,13 @@ opens a WSL shell and runs the ordinary POSIX product there.
   accepted, resize drops saved geometry, and a bounded control-state parser
   keeps corrections outside partial CSI and OSC/DCS payload, including UTF-8
   continuation bytes that equal an eight-bit string terminator. During that
-  same burst, one complete prompt-row `EL 2 + row` repaint may be retained and
-  an identical successor omitted only when a following absolute CUP proves
-  that final cells, cursor semantics, and replayed SGR state remain unchanged.
-  Changed, incomplete, unknown, screen-wide, resized, and post-quiet output is
-  never coalesced. Normal Codex
+  same burst, the newest complete prompt-row `EL 2 + row` repaint may be
+  retained until the 100 ms quiet boundary when a following absolute CUP
+  proves that its immediate cursor advance is irrelevant. Committed input
+  permits the next provider row through immediately; later SGR controls are
+  replayed after the deferred row so the provider's final rendition state
+  remains authoritative. Incomplete, unknown, screen-wide, resized, and
+  post-quiet output is never coalesced. Normal Codex
   animation and Working timers remain enabled; Railmux does not edit Codex
   configuration, argv, or history. If this visual proxy cannot be created, the
   normal direct client remains available.

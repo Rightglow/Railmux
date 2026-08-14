@@ -597,6 +597,18 @@ class Msys2Runtime:
             child["HOME"] = user_profile
         child["SHELL"] = "/usr/bin/bash"
         child["MSYSTEM"] = "MSYS"
+        # Native Codex and Claude must see a Windows console bridge when they
+        # are launched below the private MSYS2 tmux PTY. Modern MSYS2 defaults
+        # to ConPTY, but a parent Git/MSYS environment may export disable_pcon
+        # and silently restore the legacy pipe path. Preserve unrelated MSYS
+        # options while making the managed runtime boundary explicit.
+        msys_options = [
+            option
+            for option in child.get("MSYS", "").split()
+            if option not in {"enable_pcon", "disable_pcon"}
+        ]
+        msys_options.append("enable_pcon")
+        child["MSYS"] = " ".join(msys_options)
         child["MSYS2_PATH_TYPE"] = "inherit"
         # Preserve bootstrap argv exactly at the Windows -> MSYS boundary.
         # The fixed handoff command unsets this before Railmux launches native

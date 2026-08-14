@@ -598,6 +598,7 @@ def test_handoff_preserves_argv_and_uses_child_only_msys_environment(tmp_path):
         "TMUX": "untrusted-parent",
         "TERM": "dumb",
         "LANG": "zh_CN.GBK",
+        "MSYS": "winsymlinks:nativestrict disable_pcon",
     }
 
     argv = runtime.argv(arguments)
@@ -616,6 +617,7 @@ def test_handoff_preserves_argv_and_uses_child_only_msys_environment(tmp_path):
     assert child["HOME"] == r"C:\Users\用户"
     assert child["MSYS2_ARG_CONV_EXCL"] == "*"
     assert child["MSYS2_PATH_TYPE"] == "inherit"
+    assert child["MSYS"] == "winsymlinks:nativestrict enable_pcon"
     assert child["TERM"] == "xterm-256color"
     assert child["LANG"] == "C.UTF-8"
     assert child["LC_ALL"] == "C.UTF-8"
@@ -624,6 +626,7 @@ def test_handoff_preserves_argv_and_uses_child_only_msys_environment(tmp_path):
     assert "RAILMUX_MSYS2_RUNTIME_ID" not in child
     assert "TMUX" not in child
     assert parent["PATH"] == r"C:\Windows\System32"
+    assert parent["MSYS"] == "winsymlinks:nativestrict disable_pcon"
 
     managed = make_runtime(tmp_path / "managed-msys", managed=True, shared=True)
     assert managed.environment(parent)["RAILMUX_MSYS2_RUNTIME_ID"] == (
@@ -632,6 +635,17 @@ def test_handoff_preserves_argv_and_uses_child_only_msys_environment(tmp_path):
     assert managed.argv(["doctor"])[6] == (
         f"/opt/railmux/apps/railmux-{VERSION}/venv/bin/railmux"
     )
+
+
+def test_handoff_normalizes_pcon_without_duplicating_other_msys_options(tmp_path):
+    runtime = make_runtime(tmp_path / "msys", managed=False)
+
+    assert runtime.environment({})["MSYS"] == "enable_pcon"
+    child = runtime.environment(
+        {"MSYS": "enable_pcon winsymlinks:sysfile enable_pcon disable_pcon"}
+    )
+
+    assert child["MSYS"] == "winsymlinks:sysfile enable_pcon"
 
 
 def test_managed_runtime_requires_utf8_marker_and_exact_package_version(tmp_path):

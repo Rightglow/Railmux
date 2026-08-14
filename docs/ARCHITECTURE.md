@@ -156,16 +156,18 @@ inside the next atomic frame, before cursor-dependent relative output, or
 superseded by a new absolute CUP. A bounded VT control-state parser prevents
 injection into partial CSI or opaque OSC/DCS payload and distinguishes an
 eight-bit string terminator from the same byte used as UTF-8 continuation data.
-Within one active synchronized burst, the proxy may retain one complete
-`EL 2 + row` segment for the proven prompt row. It omits a later segment only
-when the row and every byte are identical and a following absolute CUP makes
-the skipped write's cursor advance irrelevant; SGR state is still replayed.
-Changed content, an incomplete segment, unknown control, screen-wide change,
-resize, or quiet-boundary transition is forwarded and invalidates the proof.
-This leaves the final terminal cells and provider state unchanged while
-preventing Windows Terminal from erasing an inline IME pre-edit merely to draw
-the same underlying prompt again. The proxy does not
-interpret text, panes, provider state, or provider history. This preserves
+Within one active synchronized burst, the proxy may retain the newest complete
+`EL 2 + row` segment for the proven prompt row when a following absolute CUP
+makes its immediate cursor advance irrelevant. SGR state is still replayed,
+and the newest authoritative row is committed once at the 100 ms quiet
+boundary. A committed input byte discards any deferred row and permits the
+provider's next prompt row through immediately; terminal-owned IME pre-edit
+does not emit PTY bytes and therefore remains undisturbed during animation.
+An incomplete segment, unknown control, screen-wide change, resize, or lost
+anchor is forwarded and invalidates the deferred repaint. This leaves the
+final terminal cells and provider state authoritative while preventing Windows
+Terminal from erasing inline IME pre-edit on every Working frame. The proxy
+does not interpret text, panes, provider state, or provider history. This preserves
 Codex's Working timer and animations while preventing Windows Terminal from
 painting or anchoring IME text at each intermediate frame-final row. If
 private-PTY setup fails, the unfiltered direct client remains the fail-safe. A
@@ -363,11 +365,19 @@ observe the renderer's intermediate clear state. The marker is a local
 capability bit only: its opaque value is never persisted or sent remotely, and
 POSIX, WSL, Termux, and unvalidated Windows terminal hosts keep the ordinary
 byte-exact repaint path.
-Bracketed-paste begin/end boundaries are retained across arbitrary local and
-wire read splits. Their enclosed bytes are opaque provider input: Railmux does
-not reinterpret an embedded emergency escape, Page key, focus sequence, or SGR
-mouse-shaped payload as a local action. Outside that exact boundary, the
-ordinary local escape, history, pointer, and focus routes remain authoritative.
+The SSH transport enables local bracketed-paste mode for its complete raw
+interactive lifetime rather than waiting for the sampled remote screen to
+project that mode. Railmux owns local emergency/Page/pointer interception and
+must therefore know paste boundaries even before the next 20 fps remote frame.
+Begin/end boundaries are retained across arbitrary local and wire read splits;
+a partial owned control receives a bounded 250 ms completion grace without
+delaying ordinary Escape input indefinitely. Enclosed bytes remain opaque
+provider input, including an embedded emergency escape, Page key, focus
+sequence, or SGR mouse-shaped payload. The remote tmux client consumes the
+envelope for panes that did not request bracketed paste and forwards it for
+panes that did. The transport restores the local mode on every cooked prompt
+and exit path. Outside that exact boundary, the ordinary local escape, history,
+pointer, and focus routes remain authoritative.
 
 ### SSH local history and rewind generations
 

@@ -567,6 +567,12 @@ class TerminalSurface:
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
+        # The SSH display client owns local shortcut interception, so it must
+        # know which bytes came from a paste even when the sampled remote
+        # screen has not (yet) projected the agent's DECSET 2004 state.  Keep
+        # bracketed paste enabled for the complete raw interactive lifetime;
+        # markers remain opaque when requested and are removed otherwise.
+        self._transport_bracketed_paste = False
         # Track the physical emulator cursor separately from the remote model.
         # Re-sending DECSET/DECRST 25 on every 20 fps patch restarts the cursor
         # animation in Windows Terminal and presents as a rapid flash.
@@ -635,6 +641,9 @@ class TerminalSurface:
             controls.append(b"\033[?25l")
             self.cursor_hidden = True
             self._painted_cursor_visible = False
+        if interactive and not self._transport_bracketed_paste:
+            controls.append(b"\033[?2004h")
+            self._transport_bracketed_paste = True
         if (
             interactive
             and self.mouse
@@ -721,7 +730,7 @@ class TerminalSurface:
         if self.interaction_active:
             return
         controls: list[bytes] = [b"\033[0m\033[?7h\033[?25h"]
-        if self.terminal_modes & TerminalMode.BRACKETED_PASTE:
+        if self._transport_bracketed_paste:
             controls.append(b"\033[?2004l")
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
@@ -731,6 +740,7 @@ class TerminalSurface:
         self.stream.write(b"".join(controls))
         self.stream.flush()
         self.terminal_modes = TerminalMode.NONE
+        self._transport_bracketed_paste = False
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
@@ -1026,7 +1036,6 @@ class TerminalSurface:
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
         for mode, disable, enable in (
-            (TerminalMode.BRACKETED_PASTE, b"\033[?2004l", b"\033[?2004h"),
             (TerminalMode.FOCUS_EVENTS, b"\033[?1004l", b"\033[?1004h"),
         ):
             if disabled & mode:
@@ -1324,7 +1333,7 @@ class TerminalSurface:
         if not self.active:
             return
         controls = [b"\033[0m\033[?7h\033[?25h"]
-        if self.terminal_modes & TerminalMode.BRACKETED_PASTE:
+        if self._transport_bracketed_paste:
             controls.append(b"\033[?2004l")
         if self.terminal_modes & TerminalMode.FOCUS_EVENTS:
             controls.append(b"\033[?1004l")
@@ -1334,6 +1343,7 @@ class TerminalSurface:
         self.stream.write(b"".join(controls))
         self.stream.flush()
         self.terminal_modes = TerminalMode.NONE
+        self._transport_bracketed_paste = False
         self.mouse_active = False
         self.mouse_suspended = False
         self.cursor_hidden = False
@@ -2553,6 +2563,10 @@ def run(args: argparse.Namespace) -> int:
         opaque_paste = isinstance(part, BracketedPasteInput)
         if opaque_paste:
             part = part.raw
+            # Railmux owns local bracketed-paste mode for the complete raw
+            # transport lifetime so it can keep newlines and local-looking
+            # controls opaque. The remote tmux client consumes the envelope
+            # for ordinary panes and forwards it to panes that requested 2004.
         if surface.dismiss_interruptible_local_status():
             history_info_until = None
             if latest_screen is not None:
