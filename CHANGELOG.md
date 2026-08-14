@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   temporarily changes provider text through ASCII and `DEL` bytes. Railmux
   publishes only the newest prompt row when input becomes quiet while Working
   timers and every other row remain live; resize, unknown output, Enter-driven
-  transitions, and terminal restoration retain fail-safe authority.
+  transitions, and terminal restoration retain fail-safe authority. Curly and
+  CJK quote bytes stay exact on both ordinary and bracketed input, and a guarded
+  provider prompt containing `“”‘’「」` is released intact.
 
 ## [0.4.0rc18] - 2026-08-14
 

@@ -296,7 +296,12 @@ def test_cursor_coalescer_ime_guard_keeps_working_live_and_latest_prompt_only():
     for now, input_bytes, prompt, timer in (
         (1.00, b"n", b"> n", b"Working 0.1s"),
         (1.04, b"\x7f", b"> ", b"Working 0.2s"),
-        (1.08, b"ni", b"> ni", b"Working 0.3s"),
+        (
+            1.08,
+            "ni“”‘’「」".encode(),
+            "> ni“”‘’「」".encode(),
+            b"Working 0.3s",
+        ),
     ):
         cursor.note_input(input_bytes, now)
         visible.extend(
@@ -311,13 +316,13 @@ def test_cursor_coalescer_ime_guard_keeps_working_live_and_latest_prompt_only():
         )
 
     assert b"> n" not in visible
-    assert b"> ni" not in visible
+    assert "> ni“”‘’「」".encode() not in visible
     assert b"Working 0.1s" in visible
     assert b"Working 0.2s" in visible
     assert b"Working 0.3s" in visible
     assert cursor.flush_due(1.179) == b""
     settled = cursor.flush_due(1.181)
-    assert b"> ni" in settled
+    assert "> ni“”‘’「」".encode() in settled
     assert b"> n\033" not in settled
 
 
@@ -340,6 +345,21 @@ def test_cursor_coalescer_resize_discards_guarded_prompt_row():
 
     assert cursor.flush_due(2.0) == b""
     assert cursor.feed(b"\033[20;1Hresized", 2.1) == b"\033[20;1Hresized"
+
+
+def test_cursor_coalescer_enter_does_not_hold_a_screen_transition():
+    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
+    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
+    cursor.note_input(b"\r", 1.0)
+
+    transition = cursor.feed(
+        b"\033[?2026h\033[2J\033[1;1Hnext surface\033[?2026l",
+        1.01,
+    )
+
+    assert b"\033[2J" in transition
+    assert b"next surface" in transition
+    assert cursor._input_guard_deadline is None
 
 
 def test_cursor_coalescer_repeated_cursor_presentation_is_idempotent():
@@ -741,8 +761,10 @@ def test_local_proxy_preserves_large_bracketed_paste_byte_exact(monkeypatch):
     input_read, input_write = os.pipe()
     output_fd = os.open(os.devnull, os.O_WRONLY)
     proxy_socket, child_socket = socket.socketpair()
+    punctuation = "A“B”C‘D’E「F」G".encode()
     payload = (
-        b"\033[200~"
+        punctuation
+        + b"\033[200~"
         + ("本地“粘贴”‘line’「保留」\n" * 9000).encode()
         + b"\x1d\033[5~\033[<0;4;5M\033[201~"
     )
