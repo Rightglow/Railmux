@@ -47,7 +47,12 @@ from railmux.fast_display_protocol import (
     REMOTE_HELLO_PREFIX,
     REMOTE_START,
     RemoteExit,
+    TerminalMode,
     encode_input,
+)
+from railmux.fast_display_input import (
+    BracketedPasteInput,
+    bracketed_paste_for_pane,
 )
 from railmux.tmux_binding_manager import SharedTmuxBindingManager
 from railmux.tmux_server import TmuxServerTarget
@@ -2307,14 +2312,24 @@ def test_real_private_tmux_client_routes_fragmented_bracketed_paste(
             )
             if readable:
                 output.extend(os.read(master_fd, 65536))
-        # tmux itself requests bracketed paste from every attached client and
-        # decides whether its active pane receives the wrapper markers.
-        assert b"\033[?2004h" in output
+        # The active pane requests the outer mode only when it wants the
+        # wrapper. Railmux normalizes ordinary-pane pastes before tmux because
+        # the supported 2.7 floor otherwise forwards the marker keys too.
+        if pane_requests_bracketed:
+            assert b"\033[?2004h" in output
         assert b"READY" in output
 
+        client_payload = bracketed_paste_for_pane(
+            BracketedPasteInput(payload),
+            (
+                TerminalMode.BRACKETED_PASTE
+                if pane_requests_bracketed
+                else TerminalMode.NONE
+            ),
+        )
         wire = b"".join(
-            encode_input(payload[start : start + 4093])
-            for start in range(0, len(payload), 4093)
+            encode_input(client_payload[start : start + 4093])
+            for start in range(0, len(client_payload), 4093)
         )
         decoder = InputFrameDecoder()
         for start in range(0, len(wire), 701):

@@ -19,7 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Slow split begin markers receive a bounded completion grace, while complete
   pastes remain byte-exact through the SSH protocol and real tmux PTY; embedded
   newlines can no longer escape as separate local Enter actions merely because
-  mode projection was late.
+  mode projection was late. The client also normalizes the outer paste markers
+  from the authoritative pane mode before tmux, so the supported tmux 2.7 floor
+  matches modern tmux instead of leaking marker keys into ordinary panes.
 - Defer the newest native-Windows prompt-row repaint through a Codex output
   burst and commit it once at the quiet boundary, rather than requiring two
   raw ANSI rows to be byte-identical. Committed input still publishes the next

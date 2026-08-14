@@ -47,6 +47,7 @@ from railmux.fast_display_input import (
     SgrMouseEvent,
     TermuxTouchKeyboard,
     TerminalInputDecoder,
+    bracketed_paste_for_pane,
     is_termux_environment,
     page_key_direction,
     split_page_key_input,
@@ -147,6 +148,30 @@ def test_large_bracketed_paste_survives_many_terminal_and_protocol_reads():
 
     assert bytes(forwarded) == payload
     assert bytes(decoded) == payload
+
+
+@pytest.mark.parametrize(
+    ("terminal_modes", "expected"),
+    (
+        (TerminalMode.NONE, b"payload"),
+        (TerminalMode.BRACKETED_PASTE, b"\033[200~payload\033[201~"),
+        (None, b"\033[200~payload\033[201~"),
+    ),
+)
+def test_bracketed_paste_normalizes_outer_markers_for_remote_pane(
+    terminal_modes,
+    expected,
+):
+    fragments = (
+        BracketedPasteInput(b"\033[200~pay"),
+        BracketedPasteInput(b"load"),
+        BracketedPasteInput(b"\033[201~"),
+    )
+
+    assert b"".join(
+        bracketed_paste_for_pane(fragment, terminal_modes)
+        for fragment in fragments
+    ) == expected
 
 
 def test_bracketed_paste_decoder_restores_control_parsing_after_split_end():

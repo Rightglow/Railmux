@@ -14,7 +14,11 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 from urllib.parse import urlsplit
 
-from railmux.fast_display_protocol import HistorySnapshot, MAX_CLIPBOARD_BYTES
+from railmux.fast_display_protocol import (
+    HistorySnapshot,
+    MAX_CLIPBOARD_BYTES,
+    TerminalMode,
+)
 
 _SGR_MOUSE_PREFIX = b"\x1b[<"
 _SGR_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
@@ -36,6 +40,29 @@ class BracketedPasteInput:
     """
 
     raw: bytes
+
+
+def bracketed_paste_for_pane(
+    part: BracketedPasteInput,
+    terminal_modes: TerminalMode | None,
+) -> bytes:
+    """Normalize one paste fragment for the authoritative remote pane mode.
+
+    Railmux owns the outer terminal's bracketed-paste mode, so receiving the
+    envelope does not imply that the active pane requested it. Modern tmux
+    versions make that distinction themselves, but tmux 2.7 forwards marker
+    keys even to an ordinary pane. Strip only the decoder-owned outer markers
+    when the latest screen says bracketed paste is disabled. Unknown initial
+    state fails open to tmux rather than risking loss of paste framing.
+    """
+    raw = part.raw
+    if terminal_modes is None or terminal_modes & TerminalMode.BRACKETED_PASTE:
+        return raw
+    if raw.startswith(_BRACKETED_PASTE_BEGIN):
+        raw = raw[len(_BRACKETED_PASTE_BEGIN) :]
+    if raw.endswith(_BRACKETED_PASTE_END):
+        raw = raw[: -len(_BRACKETED_PASTE_END)]
+    return raw
 
 
 @dataclass(frozen=True)

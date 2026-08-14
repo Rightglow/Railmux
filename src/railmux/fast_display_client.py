@@ -50,6 +50,7 @@ from railmux.fast_display_input import (
     TermuxTouchKeyboard,
     TouchKeyboardAction,
     TerminalInputDecoder,
+    bracketed_paste_for_pane,
     is_termux_environment,
     page_key_direction,
     split_page_key_input,
@@ -2562,11 +2563,15 @@ def run(args: argparse.Namespace) -> int:
         nonlocal local_status_mouse_button
         opaque_paste = isinstance(part, BracketedPasteInput)
         if opaque_paste:
-            part = part.raw
+            part = bracketed_paste_for_pane(
+                part,
+                None if latest_screen is None else latest_screen.terminal_modes,
+            )
             # Railmux owns local bracketed-paste mode for the complete raw
             # transport lifetime so it can keep newlines and local-looking
-            # controls opaque. The remote tmux client consumes the envelope
-            # for ordinary panes and forwards it to panes that requested 2004.
+            # controls opaque. Normalize its envelope from the authoritative
+            # pane mode before tmux so the 2.7 compatibility floor behaves the
+            # same as modern tmux.
         if surface.dismiss_interruptible_local_status():
             history_info_until = None
             if latest_screen is not None:
