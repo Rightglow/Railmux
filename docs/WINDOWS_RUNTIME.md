@@ -193,17 +193,19 @@ opens a WSL shell and runs the ordinary POSIX product there.
   continuation bytes that equal an eight-bit string terminator. During that
   same burst, the newest complete prompt-row `EL 2 + row` repaint may be
   retained until the 100 ms quiet boundary when a following absolute CUP
-  proves that its immediate cursor advance is irrelevant. Because Windows IME
-  composition can expose temporary ASCII and `DEL` bytes, every input read
-  extends an independent 100 ms guard for only that proven prompt row; its
-  newest contents publish when input quiets even if provider animation
-  continues. Later SGR controls are replayed after the deferred row so the
-  provider's final rendition state remains authoritative. Incomplete,
-  unknown, screen-wide, resized, and
-  post-quiet output is never coalesced. Normal Codex
-  animation and Working timers remain enabled; Railmux does not edit Codex
-  configuration, argv, or history. If this visual proxy cannot be created, the
-  normal direct client remains available.
+  proves that its immediate cursor advance is irrelevant. Field evidence also
+  showed that Codex may scroll the complete grid while Windows Terminal owns
+  inline IME pre-edit, so input-time protection cannot be scoped to one guessed
+  row. Composition-shaped ASCII/`DEL` input therefore starts a bounded complete
+  output gate while the same input bytes reach the PTY immediately. Committed
+  UTF-8 uses a short release deadline; Enter and Ctrl-C release immediately.
+  The byte-exact retained stream is presented in one outer synchronized-output
+  transaction, and a two-MiB ceiling fails open atomically without dropping
+  bytes. Resize and exit flush in source order before changing geometry or
+  restoring terminal modes. Later SGR controls remain authoritative. Normal
+  Codex animation and Working timers remain enabled outside active composition;
+  Railmux does not edit Codex configuration, argv, or history. If this visual
+  proxy cannot be created, the normal direct client remains available.
 - A published base is never upgraded in place. A pacman core transition can
   temporarily replace DLLs needed by the updater itself, so mutating the base
   that owns a live detached tmux server would turn a visual improvement into a

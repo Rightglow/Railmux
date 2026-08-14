@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc20] - 2026-08-14
+
+### Fixed
+
+- Replace rc19's prompt-row-only Windows IME guard after field evidence showed
+  that Codex can scroll the complete terminal grid underneath inline pre-edit.
+  Text input still reaches the tmux PTY immediately; provider output is retained
+  byte-exact for a bounded composition interval and released as one atomic
+  terminal update, with a shorter UTF-8 commit boundary and immediate Enter or
+  Ctrl-C release. The two-MiB safety ceiling fails open without dropping output.
+- Forward a native Windows Ctrl-C console signal as byte `0x03` while a local or
+  cross-session private-PTY client owns the terminal, so a focused Codex/Claude
+  run is interrupted rather than closing Railmux. The controller pane keeps its
+  existing Ctrl-C/q quit behavior, and the previous signal handler is restored
+  when the proxy closes.
+
 ## [0.4.0rc19] - 2026-08-14
 
 ### Fixed
@@ -2940,7 +2956,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc19...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc20...HEAD
+[0.4.0rc20]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc19...v0.4.0rc20
 [0.4.0rc19]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc18...v0.4.0rc19
 [0.4.0rc18]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc17...v0.4.0rc18
 [0.4.0rc17]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc16...v0.4.0rc17

@@ -160,19 +160,26 @@ Within one active synchronized burst, the proxy may retain the newest complete
 `EL 2 + row` segment for the proven prompt row when a following absolute CUP
 makes its immediate cursor advance irrelevant. SGR state is still replayed,
 and the newest authoritative row is committed once at the 100 ms quiet
-boundary. Windows IME composition may expose temporary ASCII and `DEL` bytes
-to the PTY, so an input read starts an independent 100 ms prompt-row guard
-instead of proving that text was committed. Each further input extends the
-guard; only the newest complete prompt row is published when input becomes
-quiet, even if Working animation continues, while every non-prompt row remains
-live.
+boundary. Field evidence showed that a Codex repaint may scroll the complete
+terminal grid while Windows Terminal owns inline IME pre-edit, so a guessed
+prompt-row guard is not sufficient. The entry proxy instead forwards input to
+the tmux PTY immediately while briefly retaining the complete provider-output
+stream after composition-shaped ASCII/`DEL` input. UTF-8 text, which proves a
+committed character, uses a much shorter release boundary; Enter and Ctrl-C
+release immediately. The retained byte-exact output is then presented inside
+one outer synchronized-output transaction. A bounded two-MiB ceiling fails
+open atomically rather than dropping output.
 An incomplete segment, unknown control, screen-wide change, resize, or lost
 anchor is forwarded and invalidates the deferred repaint. This leaves the
 final terminal cells and provider state authoritative while preventing Windows
-Terminal from erasing inline IME pre-edit on every Working frame. The proxy
-does not interpret text, panes, provider state, or provider history. This preserves
-Codex's Working timer and animations while preventing Windows Terminal from
-painting or anchoring IME text at each intermediate frame-final row. If
+Terminal from painting a partially updated grid underneath inline IME pre-edit.
+The proxy does not interpret text, panes, provider state, or provider history.
+Provider animation remains live outside the bounded interval in which the user
+is composing text. Native Windows may deliver Ctrl-C as `SIGINT` instead of a
+TTY byte; while either private-PTY client is active, the entry process converts
+that signal into byte `0x03` for the focused tmux pane and restores the prior
+handler on exit. The controller pane retains its ordinary Ctrl-C quit action
+when it owns focus. If
 private-PTY setup fails, the unfiltered direct client remains the fail-safe. A
 cross-Terminal-
 Services fallback bridge carries only the resulting capability bit into its

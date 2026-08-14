@@ -26,6 +26,55 @@ def test_terminal_selector_batch_processes_input_before_output():
     ) == [terminal, output, relay]
 
 
+def test_local_windows_ctrl_c_signal_is_forwarded_to_the_active_pty(monkeypatch):
+    installed = []
+    restored = []
+    previous = object()
+    monkeypatch.setattr(
+        windows_attach_relay.signal,
+        "getsignal",
+        lambda _sig: previous,
+    )
+
+    def set_handler(_sig, handler):
+        if handler is previous:
+            restored.append(handler)
+        else:
+            installed.append(handler)
+
+    monkeypatch.setattr(windows_attach_relay.signal, "signal", set_handler)
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_socket.detach(),
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+        forward_interrupts=True,
+    )
+    child_socket.settimeout(0.5)
+    try:
+        assert installed
+        installed[0](windows_attach_relay.signal.SIGINT, None)
+
+        client.pump(0.0)
+
+        assert child_socket.recv(16) == b"\x03"
+        assert client.returncode is None
+    finally:
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+    assert restored == [previous]
+
+
 def test_frame_decoder_preserves_partial_and_multiple_frames():
     first = windows_attach_relay._frame(windows_attach_relay._TYPE_OUTPUT, b"first")
     second = windows_attach_relay._frame(windows_attach_relay._TYPE_EXIT, b"done")
@@ -222,144 +271,54 @@ def test_cursor_coalescer_keeps_latest_changed_anchor_line_for_quiet():
     assert "第二行“保留”".encode() in settled
 
 
-def test_cursor_coalescer_input_guard_publishes_latest_anchor_row_after_quiet():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Kold"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.0,
+def test_ime_output_gate_holds_complete_grid_while_ascii_composition_is_active():
+    gate = windows_attach_relay._ImeOutputGate()
+    gate.note_input(b"n\x7fi", 1.0)
+
+    first, atomic = gate.hold(b"Working 1\nfull-screen-scroll-1", 1.1)
+    second, second_atomic = gate.hold(b"Working 2\nfull-screen-scroll-2", 1.4)
+
+    assert first == b""
+    assert second == b""
+    assert not atomic
+    assert not second_atomic
+    assert gate.flush_due(1.499) == b""
+    assert gate.flush_due(1.501) == (
+        b"Working 1\nfull-screen-scroll-1Working 2\nfull-screen-scroll-2"
     )
 
-    cursor.note_input("中".encode(), 1.04)
-    guarded = cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Knew"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.05,
-    )
 
-    assert b"\033[2Knew" not in guarded
-    assert cursor.flush_due(1.139) == b""
-    committed = cursor.flush_due(1.141)
-    assert b"\033[2Knew" in committed
-    assert b"\033[2Kold" not in committed
+def test_ime_output_gate_committed_utf8_releases_without_composition_delay():
+    gate = windows_attach_relay._ImeOutputGate()
+    gate.note_input(b"ni", 1.0)
+    assert gate.hold(b"old-frame", 1.1) == (b"", False)
+
+    gate.note_input("你“”‘’「」".encode(), 1.2)
+    assert gate.hold(b"committed-frame", 1.21) == (b"", False)
+    assert gate.flush_due(1.239) == b""
+    assert gate.flush_due(1.241) == b"old-framecommitted-frame"
 
 
-def test_cursor_coalescer_ime_input_does_not_repaint_unchanged_prompt():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    initial = cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2K\033[32m> prompt\033[0m"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        0.9,
-    )
-    assert b"> prompt" not in initial
-    assert b"> prompt" in cursor.flush_due(1.01)
+def test_ime_output_gate_ctrl_c_and_enter_release_immediately():
+    for control in (b"\x03", b"\r", b"\n"):
+        gate = windows_attach_relay._ImeOutputGate()
+        gate.note_input(b"compose", 1.0)
+        assert gate.hold(b"pending", 1.1) == (b"", False)
 
-    # Windows IME composition may emit raw letters and DEL while its pre-edit
-    # remains terminal-owned. Those bytes must not turn the same provider row
-    # into a visible EL 2 erase on every animation frame.
-    repeated = bytearray()
-    for index in range(8):
-        now = 1.0 + index * 0.05
-        cursor.note_input(b"n\x7fi", now)
-        erase = b"\033[0K" if index % 2 else b"\033[K"
-        repeated.extend(
-            cursor.feed(
-                b"\033[5 q\033[?25l\033[?2026h\033[55;1H"
-                + erase
-                + b"\033[32m> prompt\033[0m\033[57;1Hfooter"
-                + str(index).encode()
-                + b"\033[?2026l\033[?25h",
-                now,
-            )
-        )
+        gate.note_input(control, 1.2)
 
-    assert b"\033[K" not in repeated
-    assert b"\033[0K" not in repeated
-    assert b"> prompt" not in repeated
-    assert repeated.count(b"\033[5 q") == 1
-    assert b"> prompt" not in cursor.flush_due(1.5)
+        assert gate.flush_due(1.2) == b"pending"
 
 
-def test_cursor_coalescer_ime_guard_keeps_working_live_and_latest_prompt_only():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2K> "
-        b"\033[52;1H\033[2KWorking 0.0s\033[57;1Hfooter"
-        b"\033[?2026l\033[?25h",
-        0.9,
-    )
+def test_ime_output_gate_never_changes_or_drops_input_bytes():
+    gate = windows_attach_relay._ImeOutputGate()
+    payload = "A“B”C‘D’E「F」G".encode()
 
-    visible = bytearray()
-    for now, input_bytes, prompt, timer in (
-        (1.00, b"n", b"> n", b"Working 0.1s"),
-        (1.04, b"\x7f", b"> ", b"Working 0.2s"),
-        (
-            1.08,
-            "ni“”‘’「」".encode(),
-            "> ni“”‘’「」".encode(),
-            b"Working 0.3s",
-        ),
-    ):
-        cursor.note_input(input_bytes, now)
-        visible.extend(
-            cursor.feed(
-                b"\033[?25l\033[?2026h\033[55;1H\033[2K"
-                + prompt
-                + b"\033[52;1H\033[2K"
-                + timer
-                + b"\033[57;1Hfooter\033[?2026l\033[?25h",
-                now,
-            )
-        )
+    gate.note_input(payload, 1.0)
 
-    assert b"> n" not in visible
-    assert "> ni“”‘’「」".encode() not in visible
-    assert b"Working 0.1s" in visible
-    assert b"Working 0.2s" in visible
-    assert b"Working 0.3s" in visible
-    assert cursor.flush_due(1.179) == b""
-    settled = cursor.flush_due(1.181)
-    assert "> ni“”‘’「」".encode() in settled
-    assert b"> n\033" not in settled
-
-
-def test_cursor_coalescer_resize_discards_guarded_prompt_row():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Kold"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        0.9,
-    )
-    cursor.note_input(b"x", 1.0)
-    assert b"new" not in cursor.feed(
-        b"\033[?25l\033[?2026h\033[55;1H\033[2Knew"
-        b"\033[57;1Hfooter\033[?2026l\033[?25h",
-        1.01,
-    )
-
-    cursor.note_resize()
-
-    assert cursor.flush_due(2.0) == b""
-    assert cursor.feed(b"\033[20;1Hresized", 2.1) == b"\033[20;1Hresized"
-
-
-def test_cursor_coalescer_enter_does_not_hold_a_screen_transition():
-    cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
-    cursor.feed(b"\033[55;3H\033[?25h", 0.8)
-    cursor.note_input(b"\r", 1.0)
-
-    transition = cursor.feed(
-        b"\033[?2026h\033[2J\033[1;1Hnext surface\033[?2026l",
-        1.01,
-    )
-
-    assert b"\033[2J" in transition
-    assert b"next surface" in transition
-    assert cursor._input_guard_deadline is None
+    assert payload == "A“B”C‘D’E「F」G".encode()
+    assert gate.hold(b"screen", 1.01) == (b"", False)
+    assert gate.flush_due(1.041) == b"screen"
 
 
 def test_cursor_coalescer_repeated_cursor_presentation_is_idempotent():
@@ -476,10 +435,9 @@ def test_cursor_coalescer_does_not_guess_after_relative_frame_output():
     assert cursor.feed(payload, 1.0) == (b"\033[?2026hrelative text\033[?2026l")
 
 
-def test_cursor_coalescer_relearns_anchor_after_explicit_input():
+def test_cursor_coalescer_relearns_anchor_after_same_row_caret_move():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     cursor.feed(b"\033[55;3H\033[?25h", 0.9)
-    cursor.note_input("中".encode(), 0.95)
 
     assert cursor.feed(b"\033[55;5H\033[?25h", 1.0) == b"\033[55;5H"
     assert cursor._stable_cursor_position == b"\033[55;5H"
@@ -550,11 +508,10 @@ def test_cursor_coalescer_never_injects_inside_a_split_control_sequence():
     assert cursor.flush_due(1.21) == b""
 
 
-def test_cursor_coalescer_retains_quiet_ime_anchor_after_committed_input():
+def test_cursor_coalescer_retains_quiet_ime_anchor_during_working_frame():
     cursor = windows_attach_relay._CursorVisibilityCoalescer(quiet_interval=0.1)
     assert cursor.feed(b"\033[55;3H\033[?25h", 0.8) == b"\033[55;3H"
 
-    cursor.note_input("中".encode(), 0.95)
     rendered = cursor.feed(
         b"\033[?25l\033[?2026h\033[52;1Hworking\033[57;1H\033[?2026l\033[?25h",
         1.0,
@@ -838,7 +795,13 @@ def test_local_proxy_starts_at_exact_entry_geometry(monkeypatch):
         height=46,
         suppress_stderr=False,
     )
-    client_type.assert_called_once_with(77, 12, stdin_fd=10, stdout_fd=11)
+    client_type.assert_called_once_with(
+        77,
+        12,
+        stdin_fd=10,
+        stdout_fd=11,
+        forward_interrupts=True,
+    )
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
