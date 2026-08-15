@@ -774,7 +774,11 @@ def test_local_proxy_sustained_backlog_still_paints_bounded_progress(monkeypatch
     backlog_seen = False
     try:
         os.write(input_write, b"input during steady output")
-        deadline = time.monotonic() + 0.75
+        # Python 3.10's pyte decoder can spend most of the first staleness
+        # window consuming this deliberately saturated stream. Keep the source
+        # busy long enough to observe two independent bounded publications on
+        # every supported interpreter rather than weakening the assertion.
+        deadline = time.monotonic() + 1.5
         while time.monotonic() < deadline:
             client.pump(0.01)
             backlog_seen = backlog_seen or client._pty_backlog_pending
