@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from railmux.tool_panes import (
@@ -124,6 +125,49 @@ def test_tmux_27_reports_managed_tools_as_an_explicit_version_limit(tmp_path):
     assert viewer.message == shell.message
 
 
+def test_managed_windows_login_shell_preserves_clicked_directory(monkeypatch):
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    monkeypatch.setenv("SHELL", "/usr/bin/bash")
+
+    command = ToolPaneManager._shell_command(Path("/c/Users/user/.railmux"))
+
+    assert command == (
+        "export CHERE_INVOKING=1; "
+        "cd -- /c/Users/user/.railmux && exec /usr/bin/bash -l"
+    )
+
+
+def test_windows_executable_suffix_is_not_part_of_shell_identity():
+    manager = object.__new__(ToolPaneManager)
+    manager._output = MagicMock(return_value="bash.exe")
+
+    assert manager._pane_current_command("%9") == "bash"
+
+
+def test_reused_terminal_refuses_to_claim_a_different_directory(tmp_path):
+    manager = object.__new__(ToolPaneManager)
+    manager.outer_session_id = "$4"
+    owner = _ref(8, 108)
+    shell = _ref(9, 109)
+    state = ToolState(
+        "primary", "$4", owner, shell, None, "shell", None, None, None
+    )
+    manager._pane_options_supported = MagicMock(return_value=True)
+    manager._pane_ref = MagicMock(return_value=owner)
+    manager._window_is_zoomed = MagicMock(return_value=False)
+    manager.load = MagicMock(return_value=state)
+    manager._exact_ref = MagicMock(side_effect=lambda ref: ref)
+    manager._pane_current_path = MagicMock(return_value=tmp_path / "old")
+    manager._select_tool = MagicMock(return_value=True)
+
+    result = manager.open_shell("primary", "%8", tmp_path / "clicked")
+
+    assert not result.ok
+    assert result.level == "warning"
+    assert "another directory" in result.message
+    manager._select_tool.assert_not_called()
+
+
 def test_owner_slot_falls_back_to_existing_selection_marker(monkeypatch):
     manager = object.__new__(ToolPaneManager)
     manager.outer_session_id = "$4"
@@ -168,3 +212,28 @@ def test_owner_slot_rejects_selection_marker_outside_outer_window(monkeypatch):
     )
 
     assert manager.slot_for_owner("%8") is None
+
+
+def test_visible_tool_slot_requires_exact_process_identity(monkeypatch):
+    manager = object.__new__(ToolPaneManager)
+    current = _ref(9, 109)
+    state = ToolState(
+        "primary",
+        "$4",
+        _ref(8, 108),
+        current,
+        None,
+        "shell",
+        None,
+        None,
+        None,
+    )
+    monkeypatch.setattr(manager, "_pane_ref", lambda pane: current if pane == "%9" else None)
+    monkeypatch.setattr(manager, "_outer_window_ids", lambda: frozenset({"@2"}))
+    monkeypatch.setattr(manager, "load", lambda slot: state if slot == "primary" else None)
+
+    assert manager.slot_for_tool("%9") == "primary"
+
+    replaced = _ref(9, 999)
+    monkeypatch.setattr(manager, "_pane_ref", lambda pane: replaced if pane == "%9" else None)
+    assert manager.slot_for_tool("%9") is None

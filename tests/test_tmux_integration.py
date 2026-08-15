@@ -488,6 +488,14 @@ def test_real_managed_tool_surface_reuses_shell_and_vim_tabs(
     assert shell_result.ok
     shell_id = shell_result.pane_id
     assert shell_id in manager.visible_tool_panes()
+    shell_path = subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", shell_id, "#{pane_current_path}",
+        ],
+        text=True,
+    ).strip()
+    assert Path(shell_path).samefile(tmp_path)
     # While a tool owns keyboard focus, SSH mouse/history routing stays
     # native instead of pretending that tool is an agent.
     assert fast_display_server._list_agent_panes(
@@ -504,6 +512,19 @@ def test_real_managed_tool_surface_reuses_shell_and_vim_tabs(
     )
     assert tuple(route.pane_id for route in routes) == (agent_pane,)
     assert manager.open_shell("primary", agent_pane, tmp_path).pane_id == shell_id
+    other = tmp_path / "other"
+    other.mkdir()
+    mismatched = manager.open_shell("primary", agent_pane, other)
+    assert not mismatched.ok
+    assert mismatched.level == "warning"
+    assert "another directory" in mismatched.message
+    assert Path(subprocess.check_output(
+        [
+            "tmux", "-S", socket_path, "display-message", "-p",
+            "-t", shell_id, "#{pane_current_path}",
+        ],
+        text=True,
+    ).strip()).samefile(tmp_path)
 
     viewer_result = manager.open_viewer(
         "primary",

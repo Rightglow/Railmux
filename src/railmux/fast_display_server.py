@@ -1102,7 +1102,7 @@ def apply_path_open_request(
             request_id,
             False,
             "warning",
-            "Path is no longer available in this remote workspace",
+            "Path is no longer available in this workspace",
         )
     if persistent and not Settings().set_path_open_policy(policy):
         return PathOpenResult(
@@ -1153,7 +1153,7 @@ def apply_path_open_request(
                 True,
                 "warning",
                 (
-                    "Remote Vim is unavailable; selected the managed terminal "
+                    "Vim is unavailable; selected the managed terminal "
                     "(an existing shell keeps its current directory)"
                 ),
             )
@@ -1163,6 +1163,166 @@ def apply_path_open_request(
         outcome.level,
         outcome.message,
     )
+
+
+@dataclass(frozen=True)
+class _PathResolveJob:
+    session_id: str
+    request_id: int
+    pane_id: str
+    raw_path: str
+
+
+@dataclass(frozen=True)
+class _PathOpenJob:
+    session_id: str
+    request_id: int
+    pane_id: str
+    raw_path: str
+    policy: str
+    persistent: bool
+    line: int | None
+    column: int | None
+
+
+class PathActionWorker:
+    """Serialize path validation/actions away from a display/PTY loop."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._job: _PathResolveJob | _PathOpenJob | None = None
+        self._result: PathResult | PathOpenResult | None = None
+        self._in_flight = False
+        self._closed = False
+        self._thread = threading.Thread(
+            target=self._run,
+            name="railmux-path-action",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def submit_resolve(
+        self,
+        session_id: str,
+        request_id: int,
+        pane_id: str,
+        raw_path: str,
+    ) -> bool:
+        with self._condition:
+            if self._busy_unlocked():
+                return False
+            self._job = _PathResolveJob(
+                session_id,
+                request_id,
+                pane_id,
+                raw_path,
+            )
+            self._condition.notify()
+            return True
+
+    def submit(
+        self,
+        session_id: str,
+        request_id: int,
+        pane_id: str,
+        raw_path: str,
+        policy: str,
+        persistent: bool,
+        line: int | None,
+        column: int | None,
+    ) -> bool:
+        with self._condition:
+            if self._busy_unlocked():
+                return False
+            self._job = _PathOpenJob(
+                session_id,
+                request_id,
+                pane_id,
+                raw_path,
+                policy,
+                persistent,
+                line,
+                column,
+            )
+            self._condition.notify()
+            return True
+
+    def drain(self) -> tuple[PathResult | PathOpenResult, ...]:
+        with self._condition:
+            if self._result is None:
+                return ()
+            result = self._result
+            self._result = None
+            return (result,)
+
+    @property
+    def busy(self) -> bool:
+        with self._condition:
+            return self._busy_unlocked()
+
+    def _busy_unlocked(self) -> bool:
+        return (
+            self._closed
+            or self._job is not None
+            or self._in_flight
+            or self._result is not None
+        )
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._job = None
+            self._condition.notify()
+        self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while self._job is None and not self._closed:
+                    self._condition.wait()
+                if self._closed:
+                    return
+                job = self._job
+                self._job = None
+                self._in_flight = True
+            assert job is not None
+            try:
+                if isinstance(job, _PathResolveJob):
+                    result = resolve_path_result(
+                        job.session_id,
+                        job.request_id,
+                        job.pane_id,
+                        job.raw_path,
+                    )
+                else:
+                    result = apply_path_open_request(
+                        job.session_id,
+                        job.request_id,
+                        job.pane_id,
+                        job.raw_path,
+                        job.policy,
+                        job.persistent,
+                        job.line,
+                        job.column,
+                    )
+            except Exception:
+                # A tool-pane command is a presentation operation. Keep an
+                # unexpected subprocess/config failure out of the transport
+                # loop and never turn it into provider or session mutation.
+                if isinstance(job, _PathResolveJob):
+                    result = PathResult(job.request_id, PathKind.UNAVAILABLE)
+                else:
+                    result = PathOpenResult(
+                        job.request_id,
+                        False,
+                        "error",
+                        "Could not complete path opening",
+                    )
+            with self._condition:
+                self._in_flight = False
+                if self._closed:
+                    return
+                self._result = result
 
 
 def _render_history_lines(
@@ -2198,6 +2358,7 @@ def _serve_attached(
         _stop_client(pid, master_fd)
         raise DisplayServerError("dedicated tmux server disappeared after attach")
     history_worker = _HistoryWorker(pyte)
+    path_worker: PathActionWorker | None = None
     history_settings = Settings()
     persisted_history_policy = history_settings.claude_history_policy
 
@@ -2316,6 +2477,14 @@ def _serve_attached(
             history_ready.extend(history_worker.drain())
             while history_ready and len(control_packets) < 4:
                 queue_control_packet(history_ready.popleft())
+            if path_worker is not None:
+                for result in path_worker.drain():
+                    packet = (
+                        encode_path_open_result(result)
+                        if isinstance(result, PathOpenResult)
+                        else encode_path_result(result)
+                    )
+                    queue_control_packet(packet, priority=True)
             activate_control_packet()
             now = time.monotonic()
             timeout = (
@@ -2453,24 +2622,37 @@ def _serve_attached(
                             request = decode_path_request(message.data)
                         except ValueError:
                             continue
-                        queue_control_packet(
-                            encode_path_result(
-                                resolve_path_result(session_id, *request)
-                            ),
-                            priority=True,
-                        )
+                        if path_worker is None:
+                            path_worker = PathActionWorker()
+                        if not path_worker.submit_resolve(
+                            session_id, *request
+                        ):
+                            queue_control_packet(
+                                encode_path_result(
+                                    PathResult(request[0], PathKind.UNAVAILABLE)
+                                ),
+                                priority=True,
+                            )
                         continue
                     if message.kind is InputKind.OPEN_PATH:
                         try:
                             request = decode_path_open_request(message.data)
                         except ValueError:
                             continue
-                        queue_control_packet(
-                            encode_path_open_result(
-                                apply_path_open_request(session_id, *request)
-                            ),
-                            priority=True,
-                        )
+                        if path_worker is None:
+                            path_worker = PathActionWorker()
+                        if not path_worker.submit(session_id, *request):
+                            queue_control_packet(
+                                encode_path_open_result(
+                                    PathOpenResult(
+                                        request[0],
+                                        False,
+                                        "warning",
+                                        "Another path open is still completing",
+                                    )
+                                ),
+                                priority=True,
+                            )
                         continue
                     view = memoryview(message.data)
                     while view:
@@ -2547,6 +2729,8 @@ def _serve_attached(
             return 0
         return int(_classify_observed_exit(session_id, target))
     finally:
+        if path_worker is not None:
+            path_worker.close()
         history_worker.close()
         _stop_client(pid, master_fd)
 

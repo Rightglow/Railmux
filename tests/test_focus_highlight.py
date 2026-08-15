@@ -608,6 +608,65 @@ def test_single_workspace_reapplies_one_continuous_green_border(monkeypatch):
     assert set_border.call_args.args == ("fg=#5faf00", "fg=#5faf00")
 
 
+def test_single_workspace_with_tool_colours_only_active_border(monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SINGLE
+    app._divider_active = None
+    app._managed_tool_visible = True
+    set_border = MagicMock(return_value=True)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.set_window_border_styles", set_border
+    )
+
+    app._set_divider_active(True)
+
+    set_border.assert_called_once_with("fg=colour240", "fg=#5faf00")
+
+
+def test_focus_reconciliation_recognizes_managed_tool_pane(monkeypatch):
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._workspace.primary.pane_id = "%2"
+    app._railmux_pane_id = "%1"
+    app._railmux_has_focus = True
+    app._managed_tool_visible = False
+    app._sync_compact_page_from_tmux = MagicMock()
+    app._set_railmux_focus = MagicMock()
+    manager = MagicMock()
+    manager.slot_for_tool.return_value = AgentWorkspace.PRIMARY
+    app._get_tool_pane_manager = MagicMock(return_value=manager)
+    monkeypatch.setattr(
+        "railmux.ui.app.tmux_ctl.active_pane_id", lambda _owner: "%9"
+    )
+
+    assert app._reconcile_focus_from_tmux()
+
+    assert app._managed_tool_visible is True
+    app._set_railmux_focus.assert_called_once_with(False, force_border=True)
+
+
+def test_tool_reconciliation_reuses_returned_visibility_for_border():
+    app = App.__new__(App)
+    app._workspace = AgentWorkspace()
+    app._managed_tool_visible = False
+    app._divider_active = None
+    app._railmux_has_focus = False
+    app._set_divider_active = MagicMock()
+    manager = MagicMock()
+    manager.reconcile.return_value = frozenset({"%9"})
+    app._get_tool_pane_manager = MagicMock(return_value=manager)
+    app._tool_owner_panes = MagicMock(
+        return_value={"primary": "%2", "secondary": None}
+    )
+
+    app._reconcile_tool_panes()
+
+    manager.visible_tool_panes.assert_not_called()
+    assert app._managed_tool_visible is True
+    app._set_divider_active.assert_called_once_with(True, force=True)
+
+
 def test_single_workspace_sidebar_focus_clears_old_dim_target_format(monkeypatch):
     app = App.__new__(App)
     app._workspace = AgentWorkspace()

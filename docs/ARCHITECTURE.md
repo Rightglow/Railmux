@@ -1574,7 +1574,10 @@ opaque keyboard sequence `Ctrl-B [` remains the explicit copy-mode path.
 A semantic hover candidate may be highlighted in either visible agent route,
 but only a clean click in the already-focused agent route may become a
 client-owned semantic open. Bounded visible `http://` and `https://` tokens
-are opened locally and never sent to a shell. A bounded POSIX or Windows path
+are opened locally and never sent to a shell. Native Windows delegates these
+tokens to the registered HTTP(S) protocol handler; Explorer is reserved for
+validated filesystem paths because its command-line parser can misclassify a
+valid URL query as a path. A bounded POSIX or Windows path
 is resolved against the exact visible pane. Over `railmux ssh`, it sends a typed
 protocol request containing only the visible pane ID and raw token; native
 Windows uses the same server-side pane/path authority locally. Besides terminal
@@ -1603,6 +1606,12 @@ server revalidates pane identity, current working directory, path type, and
 access before taking action. A persistent choice updates only the shared
 `config.toml`. The canonical preference is `interaction.path_open`; the
 released `ssh.path_open` key is accepted as an upgrade alias but is not written.
+The action itself runs through one serialized worker rather than the attached
+PTY/display loop. Local Windows therefore continues draining its tmux PTY, and
+the SSH helper continues framing provider output and input, while split/swap,
+shell readiness, or configuration I/O is pending. A second action fails busy;
+it is never queued behind stale pane/path identity. Completion is correlated
+to the exact request before any local external opener runs.
 
 Inside-Railmux tools are session-scoped tmux processes, with at most one shell
 and one Vim viewer for each agent slot. Pane ID, pane PID, session ID, and
@@ -1618,6 +1627,18 @@ columns place tools below, while stacked agent rows place tools on the right.
 F9 zooms the focused tool when one owns focus, otherwise it retains the Target
 agent behavior. Tool panes carry a pane-local marker so the SSH history and
 semantic-click router can exclude them without extra polling subprocesses.
+That marker also lets the outer UI reconcile tmux's actual active pane: a tool
+is a distinct focus target, so inactive borders are gray and only the active
+tool/agent side uses the green active-border style. Reconciliation reports the
+visibility it already proved while repairing the tool layout; border state
+does not add a second tmux polling path.
+An MSYS2 managed shell exports the standard `CHERE_INVOKING=1` contract before
+entering its login shell so `/etc/profile` cannot reset a validated drive or
+POSIX path to home. Railmux then requires two stable observations of the
+requested `pane_current_path` before publishing a fresh shell. A pre-existing
+shell is reused only when it is already in that directory; Railmux never sends
+an implicit `cd` into a terminal that may contain unsubmitted input or a live
+command.
 Pane-local user options require tmux 3.0, so tmux 2.7/2.8 retain the core
 workspace but fail closed with an explicit warning instead of creating an
 unidentifiable managed terminal or Vim pane. For the same reason, nested

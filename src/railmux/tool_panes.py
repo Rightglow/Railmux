@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -496,6 +497,24 @@ class ToolPaneManager:
                     result.add(current.pane_id)
         return frozenset(result)
 
+    def slot_for_tool(self, pane_id: str) -> str | None:
+        """Return the owning slot for one exact visible managed tool pane."""
+        current = self._pane_ref(pane_id)
+        if current is None or current.window_id not in self._outer_window_ids():
+            return None
+        for slot in ("primary", "secondary"):
+            state = self.load(slot)
+            if state is None:
+                continue
+            for ref in (state.shell, state.viewer):
+                if (
+                    ref is not None
+                    and ref.pane_id == current.pane_id
+                    and ref.pane_pid == current.pane_pid
+                ):
+                    return slot
+        return None
+
     def _parking_name(self, slot: str) -> str:
         suffix = self.outer_session_id[1:]
         return f"railmux-tool-{suffix}-{slot}"
@@ -619,8 +638,18 @@ class ToolPaneManager:
     @staticmethod
     def _shell_command(cwd: Path) -> str:
         shell = os.environ.get("SHELL", "/bin/sh")
+        # MSYS2's /etc/profile returns a login shell to HOME unless this
+        # standard MSYS flag says that the caller intentionally selected the
+        # working directory. Without it, ``cd /c/... && bash -l`` briefly
+        # reaches the clicked path and then silently lands in ``~``.
+        preserve_msys_cwd = (
+            "export CHERE_INVOKING=1; "
+            if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2"
+            else ""
+        )
         return (
-            f"cd -- {shlex.quote(str(cwd))} && "
+            preserve_msys_cwd
+            + f"cd -- {shlex.quote(str(cwd))} && "
             f"exec {shlex.quote(shell)} -l"
         )
 
@@ -640,10 +669,16 @@ class ToolPaneManager:
         notice = shlex.quote(
             "Railmux: vim is unavailable; opened the file's directory."
         )
+        preserve_msys_cwd = (
+            "export CHERE_INVOKING=1; "
+            if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2"
+            else ""
+        )
         return (
             "if command -v vim >/dev/null 2>&1; "
             f"then exec {shlex.join(vim)}; "
             f"else printf '%s\\n' {notice}; "
+            f"{preserve_msys_cwd}"
             f"cd -- {shlex.quote(destination)} && "
             f"exec {shlex.quote(shell)} -l; fi"
         )
@@ -652,7 +687,55 @@ class ToolPaneManager:
         command = self._output(
             "display-message", "-p", "-t", pane_id, "#{pane_current_command}"
         )
-        return Path(command).name if command else None
+        if not command:
+            return None
+        name = Path(command).name
+        return name[:-4] if name.casefold().endswith(".exe") else name
+
+    def _pane_current_path(self, pane_id: str) -> Path | None:
+        current = self._output(
+            "display-message", "-p", "-t", pane_id, "#{pane_current_path}"
+        )
+        if not current or any(character in current for character in "\x00\r\n"):
+            return None
+        return Path(current)
+
+    @staticmethod
+    def _same_directory(left: Path | None, right: Path) -> bool:
+        if left is None:
+            return False
+        try:
+            return os.path.samefile(left, right)
+        except OSError:
+            try:
+                return left.resolve(strict=True) == right.resolve(strict=True)
+            except (OSError, RuntimeError):
+                return False
+
+    def _wait_for_shell_directory(
+        self,
+        pane_id: str,
+        cwd: Path,
+        *,
+        timeout: float = 1.0,
+    ) -> bool:
+        """Require a new login shell to settle at the requested directory."""
+        deadline = time.monotonic() + timeout
+        consecutive = 0
+        expected = Path(os.environ.get("SHELL", "/bin/sh")).name
+        if expected.casefold().endswith(".exe"):
+            expected = expected[:-4]
+        while time.monotonic() < deadline:
+            command = self._pane_current_command(pane_id)
+            current = self._pane_current_path(pane_id)
+            if command == expected and self._same_directory(current, cwd):
+                consecutive += 1
+                if consecutive >= 2:
+                    return True
+            else:
+                consecutive = 0
+            time.sleep(0.02)
+        return False
 
     def _window_is_zoomed(self, pane_id: str) -> bool:
         return (
@@ -774,10 +857,29 @@ class ToolPaneManager:
         state = self.load(slot)
         shell = self._exact_ref(state.shell) if state else None
         reused = shell is not None
+        if reused and not self._same_directory(
+            self._pane_current_path(shell.pane_id), cwd
+        ):
+            return ToolResult(
+                False,
+                (
+                    "Terminal already open in another directory; use Term to "
+                    "return to it and exit, or choose external path opening"
+                ),
+                shell.pane_id,
+                "warning",
+            )
         if state is None:
             shell = self._split_tool(owner, self._shell_command(cwd))
             if shell is None:
                 return ToolResult(False, "Could not create terminal pane", level="error")
+            if not self._wait_for_shell_directory(shell.pane_id, cwd):
+                self._run("kill-pane", "-t", shell.pane_id)
+                return ToolResult(
+                    False,
+                    "Terminal did not enter the clicked directory",
+                    level="error",
+                )
             if not self._mark_tool(shell, slot, "shell"):
                 self._run("kill-pane", "-t", shell.pane_id)
                 return ToolResult(False, "Could not register terminal pane", level="error")
@@ -827,6 +929,11 @@ class ToolPaneManager:
                     self._shell_command(cwd),
                 )
                 shell = self._pane_ref(shell_id) if shell_id else None
+                if shell is not None and not self._wait_for_shell_directory(
+                    shell.pane_id, cwd
+                ):
+                    self._run("kill-pane", "-t", shell.pane_id)
+                    shell = None
                 if shell is None or not self._mark_tool(shell, slot, "shell"):
                     if shell is not None:
                         self._run("kill-pane", "-t", shell.pane_id)
@@ -886,11 +993,11 @@ class ToolPaneManager:
                 self._viewer_command(path, line=line, column=column),
             )
             if viewer is None:
-                return ToolResult(False, "Could not start remote Vim", level="error")
+                return ToolResult(False, "Could not start Vim", level="error")
             if not self._mark_tool(viewer, slot, "viewer"):
                 self._run("kill-pane", "-t", viewer.pane_id)
                 return ToolResult(
-                    False, "Could not register remote Vim", level="error"
+                    False, "Could not register Vim", level="error"
                 )
             state = ToolState(
                 slot,
@@ -906,7 +1013,7 @@ class ToolPaneManager:
             if not self._save(state):
                 self._run("kill-pane", "-t", viewer.pane_id)
                 return ToolResult(
-                    False, "Could not register remote Vim", level="error"
+                    False, "Could not register Vim", level="error"
                 )
             if not self._select_tool(
                 viewer.pane_id,
@@ -916,7 +1023,7 @@ class ToolPaneManager:
                     False, "Could not focus Vim viewer", level="error"
                 )
             return ToolResult(
-                True, "Opened remote file inside Railmux", viewer.pane_id
+                True, "Opened file inside Railmux", viewer.pane_id
             )
         viewer = self._exact_ref(state.viewer)
         if viewer is not None:
@@ -955,7 +1062,7 @@ class ToolPaneManager:
                 return ToolResult(False, "Could not focus Vim viewer", level="error")
             return ToolResult(
                 True,
-                "Opened remote file in the managed Vim",
+                "Opened file in the managed Vim",
                 viewer.pane_id,
             )
         parked = self._ensure_parking(
@@ -986,10 +1093,10 @@ class ToolPaneManager:
         )
         viewer = self._pane_ref(viewer_id) if viewer_id else None
         if viewer is None:
-            return ToolResult(False, "Could not start remote Vim", level="error")
+            return ToolResult(False, "Could not start Vim", level="error")
         if not self._mark_tool(viewer, slot, "viewer"):
             self._run("kill-pane", "-t", viewer.pane_id)
-            return ToolResult(False, "Could not register remote Vim", level="error")
+            return ToolResult(False, "Could not register Vim", level="error")
         state = ToolState(
             state.slot,
             state.outer_session_id,
@@ -1004,13 +1111,13 @@ class ToolPaneManager:
         state = self._switch(state, "viewer")
         if state is None:
             self._run("kill-pane", "-t", viewer.pane_id)
-            return ToolResult(False, "Could not display remote Vim", level="error")
+            return ToolResult(False, "Could not display Vim", level="error")
         if not self._select_tool(
             viewer.pane_id,
             preserve_zoom=preserve_zoom,
         ):
             return ToolResult(False, "Could not focus Vim viewer", level="error")
-        return ToolResult(True, "Opened remote file inside Railmux", viewer.pane_id)
+        return ToolResult(True, "Opened file inside Railmux", viewer.pane_id)
 
     def focus_viewer(self, slot: str, owner_pane_id: str) -> ToolResult:
         state = self.load(slot)
@@ -1103,8 +1210,9 @@ class ToolPaneManager:
         owners: Mapping[str, str | None],
         *,
         layout: str | None = None,
-    ) -> None:
+    ) -> frozenset[str]:
         """Repair dead viewers and restore live surfaces below current slots."""
+        visible: set[str] = set()
         self.sync_owners(owners, layout=layout)
         for slot in ("primary", "secondary"):
             state = self.load(slot)
@@ -1159,8 +1267,19 @@ class ToolPaneManager:
                     state.parking_session_id,
                     state.placeholder,
                 )
-            if self._switch(state, state.active) is None:
+            switched = self._switch(state, state.active)
+            if switched is None:
                 self._save(state)
+                continue
+            active = (
+                switched.viewer
+                if switched.active == "viewer"
+                else switched.shell
+            )
+            current = self._exact_ref(active)
+            if current is not None:
+                visible.add(current.pane_id)
+        return frozenset(visible)
 
 
 def manager_for_session(session_id: str) -> ToolPaneManager | None:

@@ -803,7 +803,9 @@ selection priority instead.
 #### Click URLs and paths
 
 Native Windows and `railmux ssh` recognize hoverable URLs and paths in either
-agent pane. A clean click on a URL opens the client browser. Paths are checked
+agent pane. A clean click on a URL opens the client browser through the local
+HTTP(S) protocol association; it is never passed to a shell or filesystem
+opener. Paths are checked
 read-only and can open in a managed Vim pane inside Railmux or outside Railmux,
 with **Always** and **this time** choices. On native Windows, outside opening
 uses Windows Explorer; with `railmux ssh`, it uses a separate local terminal.
@@ -811,6 +813,10 @@ The first click in an unfocused agent pane only focuses it.
 
 Each agent slot has at most one reusable managed shell and one Vim viewer. Use
 `t` for the shell, `T` for Vim, and Vim's `gt` / `gT` for multiple file tabs.
+Clicking another directory never changes a live managed shell: return to it
+with `t` and exit it, or choose outside opening, before opening that directory
+inside Railmux. A newly created shell is shown only after Railmux verifies its
+actual working directory.
 Managed tool panes require tmux 3.0+; core Railmux remains compatible with tmux
 2.7. Paths with spaces must be quoted. Relative paths from old output resolve
 against the pane's current directory, and remote localhost URLs still require

@@ -1037,6 +1037,7 @@ class App:
         self._border_indicators_original_known = False
         self._border_indicators_original = None
         self._border_indicators_arrows = False
+        self._managed_tool_visible = False
         self._has_less: bool = shutil.which("less") is not None
         self._less_mouse_flag: str = self._detect_less_mouse()
         self._scroll_manager = ScrollManager(enabled=scroll_coalescing)
@@ -1574,7 +1575,10 @@ class App:
             # ambiguous target, and a dual workspace names P1/P2 in the status
             # brand, so every sidebar-focused border can stay honestly gray.
             applied = tmux_ctl.set_window_border_styles(gray, gray)
-        elif layout is WorkspaceLayout.SINGLE:
+        elif (
+            layout is WorkspaceLayout.SINGLE
+            and not getattr(self, "_managed_tool_visible", False)
+        ):
             applied = tmux_ctl.set_window_border_styles(green, green)
         else:
             applied = tmux_ctl.set_window_border_styles(
@@ -1621,7 +1625,10 @@ class App:
         green = f"fg={_GRASS_GREEN}"
         if not active:
             expected = (gray, gray)
-        elif layout is WorkspaceLayout.SINGLE:
+        elif (
+            layout is WorkspaceLayout.SINGLE
+            and not getattr(self, "_managed_tool_visible", False)
+        ):
             expected = (green, green)
         else:
             expected = (gray, green)
@@ -1712,7 +1719,23 @@ class App:
 
         slot = self._agent_workspace().slot_for_pane(active_pane)
         if slot is None:
-            return False
+            manager = self._get_tool_pane_manager()
+            tool_slot = (
+                manager.slot_for_tool(active_pane)
+                if manager is not None
+                else None
+            )
+            if tool_slot is None:
+                return False
+            self._managed_tool_visible = True
+            workspace = self._agent_workspace()
+            if tool_slot != workspace.target_slot_key:
+                self._set_workspace_target(tool_slot)
+            if getattr(self, "_railmux_has_focus", True):
+                self._set_railmux_focus(False, force_border=True)
+            else:
+                self._set_divider_active(True)
+            return True
         self._sync_target_slot_from_tmux()
         if getattr(self, "_railmux_has_focus", True):
             self._set_railmux_focus(False, force_border=True)
@@ -6063,10 +6086,21 @@ class App:
 
     def _reconcile_tool_panes(self) -> None:
         manager = self._get_tool_pane_manager()
-        if manager is not None:
-            manager.reconcile(
+        visible = (
+            bool(manager.reconcile(
                 self._tool_owner_panes(),
                 layout=self._agent_workspace().layout.value,
+            ))
+            if manager is not None
+            else False
+        )
+        if visible == getattr(self, "_managed_tool_visible", False):
+            return
+        self._managed_tool_visible = visible
+        if hasattr(self, "_divider_active"):
+            self._set_divider_active(
+                not getattr(self, "_railmux_has_focus", True),
+                force=True,
             )
 
     def _suspend_tool_panes(self) -> bool:

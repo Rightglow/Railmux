@@ -50,6 +50,7 @@ def test_managed_windows_url_and_path_openers_use_direct_argv(monkeypatch):
         local_open.shutil,
         "which",
         lambda name: {
+            "rundll32.exe": "/c/Windows/System32/rundll32.exe",
             "explorer.exe": "/c/Windows/explorer.exe",
             "cygpath": "/usr/bin/cygpath",
         }.get(name),
@@ -65,13 +66,36 @@ def test_managed_windows_url_and_path_openers_use_direct_argv(monkeypatch):
         lambda argv: launched.append(tuple(argv)),
     )
 
-    assert local_open.open_url("https://example.test").opened
+    assert local_open.open_url(
+        "https://www.baidu.com/s??wd=railmux&source=terminal"
+    ).opened
     assert local_open.open_windows_path("/c/work/main.py", directory=False).opened
 
     assert launched == [
-        ("/c/Windows/explorer.exe", "https://example.test"),
+        (
+            "/c/Windows/System32/rundll32.exe",
+            "url.dll,FileProtocolHandler",
+            "https://www.baidu.com/s??wd=railmux&source=terminal",
+        ),
         ("/c/Windows/explorer.exe", "C:\\work\\main.py"),
     ]
+
+
+def test_managed_windows_url_never_falls_back_to_file_explorer(monkeypatch):
+    monkeypatch.setattr(local_open.sys, "platform", "linux")
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    monkeypatch.setattr(
+        local_open.shutil,
+        "which",
+        lambda name: "/c/Windows/explorer.exe"
+        if name == "explorer.exe"
+        else None,
+    )
+
+    result = local_open.open_url("https://example.test/search??q=railmux")
+
+    assert not result.opened
+    assert result.copy_data == b"https://example.test/search??q=railmux"
 
 
 def test_managed_windows_path_open_failure_copies_validated_path(monkeypatch):

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import base64
+import threading
+import time
 from dataclasses import replace
 from unittest.mock import MagicMock, patch
 
@@ -113,7 +115,7 @@ def test_server_path_open_choice_persists_and_uses_managed_vim(monkeypatch):
     manager.open_viewer.return_value = MagicMock(
         ok=True,
         level="success",
-        message="Opened remote file inside Railmux",
+        message="Opened file inside Railmux",
     )
     monkeypatch.setattr(
         fast_display_server,
@@ -145,7 +147,7 @@ def test_server_path_open_choice_persists_and_uses_managed_vim(monkeypatch):
         7,
         True,
         "success",
-        "Opened remote file inside Railmux",
+        "Opened file inside Railmux",
     )
     settings.set_path_open_policy.assert_called_once_with("internal")
     manager.open_viewer.assert_called_once_with(
@@ -193,6 +195,68 @@ def test_server_external_path_choice_never_mutates_tmux(monkeypatch):
     assert result.level == "success"
     settings.set_path_open_policy.assert_not_called()
     manager.assert_not_called()
+
+
+def test_path_action_worker_keeps_caller_responsive_and_serializes(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def apply(_session, request_id, *_request):
+        started.set()
+        assert release.wait(1.0)
+        return PathOpenResult(request_id, True, "success", "opened")
+
+    monkeypatch.setattr(fast_display_server, "apply_path_open_request", apply)
+    worker = fast_display_server.PathActionWorker()
+    try:
+        assert worker.submit("$4", 7, "%8", "/work", "internal", False, None, None)
+        assert started.wait(0.5)
+        assert worker.busy
+        assert worker.drain() == ()
+        assert not worker.submit(
+            "$4", 8, "%8", "/other", "internal", False, None, None
+        )
+
+        release.set()
+        deadline = time.monotonic() + 1.0
+        results = ()
+        while not results and time.monotonic() < deadline:
+            results = worker.drain()
+            time.sleep(0.01)
+        assert results == (PathOpenResult(7, True, "success", "opened"),)
+    finally:
+        release.set()
+        worker.close()
+
+
+def test_path_action_worker_keeps_read_only_resolution_off_caller(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def resolve(_session, request_id, _pane, raw_path):
+        started.set()
+        assert release.wait(1.0)
+        return PathResult(request_id, PathKind.DIRECTORY, raw_path, "ask")
+
+    monkeypatch.setattr(fast_display_server, "resolve_path_result", resolve)
+    worker = fast_display_server.PathActionWorker()
+    try:
+        assert worker.submit_resolve("$4", 9, "%8", "/c/work")
+        assert started.wait(0.5)
+        assert worker.drain() == ()
+        assert not worker.submit_resolve("$4", 10, "%8", "/c/other")
+        release.set()
+        deadline = time.monotonic() + 1.0
+        results = ()
+        while not results and time.monotonic() < deadline:
+            results = worker.drain()
+            time.sleep(0.01)
+        assert results == (
+            PathResult(9, PathKind.DIRECTORY, "/c/work", "ask"),
+        )
+    finally:
+        release.set()
+        worker.close()
 
 
 def test_server_options_change_clears_only_a_this_time_history_override():
@@ -308,13 +372,34 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
     )
 
 
+def test_local_text_selection_keeps_double_question_url_as_one_url():
+    route = HistorySnapshot(1, "%8", 0, 0, 80, 1)
+    source = SelectionSource(
+        route,
+        (b"Open https://www.baidu.com/s??wd=railmux now",),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 10, 1, True), source)
+    target = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 10, 1, False), source
+    ).open_target
+
+    assert target is not None
+    assert target.kind == "url"
+    assert target.value == "https://www.baidu.com/s??wd=railmux"
+
+
 def test_local_text_selection_recognizes_windows_drive_and_unc_paths():
-    route = HistorySnapshot(1, "%8", 0, 0, 120, 2)
+    route = HistorySnapshot(1, "%8", 0, 0, 120, 4)
     source = SelectionSource(
         route,
         (
             rb"changed C:\work\rail mux\ignored.py C:\work\railmux\app.py:12:3",
             rb"share \\server\team\project\README.md",
+            b"C:\\Users\\user\\.railmux\\windows\\",
+            b"/c/Users/user/.railmux/",
         ),
         0,
     )
@@ -334,6 +419,20 @@ def test_local_text_selection_recognizes_windows_drive_and_unc_paths():
     ).open_target
     assert unc is not None
     assert unc.value == r"\\server\team\project\README.md"
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 5, 3, True), source)
+    drive_directory = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 5, 3, False), source
+    ).open_target
+    assert drive_directory is not None
+    assert drive_directory.value == "C:\\Users\\user\\.railmux\\windows\\"
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 5, 4, True), source)
+    msys_directory = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 5, 4, False), source
+    ).open_target
+    assert msys_directory is not None
+    assert msys_directory.value == "/c/Users/user/.railmux/"
 
 
 def test_local_text_selection_stops_url_before_chinese_prose():

@@ -119,8 +119,15 @@ def _url_opener() -> tuple[str, ...] | None:
         if executable := shutil.which("explorer.exe"):
             return (executable,)
     if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2":
-        if executable := shutil.which("explorer.exe"):
-            return (executable,)
+        # ``explorer.exe URL`` is not the Windows URL-association API. In
+        # particular, Explorer interprets some otherwise valid query strings
+        # (for example a path followed by ``??key=value``) as filesystem
+        # input and opens a folder window. ``url.dll`` delegates the already
+        # validated HTTP(S) token through the user's registered protocol
+        # handler without involving a command shell.
+        if executable := shutil.which("rundll32.exe"):
+            return (executable, "url.dll,FileProtocolHandler")
+        return None
     if executable := shutil.which("xdg-open"):
         return (executable,)
     return None

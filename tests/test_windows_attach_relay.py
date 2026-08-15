@@ -14,8 +14,13 @@ import pytest
 
 from railmux import __version__, windows_attach_relay
 from railmux.tmux_server import TmuxServerTarget
-from railmux.fast_display_input import LocalTextSelection, SgrMouseEvent
-from railmux.fast_display_protocol import HistorySnapshot
+from railmux.fast_display_input import ClickTarget, LocalTextSelection, SgrMouseEvent
+from railmux.fast_display_protocol import (
+    HistorySnapshot,
+    PathKind,
+    PathOpenResult,
+    PathResult,
+)
 
 
 def test_terminal_selector_batch_processes_input_before_output():
@@ -330,6 +335,134 @@ def test_local_semantic_url_in_unfocused_agent_replays_focus_click():
     finally:
         os.close(client.master_fd)
         child_socket.close()
+
+
+def test_local_path_choice_completes_outside_input_loop(monkeypatch):
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client._session_id = "$4"
+    client._renderer = MagicMock()
+    client._selection = MagicMock()
+    client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
+    client._routes_checked_at = 10.0
+    client._pending_path_open = None
+    worker = MagicMock()
+    worker.submit.return_value = True
+    worker.drain.return_value = ()
+    client._path_worker = worker
+    target = ClickTarget("path", "/c/work", "%8")
+    resolved = PathResult(9, PathKind.DIRECTORY, "/c/work", "external")
+
+    client._apply_path_choice(target, resolved, "external", persistent=False)
+
+    worker.submit.assert_called_once_with(
+        "$4", 9, "%8", "/c/work", "external", False, None, None
+    )
+    assert client._pending_path_open == (target, resolved, "external")
+    client._renderer.show_status.assert_called_once_with("Opening path…")
+
+    worker.drain.return_value = (
+        PathOpenResult(9, True, "success", "validated"),
+    )
+    opened = MagicMock(
+        return_value=windows_attach_relay.local_open.OpenResult(
+            True, "opened", "success"
+        )
+    )
+    monkeypatch.setattr(
+        windows_attach_relay.local_open, "open_windows_path", opened
+    )
+
+    client._drain_path_action_results()
+
+    opened.assert_called_once_with("/c/work", directory=True)
+    assert client._pending_path_open is None
+    assert client._routes == ()
+
+
+def test_local_path_resolution_completes_outside_input_loop():
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client._session_id = "$4"
+    client._renderer = MagicMock()
+    client._pending_path_open = None
+    client._pending_path_resolve = None
+    client._next_path_request_id = 4
+    worker = MagicMock()
+    worker.submit_resolve.return_value = True
+    worker.drain.return_value = ()
+    client._path_worker = worker
+    target = ClickTarget("path", r"C:\Users\user\.railmux\windows", "%8")
+
+    client._open_target(target)
+
+    worker.submit_resolve.assert_called_once_with(
+        "$4", 4, "%8", r"C:\Users\user\.railmux\windows"
+    )
+    assert client._pending_path_resolve == (4, target)
+    client._renderer.show_status.assert_called_once_with("Checking path…")
+
+    resolved = PathResult(
+        4,
+        PathKind.DIRECTORY,
+        "/c/Users/user/.railmux/windows",
+        "ask",
+    )
+    worker.drain.return_value = (resolved,)
+    client._drain_path_action_results()
+
+    assert client._pending_path_resolve is None
+    assert client._path_prompt == (target, resolved)
+    client._renderer.show_path_prompt.assert_called_once_with()
+
+
+def test_slow_local_path_resolution_does_not_stop_pty_drain(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def resolve(_session, request_id, _pane, _raw_path):
+        started.set()
+        assert release.wait(1.0)
+        return PathResult(request_id, PathKind.UNAVAILABLE)
+
+    monkeypatch.setattr(
+        "railmux.fast_display_server.resolve_path_result", resolve
+    )
+    monkeypatch.setattr(
+        windows_attach_relay, "_terminal_size", lambda _fd: (80, 24)
+    )
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+        session_id="$4",
+    )
+    try:
+        client._open_target(ClickTarget("path", "/c/work", "%8"))
+        assert started.wait(0.5)
+
+        child_socket.sendall(b"provider output while path lookup waits\r\n")
+        client.pump(0.1)
+
+        assert client._pty_seen_output is True
+        assert client.returncode is None
+    finally:
+        release.set()
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
 
 
 def test_local_proxy_starts_at_exact_entry_geometry(monkeypatch):

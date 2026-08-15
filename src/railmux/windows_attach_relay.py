@@ -1163,6 +1163,15 @@ class LocalPtyClient:
         self._routes_checked_at = 0.0
         self._path_prompt: tuple[ClickTarget, PathResult] | None = None
         self._path_prompt_mouse_button: int | None = None
+        # Path validation is optional. Avoid importing the server graph or
+        # starting a thread on the ordinary attach/input path until a clean
+        # semantic path click actually needs it.
+        self._path_worker = None
+        self._pending_path_open: (
+            tuple[ClickTarget, PathResult, str] | None
+        ) = None
+        self._pending_path_resolve: tuple[int, ClickTarget] | None = None
+        self._next_path_request_id = 1
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
         self._closed = False
@@ -1176,6 +1185,15 @@ class LocalPtyClient:
         self._pty_seen_output = False
         self._pty_burst_started = started
         self._pty_burst_bytes = 0
+
+    def _ensure_path_worker(self):
+        worker = getattr(self, "_path_worker", None)
+        if worker is None:
+            from railmux.fast_display_server import PathActionWorker
+
+            worker = PathActionWorker()
+            self._path_worker = worker
+        return worker
 
     def _refresh_routes(self, *, force: bool = False) -> None:
         if self._session_id is None:
@@ -1245,9 +1263,8 @@ class LocalPtyClient:
     ) -> None:
         if self._session_id is None:
             return
-        from railmux.fast_display_server import apply_path_open_request
-
-        result = apply_path_open_request(
+        worker = self._ensure_path_worker()
+        if not worker.submit(
             self._session_id,
             resolved.request_id,
             target.pane_id,
@@ -1256,19 +1273,67 @@ class LocalPtyClient:
             persistent,
             target.line,
             target.column,
-        )
-        if not result.applied:
-            self._renderer.show_status(result.message, level=result.level)
-            return
-        if policy == "external":
-            self._show_open_result(
-                local_open.open_windows_path(
-                    resolved.path,
-                    directory=resolved.kind is PathKind.DIRECTORY,
-                )
+        ):
+            self._renderer.show_status(
+                "Another path open is still completing",
+                level="warning",
             )
             return
-        self._renderer.show_status(result.message, level=result.level)
+        self._pending_path_open = (target, resolved, policy)
+        self._renderer.show_status("Opening path…")
+
+    def _drain_path_action_results(self) -> None:
+        worker = getattr(self, "_path_worker", None)
+        if worker is None:
+            return
+        for result in worker.drain():
+            if isinstance(result, PathResult):
+                pending_resolve = getattr(
+                    self, "_pending_path_resolve", None
+                )
+                if (
+                    pending_resolve is None
+                    or result.request_id != pending_resolve[0]
+                ):
+                    continue
+                _request_id, target = pending_resolve
+                self._pending_path_resolve = None
+                if result.kind is PathKind.UNAVAILABLE:
+                    self._renderer.show_status(
+                        "Path is no longer available in this workspace",
+                        level="warning",
+                    )
+                elif result.policy == "ask":
+                    self._path_prompt = (target, result)
+                    self._renderer.show_path_prompt()
+                else:
+                    self._apply_path_choice(
+                        target,
+                        result,
+                        result.policy,
+                        persistent=False,
+                    )
+                continue
+            pending = getattr(self, "_pending_path_open", None)
+            if pending is None or result.request_id != pending[1].request_id:
+                continue
+            _target, resolved, policy = pending
+            self._pending_path_open = None
+            self._selection.cancel()
+            self._renderer.set_selection(())
+            self._routes = ()
+            self._routes_checked_at = 0.0
+            if not result.applied:
+                self._renderer.show_status(result.message, level=result.level)
+            elif policy == "external":
+                self._show_open_result(
+                    local_open.open_windows_path(
+                        resolved.path,
+                        directory=resolved.kind is PathKind.DIRECTORY,
+                    )
+                )
+            else:
+                self._renderer.show_status(result.message, level=result.level)
 
     def _open_target(self, target: ClickTarget) -> None:
         if target.kind == "url":
@@ -1276,29 +1341,22 @@ class LocalPtyClient:
             return
         if self._session_id is None:
             return
-        from railmux.fast_display_server import resolve_path_result
-
-        resolved = resolve_path_result(
+        request_id = getattr(self, "_next_path_request_id", 1)
+        self._next_path_request_id = request_id + 1
+        worker = self._ensure_path_worker()
+        if not worker.submit_resolve(
             self._session_id,
-            1,
+            request_id,
             target.pane_id,
             target.value,
-        )
-        if resolved.kind is PathKind.UNAVAILABLE:
+        ):
             self._renderer.show_status(
-                "Path is no longer available in this workspace",
+                "Another path open is still completing",
                 level="warning",
             )
-        elif resolved.policy == "ask":
-            self._path_prompt = (target, resolved)
-            self._renderer.show_path_prompt()
-        else:
-            self._apply_path_choice(
-                target,
-                resolved,
-                resolved.policy,
-                persistent=False,
-            )
+            return
+        self._pending_path_resolve = (request_id, target)
+        self._renderer.show_status("Checking path…")
 
     def _forward_input_part(
         self,
@@ -1515,6 +1573,7 @@ class LocalPtyClient:
     def pump(self, timeout: float) -> None:
         if self.returncode is not None:
             return
+        self._drain_path_action_results()
         self._resize_if_needed()
         now = time.monotonic()
         self._forward_pending_interrupts()
@@ -1551,6 +1610,7 @@ class LocalPtyClient:
         self._forward_pending_interrupts()
         for part in self._input_decoder.flush_pending():
             self._forward_input_part(part)
+        self._drain_path_action_results()
         paint_now = time.monotonic()
         catchup_was_active = self._pty_catchup_active
         catchup_settled = (
@@ -1617,6 +1677,9 @@ class LocalPtyClient:
         self._interrupts.close()
         if self.returncode is None:
             self.terminate()
+        path_worker = getattr(self, "_path_worker", None)
+        if path_worker is not None:
+            path_worker.close()
         try:
             self._restore_deferred = self._renderer.close()
         finally:

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc25] - 2026-08-15
+
+### Fixed
+
+- Open native-Windows HTTP(S) clicks through the registered URL protocol
+  handler instead of Explorer's filesystem parser, so valid query strings such
+  as `??key=value` cannot be misclassified as paths.
+- Preserve and verify the requested directory when a managed MSYS2 login shell
+  starts. A reusable terminal already running in another directory now refuses
+  the path action instead of changing a live shell or silently showing `~`.
+- Run managed path actions on one serialized worker outside the local-Windows
+  PTY and remote-SSH display loops. Slow tmux split/swap operations no longer
+  stop screen draining or leave an apparently frozen agent pane until restart.
+- Treat a focused managed Term/Vim pane as its own tmux focus target. Inactive
+  borders remain gray and only the pane that actually owns keyboard focus is
+  green; border state reuses the tool reconciliation result without adding
+  Windows tmux polling or input latency.
+
 ## [0.4.0rc24] - 2026-08-15
 
 ### Added
