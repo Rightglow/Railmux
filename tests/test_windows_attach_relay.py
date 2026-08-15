@@ -49,9 +49,11 @@ def test_local_windows_ctrl_c_signal_is_forwarded_to_the_active_pty(monkeypatch)
     input_read, input_write = os.pipe()
     output_fd = os.open(os.devnull, os.O_WRONLY)
     proxy_socket, child_socket = socket.socketpair()
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
     client = windows_attach_relay.LocalPtyClient(
         999999,
-        proxy_socket.detach(),
+        proxy_fd,
         stdin_fd=input_read,
         stdout_fd=output_fd,
         forward_interrupts=True,
@@ -637,7 +639,9 @@ def test_local_proxy_forwards_input_while_physical_output_is_blocked(monkeypatch
     child_socket.settimeout(1.0)
     try:
         child_socket.sendall(b"\033[2J\033[HSCREEN")
-        client.pump(0.1)
+        paint_deadline = time.monotonic() + 1.0
+        while not started.is_set() and time.monotonic() < paint_deadline:
+            client.pump(0.05)
         assert started.wait(1.0)
 
         os.write(input_write, b"typed while painting")
@@ -699,8 +703,13 @@ def test_local_proxy_coalesces_a_large_restore_backlog_to_its_latest_screen(
             except BlockingIOError:
                 pass
         writer.join(timeout=1.0)
-        for _attempt in range(3):
-            client.pump(0.0)
+        settle_deadline = time.monotonic() + 1.0
+        while b"FINAL" not in rendered and time.monotonic() < settle_deadline:
+            client.pump(0.05)
+            try:
+                rendered.extend(os.read(output_read, 65536))
+            except BlockingIOError:
+                pass
         assert client._renderer.writer.wait_idle(1.0)
         while True:
             try:
@@ -722,6 +731,126 @@ def test_local_proxy_coalesces_a_large_restore_backlog_to_its_latest_screen(
     assert len(set(re.findall(rb"STATE-[0-9]{4}", rendered))) < 5
 
 
+def test_local_proxy_coalesces_microgapped_screen_replay_after_settling(
+    monkeypatch,
+):
+    writes = []
+    terminal_size = [80, 24]
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        lambda _fd, payload: writes.append(payload),
+    )
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_terminal_size",
+        lambda _fd: tuple(terminal_size),
+    )
+    monkeypatch.setattr(windows_attach_relay, "_set_winsize", lambda *_args: None)
+    monkeypatch.setattr(windows_attach_relay.os, "killpg", lambda *_args: None)
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+    )
+
+    def pump_until_painted(label: bytes) -> None:
+        deadline = time.monotonic() + 1.0
+        while label not in b"".join(writes) and time.monotonic() < deadline:
+            client.pump(0.02)
+        assert client._renderer.writer.wait_idle(1.0)
+        assert label in b"".join(writes)
+
+    try:
+        child_socket.sendall(b"\033[2J\033[HREADY")
+        pump_until_painted(b"READY")
+        assert not client._pty_catchup_active
+        writes.clear()
+
+        terminal_size[:] = [100, 30]
+        client._resize_if_needed()
+        assert client._pty_catchup_active
+
+        for index in range(8):
+            label = f"REPLAY-{index:02d}".encode()
+            body = b"\n".join(label + b"-" * 68 for _row in range(24))
+            child_socket.sendall(
+                b"\033[?2026h\033[2J\033[H"
+                + body
+                + b"\033[?2026l"
+            )
+            client.pump(0.0)
+            time.sleep(0.02)
+        child_socket.sendall(b"\033[?2026h\033[2J\033[HFINAL\033[?2026l")
+        pump_until_painted(b"FINAL")
+    finally:
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+    replayed = set(re.findall(rb"REPLAY-[0-9]{2}", b"".join(writes)))
+    assert replayed == set()
+
+
+def test_local_proxy_keeps_small_settled_updates_immediate(monkeypatch):
+    writes = []
+    monkeypatch.setattr(windows_attach_relay, "_LOCAL_FRAME_INTERVAL", 0.0)
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        lambda _fd, payload: writes.append(payload),
+    )
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+    )
+    try:
+        # A slow tmux startup must begin its staleness ceiling at the first
+        # output byte, not at LocalPtyClient construction.
+        client._last_pty_paint -= 10.0
+        child_socket.sendall(b"\033[2J\033[HREADY")
+        client.pump(0.0)
+        assert b"READY" not in b"".join(writes)
+        deadline = time.monotonic() + 1.0
+        while b"READY" not in b"".join(writes) and time.monotonic() < deadline:
+            client.pump(0.02)
+        assert client._renderer.writer.wait_idle(1.0)
+        assert not client._pty_catchup_active
+        writes.clear()
+
+        child_socket.sendall(b"\033[Htick")
+        client.pump(0.1)
+        assert client._renderer.writer.wait_idle(1.0)
+        assert b"tick" in b"".join(writes)
+        assert not client._pty_catchup_active
+    finally:
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+
 def test_local_proxy_sustained_backlog_still_paints_bounded_progress(monkeypatch):
     writes = []
     received_input = bytearray()
@@ -738,9 +867,11 @@ def test_local_proxy_sustained_backlog_still_paints_bounded_progress(monkeypatch
     input_read, input_write = os.pipe()
     output_fd = os.open(os.devnull, os.O_WRONLY)
     proxy_socket, child_socket = socket.socketpair()
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
     client = windows_attach_relay.LocalPtyClient(
         999999,
-        proxy_socket.detach(),
+        proxy_fd,
         stdin_fd=input_read,
         stdout_fd=output_fd,
     )

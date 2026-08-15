@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep native-Windows attach, resume, and resize redraws in a bounded catch-up
+  mode across the short idle gaps between full-screen provider frames. Railmux
+  now paints the latest settled screen instead of visibly advancing one
+  viewport at a time; an endless producer still receives periodic progress,
+  while terminal input immediately restores the ordinary interactive cadence.
+
 ## [0.4.0rc22] - 2026-08-15
 
 ### Fixed

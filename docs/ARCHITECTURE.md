@@ -153,10 +153,16 @@ chunk onto the physical terminal. Each drain has independent time and byte
 bounds so terminal input is considered first on the next pump. Default trailing
 blank cells are omitted from a row that the physical painter has already
 cleared; styled blanks remain visible and authoritative.
-If a producer never lets the PTY reach an empty read, a separate bounded
-staleness deadline publishes periodic latest-state frames instead of waiting
-forever. Clipboard ownership follows the same latest-state rule while physical
-output is busy.
+Initial attach and resize begin a bounded catch-up transaction. A later
+screen-sized output burst enters the same state, so the short empty reads
+between complete provider frames do not turn a resume replay into visible
+viewport-by-viewport progress. The newest semantic state publishes after a
+short quiet interval; a separate, longer staleness ceiling still publishes
+periodic latest-state frames when a producer never settles. Any terminal input
+leaves catch-up immediately and a later large burst must earn it again, so
+ordinary Working ticks and interactive feedback retain their normal cadence.
+Clipboard ownership follows the same latest-state rule while physical output
+is busy.
 Physical Windows Terminal writes run through one ordered, single-flight worker.
 While it owns a complete synchronized frame, the main loop continues input,
 resize, PTY consumption, and tmux health work but does not advance the semantic

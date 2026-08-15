@@ -73,6 +73,15 @@ _LOCAL_PTY_DRAIN_BYTES = 4 * 1024 * 1024
 # progress.  This is deliberately slower than the normal 30 fps cadence so a
 # restore burst remains heavily coalesced without freezing an endless stream.
 _LOCAL_PTY_MAX_PAINT_STALENESS = 0.2
+# A restore can briefly reach EAGAIN between complete application frames. Once
+# output reaches roughly one physical screen, keep treating those short gaps as
+# one catch-up transaction instead of painting a viewport-by-viewport replay.
+# Normal small Working ticks never enter this gate, and any terminal input
+# leaves it immediately.
+_LOCAL_PTY_CATCHUP_WINDOW = 0.15
+_LOCAL_PTY_CATCHUP_QUIET = 0.12
+_LOCAL_PTY_CATCHUP_MAX_STALENESS = 0.75
+_LOCAL_PTY_CATCHUP_MIN_BYTES = 1024
 _TERMINAL_WRITER_POLL = 0.01
 _TERMINAL_WRITER_CLOSE_TIMEOUT = 5.0
 _TERMINAL_WRITER_MAX_QUEUE = 8
@@ -1079,7 +1088,14 @@ class LocalPtyClient:
         self._closed = False
         self._restore_deferred = False
         self._pty_backlog_pending = False
-        self._last_pty_paint = time.monotonic()
+        started = time.monotonic()
+        self._last_pty_paint = started
+        self._last_pty_output = started
+        self._pty_catchup_active = True
+        self._pty_catchup_started = started
+        self._pty_seen_output = False
+        self._pty_burst_started = started
+        self._pty_burst_bytes = 0
 
     def poll(self) -> int | None:
         return self.returncode
@@ -1091,16 +1107,71 @@ class LocalPtyClient:
         _set_winsize(self.master_fd, *size)
         self._size = size
         self._renderer.resize(*size)
+        self._enter_pty_catchup(time.monotonic(), restart=True)
         try:
             os.killpg(self.pid, signal.SIGWINCH)
         except ProcessLookupError:
             pass
+
+    def _enter_pty_catchup(self, now: float, *, restart: bool = False) -> None:
+        if restart or not self._pty_catchup_active:
+            self._pty_catchup_started = now
+        self._pty_catchup_active = True
+        self._last_pty_output = now
+
+    def _leave_pty_catchup(self, now: float) -> None:
+        self._pty_catchup_active = False
+        self._pty_burst_started = now
+        self._pty_burst_bytes = 0
+
+    def _observe_pty_output(self, size: int, now: float) -> None:
+        if not self._pty_seen_output:
+            self._pty_seen_output = True
+            self._pty_catchup_started = now
+        self._last_pty_output = now
+        if now - self._pty_burst_started > _LOCAL_PTY_CATCHUP_WINDOW:
+            self._pty_burst_started = now
+            self._pty_burst_bytes = 0
+        self._pty_burst_bytes += size
+        catchup_threshold = max(
+            _LOCAL_PTY_CATCHUP_MIN_BYTES,
+            (self._size[0] * self._size[1]) // 2,
+        )
+        if (
+            self._pty_backlog_pending
+            or self._pty_burst_bytes >= catchup_threshold
+            or not self._renderer.writer.idle
+        ):
+            self._enter_pty_catchup(now)
+
+    def _pty_catchup_deadline(self) -> float:
+        return min(
+            self._last_pty_output + _LOCAL_PTY_CATCHUP_QUIET,
+            max(self._last_pty_paint, self._pty_catchup_started)
+            + _LOCAL_PTY_CATCHUP_MAX_STALENESS,
+        )
+
+    def _paint_is_due(self, now: float) -> bool:
+        if not self._pty_catchup_active:
+            return not self._pty_backlog_pending or (
+                now - self._last_pty_paint >= _LOCAL_PTY_MAX_PAINT_STALENESS
+            )
+        quiet = (
+            not self._pty_backlog_pending
+            and now - self._last_pty_output >= _LOCAL_PTY_CATCHUP_QUIET
+        )
+        stale = (
+            now - max(self._last_pty_paint, self._pty_catchup_started)
+            >= _LOCAL_PTY_CATCHUP_MAX_STALENESS
+        )
+        return quiet or stale
 
     def _forward_pending_interrupts(self) -> None:
         pending = self._interrupts.consume()
         if not pending:
             return
         _write_pty_input(self.master_fd, b"\x03" * pending)
+        self._leave_pty_catchup(time.monotonic())
 
     def _drain_ready_pty(self) -> bool:
         """Feed a bounded PTY burst and report whether its backlog is drained.
@@ -1126,6 +1197,7 @@ class LocalPtyClient:
                 return True
             self._renderer.feed(data)
             consumed += len(data)
+            self._observe_pty_output(len(data), time.monotonic())
             if time.monotonic() >= deadline:
                 return False
         return False
@@ -1160,6 +1232,15 @@ class LocalPtyClient:
         now = time.monotonic()
         self._forward_pending_interrupts()
         wait = self._renderer.next_timeout(max(0.0, timeout), now)
+        if (
+            self._pty_catchup_active
+            and self._renderer.producer.dirty
+            and self._renderer.writer.idle
+        ):
+            wait = min(
+                max(0.0, timeout),
+                max(0.0, self._pty_catchup_deadline() - now),
+            )
         events = _terminal_events_first(self._selector.select(timeout=wait))
         drained_pty = False
         for key, _events in events:
@@ -1169,6 +1250,9 @@ class LocalPtyClient:
                     self.terminate()
                     return
                 _write_pty_input(self.master_fd, data)
+                # Interactive feedback outranks replay coalescing. A later
+                # screen-sized burst can enter catch-up mode again.
+                self._leave_pty_catchup(time.monotonic())
                 continue
             self._pty_backlog_pending = not self._drain_ready_pty()
             drained_pty = True
@@ -1178,12 +1262,21 @@ class LocalPtyClient:
             self._pty_backlog_pending = not self._drain_ready_pty()
         self._forward_pending_interrupts()
         paint_now = time.monotonic()
-        if (
-            not self._pty_backlog_pending
-            or paint_now - self._last_pty_paint
-            >= _LOCAL_PTY_MAX_PAINT_STALENESS
-        ) and self._renderer.paint_due(paint_now):
-            self._last_pty_paint = paint_now
+        catchup_was_active = self._pty_catchup_active
+        catchup_settled = (
+            catchup_was_active
+            and not self._pty_backlog_pending
+            and paint_now - self._last_pty_output >= _LOCAL_PTY_CATCHUP_QUIET
+        )
+        if self._paint_is_due(paint_now):
+            if self._renderer.paint_due(paint_now):
+                self._last_pty_paint = paint_now
+            if (
+                catchup_settled
+                and self._renderer.writer.idle
+                and not self._renderer.producer.dirty
+            ):
+                self._leave_pty_catchup(paint_now)
         self.returncode = _child_status(self.pid)
         if self.returncode is not None:
             self._drain_after_exit()
