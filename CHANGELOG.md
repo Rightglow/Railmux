@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc23] - 2026-08-15
+
 ### Fixed
 
 - Keep native-Windows attach, resume, and resize redraws in a bounded catch-up
@@ -3008,7 +3010,10 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc20...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc23...HEAD
+[0.4.0rc23]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc22...v0.4.0rc23
+[0.4.0rc22]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc21...v0.4.0rc22
+[0.4.0rc21]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc20...v0.4.0rc21
 [0.4.0rc20]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc19...v0.4.0rc20
 [0.4.0rc19]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc18...v0.4.0rc19
 [0.4.0rc18]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc17...v0.4.0rc18
