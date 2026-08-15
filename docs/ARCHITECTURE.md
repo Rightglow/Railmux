@@ -1548,8 +1548,9 @@ release markers before moving panes, while periodic reconciliation heals a
 missed hook after interruption. tmux 2.7-2.9 keeps its existing selection
 behavior because configurable hooks and pane-local options are unavailable.
 
-The `railmux ssh` client owns a different mouse boundary before input reaches
-the remote tmux client. A plain left press over a known agent route begins a
+The `railmux ssh` client and the supported native-Windows semantic PTY client
+own the same mouse boundary before input reaches tmux. A plain left press over
+a known agent route begins a
 local click candidate. If it is released without motion, the original
 press/release pair is replayed in order so pane focus, preview, and double-click
 semantics remain authoritative remotely. Once motion is reported, the local
@@ -1573,9 +1574,11 @@ opaque keyboard sequence `Ctrl-B [` remains the explicit copy-mode path.
 A semantic hover candidate may be highlighted in either visible agent route,
 but only a clean click in the already-focused agent route may become a
 client-owned semantic open. Bounded visible `http://` and `https://` tokens
-are opened locally and never sent to the remote shell. A bounded Unix-style
-path sends a typed protocol request containing only the visible pane ID and raw
-token. Besides terminal soft wraps, the recognizer can join a bounded path-only
+are opened locally and never sent to a shell. A bounded POSIX or Windows path
+is resolved against the exact visible pane. Over `railmux ssh`, it sends a typed
+protocol request containing only the visible pane ID and raw token; native
+Windows uses the same server-side pane/path authority locally. Besides terminal
+soft wraps, the recognizer can join a bounded path-only
 continuation that Codex or Claude rendered as a real indented newline; every
 physical fragment remains a separate highlight segment. This prevents an
 existing directory at the end of the first row from winning over the intended
@@ -1592,12 +1595,14 @@ shell-quoted command instead. Clean clicks in an unfocused agent continue to
 mean focus, and drags continue to mean selection, so semantic recognition
 cannot replace either established gesture.
 
-Protocol v16 separates path validation from the requested destination. The
+Protocol v16 separates remote path validation from the requested destination.
+Native Windows follows the same two-phase validation locally. The
 first response includes the remote workspace's Ask/Inside/Separate policy; an
 Inside or Separate choice is returned in a bounded typed request and the
 server revalidates pane identity, current working directory, path type, and
 access before taking action. A persistent choice updates only the shared
-remote `config.toml`.
+`config.toml`. The canonical preference is `interaction.path_open`; the
+released `ssh.path_open` key is accepted as an upgrade alias but is not written.
 
 Inside-Railmux tools are session-scoped tmux processes, with at most one shell
 and one Vim viewer for each agent slot. Pane ID, pane PID, session ID, and

@@ -92,6 +92,7 @@ from railmux.ui.workspace import (
     COMPACT_RESIZE_SEQUENCE,
 )
 from railmux.settings import Settings
+from railmux.provider_paths import provider_path
 from railmux.runtime_config import (
     activate_runtime_environment,
     check_executable,
@@ -998,6 +999,27 @@ def _pane_current_path(pane: _PaneGeometry) -> str | None:
     )
 
 
+def visible_agent_snapshots(session_id: str) -> tuple[HistorySnapshot, ...]:
+    """Return cached, geometry-only routes for local semantic interaction.
+
+    This is deliberately the same fail-closed pane authority used by the fast
+    SSH display. It does not capture history or transcript data and therefore
+    cannot make local Windows rendering fall behind provider output.
+    """
+    return tuple(
+        HistorySnapshot(
+            0,
+            pane.pane_id,
+            pane.x,
+            pane.y,
+            pane.width,
+            pane.height,
+            mouse_forwardable=pane.mouse_forwardable,
+        )
+        for pane in _list_agent_panes(session_id, use_cache=True)
+    )
+
+
 def resolve_path_result(
     session_id: str,
     request_id: int,
@@ -1020,12 +1042,13 @@ def resolve_path_result(
     current = _pane_current_path(pane)
     if current is None:
         return PathResult(request_id, PathKind.UNAVAILABLE)
-    if raw_path == "~":
+    normalized_path = provider_path(raw_path)
+    if str(normalized_path) == "~":
         candidate = Path.home()
-    elif raw_path.startswith("~/"):
-        candidate = Path.home() / raw_path[2:]
+    elif str(normalized_path).startswith("~/"):
+        candidate = Path.home() / str(normalized_path)[2:]
     else:
-        candidate = Path(raw_path)
+        candidate = normalized_path
         if not candidate.is_absolute():
             candidate = Path(current) / candidate
     try:

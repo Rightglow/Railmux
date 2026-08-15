@@ -554,13 +554,15 @@ poll_interval_ms = 1000
 # Set "nested" only when troubleshooting an unusual tmux environment.
 agent_transport = "swap" # or "nested"
 
+[interaction]
+# Clicked paths in native Windows and railmux ssh: "ask", "internal", or "external"
+path_open = "ask"
+
 [ssh]
 # Local railmux ssh history cap (default: 10000; range: 2000-20000)
 history_lines = 10000
 # Claude Code wheel history: "ask", "local", or "native"
 claude_history = "ask"
-# Clicked remote paths: "ask", "internal", or "external"
-path_open = "ask"
 ```
 
 Most users should leave `agent_transport` unchanged. Railmux automatically uses
@@ -572,8 +574,10 @@ the in-app Options screen share the same authority and preserve comments,
 formatting, order, and unknown keys. The local-only `ssh.history_lines` setting
 is intentionally file/command-line controlled because the remote TUI cannot
 configure the machine that initiated `railmux ssh`. By contrast,
-`ssh.claude_history` and `ssh.path_open` belong to the remote workspace and are
-exposed in that workspace's Options screen. A one-run Codex choice is kept only in memory. A
+`ssh.claude_history` belongs to the remote workspace. The shared
+`interaction.path_open` preference controls recognized paths in native Windows
+and `railmux ssh`; the older `ssh.path_open` spelling remains a read-only
+upgrade alias. Both current settings are exposed in Options. A one-run Codex choice is kept only in memory. A
 `This time` layout profile is stored here until it is successfully applied on
 the next launch, then removed.
 
@@ -642,10 +646,10 @@ custom paths.
 
 Under tmux the sidebar and agent share the screen, and over SSH your clipboard
 lives on the *local* machine. Ordinary Railmux copying depends on terminal
-clipboard support; `railmux ssh` additionally provides direct, pane-bounded
-drag-to-local-copy.
+clipboard support; native Windows and `railmux ssh` additionally provide
+direct, pane-bounded drag-to-local-copy.
 
-**With `railmux ssh`**: drag directly inside one agent pane. Railmux briefly
+**With native Windows or `railmux ssh`**: drag directly inside one agent pane. Railmux briefly
 highlights the visible selection and copies it to the local clipboard on
 release, using a native clipboard command where available and bounded OSC 52
 as fallback. The
@@ -796,13 +800,14 @@ copy-mode. Selection stays within that pane and viewport. `Ctrl-B [` remains
 available for explicit tmux copy-mode; `--no-mouse` gives terminal-native
 selection priority instead.
 
-#### Click URLs and remote paths
+#### Click URLs and paths
 
-Hoverable URLs and paths are recognized in either agent pane. A clean click on
-a URL opens the local browser. Remote paths are checked read-only and can open
-in a managed Vim pane inside Railmux or in a separate local terminal, with
-**Always** and **this time** choices. The first click in an unfocused agent pane
-only focuses it.
+Native Windows and `railmux ssh` recognize hoverable URLs and paths in either
+agent pane. A clean click on a URL opens the client browser. Paths are checked
+read-only and can open in a managed Vim pane inside Railmux or outside Railmux,
+with **Always** and **this time** choices. On native Windows, outside opening
+uses Windows Explorer; with `railmux ssh`, it uses a separate local terminal.
+The first click in an unfocused agent pane only focuses it.
 
 Each agent slot has at most one reusable managed shell and one Vim viewer. Use
 `t` for the shell, `T` for Vim, and Vim's `gt` / `gT` for multiple file tabs.

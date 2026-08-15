@@ -909,10 +909,10 @@ class OptionsModal(urwid.WidgetWrap):
         ))
         rows.extend([
             urwid.Divider(),
-            urwid.Text(("title", "Clicked paths in railmux ssh")),
+            urwid.Text(("title", "Clicked paths")),
             urwid.Text(
-                "Choose whether remote files open in the managed Vim below "
-                "the target agent or in a separate local terminal."
+                "Choose whether recognized paths open inside Railmux or on "
+                "the client outside Railmux."
             ),
         ])
         rows.extend(self._build_group(
@@ -920,12 +920,12 @@ class OptionsModal(urwid.WidgetWrap):
             {
                 "internal": "managed Vim; t selects shell and T returns to Vim",
                 "ask": "ask before choosing an opening surface",
-                "external": "new local terminal SSHed to the same remote host",
+                "external": "the client operating system opens the path",
             },
             labels=(
                 ("internal", "Inside · managed Vim"),
                 ("ask", "Ask every time"),
-                ("external", "Separate terminal"),
+                ("external", "Outside Railmux"),
             ),
         ))
         rows.extend([

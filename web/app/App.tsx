@@ -256,9 +256,9 @@ export default function Home() {
                 </p>
                 <p>
                   <strong>COPY</strong>
-                  With <code>railmux ssh</code>, drag inside one agent pane to
-                  copy locally. Other connections depend on terminal clipboard
-                  support.{" "}
+                  With native Windows or <code>railmux ssh</code>, drag inside
+                  one agent pane to copy locally. Other connections depend on
+                  terminal clipboard support.{" "}
                   <a href="https://github.com/Rightglow/Railmux#1-how-do-i-copy-text-from-the-agent-pane">
                     See every copy path
                   </a>

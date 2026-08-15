@@ -543,6 +543,13 @@ _URL_ASCII_CHARACTERS = frozenset(
     "-._~:/?#[]@!$&()*+,;=%"
 )
 _EMBEDDED_ABSOLUTE_PATH_RE = re.compile(r"(?:^|(?<=[^A-Za-z0-9_.@+~/-]))/")
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(
+    r"^(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+(?:[\\/]|$))"
+)
+_EMBEDDED_WINDOWS_PATH_RE = re.compile(
+    r"(?:^|(?<=[^A-Za-z0-9_.@+~\\/-]))"
+    r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+(?:[\\/]|$))"
+)
 
 
 def _clicked_character_index(
@@ -618,11 +625,13 @@ def _path_parts(token: str) -> tuple[str, int | None, int | None] | None:
             line = min(int(location.group(2)), 2_147_483_647)
     if not path or len(path.encode("utf-8")) > 4096 or "\x00" in path or "://" in path:
         return None
-    name = path.rsplit("/", 1)[-1]
+    name = re.split(r"[\\/]", path)[-1]
     path_like = (
         path == "~"
         or path.startswith(("/", "./", "../", "~/"))
+        or _WINDOWS_ABSOLUTE_PATH_RE.match(path) is not None
         or "/" in path
+        or "\\" in path
         or name in _PATH_NAMES
         or any(name.startswith(f"{prefix}.") for prefix in _PATH_NAMES)
         or _BARE_PATH_RE.fullmatch(name) is not None
@@ -679,6 +688,13 @@ def click_target_at(
                 )
             return None
         absolute = tuple(_EMBEDDED_ABSOLUTE_PATH_RE.finditer(token))
+        windows_absolute = tuple(_EMBEDDED_WINDOWS_PATH_RE.finditer(token))
+        if windows_absolute:
+            offset = windows_absolute[-1].start()
+            if start + offset <= character_index:
+                token = token[offset:]
+                start += offset
+                absolute = ()
         if absolute:
             offset = absolute[-1].start()
             if start + offset <= character_index:
@@ -1005,7 +1021,7 @@ def _target_in_rows(
 
 
 class LocalTextSelection:
-    """Own one pane-bounded, visible-screen selection for ``railmux ssh``."""
+    """Own one pane-bounded selection for a semantic Railmux display client."""
 
     def __init__(self) -> None:
         self._press: SgrMouseEvent | None = None

@@ -139,6 +139,7 @@ def _run_tmux_client_with_watchdog(
                     stdin_fd=sys.stdin.fileno(),
                     stdout_fd=sys.stdout.fileno(),
                     suppress_stderr=expected_target is not None,
+                    session_id=expected_session_id,
                 )
             except (ImportError, OSError, RuntimeError) as exc:
                 # Windows Terminal requires the semantic renderer: falling

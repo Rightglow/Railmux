@@ -13,7 +13,7 @@ from railmux.setting_contracts import (
 def test_ssh_setting_contracts_pin_values_and_activation_boundaries():
     history = SETTING_CONTRACTS["ssh.history_lines"]
     claude = SETTING_CONTRACTS["ssh.claude_history"]
-    path_open = SETTING_CONTRACTS["ssh.path_open"]
+    path_open = SETTING_CONTRACTS["interaction.path_open"]
 
     assert (history.minimum, history.maximum) == (
         SSH_HISTORY_MIN_LINES,

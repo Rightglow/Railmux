@@ -14,6 +14,8 @@ import pytest
 
 from railmux import __version__, windows_attach_relay
 from railmux.tmux_server import TmuxServerTarget
+from railmux.fast_display_input import LocalTextSelection, SgrMouseEvent
+from railmux.fast_display_protocol import HistorySnapshot
 
 
 def test_terminal_selector_batch_processes_input_before_output():
@@ -214,6 +216,120 @@ def test_local_proxy_preserves_large_bracketed_paste_byte_exact(monkeypatch):
         os.close(input_read)
         os.close(input_write)
         os.close(output_fd)
+
+
+def test_local_semantic_click_opens_url_but_replays_an_ordinary_click(monkeypatch):
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (HistorySnapshot(0, "%8", 0, 0, 80, 1),)
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    screen = SimpleNamespace(
+        width=80,
+        height=1,
+        cursor_x=10,
+        cursor_y=0,
+        rows=(b"See https://example.test/docs and ordinary text",),
+    )
+    renderer = MagicMock()
+    renderer.screen = screen
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    opened = MagicMock(
+        return_value=windows_attach_relay.local_open.OpenResult(
+            True, "opened", "success"
+        )
+    )
+    monkeypatch.setattr(windows_attach_relay.local_open, "open_url", opened)
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(SgrMouseEvent(b"url-down", 0, 8, 1, True))
+        client._forward_input_part(SgrMouseEvent(b"url-up", 0, 8, 1, False))
+        opened.assert_called_once_with("https://example.test/docs")
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+
+        client._forward_input_part(SgrMouseEvent(b"plain-down", 0, 40, 1, True))
+        client._forward_input_part(SgrMouseEvent(b"plain-up", 0, 40, 1, False))
+        assert child_socket.recv(64) == b"plain-downplain-up"
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_semantic_drag_copies_without_forwarding_mouse(monkeypatch):
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    renderer = MagicMock()
+    renderer.screen = SimpleNamespace(
+        width=20, height=1, cursor_x=1, cursor_y=0, rows=(b"select me",)
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(SgrMouseEvent(b"down", 0, 1, 1, True))
+        client._forward_input_part(SgrMouseEvent(b"drag", 32, 6, 1, True))
+        client._forward_input_part(SgrMouseEvent(b"up", 0, 6, 1, False))
+
+        renderer.copy_to_clipboard.assert_called_once_with(b"select")
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_semantic_url_in_unfocused_agent_replays_focus_click():
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    proxy_socket, child_socket = socket.socketpair()
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (
+        HistorySnapshot(0, "%8", 0, 0, 20, 1),
+        HistorySnapshot(0, "%9", 20, 0, 30, 1),
+    )
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    renderer = MagicMock()
+    renderer.screen = SimpleNamespace(
+        width=50,
+        height=1,
+        cursor_x=2,
+        cursor_y=0,
+        rows=(b"focused pane".ljust(20) + b"https://example.test",),
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    child_socket.settimeout(0.5)
+    try:
+        client._forward_input_part(SgrMouseEvent(b"down", 0, 25, 1, True))
+        client._forward_input_part(SgrMouseEvent(b"up", 0, 25, 1, False))
+
+        assert child_socket.recv(32) == b"downup"
+        renderer.copy_to_clipboard.assert_not_called()
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
 
 
 def test_local_proxy_starts_at_exact_entry_geometry(monkeypatch):

@@ -158,6 +158,19 @@ def test_ssh_path_open_accepts_documented_choices(tmp_path, value):
     assert load_config(config_path=path).ssh_path_open == value
 
 
+def test_interaction_path_open_wins_over_released_ssh_alias(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[ssh]\npath_open = "external"\n'
+        '[interaction]\npath_open = "internal"\n'
+    )
+
+    config = load_config(config_path=path)
+
+    assert config.interaction_path_open == "internal"
+    assert config.ssh_path_open == "internal"
+
+
 @pytest.mark.parametrize("value", ('"sometimes"', '["internal"]', "true", "1"))
 def test_ssh_path_open_rejects_unknown_choice(tmp_path, value):
     path = tmp_path / "config.toml"

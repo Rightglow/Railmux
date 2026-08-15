@@ -93,7 +93,10 @@ def test_path_open_policy_round_trips_and_refreshes(settings, policy):
 
     assert helper.set_path_open_policy(policy)
     assert running_ui.path_open_policy == policy
-    assert tomlkit.parse(path.read_text()).unwrap()["ssh"]["path_open"] == policy
+    assert (
+        tomlkit.parse(path.read_text()).unwrap()["interaction"]["path_open"]
+        == policy
+    )
 
 
 def test_malformed_config_is_never_overwritten(tmp_path, monkeypatch):

@@ -87,6 +87,13 @@ class OpenResult:
 
 
 def _detached_popen(argv: Sequence[str]) -> None:
+    environ = None
+    if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2":
+        # Native Windows launchers must receive URLs and drive paths verbatim;
+        # MSYS2's ordinary POSIX-to-Windows argv conversion is neither needed
+        # nor safe for these already validated arguments.
+        environ = dict(os.environ)
+        environ["MSYS2_ARG_CONV_EXCL"] = "*"
     subprocess.Popen(
         list(argv),
         stdin=subprocess.DEVNULL,
@@ -94,6 +101,7 @@ def _detached_popen(argv: Sequence[str]) -> None:
         stderr=subprocess.DEVNULL,
         start_new_session=True,
         close_fds=True,
+        env=environ,
     )
 
 
@@ -108,6 +116,9 @@ def _url_opener() -> tuple[str, ...] | None:
     if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
         if executable := shutil.which("wslview"):
             return (executable,)
+        if executable := shutil.which("explorer.exe"):
+            return (executable,)
+    if os.environ.get("RAILMUX_WINDOWS_RUNTIME") == "msys2":
         if executable := shutil.which("explorer.exe"):
             return (executable,)
     if executable := shutil.which("xdg-open"):
@@ -148,6 +159,45 @@ def open_url(url: str) -> OpenResult:
             "warning",
         )
     return OpenResult(True, "Opened URL in local browser", "success")
+
+
+def open_windows_path(path: str, *, directory: bool) -> OpenResult:
+    """Open one already validated managed-Windows path without a shell."""
+    explorer = shutil.which("explorer.exe")
+    cygpath = shutil.which("cygpath")
+    if explorer is None or cygpath is None:
+        return OpenResult(
+            False,
+            "Windows path opener unavailable · path copied",
+            "warning",
+            path.encode("utf-8"),
+        )
+    try:
+        native = subprocess.check_output(
+            (cygpath, "-w", "--", path),
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+            encoding="utf-8",
+            errors="strict",
+        ).rstrip("\r\n")
+        if not native or any(character in native for character in "\x00\r\n"):
+            raise ValueError
+        _detached_popen((explorer, native))
+    except (OSError, UnicodeError, ValueError, subprocess.SubprocessError):
+        return OpenResult(
+            False,
+            "Could not open Windows path · path copied",
+            "warning",
+            path.encode("utf-8"),
+        )
+    return OpenResult(
+        True,
+        "Opened directory outside Railmux"
+        if directory
+        else "Opened file outside Railmux",
+        "success",
+    )
 
 
 def is_vim_text_path(path: str) -> bool:

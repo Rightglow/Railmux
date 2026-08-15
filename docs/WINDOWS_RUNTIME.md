@@ -199,6 +199,11 @@ opens a WSL shell and runs the ordinary POSIX product there.
   The producer is provider-neutral and shares CJK width, indexed-colour,
   scroll-region, REP, bracketed-paste/focus-mode, and OSC 52 behavior with the
   SSH display path.
+  The entry client also consumes the shared pane-bounded semantic mouse layer:
+  a drag copies visible agent text locally, clean HTTP(S) clicks open the
+  Windows browser, and validated POSIX/drive/UNC paths follow the shared
+  `interaction.path_open` policy. Sidebar, status, right-click, wheel, and
+  click-without-drag events retain their existing tmux/UI routing.
   Input remains immediate and byte-exact; resize still targets only this PTY;
   Ctrl-C still reaches the focused tmux pane. Railmux does not edit provider
   configuration, argv, or history. The supported Windows Terminal route has no

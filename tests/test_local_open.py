@@ -42,6 +42,47 @@ def test_url_without_opener_falls_back_to_copy(monkeypatch):
     assert result.copy_data == b"https://example.test"
 
 
+def test_managed_windows_url_and_path_openers_use_direct_argv(monkeypatch):
+    launched: list[tuple[str, ...]] = []
+    monkeypatch.setattr(local_open.sys, "platform", "linux")
+    monkeypatch.setenv("RAILMUX_WINDOWS_RUNTIME", "msys2")
+    monkeypatch.setattr(
+        local_open.shutil,
+        "which",
+        lambda name: {
+            "explorer.exe": "/c/Windows/explorer.exe",
+            "cygpath": "/usr/bin/cygpath",
+        }.get(name),
+    )
+    monkeypatch.setattr(
+        local_open.subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: "C:\\work\\main.py\n",
+    )
+    monkeypatch.setattr(
+        local_open,
+        "_detached_popen",
+        lambda argv: launched.append(tuple(argv)),
+    )
+
+    assert local_open.open_url("https://example.test").opened
+    assert local_open.open_windows_path("/c/work/main.py", directory=False).opened
+
+    assert launched == [
+        ("/c/Windows/explorer.exe", "https://example.test"),
+        ("/c/Windows/explorer.exe", "C:\\work\\main.py"),
+    ]
+
+
+def test_managed_windows_path_open_failure_copies_validated_path(monkeypatch):
+    monkeypatch.setattr(local_open.shutil, "which", lambda _name: None)
+
+    result = local_open.open_windows_path("/c/work/main.py", directory=False)
+
+    assert not result.opened
+    assert result.copy_data == b"/c/work/main.py"
+
+
 def test_remote_html_uses_vim_with_location_and_safe_ssh_argv():
     argv = local_open.build_remote_open_argv(
         "work-host",

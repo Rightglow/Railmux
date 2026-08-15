@@ -29,6 +29,7 @@ MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "updates": ("auto_update",),
     "projects": ("show_empty_projects",),
     "live": ("poll_interval_ms", "agent_transport"),
+    "interaction": ("path_open",),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
 
@@ -257,22 +258,27 @@ class Settings:
             return False
         return self._update_section("ssh", {"claude_history": policy})
 
-    # -- Fast SSH clicked paths -----------------------------------------
+    # -- Semantic clicked paths -----------------------------------------
     @property
     def path_open_policy(self) -> str:
         self._load()
-        policy = self._get("ssh", "path_open")
+        policy = self._get("interaction", "path_open")
+        if policy is None:
+            policy = self._get("ssh", "path_open")
         return (
             policy
             if isinstance(policy, str)
-            and policy in choices_for("ssh.path_open")
+            and policy in choices_for("interaction.path_open")
             else "ask"
         )
 
     def set_path_open_policy(self, policy: str) -> bool:
-        if policy not in choices_for("ssh.path_open"):
+        if policy not in choices_for("interaction.path_open"):
             return False
-        return self._update_section("ssh", {"path_open": policy})
+        # Do not delete the legacy key here: another running 0.3.x process
+        # may still rely on it. The canonical key wins immediately and reset
+        # operations know about both spellings.
+        return self._update_section("interaction", {"path_open": policy})
 
     # -- Saved outer-workspace geometry ---------------------------------
     @property

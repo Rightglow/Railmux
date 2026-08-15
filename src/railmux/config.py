@@ -37,7 +37,12 @@ class Config:
     show_empty_projects: bool = False
     ssh_history_lines: int = SSH_HISTORY_DEFAULT_LINES
     ssh_claude_history: str = "ask"
-    ssh_path_open: str = "ask"
+    interaction_path_open: str = "ask"
+
+    @property
+    def ssh_path_open(self) -> str:
+        """Compatibility alias for clients released before 0.4.0."""
+        return self.interaction_path_open
 
     def resolved_codex_home(self) -> Path:
         """The one resolved ``CODEX_HOME`` directory.
@@ -125,6 +130,7 @@ def load_config(config_path: Path | None = None) -> Config:
     live = _table(data, "live")
     projects = _table(data, "projects")
     ssh = _table(data, "ssh")
+    interaction = _table(data, "interaction")
 
     poll_value = live.get("poll_interval_ms", 1000)
     if isinstance(poll_value, bool):
@@ -161,14 +167,16 @@ def load_config(config_path: Path | None = None) -> Config:
         raise ConfigError(
             'ssh.claude_history must be "ask", "local", or "native"'
         )
-    path_open = ssh.get("path_open", "ask")
+    # The transport-neutral key wins. The released SSH-only spelling remains
+    # a read alias so an upgrade never silently forgets the user's choice.
+    canonical_path_open = "path_open" in interaction
+    path_open = interaction.get("path_open", ssh.get("path_open", "ask"))
     if (
         not isinstance(path_open, str)
-        or path_open not in choices_for("ssh.path_open")
+        or path_open not in choices_for("interaction.path_open")
     ):
-        raise ConfigError(
-            'ssh.path_open must be "ask", "internal", or "external"'
-        )
+        label = "interaction.path_open" if canonical_path_open else "ssh.path_open"
+        raise ConfigError(f'{label} must be "ask", "internal", or "external"')
 
     return Config(
         tmux_binary=_tmux_binary(tmux),
@@ -182,5 +190,5 @@ def load_config(config_path: Path | None = None) -> Config:
         show_empty_projects=projects.get("show_empty_projects") is True,
         ssh_history_lines=history_lines,
         ssh_claude_history=claude_history,
-        ssh_path_open=path_open,
+        interaction_path_open=path_open,
     )

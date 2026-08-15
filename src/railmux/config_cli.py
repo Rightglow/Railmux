@@ -106,7 +106,7 @@ _BEHAVIOR_SETTINGS = (
         "set_claude_history_policy",
     ),
     _PolicySetting(
-        "Clicked paths in railmux ssh", "ssh", "path_open",
+        "Clicked paths", "interaction", "path_open",
         "path_open_policy",
         (("internal", "Always open inside with managed Vim"),
          ("ask", "Ask every time"),
@@ -119,6 +119,7 @@ _BEHAVIOR_KEYS = {
     "ui": ("layout_retention", "layout_profile"),
     "codex": ("auto_run",),
     "updates": ("auto_update",),
+    "interaction": ("path_open",),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
 _PROGRAM_KEYS = {
@@ -404,6 +405,7 @@ def _behavior_menu(
             if _confirm(stdin, stdout, "Reset every behavior option?"):
                 behavior_keys = dict(_BEHAVIOR_KEYS)
                 if remote_context:
+                    behavior_keys["interaction"] = ("path_open",)
                     behavior_keys["ssh"] = ("claude_history", "path_open")
                 _saved(settings.reset_keys(behavior_keys), feedback)
             continue
@@ -681,6 +683,7 @@ def _recover_invalid_config(
 def _managed_reset_keys(*, remote_context: bool) -> dict[str, tuple[str, ...]]:
     keys = dict(MANAGED_CONFIG_KEYS)
     if remote_context:
+        keys["interaction"] = ("path_open",)
         keys["ssh"] = ("claude_history", "path_open")
     return keys
 

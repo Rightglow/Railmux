@@ -961,6 +961,7 @@ def test_managed_windows_terminal_uses_local_cursor_proxy(monkeypatch, capsys):
         stdin_fd=10,
         stdout_fd=11,
         suppress_stderr=True,
+        session_id="$7",
     )
     popen.assert_not_called()
     raw.assert_called_once_with(10)

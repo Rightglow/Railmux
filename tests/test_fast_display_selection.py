@@ -308,6 +308,34 @@ def test_local_text_selection_opens_url_or_remote_path_only_on_clean_release():
     )
 
 
+def test_local_text_selection_recognizes_windows_drive_and_unc_paths():
+    route = HistorySnapshot(1, "%8", 0, 0, 120, 2)
+    source = SelectionSource(
+        route,
+        (
+            rb"changed C:\work\rail mux\ignored.py C:\work\railmux\app.py:12:3",
+            rb"share \\server\team\project\README.md",
+        ),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 42, 1, True), source)
+    drive = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 42, 1, False), source
+    ).open_target
+    assert drive is not None
+    assert drive.value == r"C:\work\railmux\app.py"
+    assert (drive.line, drive.column) == (12, 3)
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 12, 2, True), source)
+    unc = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 12, 2, False), source
+    ).open_target
+    assert unc is not None
+    assert unc.value == r"\\server\team\project\README.md"
+
+
 def test_local_text_selection_stops_url_before_chinese_prose():
     route = HistorySnapshot(1, "%8", 0, 0, 100, 1)
     source = SelectionSource(

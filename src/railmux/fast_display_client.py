@@ -993,13 +993,13 @@ class TerminalSurface:
                 f"{' ' * max(0, inner - plain_width)}{border}│{normal}"
             )
 
-        title = " Open remote path "
+        title = " Open path "
         rows = (
             f"{border}┌\033[1m{title}\033[22m{'─' * (inner - len(title))}┐{normal}",
             middle("[1]", "Always use Railmux managed Vim"),
             middle("[2]", "Use Railmux managed Vim this time"),
-            middle("[3]", "Always open in a separate terminal"),
-            middle("[4]", "Open in a separate terminal this time"),
+            middle("[3]", "Always open outside Railmux"),
+            middle("[4]", "Open outside Railmux this time"),
             middle("[Esc]", "Cancel"),
             f"{border}└{'─' * inner}┘{normal}",
         )

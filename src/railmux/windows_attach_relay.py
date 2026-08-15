@@ -33,12 +33,22 @@ import sys
 import termios
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
 from railmux import restart_state, tmux_server
 from railmux.fast_display_client import ScreenModel, TerminalSurface
+from railmux.fast_display_input import (
+    BracketedPasteInput,
+    ClickTarget,
+    LocalTextSelection,
+    SelectionSource,
+    SgrMouseEvent,
+    TerminalInputDecoder,
+)
+from railmux.fast_display_protocol import HistorySnapshot, PathKind, PathResult
+from railmux import local_open
 from railmux.provider_paths import running_in_managed_windows_wrapper
 from railmux.terminal_screen import ScreenProducer
 
@@ -235,6 +245,44 @@ class _SemanticTerminalRenderer:
         self._synchronized_since: float | None = None
         self._synchronized_bypassed = False
         self._pending_clipboard: bytes | None = None
+        self._screen = None
+        self._selection: tuple[tuple[int, int, bytes], ...] = ()
+        self._selection_dirty_rows: set[int] = set()
+        self._path_prompt_visible = False
+
+    @property
+    def screen(self):
+        return self._screen
+
+    def set_selection(self, selection: tuple[tuple[int, int, bytes], ...]) -> None:
+        if selection == self._selection:
+            return
+        self._selection_dirty_rows.update(row for row, _column, _text in self._selection)
+        self._selection_dirty_rows.update(row for row, _column, _text in selection)
+        self._selection = selection
+
+    def copy_to_clipboard(self, data: bytes) -> None:
+        self._pending_clipboard = data
+
+    def show_status(self, message: str, *, level: str = "info") -> None:
+        if self.writer.idle:
+            self.surface.show_local_status(
+                message,
+                level=level,
+                expires_at=time.monotonic() + 2.0,
+            )
+
+    def show_path_prompt(self) -> None:
+        self._path_prompt_visible = True
+        if self.writer.idle:
+            self.surface.show_path_open_prompt()
+
+    def clear_path_prompt(self) -> None:
+        if not self._path_prompt_visible:
+            return
+        self._path_prompt_visible = False
+        if self._screen is not None:
+            self._selection_dirty_rows.update(range(self._screen.height))
 
     def feed(self, payload: bytes) -> None:
         self.producer.feed(payload)
@@ -284,6 +332,8 @@ class _SemanticTerminalRenderer:
             return max(0.0, min(maximum, self._next_frame - now))
         if self._pending_clipboard is not None:
             return max(0.0, min(maximum, self._next_frame - now))
+        if self._selection_dirty_rows:
+            return max(0.0, min(maximum, self._next_frame - now))
         return maximum
 
     def paint_due(self, now: float, *, force: bool = False) -> bool:
@@ -293,12 +343,25 @@ class _SemanticTerminalRenderer:
             return False
         if self._synchronized_update_blocked(now):
             return False
+        if self.surface.expire_local_status(now) and self._screen is not None:
+            self._selection_dirty_rows.add(self._screen.height - 1)
         if self._pending_clipboard is not None:
             clipboard = self._pending_clipboard
             self._pending_clipboard = None
             self.surface.copy_to_clipboard(clipboard)
         update = self.producer.take_update()
         if update is None:
+            if self._screen is not None and self._selection_dirty_rows:
+                rows = set(self._selection_dirty_rows)
+                self._selection_dirty_rows.clear()
+                self.surface.paint_changed_rows(
+                    self._screen,
+                    (),
+                    self._selection,
+                    rows,
+                )
+                self._next_frame = now + _LOCAL_FRAME_INTERVAL
+                return True
             return False
         screen = self.model.apply(
             update,
@@ -306,7 +369,16 @@ class _SemanticTerminalRenderer:
         )
         if screen is None:
             raise WindowsAttachRelayError("local terminal screen lost its update base")
-        self.surface.paint(screen)
+        if self._selection_dirty_rows:
+            screen = replace(
+                screen,
+                changed_rows=tuple(sorted(set(screen.changed_rows) | self._selection_dirty_rows)),
+            )
+            self._selection_dirty_rows.clear()
+        self._screen = screen
+        self.surface.paint(screen, selection=self._selection)
+        if self._path_prompt_visible:
+            self.surface.show_path_open_prompt()
         self._next_frame = now + _LOCAL_FRAME_INTERVAL
         return True
 
@@ -1072,6 +1144,7 @@ class LocalPtyClient:
         stdin_fd: int,
         stdout_fd: int,
         forward_interrupts: bool = False,
+        session_id: str | None = None,
     ) -> None:
         self.pid = pid
         self.master_fd = master_fd
@@ -1083,6 +1156,13 @@ class LocalPtyClient:
         self._selector.register(stdin_fd, selectors.EVENT_READ, "terminal")
         self._size = _terminal_size(stdin_fd)
         self._renderer = _SemanticTerminalRenderer(stdout_fd, *self._size)
+        self._session_id = session_id
+        self._input_decoder = TerminalInputDecoder()
+        self._selection = LocalTextSelection()
+        self._routes: tuple[HistorySnapshot, ...] = ()
+        self._routes_checked_at = 0.0
+        self._path_prompt: tuple[ClickTarget, PathResult] | None = None
+        self._path_prompt_mouse_button: int | None = None
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
         self._closed = False
@@ -1097,6 +1177,209 @@ class LocalPtyClient:
         self._pty_burst_started = started
         self._pty_burst_bytes = 0
 
+    def _refresh_routes(self, *, force: bool = False) -> None:
+        if self._session_id is None:
+            self._routes = ()
+            return
+        now = time.monotonic()
+        if not force and now - self._routes_checked_at < 0.25:
+            return
+        self._routes_checked_at = now
+        # Import lazily so ordinary POSIX and non-interactive Windows launch
+        # paths do not acquire the fast-display server dependency graph.
+        from railmux.fast_display_server import visible_agent_snapshots
+
+        routes = visible_agent_snapshots(self._session_id)
+        if self._selection.validate_routes(routes):
+            self._renderer.set_selection(self._selection.segments())
+        self._routes = routes
+
+    def _selection_source(self, event: SgrMouseEvent) -> SelectionSource | None:
+        screen = self._renderer.screen
+        if screen is None:
+            return None
+        self._refresh_routes()
+        x, y = event.x - 1, event.y - 1
+        route = next(
+            (
+                candidate
+                for candidate in self._routes
+                if candidate.x <= x < candidate.x + candidate.width
+                and candidate.y <= y < candidate.y + candidate.height
+            ),
+            None,
+        )
+        if route is None:
+            return None
+        rows = screen.rows[route.y : route.y + route.height]
+        if len(rows) != route.height:
+            return None
+        focused = next(
+            (
+                candidate
+                for candidate in self._routes
+                if candidate.x <= screen.cursor_x < candidate.x + candidate.width
+                and candidate.y <= screen.cursor_y < candidate.y + candidate.height
+            ),
+            None,
+        )
+        return SelectionSource(
+            route,
+            rows,
+            route.x,
+            semantic_open=focused is not None and focused.pane_id == route.pane_id,
+        )
+
+    def _show_open_result(self, result: local_open.OpenResult) -> None:
+        if result.copy_data:
+            self._renderer.copy_to_clipboard(result.copy_data)
+        self._renderer.show_status(result.message, level=result.level)
+
+    def _apply_path_choice(
+        self,
+        target: ClickTarget,
+        resolved: PathResult,
+        policy: str,
+        *,
+        persistent: bool,
+    ) -> None:
+        if self._session_id is None:
+            return
+        from railmux.fast_display_server import apply_path_open_request
+
+        result = apply_path_open_request(
+            self._session_id,
+            resolved.request_id,
+            target.pane_id,
+            target.value,
+            policy,
+            persistent,
+            target.line,
+            target.column,
+        )
+        if not result.applied:
+            self._renderer.show_status(result.message, level=result.level)
+            return
+        if policy == "external":
+            self._show_open_result(
+                local_open.open_windows_path(
+                    resolved.path,
+                    directory=resolved.kind is PathKind.DIRECTORY,
+                )
+            )
+            return
+        self._renderer.show_status(result.message, level=result.level)
+
+    def _open_target(self, target: ClickTarget) -> None:
+        if target.kind == "url":
+            self._show_open_result(local_open.open_url(target.value))
+            return
+        if self._session_id is None:
+            return
+        from railmux.fast_display_server import resolve_path_result
+
+        resolved = resolve_path_result(
+            self._session_id,
+            1,
+            target.pane_id,
+            target.value,
+        )
+        if resolved.kind is PathKind.UNAVAILABLE:
+            self._renderer.show_status(
+                "Path is no longer available in this workspace",
+                level="warning",
+            )
+        elif resolved.policy == "ask":
+            self._path_prompt = (target, resolved)
+            self._renderer.show_path_prompt()
+        else:
+            self._apply_path_choice(
+                target,
+                resolved,
+                resolved.policy,
+                persistent=False,
+            )
+
+    def _forward_input_part(
+        self,
+        part: bytes | BracketedPasteInput | SgrMouseEvent,
+    ) -> None:
+        if (
+            self._path_prompt_mouse_button is not None
+            and isinstance(part, SgrMouseEvent)
+        ):
+            suppress = (
+                not part.pressed
+                and part.button & 3 == self._path_prompt_mouse_button
+            )
+            self._path_prompt_mouse_button = None
+            if suppress:
+                return
+        if self._path_prompt is not None:
+            target, resolved = self._path_prompt
+            choice = None
+            if isinstance(part, bytes):
+                choice = {
+                    b"1": ("internal", True),
+                    b"2": ("internal", False),
+                    b"3": ("external", True),
+                    b"4": ("external", False),
+                }.get(part)
+            elif isinstance(part, SgrMouseEvent):
+                choice = self._renderer.surface.path_open_prompt_choice(part)
+                if choice is not None:
+                    self._path_prompt_mouse_button = part.button & 3
+            if choice is not None:
+                self._path_prompt = None
+                self._renderer.clear_path_prompt()
+                self._apply_path_choice(
+                    target,
+                    resolved,
+                    choice[0],
+                    persistent=choice[1],
+                )
+                return
+            if part == b"\x1b":
+                self._path_prompt = None
+                self._renderer.clear_path_prompt()
+                self._renderer.show_status("Path opening cancelled")
+                return
+            # The prompt is local authority. Unknown keys, paste, hover, and
+            # clicks outside it must not leak through to the provider pane.
+            return
+        if isinstance(part, BracketedPasteInput):
+            _write_pty_input(self.master_fd, part.raw)
+            return
+        if isinstance(part, bytes):
+            if self._selection.cancel():
+                self._renderer.set_selection(self._selection.segments())
+            _write_pty_input(self.master_fd, part)
+            return
+        screen = self._renderer.screen
+        logical_height = self._size[1] if screen is None else screen.height
+        event = self._renderer.surface.translate_mouse_event(
+            part,
+            logical_height=logical_height,
+        )
+        source = self._selection_source(event)
+        if event.is_hover_motion:
+            if self._selection.hover(event, source):
+                self._renderer.set_selection(self._selection.segments())
+            return
+        action = self._selection.pointer_event(event, source)
+        if action.repaint:
+            self._renderer.set_selection(self._selection.segments())
+        for replay in action.replay_events:
+            _write_pty_input(self.master_fd, replay.raw)
+        if action.copy_data is not None:
+            self._renderer.copy_to_clipboard(action.copy_data)
+            count = len(action.copy_data.decode("utf-8", errors="replace"))
+            self._renderer.show_status(f"Copied {count:,} chars.", level="success")
+        if action.open_target is not None:
+            self._open_target(action.open_target)
+        if not action.handled:
+            _write_pty_input(self.master_fd, event.raw)
+
     def poll(self) -> int | None:
         return self.returncode
 
@@ -1107,6 +1390,10 @@ class LocalPtyClient:
         _set_winsize(self.master_fd, *size)
         self._size = size
         self._renderer.resize(*size)
+        self._selection.cancel()
+        self._renderer.set_selection(())
+        self._routes = ()
+        self._routes_checked_at = 0.0
         self._enter_pty_catchup(time.monotonic(), restart=True)
         try:
             os.killpg(self.pid, signal.SIGWINCH)
@@ -1249,7 +1536,8 @@ class LocalPtyClient:
                 if not data:
                     self.terminate()
                     return
-                _write_pty_input(self.master_fd, data)
+                for part in self._input_decoder.feed(data):
+                    self._forward_input_part(part)
                 # Interactive feedback outranks replay coalescing. A later
                 # screen-sized burst can enter catch-up mode again.
                 self._leave_pty_catchup(time.monotonic())
@@ -1261,6 +1549,8 @@ class LocalPtyClient:
             # again without waiting so an EAGAIN can publish the settled frame.
             self._pty_backlog_pending = not self._drain_ready_pty()
         self._forward_pending_interrupts()
+        for part in self._input_decoder.flush_pending():
+            self._forward_input_part(part)
         paint_now = time.monotonic()
         catchup_was_active = self._pty_catchup_active
         catchup_settled = (
@@ -1345,6 +1635,7 @@ def start_local_pty_client(
     stdin_fd: int,
     stdout_fd: int,
     suppress_stderr: bool = False,
+    session_id: str | None = None,
 ) -> LocalPtyClient:
     """Start the managed-Windows semantic PTY client without addressing a server."""
     if not running_in_managed_windows_wrapper(environ):
@@ -1358,13 +1649,14 @@ def start_local_pty_client(
         suppress_stderr=suppress_stderr,
     )
     try:
-        return LocalPtyClient(
-            pid,
-            master_fd,
-            stdin_fd=stdin_fd,
-            stdout_fd=stdout_fd,
-            forward_interrupts=True,
-        )
+        kwargs = {
+            "stdin_fd": stdin_fd,
+            "stdout_fd": stdout_fd,
+            "forward_interrupts": True,
+        }
+        if session_id is not None:
+            kwargs["session_id"] = session_id
+        return LocalPtyClient(pid, master_fd, **kwargs)
     except BaseException:
         _stop_child(pid)
         try:

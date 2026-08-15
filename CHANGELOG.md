@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc24] - 2026-08-15
+
+### Added
+
+- Add pane-bounded drag-to-copy and clean URL/path clicks to the supported
+  native-Windows local renderer. It reuses the exact semantic selection and
+  fail-closed pane/path authority from `railmux ssh`, recognizes POSIX,
+  Windows-drive, and UNC paths, and leaves sidebar, status, wheel, right-click,
+  ordinary click, resize, paste, Ctrl-C, and tmux copy-mode routing unchanged.
+
+### Changed
+
+- Move the clicked-path preference to transport-neutral
+  `interaction.path_open`. The released `ssh.path_open` spelling remains a
+  validated read alias, while Options and future writes converge on the new
+  key. HTTP(S) clicks remain strict and configuration-free.
+
 ## [0.4.0rc23] - 2026-08-15
 
 ### Fixed
