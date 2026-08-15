@@ -168,6 +168,17 @@ Shutdown uses the same writer order. After one bounded wait it discards stale
 unsent frames but retains the authoritative terminal-mode reset behind the
 single in-flight write; the launcher does not race a direct reset ahead of it.
 
+Backpressure verification is part of this renderer contract. PTY,
+display-transport, and terminal-renderer changes must cover a producer burst
+larger than one production read, a slow or blocked downstream writer, and input
+arriving while output remains busy; tiny finite in-memory frames are not
+sufficient evidence. Tests must assert bounded queue or state growth,
+latest-screen rather than intermediate-frame replay, continued input and
+health-loop progress, and the ordinary low-volume path. A Windows or SSH
+renderer change must also demonstrate that native POSIX local attach remains
+outside the changed path unless the product contract explicitly expands that
+boundary.
+
 The producer defers sampling while an application DEC synchronized-output
 frame is open. A transient `EL 2` observed before the provider restores its
 prompt is therefore not physical output. An unclosed frame has a bounded 250 ms hold;

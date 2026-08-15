@@ -62,13 +62,8 @@ pane with a transcript locator, styled output, and deep history), rather than
 relying only on isolated helper tests. A new test that merely codifies a
 changed implementation is not evidence that established behavior survived.
 
-For PTY, display-transport, or terminal-renderer changes, tiny in-memory frames
-are not sufficient backpressure evidence. Include a producer burst larger than
-one production read, a slow or blocked downstream writer, and input arriving
-while output is busy. Assert bounded queue/state growth, latest-screen rather
-than intermediate-frame replay, continued input/health-loop progress, and the
-ordinary low-volume path. Keep native POSIX local attach outside a Windows/SSH
-renderer change unless the product request explicitly expands that boundary.
+For PTY, display-transport, or terminal-renderer changes, follow the
+backpressure verification contract in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Before declaring a change ready to commit or merge, perform a closure review
 of the complete diff, not only a correctness pass:
