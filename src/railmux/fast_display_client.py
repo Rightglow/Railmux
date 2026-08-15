@@ -1330,9 +1330,10 @@ class TerminalSurface:
         self.stream.write(b"".join(rendered))
         self.stream.flush()
 
-    def close(self) -> None:
+    def close_payload(self) -> bytes:
+        """Return the authoritative terminal-mode restoration payload."""
         if not self.active:
-            return
+            return b""
         controls = [b"\033[0m\033[?7h\033[?25h"]
         if self._transport_bracketed_paste:
             controls.append(b"\033[?2004l")
@@ -1341,7 +1342,13 @@ class TerminalSurface:
         if self.mouse_active:
             controls.append(self._mouse_mode(False))
         controls.append(b"\033[?1049l")
-        self.stream.write(b"".join(controls))
+        return b"".join(controls)
+
+    def close(self) -> None:
+        payload = self.close_payload()
+        if not payload:
+            return
+        self.stream.write(payload)
         self.stream.flush()
         self.terminal_modes = TerminalMode.NONE
         self._transport_bracketed_paste = False

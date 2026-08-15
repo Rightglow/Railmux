@@ -287,10 +287,14 @@ def _run_tmux_client_with_watchdog(
             # supported path prevents. Stop only this attach client; the
             # workspace and provider panes remain alive.
             _stop_tmux_client(local_proxy)
-            local_proxy.close()
-            local_proxy = None
-            _restore_terminal(attributes)
-            _reset_terminal_modes(sys.stdout.fileno())
+            restore_deferred = False
+            try:
+                restore_deferred = local_proxy.close() is True
+            finally:
+                local_proxy = None
+                _restore_terminal(attributes)
+                if not restore_deferred:
+                    _reset_terminal_modes(sys.stdout.fileno())
             print(
                 "error: the managed Windows terminal renderer stopped; the "
                 "existing workspace was left running; run 'railmux doctor' "
@@ -305,8 +309,13 @@ def _run_tmux_client_with_watchdog(
         # exits. Restore it before a bounded recovery probe or user message.
         _restore_terminal(attributes)
         if local_proxy is not None:
-            local_proxy.close()
-            local_proxy = None
+            restore_deferred = False
+            try:
+                restore_deferred = local_proxy.close() is True
+            finally:
+                local_proxy = None
+                if not restore_deferred:
+                    _reset_terminal_modes(sys.stdout.fileno())
         current_target = None
         if returncode and expected_target is not None:
             try:
@@ -432,11 +441,23 @@ def _run_tmux_client_with_watchdog(
             _reset_terminal_modes(sys.stdout.fileno())
         return 130
     finally:
-        if local_proxy is not None:
-            local_proxy.close()
-        if relay is not None:
-            relay.close()
-        _restore_terminal(attributes)
+        try:
+            if local_proxy is not None:
+                restore_deferred = False
+                try:
+                    restore_deferred = local_proxy.close() is True
+                finally:
+                    if not restore_deferred:
+                        _reset_terminal_modes(sys.stdout.fileno())
+            if relay is not None:
+                restore_deferred = False
+                try:
+                    restore_deferred = relay.close() is True
+                finally:
+                    if not restore_deferred:
+                        _reset_terminal_modes(sys.stdout.fileno())
+        finally:
+            _restore_terminal(attributes)
 
 
 def main(argv: list[str] | None = None) -> int:

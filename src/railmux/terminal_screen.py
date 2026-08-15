@@ -294,17 +294,50 @@ def _style_key(char: object) -> tuple[object, ...]:
     )
 
 
+_DEFAULT_STYLE_KEY = (
+    "default",
+    "default",
+    False,
+    False,
+    False,
+    False,
+    False,
+    False,
+)
+
+
+def _last_rendered_column(row: object, columns: int) -> int:
+    """Return the exclusive end of content that survives an EL 2 repaint.
+
+    TerminalSurface clears a changed physical row before writing this
+    serialization.  Default trailing blanks are therefore redundant, and on
+    a large Windows Terminal viewport they can dominate every local semantic
+    frame.  Styled blanks remain significant because their background or
+    decoration is visible.
+    """
+    for column in range(columns - 1, -1, -1):
+        char = row[column]
+        if char.data not in {"", " "} or _style_key(char) != _DEFAULT_STYLE_KEY:
+            return column + 1
+    return 0
+
+
 def render_rows(screen: object) -> tuple[bytes, ...]:
-    """Render independently paintable rows with allowlisted SGR controls."""
+    """Render allowlisted rows for consumers that clear the full row first.
+
+    Default trailing blanks are intentionally omitted. Every shared consumer
+    must erase the row or overlay width before writing one of these byte rows.
+    """
     rendered_rows: list[bytes] = []
     character_width = getattr(screen, "_character_width", lambda _value: 1)
     for row_index in range(screen.lines):
         rendered = [b"\033[0m"]
         previous_style: tuple[object, ...] | None = None
         row = screen.buffer[row_index]
+        rendered_columns = _last_rendered_column(row, screen.columns)
         continuation_cells = 0
         continuation_data = ""
-        for column in range(screen.columns):
+        for column in range(rendered_columns):
             if continuation_cells:
                 continuation_cells -= 1
                 continuation = row[column]

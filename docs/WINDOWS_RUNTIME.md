@@ -185,7 +185,18 @@ opens a WSL shell and runs the ordinary POSIX product there.
   only rows whose final cells changed plus one authoritative cursor. This
   preserves Codex's animation and Working timer while an unchanged prompt row
   is not repeatedly erased beneath Windows Terminal's inline IME pre-edit. The
-  producer is provider-neutral and shares CJK width, indexed-colour,
+  entry-side reader consumes a bounded busy-PTY burst to its latest available
+  screen before painting, so attach/restore output cannot queue every
+  intermediate 64 KiB state behind a slow physical terminal. Keyboard input is
+  still handled before each bounded drain; a separate staleness bound keeps a
+  never-idle producer visibly progressing. One ordered worker owns the physical
+  write so ConPTY backpressure cannot block the launcher watchdog or input; the
+  semantic diff base does not advance again until that complete synchronized
+  frame is guaranteed written. On a slow close, stale queued frames are
+  discarded while the final terminal reset remains ordered after the one
+  in-flight write. Default trailing blank cells are
+  omitted after the painter clears a changed row, while styled blanks remain.
+  The producer is provider-neutral and shares CJK width, indexed-colour,
   scroll-region, REP, bracketed-paste/focus-mode, and OSC 52 behavior with the
   SSH display path.
   Input remains immediate and byte-exact; resize still targets only this PTY;

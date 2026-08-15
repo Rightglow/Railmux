@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import socket
 import struct
@@ -296,6 +297,7 @@ def test_semantic_renderer_does_not_repaint_unchanged_prompt_for_working_tick():
     try:
         renderer.feed(b"\033[2J\033[1;1HWorking\033[4;1HPROMPT\033[4;7H")
         renderer.paint_due(1.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
         os.set_blocking(output_read, False)
         while True:
             try:
@@ -308,6 +310,7 @@ def test_semantic_renderer_does_not_repaint_unchanged_prompt_for_working_tick():
             b"\033[4;7H\033[?2026l"
         )
         renderer.paint_due(2.0)
+        assert renderer.writer.wait_idle(1.0)
         rendered = os.read(output_read, 65536)
     finally:
         renderer.close()
@@ -325,6 +328,7 @@ def test_semantic_renderer_never_paints_a_partial_synchronized_frame():
     try:
         renderer.feed(b"\033[2J\033[4;1HPROMPT\033[4;7H")
         renderer.paint_due(1.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
         os.set_blocking(output_read, False)
         while True:
             try:
@@ -359,6 +363,7 @@ def test_semantic_renderer_bounds_an_unclosed_synchronized_frame():
     try:
         renderer.feed(b"\033[2J\033[4;1HPROMPT\033[4;7H")
         renderer.paint_due(1.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
         os.set_blocking(output_read, False)
         while True:
             try:
@@ -374,6 +379,7 @@ def test_semantic_renderer_bounds_an_unclosed_synchronized_frame():
         renderer.paint_due(
             2.0 + windows_attach_relay._SYNCHRONIZED_UPDATE_MAX_HOLD
         )
+        assert renderer.writer.wait_idle(1.0)
         rendered = os.read(output_read, 65536)
     finally:
         renderer.close()
@@ -392,11 +398,404 @@ def test_semantic_renderer_preserves_split_osc52_clipboard_requests():
     try:
         renderer.feed(b"before\033]52;c;dGV")
         renderer.feed(b"zdA==\007after")
+        renderer.paint_due(1.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
     finally:
         renderer.close()
         os.close(output_fd)
 
     copy.assert_called_once_with(b"test")
+
+
+def test_semantic_renderer_retains_only_latest_clipboard_during_backpressure(
+    monkeypatch,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_write(_fd, _payload):
+        started.set()
+        assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        blocked_write,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 30, 4)
+    copy = MagicMock()
+    renderer.surface.copy_to_clipboard = copy
+    try:
+        renderer.feed(b"SCREEN")
+        renderer.paint_due(1.0, force=True)
+        assert started.wait(1.0)
+
+        renderer.feed(b"\033]52;c;Zmlyc3Q=\007")
+        renderer.feed(b"\033]52;c;c2Vjb25k\007")
+        assert renderer._pending_clipboard == b"second"
+        assert copy.call_count == 0
+
+        release.set()
+        assert renderer.writer.wait_idle(1.0)
+        renderer.paint_due(2.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
+        copy.assert_called_once_with(b"second")
+    finally:
+        release.set()
+        renderer.close()
+        os.close(output_fd)
+
+
+def test_semantic_renderer_does_not_block_or_queue_stale_frames_for_slow_terminal(
+    monkeypatch,
+):
+    started = threading.Event()
+    release = threading.Event()
+    writes = []
+
+    def slow_first_write(_fd, payload):
+        writes.append(payload)
+        if len(writes) == 1:
+            started.set()
+            assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        slow_first_write,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 40, 4)
+    try:
+        renderer.feed(b"\033[2J\033[1;1HINITIAL")
+        before = time.monotonic()
+        renderer.paint_due(1.0, force=True)
+        assert time.monotonic() - before < 0.1
+        assert started.wait(1.0)
+        assert not renderer.writer.idle
+
+        renderer.feed(b"\033[1;1H\033[2KINTERMEDIATE")
+        renderer.paint_due(2.0)
+        renderer.feed(b"\033[1;1H\033[2KFINAL")
+        renderer.paint_due(3.0)
+        assert renderer.producer.delivered is not None
+        assert renderer.producer.delivered.sequence == 1
+        assert renderer.next_timeout(0.25, 3.0) <= (
+            windows_attach_relay._TERMINAL_WRITER_POLL
+        )
+
+        release.set()
+        assert renderer.writer.wait_idle(1.0)
+        renderer.paint_due(4.0)
+        assert renderer.writer.wait_idle(1.0)
+    finally:
+        release.set()
+        renderer.close()
+        os.close(output_fd)
+
+    rendered = b"".join(writes)
+    assert b"INITIAL" in rendered
+    assert b"FINAL" in rendered
+    assert b"INTERMEDIATE" not in rendered
+
+
+def test_physical_terminal_writer_queue_is_bounded(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_write(_fd, _payload):
+        started.set()
+        assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        blocked_write,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    writer = windows_attach_relay._TerminalFdWriter(output_fd)
+    try:
+        writer.write(b"current")
+        assert started.wait(1.0)
+        for _index in range(windows_attach_relay._TERMINAL_WRITER_MAX_QUEUE):
+            writer.write(b"queued")
+        with pytest.raises(
+            windows_attach_relay.WindowsAttachRelayError,
+            match="exceeded",
+        ):
+            writer.write(b"overflow")
+    finally:
+        release.set()
+        writer.close()
+        os.close(output_fd)
+
+
+def test_semantic_renderer_blocked_shutdown_discards_stale_queue_and_orders_restore(
+    monkeypatch,
+):
+    started = threading.Event()
+    release = threading.Event()
+    writes = []
+
+    def blocked_write(_fd, payload):
+        writes.append(payload)
+        started.set()
+        assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        blocked_write,
+    )
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_TERMINAL_WRITER_CLOSE_TIMEOUT",
+        0.02,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 40, 4)
+    try:
+        renderer.feed(b"\033[2J\033[HFINAL")
+        renderer.paint_due(1.0, force=True)
+        assert started.wait(1.0)
+
+        before = time.monotonic()
+        assert renderer.close()
+        assert time.monotonic() - before < 0.2
+        with renderer.writer._condition:
+            assert renderer.writer._closed
+            assert renderer.writer._queue == [renderer.surface.close_payload()]
+    finally:
+        release.set()
+        renderer.writer.close(1.0)
+        renderer.writer._thread.join(1.0)
+        os.close(output_fd)
+
+    assert not renderer.writer._thread.is_alive()
+    assert len(writes) == 2
+    assert writes[-1].endswith(b"\033[?1049l")
+
+
+def test_semantic_renderer_surfaces_write_failure_and_cleanup_does_not_raise(
+    monkeypatch,
+):
+    failed = threading.Event()
+
+    def failed_write(_fd, _payload):
+        failed.set()
+        raise OSError("terminal unavailable")
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        failed_write,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 40, 4)
+    renderer.feed(b"\033[2J\033[HSCREEN")
+    renderer.paint_due(1.0, force=True)
+    assert failed.wait(1.0)
+
+    with pytest.raises(
+        windows_attach_relay.WindowsAttachRelayError,
+        match="stopped accepting",
+    ):
+        renderer.next_timeout(0.1, 2.0)
+
+    renderer.close()
+    os.close(output_fd)
+
+
+def test_local_proxy_forwards_input_while_physical_output_is_blocked(monkeypatch):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_write(_fd, _payload):
+        started.set()
+        assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        blocked_write,
+    )
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+    )
+    child_socket.settimeout(1.0)
+    try:
+        child_socket.sendall(b"\033[2J\033[HSCREEN")
+        client.pump(0.1)
+        assert started.wait(1.0)
+
+        os.write(input_write, b"typed while painting")
+        before = time.monotonic()
+        client.pump(0.1)
+
+        assert time.monotonic() - before < 0.5
+        assert child_socket.recv(1024) == b"typed while painting"
+        assert not client._renderer.writer.idle
+    finally:
+        release.set()
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+
+def test_local_proxy_coalesces_a_large_restore_backlog_to_its_latest_screen(
+    monkeypatch,
+):
+    input_read, input_write = os.pipe()
+    output_read, output_write = os.pipe()
+    proxy_socket, child_socket = socket.socketpair()
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    proxy_fd = proxy_socket.detach()
+    os.set_blocking(proxy_fd, False)
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_fd,
+        stdin_fd=input_read,
+        stdout_fd=output_write,
+    )
+    frames = []
+    for index in range(160):
+        label = f"STATE-{index:04d}".encode()
+        body = b"\n".join(label + b"-" * 68 for _row in range(24))
+        frames.append(b"\033[?2026h\033[2J\033[H" + body + b"\033[?2026l")
+    frames.append(b"\033[?2026h\033[2J\033[HFINAL\033[?2026l")
+    payload = b"".join(frames)
+
+    def write_payload() -> None:
+        pending = memoryview(payload)
+        while pending:
+            pending = pending[child_socket.send(pending) :]
+
+    writer = threading.Thread(target=write_payload, daemon=True)
+    writer.start()
+    os.set_blocking(output_read, False)
+    rendered = bytearray()
+    try:
+        deadline = time.monotonic() + 5.0
+        while (writer.is_alive() or client._pty_backlog_pending) and time.monotonic() < deadline:
+            client.pump(0.01)
+            try:
+                rendered.extend(os.read(output_read, 65536))
+            except BlockingIOError:
+                pass
+        writer.join(timeout=1.0)
+        for _attempt in range(3):
+            client.pump(0.0)
+        assert client._renderer.writer.wait_idle(1.0)
+        while True:
+            try:
+                rendered.extend(os.read(output_read, 65536))
+            except BlockingIOError:
+                break
+    finally:
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_read)
+        os.close(output_write)
+
+    assert not writer.is_alive()
+    assert b"FINAL" in rendered
+    # A restore which exceeds the staleness deadline may publish a periodic
+    # newest sample, but it must not serialize the 160 source states.
+    assert len(set(re.findall(rb"STATE-[0-9]{4}", rendered))) < 5
+
+
+def test_local_proxy_sustained_backlog_still_paints_bounded_progress(monkeypatch):
+    writes = []
+    received_input = bytearray()
+    sent_frames = 0
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        lambda _fd, payload: writes.append(payload),
+    )
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_socket.detach(),
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+    )
+    child_socket.setblocking(False)
+    stop = threading.Event()
+
+    def produce_continuously() -> None:
+        nonlocal sent_frames
+        pending = memoryview(b"")
+        while not stop.is_set():
+            if not pending:
+                sent_frames += 1
+                label = f"STREAM-{sent_frames:06d}".encode()
+                body = b"\n".join(label + b"-" * 64 for _row in range(24))
+                pending = memoryview(
+                    b"\033[?2026h\033[2J\033[H"
+                    + body
+                    + b"\033[?2026l"
+                )
+            try:
+                pending = pending[child_socket.send(pending) :]
+            except BlockingIOError:
+                pass
+            try:
+                received_input.extend(child_socket.recv(65536))
+            except BlockingIOError:
+                pass
+
+    producer = threading.Thread(target=produce_continuously, daemon=True)
+    producer.start()
+    backlog_seen = False
+    try:
+        os.write(input_write, b"input during steady output")
+        deadline = time.monotonic() + 0.75
+        while time.monotonic() < deadline:
+            client.pump(0.01)
+            backlog_seen = backlog_seen or client._pty_backlog_pending
+        assert client._renderer.writer.wait_idle(1.0)
+    finally:
+        stop.set()
+        producer.join(1.0)
+        client._pty_backlog_pending = False
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+    rendered = b"".join(writes)
+    labels = set(re.findall(rb"STREAM-[0-9]{6}", rendered))
+    assert not producer.is_alive()
+    assert backlog_seen
+    assert received_input == b"input during steady output"
+    assert len(labels) >= 2
+    assert len(labels) < sent_frames
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires a POSIX PTY")
@@ -728,3 +1127,42 @@ def test_relay_socket_eof_is_an_explicit_transport_error(
         os.close(read_fd)
         os.close(write_fd)
         os.close(output_fd)
+
+
+def test_relay_close_cleans_endpoint_after_renderer_cleanup_failure(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    unlink = MagicMock()
+    monkeypatch.setattr(windows_attach_relay, "_unlink_owned_endpoint", unlink)
+    client_socket, peer_socket = socket.socketpair()
+    listener = socket.socket()
+    read_fd, write_fd = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    endpoint = tmp_path / "windows-attach-0123456789abcdef.sock"
+    identity = windows_attach_relay._EndpointIdentity(1, 2)
+    client = windows_attach_relay.RelayClient(
+        client_socket,
+        listener,
+        endpoint,
+        identity,
+        stdin_fd=read_fd,
+        stdout_fd=output_fd,
+    )
+    renderer = MagicMock()
+    renderer.close.side_effect = windows_attach_relay.WindowsAttachRelayError(
+        "cleanup failed"
+    )
+    client._renderer = renderer
+
+    client.close()
+
+    renderer.close.assert_called_once_with()
+    unlink.assert_called_once_with(endpoint, identity)
+    assert client_socket.fileno() == -1
+    assert listener.fileno() == -1
+    peer_socket.close()
+    os.close(read_fd)
+    os.close(write_fd)
+    os.close(output_fd)

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0rc22] - 2026-08-15
+
+### Fixed
+
+- Coalesce a busy native-Windows local tmux PTY all the way to its latest
+  available semantic screen before painting. Large Codex restore/redraw bursts
+  no longer serialize every intermediate 64 KiB state into Windows Terminal,
+  which previously appeared as scripts and history crawling line by line while
+  new input remained visually frozen. The drain is time- and byte-bounded,
+  keyboard/Ctrl-C retain priority, and physical output resumes as soon as the
+  PTY backlog is caught up. A bounded staleness deadline still publishes
+  periodic latest-state frames when a producer never becomes idle.
+- Move the supported Windows Terminal write behind a single-flight worker. A
+  slow ConPTY consumer can no longer block the launcher watchdog, tmux health
+  probes, PTY input, or resize handling; while one complete synchronized frame
+  is in flight, later provider output stays coalesced in the semantic model and
+  cannot form a stale-frame queue.
+- Make slow-terminal shutdown cleanup-safe: stale unsent frames are discarded
+  after one bounded close interval, but the authoritative terminal reset stays
+  ordered behind an already in-flight write and cannot be overtaken by a direct
+  launcher reset. Relay endpoint cleanup still runs, and an OSC 52 burst
+  retains only its latest validated clipboard value.
+- Omit default trailing blank cells from independently cleared semantic rows
+  while retaining visible styled blanks. This substantially reduces initial
+  keyframes and full-row patches on large Windows viewports without changing
+  CJK width, colour, or final cell state.
+
 ## [0.4.0rc21] - 2026-08-14
 
 ### Fixed

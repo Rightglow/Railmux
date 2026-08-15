@@ -1869,6 +1869,30 @@ def test_server_renderer_keeps_legitimate_adjacent_cjk_once_per_glyph():
     assert all(rendered.count(character) == 1 for character in "基本通了")
 
 
+def test_server_renderer_omits_default_trailing_cells_after_row_clear():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(240, 2)
+    terminal.ByteStream(screen).feed(b"short")
+
+    first, blank = render_rows(screen)
+
+    assert b"short" in first
+    assert len(first) < 80
+    assert blank == b"\033[0m\033[0m"
+
+
+def test_server_renderer_keeps_visible_styled_trailing_blanks():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(40, 1)
+    terminal.ByteStream(screen).feed(b"\033[41m   \033[0m")
+
+    rendered = render_rows(screen)[0]
+
+    assert b";41m   " in rendered
+
+
 def test_server_renderer_collapses_reported_repeated_cjk_physical_cells():
     text = "基本通了，但发现一个真 bug："
     cells = [

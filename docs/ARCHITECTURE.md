@@ -146,6 +146,27 @@ changed, followed by one authoritative cursor and terminal-mode state inside a
 DEC synchronized-output transaction. A provider Working tick can therefore
 keep its animation and elapsed timer live without repeatedly clearing an
 unchanged input row underneath Windows Terminal's inline IME pre-edit.
+The local PTY reader drains each available output burst into that model before
+painting. A large attach/restore replay therefore replaces unsent intermediate
+states with the latest available screen instead of serializing every 64 KiB
+chunk onto the physical terminal. Each drain has independent time and byte
+bounds so terminal input is considered first on the next pump. Default trailing
+blank cells are omitted from a row that the physical painter has already
+cleared; styled blanks remain visible and authoritative.
+If a producer never lets the PTY reach an empty read, a separate bounded
+staleness deadline publishes periodic latest-state frames instead of waiting
+forever. Clipboard ownership follows the same latest-state rule while physical
+output is busy.
+Physical Windows Terminal writes run through one ordered, single-flight worker.
+While it owns a complete synchronized frame, the main loop continues input,
+resize, PTY consumption, and tmux health work but does not advance the semantic
+diff base or enqueue another physical frame. Once the write completes, the next
+patch is computed from that guaranteed frame directly to the newest modeled
+screen. Terminal backpressure therefore cannot create a stale-frame queue or a
+false local-client watchdog timeout.
+Shutdown uses the same writer order. After one bounded wait it discards stale
+unsent frames but retains the authoritative terminal-mode reset behind the
+single in-flight write; the launcher does not race a direct reset ahead of it.
 
 The producer defers sampling while an application DEC synchronized-output
 frame is open. A transient `EL 2` observed before the provider restores its

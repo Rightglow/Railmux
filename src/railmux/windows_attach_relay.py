@@ -31,6 +31,7 @@ import struct
 import subprocess
 import sys
 import termios
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,18 @@ _STALE_ENDPOINT_AGE = 5 * 60
 _MAX_STALE_ENDPOINTS = 64
 _LOCAL_FRAME_INTERVAL = 1.0 / 30.0
 _SYNCHRONIZED_UPDATE_MAX_HOLD = 0.25
+# Consume a busy PTY into the latest semantic screen before painting it.  The
+# time budget keeps terminal input responsive; the byte budget bounds one
+# pump even when a producer can outrun the parser indefinitely.
+_LOCAL_PTY_DRAIN_BUDGET = 0.01
+_LOCAL_PTY_DRAIN_BYTES = 4 * 1024 * 1024
+# A producer which never lets the PTY reach EAGAIN must still make visible
+# progress.  This is deliberately slower than the normal 30 fps cadence so a
+# restore burst remains heavily coalesced without freezing an endless stream.
+_LOCAL_PTY_MAX_PAINT_STALENESS = 0.2
+_TERMINAL_WRITER_POLL = 0.01
+_TERMINAL_WRITER_CLOSE_TIMEOUT = 5.0
+_TERMINAL_WRITER_MAX_QUEUE = 8
 _RELAY_NAME = re.compile(r"windows-attach-[0-9a-f]{16}\.sock\Z")
 
 
@@ -72,20 +85,129 @@ def _terminal_events_first(events):
 
 
 class _TerminalFdWriter:
-    """Minimal binary stream adapter which never assumes ownership of stdout."""
+    """Single-flight terminal writer that keeps the client loop responsive.
+
+    TerminalSurface can issue a small setup write followed by one synchronized
+    screen frame.  A dedicated worker preserves that exact order while a slow
+    ConPTY consumer cannot block tmux health probes, PTY draining, or input.
+    The semantic renderer will not advance its diff base while any payload is
+    queued or being written, so no later patch can depend on a skipped frame.
+    """
 
     def __init__(self, fd: int) -> None:
         self.fd = fd
+        self._condition = threading.Condition()
+        self._queue: list[bytes] = []
+        self._writing = False
+        self._closed = False
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._run,
+            name="railmux-terminal-writer",
+            # If close has to defer the restore payload behind one blocked OS
+            # write, process shutdown must not discard that final reset.
+            daemon=False,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while not self._queue and not self._closed:
+                    self._condition.wait()
+                if self._closed and not self._queue:
+                    return
+                payload = self._queue.pop(0)
+                self._writing = True
+            try:
+                _write_terminal_output(self.fd, payload)
+            except BaseException as exc:
+                with self._condition:
+                    self._error = exc
+                    self._queue.clear()
+                    self._writing = False
+                    self._closed = True
+                    self._condition.notify_all()
+                return
+            with self._condition:
+                self._writing = False
+                self._condition.notify_all()
+
+    def _raise_error_locked(self) -> None:
+        if self._error is not None:
+            raise WindowsAttachRelayError(
+                "the physical terminal stopped accepting output"
+            ) from self._error
+
+    @property
+    def idle(self) -> bool:
+        with self._condition:
+            self._raise_error_locked()
+            return not self._queue and not self._writing
 
     def writable(self) -> bool:
         return True
 
     def write(self, payload: bytes) -> int:
-        _write_terminal_output(self.fd, payload)
+        value = bytes(payload)
+        with self._condition:
+            self._raise_error_locked()
+            if self._closed:
+                raise WindowsAttachRelayError("the physical terminal writer is closed")
+            if len(self._queue) >= _TERMINAL_WRITER_MAX_QUEUE:
+                raise WindowsAttachRelayError(
+                    "the physical terminal output queue exceeded its bound"
+                )
+            self._queue.append(value)
+            self._condition.notify()
         return len(payload)
 
     def flush(self) -> None:
         return None
+
+    def wait_idle(self, timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            while self._queue or self._writing:
+                self._raise_error_locked()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._condition.wait(remaining)
+            self._raise_error_locked()
+            return True
+
+    def close(
+        self,
+        timeout: float = _TERMINAL_WRITER_CLOSE_TIMEOUT,
+        *,
+        final_payload: bytes | None = None,
+    ) -> bool:
+        """Stop writes and report a deferred ordered final payload.
+
+        Cleanup must never mask the renderer error which initiated it or skip
+        the launcher's terminal restoration. If an OS write remains blocked,
+        discard every stale not-yet-started payload and retain only the reset
+        supplied by the caller. The non-daemon worker then preserves ordering:
+        the in-flight frame finishes before the reset, never after it.
+        """
+        try:
+            idle = self.wait_idle(timeout)
+        except (OSError, WindowsAttachRelayError):
+            idle = False
+        with self._condition:
+            self._closed = True
+            if not idle:
+                self._queue.clear()
+                if (
+                    final_payload
+                    and self._error is None
+                    and self._thread.is_alive()
+                ):
+                    self._queue.append(bytes(final_payload))
+            self._condition.notify_all()
+        self._thread.join(timeout if idle else 0.0)
+        return bool(final_payload and self._thread.is_alive())
 
 
 class _SemanticTerminalRenderer:
@@ -94,19 +216,25 @@ class _SemanticTerminalRenderer:
     def __init__(self, stdout_fd: int, width: int, height: int) -> None:
         self.producer = ScreenProducer(width, height)
         self.model = ScreenModel()
+        self.writer = _TerminalFdWriter(stdout_fd)
         self.surface = TerminalSurface(
-            _TerminalFdWriter(stdout_fd),
+            self.writer,
             synchronized_output=True,
         )
         self.surface.set_physical_size(os.terminal_size((width, height)))
         self._next_frame = 0.0
         self._synchronized_since: float | None = None
         self._synchronized_bypassed = False
+        self._pending_clipboard: bytes | None = None
 
     def feed(self, payload: bytes) -> None:
         self.producer.feed(payload)
-        for clipboard_data in self.producer.drain_clipboard():
-            self.surface.copy_to_clipboard(clipboard_data)
+        clipboard = self.producer.drain_clipboard()
+        if clipboard:
+            # Clipboard ownership is latest-state semantics too. Holding one
+            # validated request prevents a chatty source from building a
+            # side-channel write queue behind a slow physical frame.
+            self._pending_clipboard = clipboard[-1]
 
     def resize(self, width: int, height: int) -> None:
         self.producer.resize(width, height)
@@ -131,6 +259,8 @@ class _SemanticTerminalRenderer:
         return True
 
     def next_timeout(self, maximum: float, now: float) -> float:
+        if not self.writer.idle:
+            return min(maximum, _TERMINAL_WRITER_POLL)
         if self._synchronized_update_blocked(now):
             assert self._synchronized_since is not None
             remaining = (
@@ -139,18 +269,28 @@ class _SemanticTerminalRenderer:
                 - now
             )
             return max(0.0, min(maximum, remaining))
-        if not self.producer.dirty or now >= self._next_frame:
-            return 0.0 if self.producer.dirty else maximum
-        return max(0.0, min(maximum, self._next_frame - now))
+        if self.producer.dirty:
+            if now >= self._next_frame:
+                return 0.0
+            return max(0.0, min(maximum, self._next_frame - now))
+        if self._pending_clipboard is not None:
+            return max(0.0, min(maximum, self._next_frame - now))
+        return maximum
 
-    def paint_due(self, now: float, *, force: bool = False) -> None:
+    def paint_due(self, now: float, *, force: bool = False) -> bool:
+        if not self.writer.idle:
+            return False
         if not force and now < self._next_frame:
-            return
+            return False
         if self._synchronized_update_blocked(now):
-            return
+            return False
+        if self._pending_clipboard is not None:
+            clipboard = self._pending_clipboard
+            self._pending_clipboard = None
+            self.surface.copy_to_clipboard(clipboard)
         update = self.producer.take_update()
         if update is None:
-            return
+            return False
         screen = self.model.apply(
             update,
             os.terminal_size((self.producer.width, self.producer.height)),
@@ -159,11 +299,40 @@ class _SemanticTerminalRenderer:
             raise WindowsAttachRelayError("local terminal screen lost its update base")
         self.surface.paint(screen)
         self._next_frame = now + _LOCAL_FRAME_INTERVAL
+        return True
 
-    def close(self) -> None:
-        if self.producer.received_output:
-            self.paint_due(time.monotonic(), force=True)
-        self.surface.close()
+    def close(self) -> bool:
+        deadline = time.monotonic() + _TERMINAL_WRITER_CLOSE_TIMEOUT
+
+        def remaining() -> float:
+            return max(0.0, deadline - time.monotonic())
+
+        writer_idle = False
+        restore_payload = self.surface.close_payload()
+        restore_deferred = False
+        try:
+            try:
+                writer_idle = self.writer.wait_idle(remaining())
+            except (OSError, WindowsAttachRelayError):
+                writer_idle = False
+            if writer_idle and self.producer.received_output:
+                try:
+                    self.paint_due(time.monotonic(), force=True)
+                    writer_idle = self.writer.wait_idle(remaining())
+                except (OSError, WindowsAttachRelayError):
+                    writer_idle = False
+            if writer_idle:
+                try:
+                    self.surface.close()
+                    writer_idle = self.writer.wait_idle(remaining())
+                except (OSError, WindowsAttachRelayError):
+                    writer_idle = False
+        finally:
+            restore_deferred = self.writer.close(
+                remaining(),
+                final_payload=restore_payload if not writer_idle else None,
+            )
+        return restore_deferred
 
 
 class _ActiveWindowsInterruptForwarder:
@@ -778,6 +947,8 @@ class RelayClient:
         )
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
+        self._closed = False
+        self._restore_deferred = False
 
     def _write_output(self, payload: bytes, now: float) -> None:
         if self._renderer is None:
@@ -862,17 +1033,23 @@ class RelayClient:
             self.pump(0.05)
         return self.returncode
 
-    def close(self) -> None:
-        if self._renderer is not None:
-            try:
-                self._renderer.close()
-            except OSError:
-                pass
-        self._selector.close()
-        self.connection.close()
-        self.listener.close()
-        _unlink_owned_endpoint(self.endpoint, self.identity)
+    def close(self) -> bool:
+        if self._closed:
+            return self._restore_deferred
+        self._closed = True
         self._interrupts.close()
+        try:
+            if self._renderer is not None:
+                try:
+                    self._restore_deferred = self._renderer.close()
+                except (OSError, WindowsAttachRelayError):
+                    pass
+        finally:
+            self._selector.close()
+            self.connection.close()
+            self.listener.close()
+            _unlink_owned_endpoint(self.endpoint, self.identity)
+        return self._restore_deferred
 
 
 class LocalPtyClient:
@@ -900,6 +1077,9 @@ class LocalPtyClient:
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
         self._closed = False
+        self._restore_deferred = False
+        self._pty_backlog_pending = False
+        self._last_pty_paint = time.monotonic()
 
     def poll(self) -> int | None:
         return self.returncode
@@ -921,6 +1101,34 @@ class LocalPtyClient:
         if not pending:
             return
         _write_pty_input(self.master_fd, b"\x03" * pending)
+
+    def _drain_ready_pty(self) -> bool:
+        """Feed a bounded PTY burst and report whether its backlog is drained.
+
+        A tmux attach or provider restore can emit megabytes of intermediate
+        full-screen states.  Painting after each 64 KiB read serializes that
+        replay onto Windows Terminal and can fall minutes behind current
+        input.  Keep consuming into ScreenProducer instead; only an EAGAIN/EOF
+        proves that the current semantic state is eligible to paint.
+        """
+        deadline = time.monotonic() + _LOCAL_PTY_DRAIN_BUDGET
+        consumed = 0
+        while consumed < _LOCAL_PTY_DRAIN_BYTES:
+            try:
+                data = os.read(self.master_fd, 65536)
+            except BlockingIOError:
+                return True
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    return True
+                raise
+            if not data:
+                return True
+            self._renderer.feed(data)
+            consumed += len(data)
+            if time.monotonic() >= deadline:
+                return False
+        return False
 
     def _drain_after_exit(self) -> None:
         deadline = time.monotonic() + _DRAIN_TIMEOUT
@@ -953,6 +1161,7 @@ class LocalPtyClient:
         self._forward_pending_interrupts()
         wait = self._renderer.next_timeout(max(0.0, timeout), now)
         events = _terminal_events_first(self._selector.select(timeout=wait))
+        drained_pty = False
         for key, _events in events:
             if key.data == "terminal":
                 data = os.read(self.stdin_fd, 65536)
@@ -961,18 +1170,20 @@ class LocalPtyClient:
                     return
                 _write_pty_input(self.master_fd, data)
                 continue
-            try:
-                data = os.read(self.master_fd, 65536)
-            except BlockingIOError:
-                continue
-            except OSError as exc:
-                if exc.errno != errno.EIO:
-                    raise
-                data = b""
-            if data:
-                self._renderer.feed(data)
+            self._pty_backlog_pending = not self._drain_ready_pty()
+            drained_pty = True
+        if self._pty_backlog_pending and not drained_pty:
+            # A budget can end exactly as the kernel queue empties.  Probe it
+            # again without waiting so an EAGAIN can publish the settled frame.
+            self._pty_backlog_pending = not self._drain_ready_pty()
         self._forward_pending_interrupts()
-        self._renderer.paint_due(time.monotonic())
+        paint_now = time.monotonic()
+        if (
+            not self._pty_backlog_pending
+            or paint_now - self._last_pty_paint
+            >= _LOCAL_PTY_MAX_PAINT_STALENESS
+        ) and self._renderer.paint_due(paint_now):
+            self._last_pty_paint = paint_now
         self.returncode = _child_status(self.pid)
         if self.returncode is not None:
             self._drain_after_exit()
@@ -1016,21 +1227,22 @@ class LocalPtyClient:
             self.pump(0.05)
         return self.returncode
 
-    def close(self) -> None:
+    def close(self) -> bool:
         if self._closed:
-            return
+            return self._restore_deferred
         self._closed = True
+        self._interrupts.close()
         if self.returncode is None:
             self.terminate()
         try:
-            self._renderer.close()
+            self._restore_deferred = self._renderer.close()
         finally:
             self._selector.close()
             try:
                 os.close(self.master_fd)
             except OSError:
                 pass
-            self._interrupts.close()
+        return self._restore_deferred
 
 
 def start_local_pty_client(
