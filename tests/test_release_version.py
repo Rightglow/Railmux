@@ -106,7 +106,7 @@ raise SystemExit(main(['--version'], version_info=(3, 10)))
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("railmux 0.4.0")
+    assert result.stdout.startswith(f"railmux {__version__}")
 
 
 def test_transition_version_metadata_import_does_not_require_fcntl():

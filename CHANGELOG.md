@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1.dev1] - 2026-08-16
+
+### Fixed
+
+- Bind native-Windows URL/path hit testing to the screen frame that has
+  actually reached the physical terminal. Pane splits, resize, and slow
+  ConPTY writes now fail pointer input closed until matching geometry is
+  visible, preventing stale clicks from targeting Quit, another pane, or
+  tmux copy-mode.
+- Queue local path prompts and status messages behind bounded terminal
+  backpressure, then refresh pane geometry without the pre-split cache after
+  a managed terminal action. A busy writer can no longer leave an invisible
+  prompt owning input.
+
 ## [0.4.0] - 2026-08-16
 
 ### Added
@@ -3114,7 +3128,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev1...HEAD
+[0.4.1.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1.dev1
 [0.4.0]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc25...v0.4.0
 [0.4.0rc25]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc24...v0.4.0rc25
 [0.4.0rc24]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc23...v0.4.0rc24
