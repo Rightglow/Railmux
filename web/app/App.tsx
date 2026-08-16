@@ -113,7 +113,7 @@ export default function Home() {
                 </a>
               </div>
               <div className="platform-line">
-                <span>LOCAL</span> macOS · Linux · Windows · WSL
+                <span>LOCAL</span> macOS · Linux · Windows
                 <i />
                 <span>REMOTE</span> Linux · macOS · Windows
               </div>
@@ -634,8 +634,8 @@ export default function Home() {
                   Give them a better station.
                 </h2>
                 <p>
-                  On macOS, Linux, and WSL, Railmux requires Python 3.9+, tmux,
-                  and at least one supported agent CLI. Native Windows uses
+                  On macOS and Linux, Railmux requires Python 3.9+, tmux, and
+                  at least one supported agent CLI. Native Windows uses
                   Python 3.10+ and provisions its own private managed
                   MSYS2/tmux runtime on first launch.
                 </p>
@@ -645,12 +645,17 @@ export default function Home() {
                   validates its own tmux 3.7+; native Codex and Claude Code
                   keep the same Windows sessions and credentials.
                 </p>
+                <p>
+                  Native Windows full-screen use requires Windows Terminal
+                  1.24.10621 or newer. Other Windows terminal hosts are best
+                  effort until separately validated.
+                </p>
                 <aside className="install-remote-note">
                   <span>REMOTE WORK</span>
                   <p>
                     If ordinary SSH cannot keep up with full-screen redraws,
-                    use <code>railmux ssh</code> from macOS, Linux, WSL, or
-                    native Windows. A Windows remote must already have its
+                    use <code>railmux ssh</code> from macOS, Linux, or native
+                    Windows. A Windows remote must already have its
                     matching managed runtime installed locally.
                   </p>
                 </aside>

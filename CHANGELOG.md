@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-16
+
+### Added
+
+- Support native Windows as a first-class local Railmux and `railmux ssh`
+  client. A Python 3.10+ bootstrap installs one private, integrity-checked
+  MSYS2/tmux/Python runtime while Codex and Claude Code remain Windows-native
+  and continue using their existing histories, credentials, and configuration.
+- Add a consent-based Windows installer with verified multi-source download
+  fallback, visible progress, resumable caches, transactional app layers,
+  privacy-safe logs and diagnostics, safe base reuse, dry-run pruning, and an
+  explicit uninstall path that never removes provider histories.
+- Support Windows Terminal 1.24.10621+ through a shared semantic terminal model
+  that preserves CJK/IME composition, synchronized redraw, cursor/input state,
+  resize, Ctrl-C, mouse routing, and responsive latest-screen restoration.
+- Add native-Windows and `railmux ssh` pane-bounded drag-to-copy plus semantic
+  HTTP(S) and path clicks. Browser actions remain local, path actions are
+  revalidated before use, and managed Term/Vim creation cannot block the
+  provider display loop.
+- Add fail-closed cross-host leases for shared Codex and Claude histories, with
+  visible remote ownership and exact holder/process validation before resume or
+  deletion.
+- Support ordinary OpenSSH login to an installed Windows runtime followed by
+  `railmux`, and field-validate a Linux `railmux ssh` client against a
+  preinstalled compatible Windows runtime. macOS uses the same supported POSIX
+  client path but remains a manual origin check. Windows runtime installation
+  over SSH remains deliberately manual.
+
+### Changed
+
+- Advance the exact-match SSH display protocol to v16. History snapshots use
+  server-owned coordinates where available, deep history work stays off the
+  provider I/O loop, large pastes remain opaque across chunk boundaries, and
+  reconnect keeps the last validated frame without recreating remote work.
+- Make native-Windows local rendering share the same extended VT screen model,
+  CJK width handling, colour preservation, changed-row painting, selection,
+  and path authority used by `railmux ssh` instead of maintaining a separate
+  compositor.
+- Keep the macOS/Linux/WSL tmux floor at 2.7 while the Railmux-owned Windows
+  runtime installs and verifies tmux 3.7+ for synchronized provider redraw.
+- Move the clicked-path preference to transport-neutral
+  `interaction.path_open`; the earlier `ssh.path_open` spelling remains a
+  read-only upgrade alias.
+
+### Fixed
+
+- Prevent large Windows restore, resume, and resize bursts from replaying every
+  intermediate viewport or blocking input/watchdog work behind a slow terminal
+  writer. Bounded catch-up paints the latest settled screen while preserving
+  periodic progress for a producer that never becomes idle.
+- Preserve Windows IME pre-edit, curly/CJK punctuation, hardware cursor state,
+  live Working animation and elapsed time, bracketed paste, and focused-agent
+  Ctrl-C throughout active Codex and Claude redraws.
+- Keep Windows runtime generations and tmux sockets isolated without starting
+  a duplicate provider writer. Active or ambiguous older-generation processes
+  fail closed with recovery guidance; session, lock, and transcript files are
+  never deleted to force migration.
+- Harden fresh Windows installation against SFX extraction failure, NTFS
+  read-only archive modes, rolling-mirror 403/slow responses, package-version
+  drift, Microsoft Store Python path virtualization, transient PyPI timeouts,
+  and stale MSYS2 tmux sockets.
+- Preserve requested Windows/MSYS working directories for clicked paths, open
+  HTTP(S) through the registered browser instead of Explorer, keep tool focus
+  distinct from agent focus, and refuse to repurpose a live managed shell in a
+  different directory.
+- Keep SSH history contiguous after large paste/output replacement, avoid
+  false transcript/scrollback joins, render CJK wide cells once, and retain
+  responsive wheel input when Windows/RDP batches several mouse reports.
+
 ## [0.4.0rc25] - 2026-08-15
 
 ### Fixed
@@ -3045,7 +3114,10 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc23...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc25...v0.4.0
+[0.4.0rc25]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc24...v0.4.0rc25
+[0.4.0rc24]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc23...v0.4.0rc24
 [0.4.0rc23]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc22...v0.4.0rc23
 [0.4.0rc22]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc21...v0.4.0rc22
 [0.4.0rc21]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc20...v0.4.0rc21

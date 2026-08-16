@@ -41,7 +41,8 @@ running native PowerShell are different Railmux runtime platforms.
 | `railmux` or `railmux ssh HOST` | Native Windows Python bootstrap using managed MSYS2/tmux | — or Linux/macOS/Unix | **Supported** | Python 3.10+ owns a private verified runtime; Railmux runs under MSYS2 while Windows-native providers retain the user's existing session/config directories. Windows Terminal 1.24.10621+ is the supported full-screen renderer and 1.24.11911 is field-validated. Other native Windows terminal hosts are best effort. |
 | Ordinary `ssh USER@WINDOWS`, then `railmux` | Managed MSYS2/tmux on native Windows | — | **Supported** | Desktop and OpenSSH entry share the same private runtime, provider histories, and dedicated workspace. A one-attempt server-origin PTY bridge handles Windows Terminal Services boundaries; this is distinct from Railmux's display protocol. |
 | `railmux ssh HOST` | Linux or macOS | macOS | **Conditional** | The remote helper is POSIX and macOS tmux is integration-tested, but there is no dedicated cross-host SSH end-to-end job. |
-| `railmux ssh --remote-platform windows HOST` | Linux or macOS | Native Windows managed MSYS2 | **Field-validated** | Real Linux-to-Windows protocol/config/doctor handshakes, attach, frame streaming, and clean local escape passed against Windows 10/OpenSSH. The matching Windows runtime must already be installed; updates are explicit user-level PowerShell operations, and `auto` can detect the same path at the cost of a second password prompt when public-key authentication is unavailable. Arbitrary Windows Python/MSYS2 installations are not adopted. |
+| `railmux ssh --remote-platform windows HOST` | Linux | Native Windows managed MSYS2 | **Field-validated** | Real protocol/config/doctor handshakes, attach, frame streaming, and clean local escape passed against Windows 10/OpenSSH. The matching Windows runtime must already be installed; updates are explicit user-level PowerShell operations, and `auto` can detect the same path at the cost of a second password prompt when public-key authentication is unavailable. Arbitrary Windows Python/MSYS2 installations are not adopted. |
+| `railmux ssh --remote-platform windows HOST` | macOS | Native Windows managed MSYS2 | **Supported** | Uses the same tested POSIX client and exact-match protocol path as Linux, but a real macOS-origin end-to-end pass remains manual. The matching managed Windows runtime must already be installed. |
 | Either entry point | Other Unix-like system | Unix-like system | **Best effort** | Requires Python 3.9+, tmux, a compatible TTY, and the documented commands; no release claim without platform evidence. |
 
 The ordinary `ssh HOST` followed by remote `railmux` path depends primarily on
@@ -265,16 +266,21 @@ must remain covered when the adapter, shared UI, or terminal behavior changes.
    that changes the corresponding manual behavior. Mocked OS branches and
    ordinary WSL evidence cannot close the managed-MSYS2 path.
 
-The release owner reported the complete dev35 Windows manual checklist passing
-on 2026-08-07, including the final click/Preview/running-session performance
-changes. The dedicated Windows 10 host then completed the exact version-boundary
-transition (`dev35` → `dev36` → `rc1`), reused its verified 96-package base,
+The release owner reported the complete dev35 Windows checklist passing on
+2026-08-07. The dedicated Windows 10 host then completed the exact
+`dev35` → `dev36` → `rc1` transition, reused its verified 96-package base,
 attached and detached both new layers, reported the rc1 UI ready through
-`doctor`, matched its content verification, and retained dev35/dev36/rc1 in a
-non-mutating prune dry-run. Unchanged terminal interactions were not repeated
-mechanically. Rc7 replaces that preview base with the first release generation;
-its fresh-install, tmux 3.7 package-floor, and uninstall checks remain the named
-real-Windows RC gate in the parity ledger.
+`doctor`, matched content verification, and retained every transition layer in
+a non-mutating prune dry-run. Rc7 introduced the clean release generation and
+tmux 3.7 package floor; a clean-profile fresh install and a real
+`runtime uninstall --dry-run` remain unrecorded follow-up evidence rather than
+inferred results. On 2026-08-15, the release owner completed the rc25
+native-Windows acceptance pass for local Railmux and Windows-origin
+`railmux ssh` to Linux, including restore, resize, IME/CJK input, active-turn
+redraw, scrolling, mouse selection, URL/path actions, tool focus, detach/quit,
+and terminal restoration. Fresh-install, uninstall, non-ASCII profile, and
+authenticated provider checks remain explicit parity-ledger evidence rather
+than being inferred from that upgrade pass.
 
 ## Release closure checklist
 

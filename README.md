@@ -77,44 +77,16 @@ On native Windows, that same two-command flow is intentional. The first
 `railmux` launch explains and asks once before installing the private runtime,
 then opens the ordinary Railmux UI inside it. A fresh runtime uses roughly
 700 MB because it contains a complete MSYS2 compatibility base, tmux, and
-Python—not because the Railmux package itself is that large. Later Railmux
-versions reuse the same verified runtime generation and install only a
-version-isolated application layer.
+Python—not because the Railmux package itself is that large. Later versions
+normally reuse the verified base automatically.
 
-When an upgrade changes that private runtime generation, Railmux will not
-silently enter while an attributable older managed workspace is still active.
-If startup reports a previous runtime, exit its Railmux/provider panes normally
-or restart Windows, then run `railmux` again. Do not delete Codex/Claude history
-or lock files; the safety check does not modify them. The diagnostic commands
-`railmux doctor --json` and `railmux runtime status --json` remain available.
-
-Railmux's shared tmux core requirement remains 2.7+ on macOS, Linux, and WSL.
-The native-Windows managed runtime automatically installs tmux 3.7 or newer
-and refuses to activate an older package set, because synchronized provider
-redraws are part of the supported Windows contract. Railmux pins and hashes the
-exact MSYS2 tmux package and detached signature independently of rolling mirror
-metadata, then lets pacman verify the MSYS2 signature. Users never install or
-upgrade this private tmux manually.
-
-The managed runtime does not replace Git Bash, adopt an existing MSYS2, edit
-the system `PATH`, or move provider data. Codex and Claude Code remain native
-Windows programs and continue using the same `%USERPROFILE%\.codex` and
-`%USERPROFILE%\.claude` directories as direct PowerShell launches. Useful
-read-only and maintenance commands are:
-
-```powershell
-railmux runtime status --json
-railmux runtime status --verify
-railmux runtime install --yes
-railmux runtime prune --dry-run
-railmux runtime uninstall --dry-run
-```
-
-For a complete Windows removal, exit every Railmux workspace and provider pane,
-run `railmux runtime uninstall`, then run `pip uninstall railmux`. The first
-command removes only Railmux's private MSYS2, tmux, Python, app layers, and
-package caches; it retains Codex/Claude histories and user-owned MSYS2 trees.
-It refuses to proceed when the private runtime may still be in use.
+Railmux requires tmux 2.7+ on macOS, Linux, and WSL. Windows installs and
+maintains the required private tmux automatically; it does not replace Git
+Bash, adopt an existing MSYS2, edit the system `PATH`, or move provider data.
+Codex and Claude Code remain native Windows programs and keep using the same
+`%USERPROFILE%\.codex` and `%USERPROFILE%\.claude` directories as direct
+PowerShell launches. Advanced inspection, repair, and removal procedures live
+in the [Windows runtime guide](https://github.com/Rightglow/Railmux/blob/main/docs/WINDOWS_RUNTIME.md).
 
 If installation succeeds but your shell says `railmux: command not found`,
 the Python user scripts directory is not on `PATH`—this is especially common
@@ -152,32 +124,28 @@ railmux ssh your-server
 ```
 
 The local machine needs an OpenSSH-compatible `ssh` executable on `PATH`;
-Railmux checks this before entering its full-screen display. macOS, most Linux
-distributions, WSL, and current Windows installations normally provide one.
+Railmux checks this before entering its full-screen display.
 
 For several SSH options, use a single quoted group, for example
 `railmux ssh your-server --ssh-args='-J jump-host -p 2222'`.
 
-The remote needs Python 3.9+, `tmux`, and the `pyte` display dependency. With
-permission, the local client installs the matching `railmux[ssh]` extra into
-the remote user environment; it never uses `sudo`. If provisioning manually,
-install `railmux[ssh]` remotely. Railmux keeps its managed tmux workspace
-isolated from your default tmux server and does not rewrite provider histories
-under `~/.codex` or `~/.claude`, except for a session you explicitly confirm
-deleting. Run
-`railmux doctor` for a privacy-safe local setup report, or
+The remote needs Python 3.9+ and `tmux`. With permission, the local client can
+install its matching helper into the remote user environment; it never uses
+`sudo`. If you prefer to install it yourself, see
+[the SSH FAQ](#3-using-railmux-over-ssh) for the `railmux[ssh]` command.
+Railmux keeps its managed workspace separate from the remote account's default
+tmux server and never rewrites `~/.codex` or `~/.claude` histories except for a
+session you explicitly confirm deleting. Run `railmux doctor` for a
+privacy-safe local setup report, or
 `railmux doctor --remote your-server` for a read-only remote compatibility
-preflight. Multiple
-terminals share one workspace; see [FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows)
-for focus and layout limits.
+preflight. Multiple terminals share one workspace; see
+[FAQ 6](#6-can-i-open-railmux-in-multiple-terminal-windows) for focus and
+layout limits.
 
-A Linux or macOS client can also connect to an OpenSSH-enabled Windows account
-with `railmux ssh --remote-platform windows USER@HOST`. That Windows account
-must already have the matching Railmux package and managed runtime installed;
-Railmux deliberately does not bootstrap or repair the Windows runtime through
-SSH. Automatic mode can detect the same direct launcher, but the explicit
-platform avoids an incompatible POSIX probe and a possible second password
-prompt. Arbitrary user-owned MSYS2 installations are not remote targets.
+A Linux or macOS client can also connect to a Windows account with
+`railmux ssh --remote-platform windows USER@HOST` when its matching managed
+runtime is already installed. Railmux does not install a Windows runtime over
+SSH.
 
 ## Controls
 
@@ -491,13 +459,10 @@ railmux config
 railmux config --remote your-server
 ```
 
-Use `--ssh-args='-J jump-host -p 2222'` for SSH options. Its contents are
-parsed locally into an argv without executing a shell. Remote editing
-first performs a bounded package/capability probe, then opens a fresh cooked
-SSH PTY for the editor. It never attaches to, creates, resizes, or queries a
-tmux server. If Railmux is absent or too old remotely, installation into the
-remote user environment (and, if needed, Railmux's private SSH venv) requires
-explicit consent and never uses `sudo`.
+Use `--ssh-args='-J jump-host -p 2222'` for SSH options. Remote configuration
+does not open or resize the destination's tmux workspace. If Railmux is absent
+or too old remotely, any user-level installation still requires explicit
+consent and never uses `sudo`.
 
 In an interactive terminal the editor uses a temporary full-screen surface.
 Category pages keep a compact parent navigator above their settings; setting
@@ -565,21 +530,17 @@ history_lines = 10000
 claude_history = "ask"
 ```
 
-Most users should leave `agent_transport` unchanged. Railmux automatically uses
-the compatible `nested` display when the default `swap` mode is not safe for the
-current tmux environment.
+Most users should leave `agent_transport` unchanged. Railmux automatically
+uses the compatible fallback when the default mode is not safe for the current
+tmux environment.
 
 This is Railmux's only user settings file. Manual edits, `railmux config`, and
 the in-app Options screen share the same authority and preserve comments,
 formatting, order, and unknown keys. The local-only `ssh.history_lines` setting
-is intentionally file/command-line controlled because the remote TUI cannot
-configure the machine that initiated `railmux ssh`. By contrast,
-`ssh.claude_history` belongs to the remote workspace. The shared
-`interaction.path_open` preference controls recognized paths in native Windows
-and `railmux ssh`; the older `ssh.path_open` spelling remains a read-only
-upgrade alias. Both current settings are exposed in Options. A one-run Codex choice is kept only in memory. A
-`This time` layout profile is stored here until it is successfully applied on
-the next launch, then removed.
+belongs to the machine that starts `railmux ssh`; `ssh.claude_history` belongs
+to the remote workspace. The shared `interaction.path_open` preference
+controls recognized paths in native Windows and `railmux ssh`. Current
+interactive preferences are also exposed in Options.
 
 Program and locale changes affect new Railmux-managed processes. They never
 restart, replace, or kill an existing tmux server or running agent. If a newly
@@ -588,14 +549,10 @@ next launch stops with a bounded compatibility message; run `railmux config`
 to select the matching executable. `railmux doctor` reports configured command
 status and whether the effective locale is UTF-8 without printing custom paths.
 
-For `railmux ssh`, local display settings come from the local config, while
-tmux, provider paths, locale, and in-workspace policies come from the remote
-host's config. Run `railmux config --remote HOST`, or log in and run
-`railmux config`, to change them. The remote editor intentionally hides the
-local-client-only `ssh.history_lines` value and preserves it during category or
-global resets. The compatibility preflight distinguishes an invalid remote config or a
-missing configured tmux from a missing Railmux installation; it never repairs
-either by mutating tmux.
+For `railmux ssh`, display settings come from the local config, while tmux,
+provider paths, locale, and in-workspace policies come from the remote host.
+Run `railmux config --remote HOST`, or log in and run `railmux config`, to
+change the remote settings.
 
 When the default `auto_update = "ask"` finds a newer stable PyPI release,
 Railmux offers **Always**, **This time**, **No**, or **Never** before opening
@@ -606,12 +563,10 @@ checks. Update checks time out quickly and never prevent offline startup;
 failed installs continue with the installed version and print a manual
 command. Editable source installations are reported but never overwritten.
 
-Inside the managed Windows runtime, the app layer never modifies the native
-Python installation that owns it. Upgrade that outer package from PowerShell
-with `py -m pip install --upgrade railmux` (or the same Python executable used
-for installation); the next `railmux` launch automatically reuses the matching
-base and installs/enters the new app layer. `railmux runtime install --yes` is
-the explicit equivalent for scripting or repair.
+On Windows, upgrade the package from PowerShell with
+`py -m pip install --upgrade railmux` (or the Python executable used for the
+original installation). The next `railmux` launch prepares the matching app
+layer automatically.
 
 ## Diagnostics
 
@@ -622,23 +577,15 @@ railmux doctor
 Use `railmux doctor --json` for the same privacy-safe snapshot in a versioned,
 machine-readable form suitable for issue tooling.
 
-Before connecting, `railmux doctor --remote your-server` checks SSH reachability,
-the remote Railmux and protocol versions, the optional SSH display dependency,
-remote config status, and remote `tmux`. It stops after the compatibility hello: it does not attach,
-create, resize, replace, install, or upgrade anything. Repeat
+Before connecting, `railmux doctor --remote your-server` checks SSH
+reachability, package compatibility, configuration, and remote `tmux` without
+attaching to or changing the workspace. Repeat
 `--ssh-args='-J jump-host -p 2222'` when the connection needs SSH options. The
 hostname is omitted from both text and JSON output.
 
-The doctor command works even when `tmux` is missing. It reports component versions, terminal capability
-hints, configuration health, dedicated-server reachability, watchdog state,
-the number of legacy candidates on the default server, the age and bounded
-category of the last recorded tmux incident, and whether provider data
-directories are accessible. When available, it also summarizes the most recent
-`railmux ssh` connection with bounded frame, reconnect, transfer, and history
-counters; the host is deliberately not recorded. Its output is designed for issue
-reports: it does not include hostnames, usernames, session IDs, transcripts,
-credentials, environment values, configured commands, socket paths, or raw
-custom paths.
+The doctor command works even when `tmux` is missing. Its output is designed
+for issue reports and omits hostnames, usernames, session IDs, transcripts,
+credentials, environment values, socket paths, and raw custom paths.
 
 ## FAQ
 

@@ -153,9 +153,9 @@ opens a WSL shell and runs the ordinary POSIX product there.
   source that serves the database but fails any sampled package check is made
   inactive when another verified source remains. HTTP 403/404 hosts are
   excluded after a failed transaction; low-speed exhaustion triggers one retry
-  that reuses the cache and disables pacman's low-speed abort. This preview does
-  not yet freeze a repository snapshot, so package versions may advance between
-  installations.
+  that reuses the cache and disables pacman's low-speed abort. The managed
+  runtime does not freeze a repository snapshot, so package versions may
+  advance between installations.
 - An ordinary version-only upgrade first builds the unpublished app layer
   without network access: it copies only the known pure-Python dependency roots
   from the newest marked app that still probes as its exact version, and copies
@@ -377,7 +377,19 @@ opens a WSL shell and runs the ordinary POSIX product there.
 Git for Windows is built from a maintained subset/fork of MSYS2, but its normal
 Git Bash installation does not provide the complete `pacman` + `tmux` runtime
 Railmux needs. Reusing it would also couple Railmux to another application's
-update lifecycle. The preview therefore uses a separately owned MSYS2 tree.
+update lifecycle. Railmux therefore uses a separately owned MSYS2 tree.
+
+## Removing the managed runtime
+
+Exit every Railmux workspace and provider pane first. Run
+`railmux runtime uninstall` from PowerShell to remove Railmux's private MSYS2,
+tmux, Python, application layers, and package caches, then run
+`pip uninstall railmux` with the same native Python installation that installed
+the package. The runtime command fails closed if its private files may still be
+in use. It does not remove `.codex`, `.claude`, provider histories, normal
+Railmux workspace state, install logs, or user-owned MSYS2 trees. Use
+`railmux runtime uninstall --dry-run` to inspect the plan without deleting
+anything.
 
 ## Evidence and release boundary
 
@@ -406,8 +418,9 @@ and Claude Code 2.1.220 through inherited `PATH`, launches both in detached tmux
 3.7b panes, preserves a detached Claude pane across closing and reopening the
 outer shell, and starts the complete POSIX Railmux UI. Authentication-specific
 restore, preview, resize, mouse, menus, clipboard/browser bridges, and
-`railmux ssh` remain release-specific manual checks and are not inferred from
-that spike.
+`railmux ssh` are release-specific manual checks and are not inferred from
+that spike. Those checks are tracked in the parity ledger rather than promoted
+from this initial experiment.
 
 
 ### Historical preview evidence
@@ -443,3 +456,14 @@ dev35-to-dev36-to-rc1 transition without replacing its verified 96-package
 base. Both new layers attached and detached normally; `doctor` reported the
 rc1 UI ready, content verification matched, and a prune dry-run retained all
 three transition layers without deleting anything.
+
+On 2026-08-15 the release owner completed the rc25 native-Windows acceptance
+pass after upgrading the existing managed runtime. Local Railmux and
+Windows-origin `railmux ssh` to Linux retained session restore, responsive
+history, IME/CJK input, resize, mouse selection, URL opening, and path actions.
+The final path-action fixes opened HTTP(S) through the registered browser,
+preserved verified Windows/MSYS working directories, kept slow tool creation
+off the display loop, and projected tool focus without freezing the agent
+pane. This field evidence supplements, rather than replaces, the automated
+Windows archive, real-MSYS2, protocol, renderer-backpressure, and full Python
+test gates.
