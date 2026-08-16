@@ -999,7 +999,11 @@ def _pane_current_path(pane: _PaneGeometry) -> str | None:
     )
 
 
-def visible_agent_snapshots(session_id: str) -> tuple[HistorySnapshot, ...]:
+def visible_agent_snapshots(
+    session_id: str,
+    *,
+    use_cache: bool = True,
+) -> tuple[HistorySnapshot, ...]:
     """Return cached, geometry-only routes for local semantic interaction.
 
     This is deliberately the same fail-closed pane authority used by the fast
@@ -1016,7 +1020,7 @@ def visible_agent_snapshots(session_id: str) -> tuple[HistorySnapshot, ...]:
             pane.height,
             mouse_forwardable=pane.mouse_forwardable,
         )
-        for pane in _list_agent_panes(session_id, use_cache=True)
+        for pane in _list_agent_panes(session_id, use_cache=use_cache)
     )
 
 

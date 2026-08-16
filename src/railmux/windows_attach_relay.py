@@ -245,14 +245,64 @@ class _SemanticTerminalRenderer:
         self._synchronized_since: float | None = None
         self._synchronized_bypassed = False
         self._pending_clipboard: bytes | None = None
+        self._pending_status: tuple[str, str] | None = None
         self._screen = None
+        # ``ScreenModel`` advances when a frame is queued, but pointer hit
+        # testing must advance only after that frame has actually reached the
+        # physical terminal.  ConPTY can keep one write in flight long enough
+        # for a pane split or resize to otherwise pair an old visible screen
+        # with new tmux geometry.
+        self._pending_screen = None
+        self._presentation_serial = 0
+        self._presentation_required_serial = 0
         self._selection: tuple[tuple[int, int, bytes], ...] = ()
         self._selection_dirty_rows: set[int] = set()
         self._path_prompt_visible = False
+        self._path_prompt_needs_paint = False
+        self._path_prompt_painted = False
+
+    def _promote_presented_screen(self) -> None:
+        if self._pending_screen is None or not self.writer.idle:
+            return
+        self._screen = self._pending_screen
+        self._pending_screen = None
+        self._presentation_serial += 1
 
     @property
     def screen(self):
+        self._promote_presented_screen()
         return self._screen
+
+    @property
+    def presentation_serial(self) -> int:
+        self._promote_presented_screen()
+        return self._presentation_serial
+
+    @property
+    def presentation_stable(self) -> bool:
+        self._promote_presented_screen()
+        return bool(
+            self._screen is not None
+            and self._pending_screen is None
+            and self.writer.idle
+            and self._presentation_serial >= self._presentation_required_serial
+        )
+
+    def require_fresh_presentation(self) -> None:
+        """Fail pointer input closed until one newer frame is displayed."""
+        required = self._presentation_serial + 1
+        if self._pending_screen is not None:
+            required += 1
+        self._presentation_required_serial = max(
+            self._presentation_required_serial,
+            required,
+        )
+
+    def cancel_fresh_presentation_requirement(self) -> None:
+        """Restore pointer input when a requested topology change failed."""
+        self._presentation_required_serial = self._presentation_serial + (
+            1 if self._pending_screen is not None else 0
+        )
 
     def set_selection(self, selection: tuple[tuple[int, int, bytes], ...]) -> None:
         if selection == self._selection:
@@ -265,23 +315,20 @@ class _SemanticTerminalRenderer:
         self._pending_clipboard = data
 
     def show_status(self, message: str, *, level: str = "info") -> None:
-        if self.writer.idle:
-            self.surface.show_local_status(
-                message,
-                level=level,
-                expires_at=time.monotonic() + 2.0,
-            )
+        self._pending_status = (message, level)
 
     def show_path_prompt(self) -> None:
         self._path_prompt_visible = True
-        if self.writer.idle:
-            self.surface.show_path_open_prompt()
+        self._path_prompt_needs_paint = True
 
     def clear_path_prompt(self) -> None:
-        if not self._path_prompt_visible:
+        if not self._path_prompt_visible and not self._path_prompt_needs_paint:
             return
+        painted = self._path_prompt_painted
         self._path_prompt_visible = False
-        if self._screen is not None:
+        self._path_prompt_needs_paint = False
+        self._path_prompt_painted = False
+        if painted and self._screen is not None:
             self._selection_dirty_rows.update(range(self._screen.height))
 
     def feed(self, payload: bytes) -> None:
@@ -315,7 +362,26 @@ class _SemanticTerminalRenderer:
             return False
         return True
 
+    def _paint_pending_local_ui(self, now: float) -> bool:
+        painted = False
+        if self._pending_status is not None:
+            message, level = self._pending_status
+            self._pending_status = None
+            self.surface.show_local_status(
+                message,
+                level=level,
+                expires_at=now + 2.0,
+            )
+            painted = True
+        if self._path_prompt_visible and self._path_prompt_needs_paint:
+            self.surface.show_path_open_prompt()
+            self._path_prompt_needs_paint = False
+            self._path_prompt_painted = True
+            painted = True
+        return painted
+
     def next_timeout(self, maximum: float, now: float) -> float:
+        self._promote_presented_screen()
         if not self.writer.idle:
             return min(maximum, _TERMINAL_WRITER_POLL)
         if self._synchronized_update_blocked(now):
@@ -334,12 +400,18 @@ class _SemanticTerminalRenderer:
             return max(0.0, min(maximum, self._next_frame - now))
         if self._selection_dirty_rows:
             return max(0.0, min(maximum, self._next_frame - now))
+        if self._pending_status is not None or self._path_prompt_needs_paint:
+            return 0.0
         return maximum
 
     def paint_due(self, now: float, *, force: bool = False) -> bool:
+        self._promote_presented_screen()
         if not self.writer.idle:
             return False
-        if not force and now < self._next_frame:
+        local_ui_pending = bool(
+            self._pending_status is not None or self._path_prompt_needs_paint
+        )
+        if not force and not local_ui_pending and now < self._next_frame:
             return False
         if self._synchronized_update_blocked(now):
             return False
@@ -351,6 +423,7 @@ class _SemanticTerminalRenderer:
             self.surface.copy_to_clipboard(clipboard)
         update = self.producer.take_update()
         if update is None:
+            painted = False
             if self._screen is not None and self._selection_dirty_rows:
                 rows = set(self._selection_dirty_rows)
                 self._selection_dirty_rows.clear()
@@ -360,9 +433,11 @@ class _SemanticTerminalRenderer:
                     self._selection,
                     rows,
                 )
+                painted = True
+            painted = self._paint_pending_local_ui(now) or painted
+            if painted:
                 self._next_frame = now + _LOCAL_FRAME_INTERVAL
-                return True
-            return False
+            return painted
         screen = self.model.apply(
             update,
             os.terminal_size((self.producer.width, self.producer.height)),
@@ -375,10 +450,12 @@ class _SemanticTerminalRenderer:
                 changed_rows=tuple(sorted(set(screen.changed_rows) | self._selection_dirty_rows)),
             )
             self._selection_dirty_rows.clear()
-        self._screen = screen
         self.surface.paint(screen, selection=self._selection)
+        self._pending_screen = screen
         if self._path_prompt_visible:
-            self.surface.show_path_open_prompt()
+            # The authoritative screen frame overwrote the local modal.
+            self._path_prompt_needs_paint = True
+        self._paint_pending_local_ui(now)
         self._next_frame = now + _LOCAL_FRAME_INTERVAL
         return True
 
@@ -1161,6 +1238,7 @@ class LocalPtyClient:
         self._selection = LocalTextSelection()
         self._routes: tuple[HistorySnapshot, ...] = ()
         self._routes_checked_at = 0.0
+        self._routes_force_refresh = True
         self._path_prompt: tuple[ClickTarget, PathResult] | None = None
         self._path_prompt_mouse_button: int | None = None
         # Path validation is optional. Avoid importing the server graph or
@@ -1199,6 +1277,7 @@ class LocalPtyClient:
         if self._session_id is None:
             self._routes = ()
             return
+        force = force or getattr(self, "_routes_force_refresh", False)
         now = time.monotonic()
         if not force and now - self._routes_checked_at < 0.25:
             return
@@ -1207,12 +1286,15 @@ class LocalPtyClient:
         # paths do not acquire the fast-display server dependency graph.
         from railmux.fast_display_server import visible_agent_snapshots
 
-        routes = visible_agent_snapshots(self._session_id)
+        routes = visible_agent_snapshots(self._session_id, use_cache=not force)
+        self._routes_force_refresh = False
         if self._selection.validate_routes(routes):
             self._renderer.set_selection(self._selection.segments())
         self._routes = routes
 
     def _selection_source(self, event: SgrMouseEvent) -> SelectionSource | None:
+        if not self._renderer.presentation_stable:
+            return None
         screen = self._renderer.screen
         if screen is None:
             return None
@@ -1280,6 +1362,10 @@ class LocalPtyClient:
             )
             return
         self._pending_path_open = (target, resolved, policy)
+        if policy == "internal":
+            # The worker is about to split/focus a tmux pane. Invalidate the
+            # old hit map before that topology mutation can become observable.
+            self._renderer.require_fresh_presentation()
         self._renderer.show_status("Opening path…")
 
     def _drain_path_action_results(self) -> None:
@@ -1323,7 +1409,10 @@ class LocalPtyClient:
             self._renderer.set_selection(())
             self._routes = ()
             self._routes_checked_at = 0.0
+            self._routes_force_refresh = True
             if not result.applied:
+                if policy == "internal":
+                    self._renderer.cancel_fresh_presentation_requirement()
                 self._renderer.show_status(result.message, level=result.level)
             elif policy == "external":
                 self._show_open_result(
@@ -1419,6 +1508,14 @@ class LocalPtyClient:
             part,
             logical_height=logical_height,
         )
+        if not self._renderer.presentation_stable:
+            if self._selection.cancel():
+                self._renderer.set_selection(self._selection.segments())
+            # A queued frame can already represent a new tmux pane topology
+            # while the user still sees the prior one.  Dropping only pointer
+            # input during this bounded transition is safer than forwarding a
+            # click to Quit or a wheel event into stock tmux copy-mode.
+            return
         source = self._selection_source(event)
         if event.is_hover_motion:
             if self._selection.hover(event, source):
@@ -1452,6 +1549,8 @@ class LocalPtyClient:
         self._renderer.set_selection(())
         self._routes = ()
         self._routes_checked_at = 0.0
+        self._routes_force_refresh = True
+        self._renderer.require_fresh_presentation()
         self._enter_pty_catchup(time.monotonic(), restart=True)
         try:
             os.killpg(self.pid, signal.SIGWINCH)

@@ -243,6 +243,7 @@ def test_local_semantic_click_opens_url_but_replays_an_ordinary_click(monkeypatc
         rows=(b"See https://example.test/docs and ordinary text",),
     )
     renderer = MagicMock()
+    renderer.presentation_stable = True
     renderer.screen = screen
     renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
     client._renderer = renderer
@@ -281,6 +282,7 @@ def test_local_semantic_drag_copies_without_forwarding_mouse(monkeypatch):
     client._path_prompt = None
     client._path_prompt_mouse_button = None
     renderer = MagicMock()
+    renderer.presentation_stable = True
     renderer.screen = SimpleNamespace(
         width=20, height=1, cursor_x=1, cursor_y=0, rows=(b"select me",)
     )
@@ -316,6 +318,7 @@ def test_local_semantic_url_in_unfocused_agent_replays_focus_click():
     client._path_prompt = None
     client._path_prompt_mouse_button = None
     renderer = MagicMock()
+    renderer.presentation_stable = True
     renderer.screen = SimpleNamespace(
         width=50,
         height=1,
@@ -346,6 +349,7 @@ def test_local_path_choice_completes_outside_input_loop(monkeypatch):
     client._selection = MagicMock()
     client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
     client._routes_checked_at = 10.0
+    client._routes_force_refresh = False
     client._pending_path_open = None
     worker = MagicMock()
     worker.submit.return_value = True
@@ -379,6 +383,63 @@ def test_local_path_choice_completes_outside_input_loop(monkeypatch):
     opened.assert_called_once_with("/c/work", directory=True)
     assert client._pending_path_open is None
     assert client._routes == ()
+
+
+def test_local_internal_path_open_invalidates_old_visible_topology():
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client._session_id = "$4"
+    client._renderer = MagicMock()
+    client._selection = MagicMock()
+    client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
+    client._routes_checked_at = 10.0
+    client._routes_force_refresh = False
+    target = ClickTarget("path", "~", "%8")
+    resolved = PathResult(11, PathKind.DIRECTORY, "/home/user", "internal")
+    worker = MagicMock()
+    worker.submit.return_value = True
+    client._path_worker = worker
+
+    client._apply_path_choice(
+        target,
+        resolved,
+        "internal",
+        persistent=False,
+    )
+
+    client._renderer.require_fresh_presentation.assert_called_once_with()
+
+    worker.drain.return_value = (
+        PathOpenResult(11, False, "warning", "Could not open terminal"),
+    )
+    client._drain_path_action_results()
+    client._renderer.cancel_fresh_presentation_requirement.assert_called_once_with()
+
+
+def test_local_route_refresh_bypasses_cache_after_topology_change(monkeypatch):
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client._session_id = "$4"
+    client._selection = MagicMock()
+    client._selection.validate_routes.return_value = False
+    client._renderer = MagicMock()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._routes_force_refresh = True
+    snapshots = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
+    query = MagicMock(return_value=snapshots)
+    monkeypatch.setattr(
+        "railmux.fast_display_server.visible_agent_snapshots",
+        query,
+    )
+
+    client._refresh_routes()
+
+    query.assert_called_once_with("$4", use_cache=False)
+    assert client._routes == snapshots
+    assert client._routes_force_refresh is False
 
 
 def test_local_path_resolution_completes_outside_input_loop():
@@ -749,6 +810,142 @@ def test_semantic_renderer_does_not_block_or_queue_stale_frames_for_slow_termina
     assert b"INITIAL" in rendered
     assert b"FINAL" in rendered
     assert b"INTERMEDIATE" not in rendered
+
+
+def test_semantic_renderer_hit_testing_waits_for_physical_frame(monkeypatch):
+    blocked = False
+    started = threading.Event()
+    release = threading.Event()
+
+    def controllable_write(_fd, _payload):
+        if blocked:
+            started.set()
+            assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        controllable_write,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 40, 4)
+    try:
+        renderer.feed(b"\033[2J\033[HOLD-VISIBLE")
+        renderer.paint_due(1.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
+        old_screen = renderer.screen
+        old_serial = renderer.presentation_serial
+        assert old_screen is not None
+
+        blocked = True
+        renderer.feed(b"\033[H\033[2KNEW-NOT-YET-VISIBLE")
+        renderer.paint_due(2.0, force=True)
+        assert started.wait(1.0)
+
+        assert renderer.screen is old_screen
+        assert renderer.presentation_serial == old_serial
+        assert renderer.presentation_stable is False
+
+        # A topology mutation requested while this already-queued frame is
+        # writing must wait for one still-newer authoritative frame.
+        renderer.require_fresh_presentation()
+        release.set()
+        assert renderer.writer.wait_idle(1.0)
+        assert renderer.presentation_stable is False
+        assert renderer.presentation_serial == old_serial + 1
+        renderer.feed(b"\033[H\033[2KNEW-TOPOLOGY-VISIBLE")
+        renderer.paint_due(3.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
+        assert renderer.presentation_stable is True
+        assert b"NEW-TOPOLOGY-VISIBLE" in renderer.screen.rows[0]
+    finally:
+        release.set()
+        renderer.close()
+        os.close(output_fd)
+
+
+def test_semantic_renderer_eventually_paints_path_prompt_after_backpressure(
+    monkeypatch,
+):
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_write(_fd, _payload):
+        started.set()
+        assert release.wait(2.0)
+
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "_write_terminal_output",
+        blocked_write,
+    )
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 40, 4)
+    prompt = MagicMock()
+    renderer.surface.show_path_open_prompt = prompt
+    try:
+        renderer.writer.write(b"busy")
+        assert started.wait(1.0)
+
+        renderer.show_path_prompt()
+        assert renderer.paint_due(1.0, force=True) is False
+        prompt.assert_not_called()
+
+        release.set()
+        assert renderer.writer.wait_idle(1.0)
+        assert renderer.next_timeout(1.0, 2.0) == 0.0
+        assert renderer.paint_due(2.0, force=True) is True
+        prompt.assert_called_once_with()
+    finally:
+        release.set()
+        renderer.close()
+        os.close(output_fd)
+
+
+def test_local_pointer_is_dropped_while_visible_frame_is_transitioning():
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    proxy_socket, child_socket = socket.socketpair()
+    client.master_fd = proxy_socket.detach()
+    client._selection = LocalTextSelection()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    client._size = (80, 24)
+    renderer = MagicMock()
+    renderer.presentation_stable = False
+    renderer.screen = SimpleNamespace(height=24)
+    renderer.surface.translate_mouse_event.side_effect = (
+        lambda event, **_kwargs: event
+    )
+    client._renderer = renderer
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(SgrMouseEvent(b"stale-click", 0, 4, 5, True))
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_explicit_tmux_copy_mode_key_remains_byte_exact():
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    proxy_socket, child_socket = socket.socketpair()
+    client.master_fd = proxy_socket.detach()
+    client._selection = LocalTextSelection()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    client._renderer = MagicMock()
+    child_socket.settimeout(0.5)
+    try:
+        client._forward_input_part(b"\x02[")
+        assert child_socket.recv(8) == b"\x02["
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
 
 
 def test_physical_terminal_writer_queue_is_bounded(monkeypatch):
