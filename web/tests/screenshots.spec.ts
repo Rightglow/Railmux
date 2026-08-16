@@ -459,6 +459,16 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();
   await expect(player.locator(".ap-control-bar")).toHaveCount(0);
+  const lifecyclePlayer = page.locator(".lifecycle-player");
+  const [lifecycleBox, playerBox] = await Promise.all([
+    lifecyclePlayer.boundingBox(),
+    player.boundingBox(),
+  ]);
+  expect(lifecycleBox).not.toBeNull();
+  expect(playerBox).not.toBeNull();
+  expect(
+    lifecycleBox!.y + lifecycleBox!.height - (playerBox!.y + playerBox!.height),
+  ).toBeLessThanOrEqual(24);
   const hud = player.getByTestId("terminal-input-hud");
   const pointer = player.getByTestId("terminal-pointer");
   const mouseTarget = player.getByTestId("terminal-mouse-target");

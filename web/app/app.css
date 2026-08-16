@@ -1579,6 +1579,7 @@ code {
 }
 
 .lifecycle-player {
+  align-self: start;
   min-width: 0;
   padding: 18px;
   background: #090d0f;
