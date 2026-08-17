@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1.dev2] - 2026-08-17
+
 ### Fixed
 
 - Recognize URLs and paths split across Codex's decorated `Ran` command rows,
@@ -3136,7 +3138,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev2...HEAD
+[0.4.1.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev1...v0.4.1.dev2
 [0.4.1.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1.dev1
 [0.4.0]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc25...v0.4.0
 [0.4.0rc25]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc24...v0.4.0rc25
