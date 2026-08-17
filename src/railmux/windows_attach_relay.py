@@ -1236,6 +1236,8 @@ class LocalPtyClient:
         self._session_id = session_id
         self._input_decoder = TerminalInputDecoder()
         self._selection = LocalTextSelection()
+        self._passthrough_left_gesture = False
+        self._suppressed_left_gesture = False
         self._routes: tuple[HistorySnapshot, ...] = ()
         self._routes_checked_at = 0.0
         self._routes_force_refresh = True
@@ -1508,15 +1510,50 @@ class LocalPtyClient:
             part,
             logical_height=logical_height,
         )
+        left_drag = (
+            event.pressed
+            and bool(event.button & 32)
+            and event.button & 3 == 0
+            and not event.button & 64
+        )
+        left_release = not event.pressed and event.button & 3 == 0
+        plain_left_press = LocalTextSelection._is_plain_left_press(event)
+        if getattr(self, "_suppressed_left_gesture", False):
+            if left_drag or left_release:
+                if left_release:
+                    self._suppressed_left_gesture = False
+                return
+            if plain_left_press:
+                self._suppressed_left_gesture = False
+        if getattr(self, "_passthrough_left_gesture", False):
+            if left_drag or left_release:
+                if left_release:
+                    self._passthrough_left_gesture = False
+                _write_pty_input(self.master_fd, event.raw)
+                return
+            if plain_left_press:
+                self._passthrough_left_gesture = False
         if not self._renderer.presentation_stable:
-            if self._selection.cancel():
+            if not self._selection.capturing and self._selection.cancel():
                 self._renderer.set_selection(self._selection.segments())
             # A queued frame can already represent a new tmux pane topology
             # while the user still sees the prior one.  Dropping only pointer
-            # input during this bounded transition is safer than forwarding a
-            # click to Quit or a wheel event into stock tmux copy-mode.
-            return
-        source = self._selection_source(event)
+            # input during this bounded transition is safer than forwarding it
+            # to Quit or stock tmux copy-mode. A capture already owns an
+            # immutable visible snapshot and therefore keeps the whole gesture.
+            if not self._selection.capturing:
+                if plain_left_press or left_drag:
+                    self._suppressed_left_gesture = not left_release
+                return
+        if self._selection.capturing:
+            # Once the newer frame is physically visible, revalidate the
+            # captured route before consuming another event. During a queued
+            # transition the old snapshot remains the visible authority.
+            if self._renderer.presentation_stable:
+                self._refresh_routes()
+            source = None
+        else:
+            source = self._selection_source(event)
         if event.is_hover_motion:
             if self._selection.hover(event, source):
                 self._renderer.set_selection(self._selection.segments())
@@ -1533,6 +1570,13 @@ class LocalPtyClient:
         if action.open_target is not None:
             self._open_target(action.open_target)
         if not action.handled:
+            if plain_left_press:
+                self._passthrough_left_gesture = True
+            elif left_drag or left_release:
+                # Never give tmux half a left-button gesture. An orphan means
+                # its press was suppressed or a captured route was invalidated.
+                self._suppressed_left_gesture = left_drag
+                return
             _write_pty_input(self.master_fd, event.raw)
 
     def poll(self) -> int | None:

@@ -550,6 +550,8 @@ _EMBEDDED_WINDOWS_PATH_RE = re.compile(
     r"(?:^|(?<=[^A-Za-z0-9_.@+~\\/-]))"
     r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+(?:[\\/]|$))"
 )
+_TOOL_COMMAND_START_RE = re.compile(r"^\s*[•●]\s+Ran\s+")
+_TOOL_COMMAND_CONTINUATION_RE = re.compile(r"^\s*│\s?")
 
 
 def _clicked_character_index(
@@ -893,6 +895,169 @@ def _hard_wrapped_target(
     return best
 
 
+def _decorated_tool_target(
+    rows: tuple[tuple[str | None, ...], ...],
+    row: int,
+    column: int,
+    *,
+    route: HistorySnapshot,
+) -> ClickTarget | None:
+    """Join a token split across Codex's decorated ``Ran`` command rows."""
+    if not 0 <= row < len(rows) or route.width <= 0:
+        return None
+
+    # A continuation glyph alone is not authority: it can occur in ordinary
+    # program output. Walk back through one bounded chain and require Codex's
+    # explicit ``Ran`` header before interpreting the prefixes as decoration.
+    block_first = row
+    while (
+        block_first > 0
+        and row - block_first < 7
+        and _TOOL_COMMAND_CONTINUATION_RE.match(_row_text(rows[block_first]))
+    ):
+        block_first -= 1
+    if _TOOL_COMMAND_START_RE.match(_row_text(rows[block_first])) is None:
+        return None
+
+    block_last = block_first
+    while (
+        block_last + 1 < len(rows)
+        and block_last - block_first < 7
+        and _TOOL_COMMAND_CONTINUATION_RE.match(_row_text(rows[block_last + 1]))
+    ):
+        block_last += 1
+    if not block_first <= row <= block_last:
+        return None
+
+    best: ClickTarget | None = None
+    for first in range(block_first, row + 1):
+        first_text = _row_text(rows[first])
+        prefix = (
+            _TOOL_COMMAND_START_RE.match(first_text)
+            if first == block_first
+            else _TOOL_COMMAND_CONTINUATION_RE.match(first_text)
+        )
+        if prefix is None:
+            continue
+        tail = re.search(r"""[^\s<>"'`]+\s*$""", first_text[prefix.end() :])
+        if tail is None:
+            continue
+        fragment = tail.group(0).rstrip()
+        fragment_index = prefix.end() + tail.start()
+        fragment, fragment_index, _fragment_end = _trim_click_token(
+            fragment,
+            fragment_index,
+            fragment_index + len(fragment),
+        )
+        lower = fragment.lower()
+        is_url = lower.startswith(("http://", "https://"))
+        is_path = (
+            _path_parts(fragment) is not None
+            or fragment.startswith(("/", "./", "../", "~/"))
+            or _WINDOWS_ABSOLUTE_PATH_RE.match(fragment) is not None
+        )
+        if not (is_url or is_path):
+            continue
+        fragment_column = _display_column(first_text, fragment_index)
+        fragments: list[tuple[int, int, str]] = [(first, fragment_column, fragment)]
+        joined = fragment
+        previous_end = fragment_column + sum(
+            _display_width(character) for character in fragment
+        )
+
+        for following in range(first + 1, block_last + 1):
+            # The formatter may place a new shell token on the following
+            # decorated row. Only a fragment ending near the physical edge is
+            # proof that the token itself, rather than the command, wrapped.
+            if route.width - previous_end > 8:
+                break
+            following_text = _row_text(rows[following])
+            following_prefix = _TOOL_COMMAND_CONTINUATION_RE.match(following_text)
+            if following_prefix is None:
+                break
+            continuation = re.match(
+                r"""([^\s<>"'`]+)""",
+                following_text[following_prefix.end() :],
+            )
+            if continuation is None:
+                break
+            next_fragment = continuation.group(1)
+            next_index = following_prefix.end() + continuation.start()
+            next_fragment, next_index, _next_end = _trim_click_token(
+                next_fragment,
+                next_index,
+                next_index + len(next_fragment),
+            )
+            if not next_fragment:
+                break
+            if is_path and (
+                next_fragment[0] not in "._~" and not next_fragment[0].isalnum()
+            ):
+                break
+            if is_url and (
+                next_fragment[0] not in "._~/%?&#"
+                and not next_fragment[0].isalnum()
+            ):
+                break
+            next_column = _display_column(following_text, next_index)
+            fragments.append((following, next_column, next_fragment))
+            joined += next_fragment
+            previous_end = next_column + sum(
+                _display_width(character) for character in next_fragment
+            )
+
+            clicked = any(
+                fragment_row == row
+                and start_column
+                <= column
+                < start_column
+                + sum(_display_width(character) for character in fragment_text)
+                for fragment_row, start_column, fragment_text in fragments
+            )
+            if not clicked:
+                continue
+            if is_url:
+                value = _bounded_url_token(joined)
+                parsed = urlsplit(value)
+                if (
+                    parsed.scheme.lower() not in ("http", "https")
+                    or parsed.hostname is None
+                    or len(value.encode("utf-8")) > 8192
+                ):
+                    continue
+                kind = "url"
+                line = None
+                target_column = None
+            else:
+                path = _path_parts(joined)
+                if path is None:
+                    continue
+                value, line, target_column = path
+                kind = "path"
+            segments = tuple(
+                (
+                    route.y + fragment_row,
+                    route.x + start_column,
+                    fragment_text.encode("utf-8"),
+                )
+                for fragment_row, start_column, fragment_text in fragments
+            )
+            candidate = ClickTarget(
+                kind,
+                value,
+                route.pane_id or "",
+                line,
+                target_column,
+                highlight_row=segments[0][0],
+                highlight_column=segments[0][1],
+                highlight_text=segments[0][2],
+                highlight_segments=segments,
+            )
+            if best is None or len(candidate.value) > len(best.value):
+                best = candidate
+    return best
+
+
 def _highlight_runs(
     target: ClickTarget,
     *,
@@ -963,6 +1128,14 @@ def _target_in_rows(
     """Resolve a semantic target across one bounded visual-wrap chain."""
     if not 0 <= row < len(rows) or route.width <= 0:
         return None
+    decorated = _decorated_tool_target(
+        rows,
+        row,
+        column,
+        route=route,
+    )
+    if decorated is not None:
+        return decorated
     # A full terminal row followed by a non-indented row is an authoritative
     # visual soft-wrap chain.  Do not let the more permissive agent hard-wrap
     # heuristic accept a shorter prefix first: on a three-row URL that made

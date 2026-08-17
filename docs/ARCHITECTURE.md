@@ -1566,6 +1566,13 @@ deliberately physical-line and visible-viewport only: it does not autoscroll,
 join application soft wraps, or cross pane borders. Keyboard input, resize,
 reconnect, and changed route geometry invalidate the local selection.
 
+Native Windows additionally pins every observed left-button gesture from press
+through release to one owner: local selection, explicit tmux passthrough, or a
+fail-closed suppression during an unstable physical presentation. A dropped
+press or invalidated route can therefore never leak a later orphan drag into
+tmux copy-mode. An already captured selection retains its immutable visible
+snapshot while a newer frame is queued.
+
 This client-owned drag never reaches tmux, so stock `MouseDrag1Pane` cannot
 enter copy-mode accidentally. Non-left sidebar and status gestures are still
 forwarded, terminal-native selection overrides never enter the client, and the
@@ -1581,11 +1588,13 @@ valid URL query as a path. A bounded POSIX or Windows path
 is resolved against the exact visible pane. Over `railmux ssh`, it sends a typed
 protocol request containing only the visible pane ID and raw token; native
 Windows uses the same server-side pane/path authority locally. Besides terminal
-soft wraps, the recognizer can join a bounded path-only
-continuation that Codex or Claude rendered as a real indented newline; every
-physical fragment remains a separate highlight segment. This prevents an
-existing directory at the end of the first row from winning over the intended
-file on the next row. It does not join adjacent list items or indented prose.
+soft wraps, the recognizer can join a bounded path-only continuation that Codex
+or Claude rendered as a real indented newline, plus a URL or path split across
+Codex's explicit `Ran` / `│` command decoration; every physical fragment
+remains a separate highlight segment. This prevents an existing directory at
+the end of the first row from winning over the intended file on the next row.
+It does not join adjacent list items, indented prose, or undecorated command
+output.
 The server accepts only a currently visible, non-controller agent pane, resolves
 the correct provider pane's current working directory (including
 identity-validated nested transport), and returns only a readable absolute

@@ -677,6 +677,118 @@ def test_local_text_selection_resolves_all_three_soft_wrapped_url_rows():
         assert action.open_target.value == expected
 
 
+def test_local_text_selection_joins_url_across_codex_ran_decoration():
+    first = "• Ran curl https://example.test/releases/rail"
+    second = "  │ mux/0.4.1.dev1/index.html --head"
+    width = max(len(first), len(second))
+    route = HistorySnapshot(1, "%8", 3, 2, width, 2)
+    source = SelectionSource(
+        route,
+        tuple((line + " " * (width - len(line))).encode() for line in (first, second)),
+        0,
+    )
+    expected = "https://example.test/releases/railmux/0.4.1.dev1/index.html"
+    expected_segments = (
+        (2, 3 + first.index("https://"), b"https://example.test/releases/rail"),
+        (3, 3 + second.index("mux/"), b"mux/0.4.1.dev1/index.html"),
+    )
+
+    for screen_row, text, token in (
+        (3, first, "https://"),
+        (4, second, "mux/"),
+    ):
+        selection = LocalTextSelection()
+        screen_column = 3 + text.index(token) + 2
+        assert selection.hover(
+            SgrMouseEvent(b"hover", 35, screen_column, screen_row, True),
+            source,
+        )
+        assert selection.segments() == expected_segments
+        selection.pointer_event(
+            SgrMouseEvent(b"down", 0, screen_column, screen_row, True),
+            source,
+        )
+        action = selection.pointer_event(
+            SgrMouseEvent(b"up", 0, screen_column, screen_row, False),
+            source,
+        )
+        assert action.open_target is not None
+        assert action.open_target.kind == "url"
+        assert action.open_target.value == expected
+
+
+def test_local_text_selection_joins_path_across_codex_ran_decoration():
+    first = "• Ran /tmp/railmux-published-0.4.1.dev1-"
+    second = "  │ 20260816/bin/pip --isolated"
+    width = max(len(first), len(second))
+    route = HistorySnapshot(1, "%8", 0, 0, width, 2)
+    source = SelectionSource(
+        route,
+        tuple((line + " " * (width - len(line))).encode() for line in (first, second)),
+        0,
+    )
+    selection = LocalTextSelection()
+    column = second.index("20260816") + 2
+
+    assert selection.hover(SgrMouseEvent(b"hover", 35, column, 2, True), source)
+    assert selection.segments() == (
+        (0, first.index("/tmp/"), b"/tmp/railmux-published-0.4.1.dev1-"),
+        (1, second.index("20260816"), b"20260816/bin/pip"),
+    )
+    selection.pointer_event(SgrMouseEvent(b"down", 0, column, 2, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, column, 2, False),
+        source,
+    )
+    assert action.open_target is not None
+    assert action.open_target.kind == "path"
+    assert action.open_target.value == (
+        "/tmp/railmux-published-0.4.1.dev1-20260816/bin/pip"
+    )
+
+
+def test_local_text_selection_does_not_join_undecorated_box_drawing_rows():
+    first = "Output /home/user/project/"
+    second = "  │ sibling/file.py"
+    width = max(len(first), len(second))
+    route = HistorySnapshot(1, "%8", 0, 0, width, 2)
+    source = SelectionSource(
+        route,
+        tuple((line + " " * (width - len(line))).encode() for line in (first, second)),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 12, 1, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 12, 1, False),
+        source,
+    )
+    assert action.open_target is not None
+    assert action.open_target.value == "/home/user/project/"
+
+
+def test_local_text_selection_does_not_join_next_decorated_shell_option():
+    first = "• Ran cat /home/user/project/"
+    second = "  │ --verbose"
+    width = len(first)
+    route = HistorySnapshot(1, "%8", 0, 0, width, 2)
+    source = SelectionSource(
+        route,
+        tuple((line + " " * (width - len(line))).encode() for line in (first, second)),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 12, 1, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 12, 1, False),
+        source,
+    )
+    assert action.open_target is not None
+    assert action.open_target.value == "/home/user/project/"
+
+
 def test_local_text_selection_strips_label_before_absolute_path():
     route = HistorySnapshot(1, "%8", 0, 0, 40, 1)
     source = SelectionSource(

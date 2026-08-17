@@ -302,6 +302,41 @@ def test_local_semantic_drag_copies_without_forwarding_mouse(monkeypatch):
         child_socket.close()
 
 
+def test_local_semantic_drag_keeps_ownership_during_frame_transition():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    client._size = (20, 1)
+    renderer = MagicMock()
+    renderer.presentation_stable = True
+    renderer.screen = SimpleNamespace(
+        width=20, height=1, cursor_x=1, cursor_y=0, rows=(b"select me",)
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(SgrMouseEvent(b"down", 0, 1, 1, True))
+        renderer.presentation_stable = False
+        client._forward_input_part(SgrMouseEvent(b"drag", 32, 6, 1, True))
+        client._forward_input_part(SgrMouseEvent(b"up", 0, 6, 1, False))
+
+        renderer.copy_to_clipboard.assert_called_once_with(b"select")
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
 def test_local_semantic_url_in_unfocused_agent_replays_focus_click():
     client = windows_attach_relay.LocalPtyClient.__new__(
         windows_attach_relay.LocalPtyClient
@@ -922,8 +957,47 @@ def test_local_pointer_is_dropped_while_visible_frame_is_transitioning():
     child_socket.setblocking(False)
     try:
         client._forward_input_part(SgrMouseEvent(b"stale-click", 0, 4, 5, True))
+        renderer.presentation_stable = True
+        client._forward_input_part(SgrMouseEvent(b"orphan-drag", 32, 8, 5, True))
+        client._forward_input_part(SgrMouseEvent(b"orphan-up", 0, 8, 5, False))
         with pytest.raises(BlockingIOError):
             child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_left_gesture_outside_agent_route_remains_tmux_owned():
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    proxy_socket, child_socket = socket.socketpair()
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    client._size = (20, 2)
+    renderer = MagicMock()
+    renderer.presentation_stable = True
+    renderer.screen = SimpleNamespace(
+        width=20,
+        height=2,
+        cursor_x=1,
+        cursor_y=0,
+        rows=(b"agent", b"status"),
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    child_socket.settimeout(0.5)
+    try:
+        client._forward_input_part(SgrMouseEvent(b"down", 0, 2, 2, True))
+        client._forward_input_part(SgrMouseEvent(b"drag", 32, 4, 2, True))
+        client._forward_input_part(SgrMouseEvent(b"up", 0, 4, 2, False))
+
+        assert child_socket.recv(64) == b"downdragup"
     finally:
         os.close(client.master_fd)
         child_socket.close()

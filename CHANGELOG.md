@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Recognize URLs and paths split across Codex's decorated `Ran` command rows,
+  while retaining pane-bounded validation and per-row hover highlighting.
+- Keep native-Windows left-drag ownership stable from press through release so
+  a dropped or invalidated selection cannot leak an orphan drag into tmux
+  copy-mode.
+
 ## [0.4.1.dev1] - 2026-08-16
 
 ### Fixed
