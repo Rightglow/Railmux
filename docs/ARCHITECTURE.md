@@ -417,12 +417,21 @@ panes that did. The transport restores the local mode on every cooked prompt
 and exit path. Outside that exact boundary, the ordinary local escape, history,
 pointer, and focus routes remain authoritative.
 
-### SSH local history and rewind generations
+### Transport-managed local history and rewind generations
 
-Local SSH history is an overlay, not a pause in the live screen model. Each
+`LocalHistoryView` is a transport-neutral history controller. The SSH client
+feeds it snapshots returned by the remote protocol; the supported native
+Windows semantic proxy feeds it the same snapshot objects from a local,
+bounded asynchronous tmux capture worker. Both adapters deliver the
+controller's actions and render its overlays instead of implementing their own
+wheel, Page, cache, or viewport rules. This boundary is intentionally reusable
+by a future semantic POSIX client, but POSIX/WSL direct Railmux continues to
+use tmux/provider-native scrolling in this release.
+
+Managed history is an overlay, not a pause in the live screen model. Each
 visible agent pane may own one immutable snapshot and offset; incoming live
-rows are painted first and every intersecting frozen rectangle is repainted in
-the same terminal write. Periodic prefetch may refresh routing but must not
+rows are consumed and painted first and every intersecting frozen rectangle
+is repainted in the same terminal write. Periodic prefetch may refresh routing but must not
 move an existing viewport or replace a deeper cached timeline with its
 300-line hot suffix. After a periodic snapshot is accepted, further periodic
 captures are suppressed until a newer screen update can have made that cache
@@ -473,9 +482,11 @@ response does not mutate the reusable cache. Deep
 history begins with 2000 physical lines and requests cumulative 2000-line
 expansions only as the viewport approaches the oldest loaded content.
 Expansion stops at the local
-`[ssh].history_lines`/CLI cap (default 10000, bounded to 2000-20000) or when the
-server returns fewer lines than requested. This setting is local-only and is
-not an in-TUI Options authority. A deep response may replace its previous
+`[interaction].history_lines` cap (default 10000, bounded to 2000-20000) or,
+for `railmux ssh`, its one-invocation CLI override. The released
+`[ssh].history_lines` spelling remains a read alias. The setting belongs to the
+display client: the native Windows machine for local Railmux, or the initiating
+machine for `railmux ssh`. It is not an in-TUI Options authority. A deep response may replace its previous
 snapshot only when the visible multi-line anchor has one exact match, so both
 live output and newly prepended history leave the viewport stationary. The
 unmodified terminal Page Up/Down sequences move one visible page only when the
@@ -483,9 +494,10 @@ keyboard cursor resolves to a verified agent route; sidebar and modal
 navigation remains remote. The server retains the newest suffix if styled
 history reaches the protocol byte
 budget; a byte-bound truncation is an effective end, never a helper failure.
-The attached display loop never performs a history capture itself. One bounded
-read-only worker owns tmux capture, transcript formatting, and history-row
-rendering, then wakes the PTY select loop through a self-pipe. Pending routing
+An attached display loop never performs a history capture itself. The shared
+`HistoryCaptureWorker` owns tmux capture, transcript formatting, and
+history-row rendering, then wakes either display loop through a self-pipe.
+Pending routing
 prefetches coalesce to the newest request; deep requests remain individually
 identified, and stale results are rejected by the client's request/route
 epoch. The pane snapshot describes and validates the controller identity with
@@ -577,13 +589,16 @@ fresh DEC ownership. Route options are window-scoped; the tmux `mouse` option
 is session-scoped, so the handoff is deliberately short and always restores to
 the `on` state Railmux requires for the rest of that session.
 
-### Claude history policy over SSH
+### Claude history policy on managed displays
 
 Managed Claude Code panes may advertise a verified transcript source without
-using it. The remote-workspace `[ssh].claude_history` policy is `ask`, `local`,
-or `native`: `ask` makes the first upward wheel gesture open a local-only
-keyboard/mouse dialog, `local` renders the bounded read-only transcript into
-the ordinary history overlay, and `native` forwards wheel input to Claude Code.
+using it. The workspace `[interaction].claude_history` policy is `ask`,
+`local`, or `native`; the released `[ssh].claude_history` spelling remains a
+read alias. For SSH the workspace authority is remote; for native Windows it is
+the local managed workspace. `ask` makes the first upward wheel gesture open a
+display-local keyboard/mouse dialog, `local` renders the bounded read-only
+transcript into the ordinary history overlay, and `native` forwards wheel
+input to Claude Code.
 The dialog offers persistent and current-invocation variants for both routes.
 The client waits for the helper's applied-success response before changing
 wheel ownership; a current-invocation choice is replayed after automatic
@@ -765,10 +780,10 @@ agent or the current pane geometry. A current-run YOLO choice remains in memory;
 a next-launch-only layout profile is removed from the same TOML file only after
 successful application.
 Legal policy sets and activation boundaries are declared once in
-`setting_contracts.py`: SSH history capacity applies to the next local SSH
-invocation, persistent Claude history applies to the next remote history
-refresh (and subsequent connections), and the remaining saved policies apply
-only at their documented launch/exit boundary.
+`setting_contracts.py`: managed history capacity applies to the next native
+Windows or SSH display client, persistent Claude history applies to the next
+managed history refresh (and subsequent connections), and the remaining saved
+policies apply only at their documented launch/exit boundary.
 
 The standalone cooked-mode `railmux config` editor is another view of this same
 TOML authority and dispatches before the tmux dependency check, so a broken or
@@ -797,9 +812,9 @@ resizes, detaches, or kills tmux. A missing/older remote package can be
 installed only with the same user/private-venv consent boundaries as
 `railmux ssh`. Phase two is a fresh `ssh -tt` process invoking the discovered
 entry point's cooked `config --remote-context` command. The remote context
-hides and preserves `ssh.history_lines`, which belongs to the initiating local
-display client, while retaining remote-workspace Claude history and clicked
-path policies. Public SSH-facing commands use grouped `--ssh-args` values with
+hides and preserves `interaction.history_lines` (and its released SSH alias),
+which belongs to the initiating display client, while retaining
+remote-workspace Claude history and clicked path policies. Public SSH-facing commands use grouped `--ssh-args` values with
 one ordered argv authority across both phases. Group parsing uses bounded
 POSIX quoting locally and never invokes a shell. The released singular
 `--ssh-arg` remains a hidden exact-argv compatibility input.
@@ -1378,9 +1393,10 @@ routing with focus, selection, or history.
 - Single-click and Enter on a running row attach its real provider pane;
   stopped-row click still opens history. `␣` and context Preview always open
   read-only canonical history, including for a running row. Wheel input over a
-  displayed live agent never enters that viewer: direct Railmux preserves
-  tmux/provider-native scrolling, while `railmux ssh` keeps exclusive ownership
-  through its bounded per-pane history layer. Explicit Preview returns the real
+  displayed live agent never enters that viewer: POSIX/WSL direct Railmux
+  preserves tmux/provider-native scrolling, while native Windows and
+  `railmux ssh` keep exclusive ownership through the shared bounded per-pane
+  history layer. Explicit Preview returns the real
   pane home first and normal viewer exit signals the controller to restore that
   exact live agent. The bounded formatter completes into an anonymous,
   seekable temporary file before `less +G` starts, so Preview paints one final

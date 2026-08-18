@@ -73,9 +73,18 @@ def test_claude_history_policy_round_trips(settings, policy):
 
     assert store.set_claude_history_policy(policy)
     assert Settings().claude_history_policy == policy
-    assert tomlkit.parse(path.read_text()).unwrap()["ssh"][
+    assert tomlkit.parse(path.read_text()).unwrap()["interaction"][
         "claude_history"
     ] == policy
+
+
+def test_managed_history_limit_uses_transport_neutral_section(settings):
+    store, path = settings
+
+    assert store.set_history_lines(12000)
+    assert tomlkit.parse(path.read_text()).unwrap()["interaction"][
+        "history_lines"
+    ] == 12000
 
 
 def test_claude_history_policy_refreshes_after_helper_process_write(settings):

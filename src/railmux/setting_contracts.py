@@ -11,11 +11,19 @@ from dataclasses import dataclass
 
 
 OPTION_POLICIES = frozenset({"always", "ask", "never"})
-SSH_CLAUDE_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
+MANAGED_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
 PATH_OPEN_POLICIES = frozenset({"ask", "internal", "external"})
-SSH_HISTORY_MIN_LINES = 2000
-SSH_HISTORY_MAX_LINES = 20000
-SSH_HISTORY_DEFAULT_LINES = 10000
+HISTORY_MIN_LINES = 2000
+HISTORY_MAX_LINES = 20000
+HISTORY_DEFAULT_LINES = 10000
+
+# Compatibility exports for third-party configuration helpers written against
+# the released 0.4.0 names. New code and persisted settings use the
+# transport-neutral names below.
+SSH_CLAUDE_HISTORY_POLICIES = MANAGED_HISTORY_POLICIES
+SSH_HISTORY_MIN_LINES = HISTORY_MIN_LINES
+SSH_HISTORY_MAX_LINES = HISTORY_MAX_LINES
+SSH_HISTORY_DEFAULT_LINES = HISTORY_DEFAULT_LINES
 
 
 @dataclass(frozen=True)
@@ -30,16 +38,16 @@ class SettingContract:
 
 
 SETTING_CONTRACTS = {
-    "ssh.history_lines": SettingContract(
-        "ssh.history_lines",
-        ("next_ssh_invocation",),
-        minimum=SSH_HISTORY_MIN_LINES,
-        maximum=SSH_HISTORY_MAX_LINES,
+    "interaction.history_lines": SettingContract(
+        "interaction.history_lines",
+        ("next_managed_history_client",),
+        minimum=HISTORY_MIN_LINES,
+        maximum=HISTORY_MAX_LINES,
     ),
-    "ssh.claude_history": SettingContract(
-        "ssh.claude_history",
-        ("next_ssh_invocation", "next_remote_history_refresh"),
-        choices=SSH_CLAUDE_HISTORY_POLICIES,
+    "interaction.claude_history": SettingContract(
+        "interaction.claude_history",
+        ("next_managed_history_client", "next_history_refresh"),
+        choices=MANAGED_HISTORY_POLICIES,
     ),
     "interaction.path_open": SettingContract(
         "interaction.path_open",
@@ -52,6 +60,19 @@ SETTING_CONTRACTS = {
         "ssh.path_open",
         ("next_path_click",),
         choices=PATH_OPEN_POLICIES,
+    ),
+    # Railmux 0.4.0 persisted managed history under [ssh]. Keep both spellings
+    # as validated read aliases until a later major-version cleanup.
+    "ssh.history_lines": SettingContract(
+        "ssh.history_lines",
+        ("next_managed_history_client",),
+        minimum=HISTORY_MIN_LINES,
+        maximum=HISTORY_MAX_LINES,
+    ),
+    "ssh.claude_history": SettingContract(
+        "ssh.claude_history",
+        ("next_managed_history_client", "next_history_refresh"),
+        choices=MANAGED_HISTORY_POLICIES,
     ),
     "updates.auto_update": SettingContract(
         "updates.auto_update",

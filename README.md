@@ -104,13 +104,13 @@ after showing the exact command and asking for confirmation. See
 requires a virtual environment.
 
 Preference prompts appear only when relevant—for updates, Codex auto-run,
-layout retention, or Claude history over `railmux ssh`. Persistent choices are
+layout retention, or Claude history on a managed Windows/SSH display. Persistent choices are
 not permanent traps: press `o`, or choose **More → Options**, to change them
 later. One-time safety confirmations such as dependency installation and
 session deletion are intentionally asked at the action itself.
 
 For setup outside the full-screen UI, run `railmux config`; it edits the same
-settings as Options and also covers executable paths, SSH history capacity,
+settings as Options and also covers executable paths, managed history capacity,
 and the runtime locale. Use `railmux config --remote your-server` to configure
 that host without opening or resizing its tmux workspace. See
 [Configuration](#configuration) for the complete interface.
@@ -155,9 +155,9 @@ SSH.
 |--------|--------|
 | Left-click (non-running) | Preview session history in the Target pane |
 | Left-click (running) | Switch the Target pane to that session |
-| Wheel over a live agent | Scroll its live terminal history (native locally, Railmux-managed over `railmux ssh`) |
+| Wheel over a live agent | Scroll its live terminal history (Railmux-managed on native Windows and over `railmux ssh`; tmux/provider-native on POSIX/WSL local) |
 | Double-click | Open/attach in the Target pane and move focus there |
-| Right-click session | Context menu (Open, Preview, Info, Rename, Star, Copy title, Kill, Term, Delete) |
+| Right-click session | Context menu (Open, Preview, Info, Rename, Star, Copy title, Term, Delete, plus Kill while running) |
 | Right-click project | Copy absolute path, Star/Unstar, Info, or open managed Term |
 
 Unavailable context-menu actions are hidden for the selected session state.
@@ -262,9 +262,9 @@ profile. The first Codex auto-run prompt uses the corresponding choices:
 
 Press `o`, or select **More → Options**, to change persistent behavior without
 editing TOML. **Layout retention**, **Codex auto-run**, and **Railmux updates**
-support **Always**, **Ask every time**, and **Never**. Claude history over
-`railmux ssh` supports **Local transcript**, **Ask on first scroll**, and
-**Claude native**. Use arrow keys plus
+support **Always**, **Ask every time**, and **Never**. Claude history on
+managed Windows/SSH displays supports **Railmux managed**, **Ask on first
+scroll**, and **Claude native**. Use arrow keys plus
 `Enter`/`Space`, or click a choice with the mouse. Activating the already
 selected choice confirms and closes the screen; `Esc` or `o` also closes it.
 Layout changes do not resize the current workspace; Codex auto-run changes
@@ -366,12 +366,13 @@ are hidden. Codex rewind lineages and Claude Code `parentUuid` branches are
 projected onto the provider's current conversation: the retained prefix and
 replacement suffix remain visible, while the abandoned suffix is hidden.
 
-Scrolling a live agent does not enter Preview. Direct `railmux` uses the
-terminal/tmux scrolling behavior; `railmux ssh` keeps its own bounded,
-per-pane history and normally preserves the live terminal's captured styling.
+Scrolling a live agent does not enter Preview. POSIX/WSL direct `railmux` uses
+terminal/tmux scrolling; native Windows and `railmux ssh` use the shared
+bounded per-pane history controller and normally preserve the live terminal's
+captured styling.
 When Railmux confirms that a running Codex session advanced after rewind or
 steering, it leaves the live terminal untouched and advances only that pane's
-SSH history generation. The SSH history for that branched generation uses the
+managed history generation. The history for that branched generation uses the
 canonical rollout so its abandoned suffix stays hidden.
 
 Preview opens at the latest activity in `less`; large sessions are limited to
@@ -522,11 +523,9 @@ agent_transport = "swap" # or "nested"
 [interaction]
 # Clicked paths in native Windows and railmux ssh: "ask", "internal", or "external"
 path_open = "ask"
-
-[ssh]
-# Local railmux ssh history cap (default: 10000; range: 2000-20000)
+# Railmux-managed history cap (default: 10000; range: 2000-20000)
 history_lines = 10000
-# Claude Code wheel history: "ask", "local", or "native"
+# Claude Code history on managed displays: "ask", "local", or "native"
 claude_history = "ask"
 ```
 
@@ -536,11 +535,15 @@ tmux environment.
 
 This is Railmux's only user settings file. Manual edits, `railmux config`, and
 the in-app Options screen share the same authority and preserve comments,
-formatting, order, and unknown keys. The local-only `ssh.history_lines` setting
-belongs to the machine that starts `railmux ssh`; `ssh.claude_history` belongs
-to the remote workspace. The shared `interaction.path_open` preference
-controls recognized paths in native Windows and `railmux ssh`. Current
-interactive preferences are also exposed in Options.
+formatting, order, and unknown keys. `interaction.history_lines` belongs to
+the display client: the native Windows machine for local Railmux, or the
+machine that starts `railmux ssh`. `interaction.claude_history` belongs to the
+workspace that runs Claude Code, so it is remote for `railmux ssh`. The
+released `ssh.history_lines`, `ssh.claude_history`, and `ssh.path_open`
+spellings are still read during upgrade, while new writes use `[interaction]`.
+The shared `interaction.path_open` preference controls recognized paths in
+native Windows and `railmux ssh`. Current interactive preferences are also
+exposed in Options.
 
 Program and locale changes affect new Railmux-managed processes. They never
 restart, replace, or kill an existing tmux server or running agent. If a newly
@@ -719,28 +722,32 @@ only the local display and leaves remote agents running. Password or MFA input
 is supported during the initial connection, but automatic reconnect is
 non-interactive and asks you to rerun the command when authentication changes.
 
-#### History, Claude behavior, and copying
+#### Managed history, Claude behavior, and copying
 
-Mouse-wheel and `Page Up` / `Page Down` browsing use a responsive local cache
-in agent panes. Each pane keeps its own position; scroll to the bottom, press
-`Esc`, or type to return that pane to live output. The default cap is 10000
-lines and the supported range is 2000-20000. POSIX/macOS clients move one row
-per decoded terminal wheel event; native Windows clients use the same common
-three-row step as local tmux/provider scrolling. Precision touchpads retain
-every event while adjacent paints are coalesced:
+Native Windows and `railmux ssh` use the same responsive local history cache
+inside agent panes. Each pane keeps its own position; live provider output
+continues to drain behind a frozen viewport, and scrolling to the bottom,
+pressing `Esc`, or typing returns that pane to current output. The default cap
+is 10000 lines and the supported range is 2000-20000. POSIX/macOS SSH clients
+move one row per decoded terminal wheel event; managed Windows clients use a
+three-row step. Precision touchpads retain every event while adjacent paints
+are coalesced. POSIX/WSL local Railmux keeps its existing tmux/provider-native
+wheel behavior.
+
+For a one-connection SSH override:
 
 ```bash
 railmux ssh --history-lines 10000 your-server
 ```
 
-Set `ssh.history_lines` persistently with `railmux config`. Reaching the
+Set `interaction.history_lines` persistently with `railmux config`. Reaching the
 available top shows a one-time `History top` message. Higher caps use more local
 memory and do not change remote tmux's own history limit.
 
 Claude Code can use either Railmux's smooth read-only transcript or Claude's
 native clickable history. The first upward scroll asks which behavior to use,
 with **Always** and **this time** choices; change it later under **More →
-Options → Claude history in railmux ssh**.
+Options → Claude managed history**.
 
 Dragging inside a visible agent pane selects and copies locally without tmux
 copy-mode. Selection stays within that pane and viewport. `Ctrl-B [` remains

@@ -176,7 +176,8 @@ def test_remote_context_hides_and_preserves_local_history_limit(
     path = tmp_path / ".config" / "railmux" / "config.toml"
     path.parent.mkdir(parents=True)
     path.write_text(
-        '[ssh]\nhistory_lines = 12345\nclaude_history = "local"\n'
+        '[interaction]\nhistory_lines = 12345\nclaude_history = "native"\n'
+        '[ssh]\nhistory_lines = 2345\nclaude_history = "local"\n'
         '[codex]\nauto_run = "always"\n'
     )
     output = StringIO()
@@ -189,11 +190,66 @@ def test_remote_context_hides_and_preserves_local_history_limit(
 
     assert result == 0
     assert "Remote Railmux configuration" in output.getvalue()
-    assert "railmux ssh history lines" not in output.getvalue()
+    assert "Managed history lines" not in output.getvalue()
     assert load_config().ssh_history_lines == 12345
     text = path.read_text()
     assert "claude_history" not in text
     assert "auto_run" not in text
+
+
+@pytest.mark.parametrize(
+    ("menu_entry", "key", "canonical", "legacy", "expected"),
+    (
+        ("4", "claude_history", '"native"', '"local"', "ask"),
+        ("5", "path_open", '"external"', '"internal"', "ask"),
+    ),
+)
+def test_single_behavior_reset_clears_canonical_and_released_alias(
+    monkeypatch,
+    tmp_path,
+    menu_entry,
+    key,
+    canonical,
+    legacy,
+    expected,
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "railmux" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        f"[interaction]\n{key} = {canonical}\n"
+        f"[ssh]\n{key} = {legacy}\n"
+    )
+
+    result = main(
+        stdin=StringIO(f"1\n{menu_entry}\nr\nq\n"),
+        stdout=StringIO(),
+    )
+
+    assert result == 0
+    config = load_config()
+    assert getattr(
+        config,
+        "claude_history" if key == "claude_history" else "interaction_path_open",
+    ) == expected
+    assert key not in path.read_text()
+
+
+def test_single_history_limit_reset_clears_released_alias(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    path = tmp_path / ".config" / "railmux" / "config.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "[interaction]\nhistory_lines = 12000\n"
+        "[ssh]\nhistory_lines = 13000\n"
+    )
+
+    # Managed history is the sixth Behavior entry.
+    result = main(stdin=StringIO("1\n6\nr\nq\n"), stdout=StringIO())
+
+    assert result == 0
+    assert load_config().history_lines == 10000
+    assert "history_lines" not in path.read_text()
 
 
 def test_remote_option_dispatches_without_loading_local_config(monkeypatch):

@@ -98,7 +98,7 @@ _BEHAVIOR_SETTINGS = (
         "set_update_policy",
     ),
     _PolicySetting(
-        "Claude history in railmux ssh", "ssh", "claude_history",
+        "Claude managed history", "interaction", "claude_history",
         "claude_history_policy",
         (("local", "Always use smooth local history"),
          ("ask", "Ask on first upward scroll"),
@@ -119,7 +119,7 @@ _BEHAVIOR_KEYS = {
     "ui": ("layout_retention", "layout_profile"),
     "codex": ("auto_run",),
     "updates": ("auto_update",),
-    "interaction": ("path_open",),
+    "interaction": ("history_lines", "claude_history", "path_open"),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
 _PROGRAM_KEYS = {
@@ -274,6 +274,23 @@ def _reset_one(
     _saved(settings.reset_keys({section: (key,)}), feedback)
 
 
+def _reset_behavior_setting(
+    settings: Settings,
+    section: str,
+    key: str,
+    feedback: _Feedback,
+) -> None:
+    keys = {section: (key,)}
+    if section == "interaction" and key in {
+        "history_lines",
+        "claude_history",
+        "path_open",
+    }:
+        # Reset means default, not "reveal a released alias underneath".
+        keys["ssh"] = (key,)
+    _saved(settings.reset_keys(keys), feedback)
+
+
 def _edit_policy(
     item: _PolicySetting,
     stdin: TextIO,
@@ -311,7 +328,18 @@ def _edit_policy(
                 if item.section == "ui" and item.key == "layout_retention"
                 else (item.key,)
             )
-            _saved(settings.reset_keys({item.section: reset_keys}), feedback)
+            if reset_keys == (item.key,):
+                _reset_behavior_setting(
+                    settings,
+                    item.section,
+                    item.key,
+                    feedback,
+                )
+            else:
+                _saved(
+                    settings.reset_keys({item.section: reset_keys}),
+                    feedback,
+                )
             return None
         if not choice.isdigit() or not 1 <= int(choice) <= len(item.choices):
             feedback.set("Choose one of the listed entries.", level="warning")
@@ -334,9 +362,9 @@ def _edit_history_lines(
         stdout,
         remote_context=remote_context,
         category="Behavior / Options",
-        setting="railmux ssh history lines",
+        setting="managed history lines",
     )
-    _write(stdout, f"Current: {config.ssh_history_lines}")
+    _write(stdout, f"Current: {config.history_lines}")
     _write(stdout)
     _write(stdout, "Enter 2000-20000, r to reset, b to go back, or q to exit.")
     _render_feedback(stdout, feedback)
@@ -347,7 +375,12 @@ def _edit_history_lines(
         return _EXIT
     settings = Settings()
     if value == "r":
-        _reset_one(settings, "ssh", "history_lines", feedback)
+        _reset_behavior_setting(
+            settings,
+            "interaction",
+            "history_lines",
+            feedback,
+        )
         return None
     try:
         parsed = int(value)
@@ -357,7 +390,7 @@ def _edit_history_lines(
             level="error",
         )
         return None
-    _saved(settings.set_ssh_history_lines(parsed), feedback)
+    _saved(settings.set_history_lines(parsed), feedback)
     return None
 
 
@@ -380,8 +413,8 @@ def _behavior_menu(
         ]
         labels = [item.title for item in _BEHAVIOR_SETTINGS]
         if not remote_context:
-            current.append(str(config.ssh_history_lines))
-            labels.append("railmux ssh history lines")
+            current.append(str(config.history_lines))
+            labels.append("Managed history lines")
         _render_category_header(
             stdout,
             remote_context=remote_context,
@@ -405,7 +438,10 @@ def _behavior_menu(
             if _confirm(stdin, stdout, "Reset every behavior option?"):
                 behavior_keys = dict(_BEHAVIOR_KEYS)
                 if remote_context:
-                    behavior_keys["interaction"] = ("path_open",)
+                    behavior_keys["interaction"] = (
+                        "claude_history",
+                        "path_open",
+                    )
                     behavior_keys["ssh"] = ("claude_history", "path_open")
                 _saved(settings.reset_keys(behavior_keys), feedback)
             continue
@@ -683,7 +719,7 @@ def _recover_invalid_config(
 def _managed_reset_keys(*, remote_context: bool) -> dict[str, tuple[str, ...]]:
     keys = dict(MANAGED_CONFIG_KEYS)
     if remote_context:
-        keys["interaction"] = ("path_open",)
+        keys["interaction"] = ("claude_history", "path_open")
         keys["ssh"] = ("claude_history", "path_open")
     return keys
 

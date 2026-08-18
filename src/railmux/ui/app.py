@@ -5998,8 +5998,8 @@ class App:
                 )
                 return False
             self._set_status(
-                f"Clicked paths in railmux ssh: {policy}; "
-                "applies to the next click.")
+                f"Clicked paths: {OptionsModal.path_open_label(policy)}; "
+                "applies to the next click in native Windows or railmux ssh.")
             return True
 
         modal = OptionsModal(
@@ -10999,6 +10999,9 @@ class App:
     def _on_running_context_menu(self, entry: RunningEntry) -> None:
         r = self._by_tmux(entry.tmux_name)
         if r is None:
+            self._set_status(
+                "That Running entry changed; refresh and try again.", "warn"
+            )
             return
         if (r.orphan is not None
                 and not self._running_action_valid(r, entry.identity_token)):
@@ -11059,6 +11062,7 @@ class App:
             if session_id is not None else None
         )
         if session is None:
+            self._set_status("Waiting for the provider history file…", "tip")
             return
         self._open_session_context_menu(session)
 
@@ -11072,6 +11076,12 @@ class App:
         is_alive = r is not None and not r.is_placeholder
         is_starred = bool(
             self._session_identity_ids(session) & self._favorites.get_ids())
+        kill_items: list[tuple[str, Callable[[], None]]] = []
+        if is_alive:
+            kill_items.append((
+                _context_menu_label("Kill", "k"),
+                lambda s=session: self._do_context_kill(s),
+            ))
         items: list[tuple[str, Callable[[], None]]] = [
             (_context_menu_label("Open", "↵"),
              lambda s=session: self._do_context_open(s)),
@@ -11085,16 +11095,12 @@ class App:
              lambda s=session: self._do_context_star(s)),
             (_context_menu_label("Copy title", "c"), lambda s=session:
              self._copy_session_title(s.display_title)),
-            (_context_menu_label("Kill", "k"),
-             lambda s=session: self._do_context_kill(s)
-             if is_alive else None),
+            *kill_items,
             (_context_menu_label("Term", "t"),
              lambda s=session: self._do_context_term(s)),
             (_context_menu_label("Delete", "d"),
              lambda s=session: self._do_context_delete(s)),
         ]
-        # Filter out None callbacks (e.g. Kill for non-running sessions).
-        items = [(label, cb) for label, cb in items if cb is not None]
         menu = ContextMenu(items, on_close=self._close_modal)
         self._show_overlay(menu, width=36, height=16,
                            click_outside_to_close=True,

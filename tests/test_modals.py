@@ -368,10 +368,10 @@ def test_options_render_current_policies_and_action_legend():
     assert "Layout retention" in text
     assert "Codex auto-run (YOLO)" in text
     assert "Railmux updates" in text
-    assert "Claude history in railmux ssh" in text
+    assert "Claude managed history" in text
     assert "Clicked paths" in text
     assert "Inside · managed Vim" in text
-    assert "Local transcript" in text
+    assert "Railmux managed" in text
     assert "[x] Always" in text
     assert "[x] Ask every time" in text
     assert "[x] Never" in text

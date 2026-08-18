@@ -30,10 +30,9 @@ from typing import BinaryIO, Optional, Sequence
 from railmux import __version__, local_clipboard, local_open
 from railmux.config import (
     ConfigError,
-    SSH_HISTORY_MAX_LINES,
-    SSH_HISTORY_MIN_LINES,
     load_config,
 )
+from railmux.setting_contracts import HISTORY_MAX_LINES, HISTORY_MIN_LINES
 from railmux.fast_display_history import (
     HistoryAction,
     LocalHistoryView,
@@ -2306,8 +2305,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         metavar="LINES",
         help=(
             "local agent history limit "
-            f"({SSH_HISTORY_MIN_LINES}-{SSH_HISTORY_MAX_LINES}; "
-            "default from [ssh].history_lines)"
+            f"({HISTORY_MIN_LINES}-{HISTORY_MAX_LINES}; "
+            "default from [interaction].history_lines)"
         ),
     )
     parser.add_argument(
@@ -2331,11 +2330,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         parser.error("--fps must be between 1 and 60")
     if (
         args.history_lines is not None
-        and not SSH_HISTORY_MIN_LINES <= args.history_lines <= SSH_HISTORY_MAX_LINES
+        and not HISTORY_MIN_LINES <= args.history_lines <= HISTORY_MAX_LINES
     ):
         parser.error(
             "--history-lines must be between "
-            f"{SSH_HISTORY_MIN_LINES} and {SSH_HISTORY_MAX_LINES}"
+            f"{HISTORY_MIN_LINES} and {HISTORY_MAX_LINES}"
         )
     return args
 
@@ -2352,7 +2351,7 @@ def run(args: argparse.Namespace) -> int:
                 "or reset it"
             ) from exc
         history_limit = (
-            config.ssh_history_lines
+            config.history_lines
             if args.history_lines is None
             else args.history_lines
         )

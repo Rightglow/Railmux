@@ -13,6 +13,8 @@ def test_load_with_no_file_uses_defaults(tmp_path):
     assert cfg.poll_interval_ms == 1000
     assert cfg.agent_transport == "swap"
     assert cfg.show_empty_projects is False
+    assert cfg.history_lines == 10000
+    assert cfg.claude_history == "ask"
     assert cfg.ssh_history_lines == 10000
     assert cfg.ssh_claude_history == "ask"
     assert cfg.ssh_path_open == "ask"
@@ -141,6 +143,29 @@ def test_ssh_claude_history_accepts_documented_choices(tmp_path, value):
     path = tmp_path / "config.toml"
     path.write_text(f'[ssh]\nclaude_history = "{value}"\n')
     assert load_config(config_path=path).ssh_claude_history == value
+
+
+def test_transport_neutral_history_settings_win_over_released_ssh_aliases(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[ssh]\nhistory_lines = 3000\nclaude_history = "native"\n'
+        '[interaction]\nhistory_lines = 12000\nclaude_history = "local"\n'
+    )
+
+    config = load_config(config_path=path)
+
+    assert config.history_lines == 12000
+    assert config.claude_history == "local"
+    assert config.ssh_history_lines == 12000
+    assert config.ssh_claude_history == "local"
+
+
+@pytest.mark.parametrize("value", (2000, 5000, 20000))
+def test_transport_neutral_history_limit_accepts_documented_range(tmp_path, value):
+    path = tmp_path / "config.toml"
+    path.write_text(f"[interaction]\nhistory_lines = {value}\n")
+
+    assert load_config(config_path=path).history_lines == value
 
 
 @pytest.mark.parametrize("value", ('"sometimes"', '["local"]', "true", "1"))

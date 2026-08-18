@@ -12,9 +12,9 @@ except ModuleNotFoundError:  # Python 3.9-3.10
     import tomli as tomllib
 
 from railmux.setting_contracts import (
-    SSH_HISTORY_DEFAULT_LINES,
-    SSH_HISTORY_MAX_LINES,
-    SSH_HISTORY_MIN_LINES,
+    HISTORY_DEFAULT_LINES,
+    HISTORY_MAX_LINES,
+    HISTORY_MIN_LINES,
     bounds_for,
     choices_for,
 )
@@ -35,9 +35,19 @@ class Config:
     poll_interval_ms: int = 1000
     agent_transport: str = "swap"
     show_empty_projects: bool = False
-    ssh_history_lines: int = SSH_HISTORY_DEFAULT_LINES
-    ssh_claude_history: str = "ask"
+    history_lines: int = HISTORY_DEFAULT_LINES
+    claude_history: str = "ask"
     interaction_path_open: str = "ask"
+
+    @property
+    def ssh_history_lines(self) -> int:
+        """Compatibility alias for the released SSH-only setting name."""
+        return self.history_lines
+
+    @property
+    def ssh_claude_history(self) -> str:
+        """Compatibility alias for the released SSH-only setting name."""
+        return self.claude_history
 
     @property
     def ssh_path_open(self) -> str:
@@ -148,24 +158,42 @@ def load_config(config_path: Path | None = None) -> Config:
         raise ConfigError(
             'live.agent_transport must be either "nested" or "swap"')
 
-    history_lines = ssh.get("history_lines", SSH_HISTORY_DEFAULT_LINES)
-    history_min, history_max = bounds_for("ssh.history_lines")
+    canonical_history_lines = "history_lines" in interaction
+    history_lines = interaction.get(
+        "history_lines",
+        ssh.get("history_lines", HISTORY_DEFAULT_LINES),
+    )
+    history_min, history_max = bounds_for("interaction.history_lines")
     if (
         not isinstance(history_lines, int)
         or isinstance(history_lines, bool)
         or not history_min <= history_lines <= history_max
     ):
         raise ConfigError(
-            "ssh.history_lines must be an integer between "
-            f"{SSH_HISTORY_MIN_LINES} and {SSH_HISTORY_MAX_LINES}"
+            (
+                "interaction.history_lines"
+                if canonical_history_lines
+                else "ssh.history_lines"
+            )
+            + " must be an integer between "
+            f"{HISTORY_MIN_LINES} and {HISTORY_MAX_LINES}"
         )
-    claude_history = ssh.get("claude_history", "ask")
+    canonical_claude_history = "claude_history" in interaction
+    claude_history = interaction.get(
+        "claude_history",
+        ssh.get("claude_history", "ask"),
+    )
     if (
         not isinstance(claude_history, str)
-        or claude_history not in choices_for("ssh.claude_history")
+        or claude_history not in choices_for("interaction.claude_history")
     ):
         raise ConfigError(
-            'ssh.claude_history must be "ask", "local", or "native"'
+            (
+                "interaction.claude_history"
+                if canonical_claude_history
+                else "ssh.claude_history"
+            )
+            + ' must be "ask", "local", or "native"'
         )
     # The transport-neutral key wins. The released SSH-only spelling remains
     # a read alias so an upgrade never silently forgets the user's choice.
@@ -188,7 +216,7 @@ def load_config(config_path: Path | None = None) -> Config:
         poll_interval_ms=poll_interval_ms,
         agent_transport=agent_transport,
         show_empty_projects=projects.get("show_empty_projects") is True,
-        ssh_history_lines=history_lines,
-        ssh_claude_history=claude_history,
+        history_lines=history_lines,
+        claude_history=claude_history,
         interaction_path_open=path_open,
     )

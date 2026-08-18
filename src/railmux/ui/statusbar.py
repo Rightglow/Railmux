@@ -18,11 +18,11 @@ from railmux.ui import keymap
 # reminders, marketing copy, or transient state that the UI already shows.
 TIPS: tuple[str, ...] = (
     "Soft Quit (q, then s) closes shared views; agents keep running",
-    "Restored filters: / edits; Ctrl-U clears the current filter",
+    "Press / then Ctrl-U to clear a list filter restored at startup",
     "Single-click a stopped session to preview it without starting it",
+    "Right-click a Project, Session, or Running row for more actions",
     "Sidebar actions target the last-focused pane in two-pane layouts",
     "Returning to one pane leaves the hidden second agent running",
-    "Codex mode lists interactive sessions and hides codex exec threads",
     "railmux doctor reports the last detected tmux incident",
 )
 

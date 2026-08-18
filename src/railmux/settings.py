@@ -29,7 +29,7 @@ MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "updates": ("auto_update",),
     "projects": ("show_empty_projects",),
     "live": ("poll_interval_ms", "agent_transport"),
-    "interaction": ("path_open",),
+    "interaction": ("history_lines", "claude_history", "path_open"),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
 
@@ -202,15 +202,19 @@ class Settings:
             return False
         return self._update_section("environment", {"locale": value})
 
-    def set_ssh_history_lines(self, value: int) -> bool:
-        minimum, maximum = bounds_for("ssh.history_lines")
+    def set_history_lines(self, value: int) -> bool:
+        minimum, maximum = bounds_for("interaction.history_lines")
         if (
             not isinstance(value, int)
             or isinstance(value, bool)
             or not minimum <= value <= maximum
         ):
             return False
-        return self._update_section("ssh", {"history_lines": value})
+        return self._update_section("interaction", {"history_lines": value})
+
+    def set_ssh_history_lines(self, value: int) -> bool:
+        """Compatibility wrapper for integrations using the 0.4.0 API."""
+        return self.set_history_lines(value)
 
     # -- Codex auto-run --------------------------------------------------
     @property
@@ -238,25 +242,27 @@ class Settings:
             return False
         return self._update_section("updates", {"auto_update": policy})
 
-    # -- Fast SSH Claude history ----------------------------------------
+    # -- Transport-managed Claude history -------------------------------
     @property
     def claude_history_policy(self) -> str:
         # The fast-display helper is a separate process and may persist the
         # first-scroll choice while the TUI is already running. Reload so a
         # later Options visit reflects that confirmed remote write.
         self._load()
-        policy = self._get("ssh", "claude_history")
+        policy = self._get("interaction", "claude_history")
+        if policy is None:
+            policy = self._get("ssh", "claude_history")
         return (
             policy
             if isinstance(policy, str)
-            and policy in choices_for("ssh.claude_history")
+            and policy in choices_for("interaction.claude_history")
             else "ask"
         )
 
     def set_claude_history_policy(self, policy: str) -> bool:
-        if policy not in choices_for("ssh.claude_history"):
+        if policy not in choices_for("interaction.claude_history"):
             return False
-        return self._update_section("ssh", {"claude_history": policy})
+        return self._update_section("interaction", {"claude_history": policy})
 
     # -- Semantic clicked paths -----------------------------------------
     @property

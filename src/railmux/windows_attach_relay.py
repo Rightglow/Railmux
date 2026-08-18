@@ -38,7 +38,21 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from railmux import restart_state, tmux_server
-from railmux.fast_display_client import ScreenModel, TerminalSurface
+from railmux.config import ConfigError, load_config
+from railmux.fast_display_client import (
+    ScreenModel,
+    TerminalSurface,
+    compact_status_row,
+    screen_input_may_change_routes,
+)
+from railmux.fast_display_history import (
+    HistoryAction,
+    HistoryCaptureJob,
+    HistoryCaptureWorker,
+    LocalHistoryView,
+    PeriodicPrefetchGate,
+)
+from railmux.setting_contracts import HISTORY_DEFAULT_LINES
 from railmux.fast_display_input import (
     BracketedPasteInput,
     ClickTarget,
@@ -46,8 +60,19 @@ from railmux.fast_display_input import (
     SelectionSource,
     SgrMouseEvent,
     TerminalInputDecoder,
+    page_key_direction,
+    split_page_key_input,
 )
-from railmux.fast_display_protocol import HistorySnapshot, PathKind, PathResult
+from railmux.fast_display_protocol import (
+    HistoryBatch,
+    HistorySnapshot,
+    InputFrameDecoder,
+    InputKind,
+    PathKind,
+    PathResult,
+    decode_history_prefetch,
+    decode_history_request,
+)
 from railmux import local_open
 from railmux.provider_paths import running_in_managed_windows_wrapper
 from railmux.terminal_screen import ScreenProducer
@@ -73,6 +98,7 @@ _PTY_INPUT_TIMEOUT = 5.0
 _STALE_ENDPOINT_AGE = 5 * 60
 _MAX_STALE_ENDPOINTS = 64
 _LOCAL_FRAME_INTERVAL = 1.0 / 30.0
+_LOCAL_HISTORY_PREFETCH_INTERVAL = 3.0
 _SYNCHRONIZED_UPDATE_MAX_HOLD = 0.25
 # Consume a busy PTY into the latest semantic screen before painting it.  The
 # time budget keeps terminal input responsive; the byte budget bounds one
@@ -257,9 +283,15 @@ class _SemanticTerminalRenderer:
         self._presentation_required_serial = 0
         self._selection: tuple[tuple[int, int, bytes], ...] = ()
         self._selection_dirty_rows: set[int] = set()
+        self._history_overlays: (
+            tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...]
+        ) = ()
         self._path_prompt_visible = False
         self._path_prompt_needs_paint = False
         self._path_prompt_painted = False
+        self._claude_history_prompt_visible = False
+        self._claude_history_prompt_needs_paint = False
+        self._claude_history_prompt_painted = False
 
     def _promote_presented_screen(self) -> None:
         if self._pending_screen is None or not self.writer.idle:
@@ -311,6 +343,18 @@ class _SemanticTerminalRenderer:
         self._selection_dirty_rows.update(row for row, _column, _text in selection)
         self._selection = selection
 
+    def set_history_overlays(
+        self,
+        overlays: tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...],
+    ) -> None:
+        if overlays == self._history_overlays:
+            return
+        for snapshot, _lines in self._history_overlays + overlays:
+            self._selection_dirty_rows.update(
+                range(snapshot.y, snapshot.y + snapshot.height)
+            )
+        self._history_overlays = overlays
+
     def copy_to_clipboard(self, data: bytes) -> None:
         self._pending_clipboard = data
 
@@ -329,6 +373,23 @@ class _SemanticTerminalRenderer:
         self._path_prompt_needs_paint = False
         self._path_prompt_painted = False
         if painted and self._screen is not None:
+            self._selection_dirty_rows.update(range(self._screen.height))
+
+    def show_claude_history_prompt(self) -> None:
+        self._claude_history_prompt_visible = True
+        self._claude_history_prompt_needs_paint = True
+
+    def clear_claude_history_prompt(self) -> None:
+        painted = self._claude_history_prompt_painted
+        self._claude_history_prompt_visible = False
+        self._claude_history_prompt_needs_paint = False
+        self._claude_history_prompt_painted = False
+        if painted:
+            self.invalidate_local_overlay()
+
+    def invalidate_local_overlay(self) -> None:
+        """Repaint the authoritative screen after a one-shot local dialog."""
+        if self._screen is not None:
             self._selection_dirty_rows.update(range(self._screen.height))
 
     def feed(self, payload: bytes) -> None:
@@ -378,6 +439,14 @@ class _SemanticTerminalRenderer:
             self._path_prompt_needs_paint = False
             self._path_prompt_painted = True
             painted = True
+        if (
+            self._claude_history_prompt_visible
+            and self._claude_history_prompt_needs_paint
+        ):
+            self.surface.show_claude_history_prompt()
+            self._claude_history_prompt_needs_paint = False
+            self._claude_history_prompt_painted = True
+            painted = True
         return painted
 
     def next_timeout(self, maximum: float, now: float) -> float:
@@ -400,7 +469,11 @@ class _SemanticTerminalRenderer:
             return max(0.0, min(maximum, self._next_frame - now))
         if self._selection_dirty_rows:
             return max(0.0, min(maximum, self._next_frame - now))
-        if self._pending_status is not None or self._path_prompt_needs_paint:
+        if (
+            self._pending_status is not None
+            or self._path_prompt_needs_paint
+            or self._claude_history_prompt_needs_paint
+        ):
             return 0.0
         return maximum
 
@@ -409,7 +482,9 @@ class _SemanticTerminalRenderer:
         if not self.writer.idle:
             return False
         local_ui_pending = bool(
-            self._pending_status is not None or self._path_prompt_needs_paint
+            self._pending_status is not None
+            or self._path_prompt_needs_paint
+            or self._claude_history_prompt_needs_paint
         )
         if not force and not local_ui_pending and now < self._next_frame:
             return False
@@ -429,7 +504,7 @@ class _SemanticTerminalRenderer:
                 self._selection_dirty_rows.clear()
                 self.surface.paint_changed_rows(
                     self._screen,
-                    (),
+                    self._history_overlays,
                     self._selection,
                     rows,
                 )
@@ -450,11 +525,17 @@ class _SemanticTerminalRenderer:
                 changed_rows=tuple(sorted(set(screen.changed_rows) | self._selection_dirty_rows)),
             )
             self._selection_dirty_rows.clear()
-        self.surface.paint(screen, selection=self._selection)
+        self.surface.paint(
+            screen,
+            self._history_overlays,
+            selection=self._selection,
+        )
         self._pending_screen = screen
         if self._path_prompt_visible:
             # The authoritative screen frame overwrote the local modal.
             self._path_prompt_needs_paint = True
+        if self._claude_history_prompt_visible:
+            self._claude_history_prompt_needs_paint = True
         self._paint_pending_local_ui(now)
         self._next_frame = now + _LOCAL_FRAME_INTERVAL
         return True
@@ -1222,6 +1303,7 @@ class LocalPtyClient:
         stdout_fd: int,
         forward_interrupts: bool = False,
         session_id: str | None = None,
+        history_limit: int | None = None,
     ) -> None:
         self.pid = pid
         self.master_fd = master_fd
@@ -1241,6 +1323,23 @@ class LocalPtyClient:
         self._routes: tuple[HistorySnapshot, ...] = ()
         self._routes_checked_at = 0.0
         self._routes_force_refresh = True
+        if history_limit is None:
+            try:
+                history_limit = load_config().history_lines
+            except ConfigError:
+                # Normal launch validates config before this adapter starts.
+                # If the file changes in that narrow interval, keep the
+                # terminal usable with the documented bound instead of
+                # escaping raw mode through an adapter-only traceback.
+                history_limit = HISTORY_DEFAULT_LINES
+        self._history = LocalHistoryView(history_limit, wheel_lines=3)
+        self._history_request_decoder = InputFrameDecoder()
+        self._history_worker: HistoryCaptureWorker | None = None
+        self._history_prefetch = PeriodicPrefetchGate()
+        self._next_history_prefetch = 0.0
+        self._claude_history_override: str | None = None
+        self._claude_history_prompt_input: bytes | None = None
+        self._claude_history_prompt_mouse_button: int | None = None
         self._path_prompt: tuple[ClickTarget, PathResult] | None = None
         self._path_prompt_mouse_button: int | None = None
         # Path validation is optional. Avoid importing the server graph or
@@ -1265,6 +1364,25 @@ class LocalPtyClient:
         self._pty_seen_output = False
         self._pty_burst_started = started
         self._pty_burst_bytes = 0
+        if session_id is not None:
+            import pyte
+
+            from railmux.fast_display_server import (
+                capture_history_batch,
+                capture_history_snapshot,
+            )
+
+            self._history_worker = HistoryCaptureWorker(
+                pyte,
+                capture_snapshot=capture_history_snapshot,
+                capture_batch=capture_history_batch,
+            )
+            self._selector.register(
+                self._history_worker.read_fd,
+                selectors.EVENT_READ,
+                "history",
+            )
+            self._request_history_prefetch(started, force=True)
 
     def _ensure_path_worker(self):
         worker = getattr(self, "_path_worker", None)
@@ -1275,24 +1393,97 @@ class LocalPtyClient:
             self._path_worker = worker
         return worker
 
-    def _refresh_routes(self, *, force: bool = False) -> None:
-        if self._session_id is None:
-            self._routes = ()
+    def _request_history_prefetch(
+        self,
+        now: float | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
+        if self._history_worker is None:
             return
-        force = force or getattr(self, "_routes_force_refresh", False)
-        now = time.monotonic()
-        if not force and now - self._routes_checked_at < 0.25:
-            return
-        self._routes_checked_at = now
-        # Import lazily so ordinary POSIX and non-interactive Windows launch
-        # paths do not acquire the fast-display server dependency graph.
-        from railmux.fast_display_server import visible_agent_snapshots
+        checked_at = time.monotonic() if now is None else now
+        frame = self._history.begin_prefetch(checked_at, force=force)
+        if frame:
+            self._dispatch_history_frame(frame)
+            self._history_prefetch.sent(self._history.prefetch_pending_id)
+        self._next_history_prefetch = checked_at + _LOCAL_HISTORY_PREFETCH_INTERVAL
 
-        routes = visible_agent_snapshots(self._session_id, use_cache=not force)
-        self._routes_force_refresh = False
+    def _dispatch_history_frame(self, frame: bytes) -> None:
+        if not frame or self._history_worker is None or self._session_id is None:
+            return
+        messages = self._history_request_decoder.feed(frame)
+        if len(messages) != 1:
+            return
+        message = messages[0]
+        if message.kind is InputKind.PREFETCH_HISTORY:
+            request_id, max_lines = decode_history_prefetch(message.data)
+            job = HistoryCaptureJob(
+                "batch",
+                self._session_id,
+                (request_id, max_lines),
+                self._claude_history_override,
+            )
+            if not self._history_worker.submit(job):
+                self._accept_history_result(HistoryBatch(request_id, ()))
+        elif message.kind is InputKind.REQUEST_HISTORY:
+            request = decode_history_request(message.data)
+            job = HistoryCaptureJob(
+                "snapshot",
+                self._session_id,
+                request,
+                self._claude_history_override,
+            )
+            if not self._history_worker.submit(job):
+                self._accept_history_result(HistorySnapshot(request[0], None))
+
+    def _accept_history_result(
+        self,
+        result: HistorySnapshot | HistoryBatch,
+    ) -> None:
+        if isinstance(result, HistoryBatch):
+            pending_id = self._history.prefetch_pending_id
+            action = self._history.accept_prefetch(result)
+            self._history_prefetch.accepted(result.request_id, pending_id)
+            routes = self._history.visible_routes
+            self._routes_checked_at = time.monotonic()
+            self._routes_force_refresh = False
+        else:
+            action = self._history.accept(result)
+            routes = self._history.visible_routes
         if self._selection.validate_routes(routes):
             self._renderer.set_selection(self._selection.segments())
         self._routes = routes
+        self._apply_history_action(action)
+
+    def _drain_history_results(self) -> None:
+        if self._history_worker is None:
+            return
+        for result in self._history_worker.drain():
+            self._accept_history_result(result)
+
+    def _refresh_routes(self, *, force: bool = False) -> None:
+        if self._history_worker is None:
+            return
+        now = time.monotonic()
+        force = force or self._routes_force_refresh
+        if force or now - self._routes_checked_at >= _LOCAL_HISTORY_PREFETCH_INTERVAL:
+            self._request_history_prefetch(now, force=force)
+
+    def _apply_history_action(self, action: HistoryAction) -> None:
+        if action.protocol_frame:
+            self._dispatch_history_frame(action.protocol_frame)
+        if action.forwarded_input:
+            _write_pty_input(self.master_fd, action.forwarded_input)
+        if action.restore_live or action.render_history:
+            self._renderer.set_history_overlays(self._history.overlays())
+        if action.refresh_routes:
+            self._routes_force_refresh = True
+            self._next_history_prefetch = 0.0
+        if action.info_message:
+            self._renderer.show_status(action.info_message)
+        if action.claude_history_prompt:
+            self._claude_history_prompt_input = action.claude_history_prompt
+            self._renderer.show_claude_history_prompt()
 
     def _selection_source(self, event: SgrMouseEvent) -> SelectionSource | None:
         if not self._renderer.presentation_stable:
@@ -1301,21 +1492,6 @@ class LocalPtyClient:
         if screen is None:
             return None
         self._refresh_routes()
-        x, y = event.x - 1, event.y - 1
-        route = next(
-            (
-                candidate
-                for candidate in self._routes
-                if candidate.x <= x < candidate.x + candidate.width
-                and candidate.y <= y < candidate.y + candidate.height
-            ),
-            None,
-        )
-        if route is None:
-            return None
-        rows = screen.rows[route.y : route.y + route.height]
-        if len(rows) != route.height:
-            return None
         focused = next(
             (
                 candidate
@@ -1325,12 +1501,21 @@ class LocalPtyClient:
             ),
             None,
         )
-        return SelectionSource(
-            route,
-            rows,
-            route.x,
-            semantic_open=focused is not None and focused.pane_id == route.pane_id,
+        return self._history.selection_source(
+            event,
+            screen.rows,
+            focused_pane_id=None if focused is None else focused.pane_id,
         )
+
+    def _focused_history_pane_id(self) -> str | None:
+        screen = self._renderer.screen
+        if screen is None:
+            return None
+        return self._history.pane_id_at_position(screen.cursor_x, screen.cursor_y)
+
+    def _status_row(self) -> int | None:
+        screen = self._renderer.screen
+        return None if screen is None else compact_status_row(screen)
 
     def _show_open_result(self, result: local_open.OpenResult) -> None:
         if result.copy_data:
@@ -1409,6 +1594,8 @@ class LocalPtyClient:
             self._pending_path_open = None
             self._selection.cancel()
             self._renderer.set_selection(())
+            restore = self._history.invalidate_routes()
+            self._apply_history_action(HistoryAction(restore_live=restore))
             self._routes = ()
             self._routes_checked_at = 0.0
             self._routes_force_refresh = True
@@ -1449,10 +1636,77 @@ class LocalPtyClient:
         self._pending_path_resolve = (request_id, target)
         self._renderer.show_status("Checking path…")
 
+    def _handle_claude_history_prompt(
+        self,
+        part: bytes | BracketedPasteInput | SgrMouseEvent,
+    ) -> bool:
+        pending = self._claude_history_prompt_input
+        if pending is None:
+            return False
+        selected: tuple[str, bool] | None = None
+        if isinstance(part, bytes):
+            selected = {
+                b"1": ("local", True),
+                b"2": ("local", False),
+                b"3": ("native", True),
+                b"4": ("native", False),
+            }.get(part)
+        elif isinstance(part, SgrMouseEvent):
+            selected = self._renderer.surface.claude_history_prompt_choice(part)
+            if selected is not None:
+                self._claude_history_prompt_mouse_button = part.button & 3
+        if selected is None:
+            if part == b"\x1b":
+                self._claude_history_prompt_input = None
+                self._renderer.clear_claude_history_prompt()
+            else:
+                self._renderer.show_claude_history_prompt()
+            return True
+        policy, persistent = selected
+        if persistent:
+            from railmux.settings import Settings
+
+            if not Settings().set_claude_history_policy(policy):
+                self._renderer.show_status(
+                    "Could not save Claude history choice",
+                    level="warning",
+                )
+                return True
+            self._claude_history_override = None
+        else:
+            self._claude_history_override = policy
+        self._claude_history_prompt_input = None
+        self._renderer.clear_claude_history_prompt()
+        restore = self._history.invalidate_routes()
+        self._apply_history_action(HistoryAction(restore_live=restore))
+        self._request_history_prefetch(force=True)
+        if policy == "native":
+            _write_pty_input(self.master_fd, pending)
+            self._renderer.show_status("Claude native history enabled")
+        else:
+            self._renderer.show_status(
+                "Railmux-managed Claude history enabled; scroll again",
+                level="success",
+            )
+        return True
+
     def _forward_input_part(
         self,
         part: bytes | BracketedPasteInput | SgrMouseEvent,
     ) -> None:
+        if (
+            self._claude_history_prompt_mouse_button is not None
+            and isinstance(part, SgrMouseEvent)
+        ):
+            suppress = (
+                not part.pressed
+                and part.button & 3 == self._claude_history_prompt_mouse_button
+            )
+            self._claude_history_prompt_mouse_button = None
+            if suppress:
+                return
+        if self._handle_claude_history_prompt(part):
+            return
         if (
             self._path_prompt_mouse_button is not None
             and isinstance(part, SgrMouseEvent)
@@ -1497,11 +1751,62 @@ class LocalPtyClient:
             # clicks outside it must not leak through to the provider pane.
             return
         if isinstance(part, BracketedPasteInput):
+            screen = self._renderer.screen
+            restore = (
+                self._history.cancel_for_input(screen.cursor_x, screen.cursor_y)
+                if screen is not None
+                else self._history.cancel()
+            )
+            self._apply_history_action(HistoryAction(restore_live=restore))
             _write_pty_input(self.master_fd, part.raw)
             return
         if isinstance(part, bytes):
             if self._selection.cancel():
                 self._renderer.set_selection(self._selection.segments())
+            screen = self._renderer.screen
+            if (
+                screen is not None
+                and page_key_direction(part)
+                and self._history.pane_id_at_position(
+                    screen.cursor_x,
+                    screen.cursor_y,
+                )
+                is not None
+            ):
+                self._apply_history_action(
+                    self._history.page(
+                        part,
+                        screen.cursor_x,
+                        screen.cursor_y,
+                        now=time.monotonic(),
+                    )
+                )
+                return
+            may_change_routes = screen_input_may_change_routes(
+                part,
+                self._history,
+                screen,
+            )
+            if self._history.active or self._history.pending:
+                if part == b"\x1b":
+                    restore = self._history.cancel()
+                    self._apply_history_action(HistoryAction(restore_live=restore))
+                    return
+                restore = (
+                    self._history.invalidate_routes()
+                    if may_change_routes
+                    else self._history.cancel_for_input(
+                        screen.cursor_x,
+                        screen.cursor_y,
+                    )
+                    if screen is not None
+                    else self._history.cancel()
+                )
+                self._apply_history_action(HistoryAction(restore_live=restore))
+            elif may_change_routes:
+                self._history.invalidate_routes()
+            if may_change_routes:
+                self._routes_force_refresh = True
             _write_pty_input(self.master_fd, part)
             return
         screen = self._renderer.screen
@@ -1510,29 +1815,6 @@ class LocalPtyClient:
             part,
             logical_height=logical_height,
         )
-        left_drag = (
-            event.pressed
-            and bool(event.button & 32)
-            and event.button & 3 == 0
-            and not event.button & 64
-        )
-        left_release = not event.pressed and event.button & 3 == 0
-        plain_left_press = LocalTextSelection._is_plain_left_press(event)
-        if getattr(self, "_suppressed_left_gesture", False):
-            if left_drag or left_release:
-                if left_release:
-                    self._suppressed_left_gesture = False
-                return
-            if plain_left_press:
-                self._suppressed_left_gesture = False
-        if getattr(self, "_passthrough_left_gesture", False):
-            if left_drag or left_release:
-                if left_release:
-                    self._passthrough_left_gesture = False
-                _write_pty_input(self.master_fd, event.raw)
-                return
-            if plain_left_press:
-                self._passthrough_left_gesture = False
         if not self._renderer.presentation_stable:
             if not self._selection.capturing and self._selection.cancel():
                 self._renderer.set_selection(self._selection.segments())
@@ -1542,8 +1824,6 @@ class LocalPtyClient:
             # to Quit or stock tmux copy-mode. A capture already owns an
             # immutable visible snapshot and therefore keeps the whole gesture.
             if not self._selection.capturing:
-                if plain_left_press or left_drag:
-                    self._suppressed_left_gesture = not left_release
                 return
         if self._selection.capturing:
             # Once the newer frame is physically visible, revalidate the
@@ -1562,7 +1842,14 @@ class LocalPtyClient:
         if action.repaint:
             self._renderer.set_selection(self._selection.segments())
         for replay in action.replay_events:
-            _write_pty_input(self.master_fd, replay.raw)
+            self._apply_history_action(
+                self._history.pointer_event(
+                    replay,
+                    self._focused_history_pane_id(),
+                    status_row=self._status_row(),
+                    now=time.monotonic(),
+                )
+            )
         if action.copy_data is not None:
             self._renderer.copy_to_clipboard(action.copy_data)
             count = len(action.copy_data.decode("utf-8", errors="replace"))
@@ -1570,14 +1857,14 @@ class LocalPtyClient:
         if action.open_target is not None:
             self._open_target(action.open_target)
         if not action.handled:
-            if plain_left_press:
-                self._passthrough_left_gesture = True
-            elif left_drag or left_release:
-                # Never give tmux half a left-button gesture. An orphan means
-                # its press was suppressed or a captured route was invalidated.
-                self._suppressed_left_gesture = left_drag
-                return
-            _write_pty_input(self.master_fd, event.raw)
+            self._apply_history_action(
+                self._history.pointer_event(
+                    event,
+                    self._focused_history_pane_id(),
+                    status_row=self._status_row(),
+                    now=time.monotonic(),
+                )
+            )
 
     def poll(self) -> int | None:
         return self.returncode
@@ -1591,9 +1878,13 @@ class LocalPtyClient:
         self._renderer.resize(*size)
         self._selection.cancel()
         self._renderer.set_selection(())
+        restore = self._history.invalidate_routes()
+        self._apply_history_action(HistoryAction(restore_live=restore))
         self._routes = ()
         self._routes_checked_at = 0.0
         self._routes_force_refresh = True
+        self._history_prefetch.reset()
+        self._next_history_prefetch = time.monotonic()
         self._renderer.require_fresh_presentation()
         self._enter_pty_catchup(time.monotonic(), restart=True)
         try:
@@ -1684,6 +1975,7 @@ class LocalPtyClient:
             if not data:
                 return True
             self._renderer.feed(data)
+            self._history_prefetch.screen_updated()
             consumed += len(data)
             self._observe_pty_output(len(data), time.monotonic())
             if time.monotonic() >= deadline:
@@ -1717,8 +2009,16 @@ class LocalPtyClient:
         if self.returncode is not None:
             return
         self._drain_path_action_results()
+        self._drain_history_results()
         self._resize_if_needed()
         now = time.monotonic()
+        if (
+            self._history_worker is not None
+            and now >= self._next_history_prefetch
+            and self._renderer.presentation_stable
+            and self._history_prefetch.should_request()
+        ):
+            self._request_history_prefetch(now)
         self._forward_pending_interrupts()
         wait = self._renderer.next_timeout(max(0.0, timeout), now)
         if (
@@ -1733,13 +2033,20 @@ class LocalPtyClient:
         events = _terminal_events_first(self._selector.select(timeout=wait))
         drained_pty = False
         for key, _events in events:
+            if key.data == "history":
+                self._drain_history_results()
+                continue
             if key.data == "terminal":
                 data = os.read(self.stdin_fd, 65536)
                 if not data:
                     self.terminate()
                     return
                 for part in self._input_decoder.feed(data):
-                    self._forward_input_part(part)
+                    if isinstance(part, bytes):
+                        for key_part in split_page_key_input(part):
+                            self._forward_input_part(key_part)
+                    else:
+                        self._forward_input_part(part)
                 # Interactive feedback outranks replay coalescing. A later
                 # screen-sized burst can enter catch-up mode again.
                 self._leave_pty_catchup(time.monotonic())
@@ -1752,8 +2059,13 @@ class LocalPtyClient:
             self._pty_backlog_pending = not self._drain_ready_pty()
         self._forward_pending_interrupts()
         for part in self._input_decoder.flush_pending():
-            self._forward_input_part(part)
+            if isinstance(part, bytes):
+                for key_part in split_page_key_input(part):
+                    self._forward_input_part(key_part)
+            else:
+                self._forward_input_part(part)
         self._drain_path_action_results()
+        self._drain_history_results()
         paint_now = time.monotonic()
         catchup_was_active = self._pty_catchup_active
         catchup_settled = (
@@ -1823,6 +2135,12 @@ class LocalPtyClient:
         path_worker = getattr(self, "_path_worker", None)
         if path_worker is not None:
             path_worker.close()
+        if self._history_worker is not None:
+            try:
+                self._selector.unregister(self._history_worker.read_fd)
+            except (KeyError, ValueError):
+                pass
+            self._history_worker.close()
         try:
             self._restore_deferred = self._renderer.close()
         finally:

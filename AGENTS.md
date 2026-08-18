@@ -46,13 +46,15 @@ change.
 
 Keep live terminal interaction, explicit provider-history Preview, and
 transport-managed history as separate concepts. In particular, direct live
-scrolling remains tmux/provider-native, while `railmux ssh` retains its own
-bounded per-pane scrolling manager and explicit Preview remains a deliberate
-Space/menu action. A transcript locator advertises availability; its presence
-alone is never authority to change ordinary live-history format. Any fallback
-that changes the source or representation of history must be gated by the
-smallest exact validated state that requires it, such as a confirmed branch
-generation matching the same rollout.
+scrolling on POSIX/WSL remains tmux/provider-native. The supported native
+Windows semantic proxy and `railmux ssh` share the bounded per-pane history
+state machine, while explicit Preview remains a deliberate Space/menu action.
+Do not duplicate that state machine in a transport adapter; adapters may only
+supply snapshots and deliver its actions. A transcript locator advertises
+availability; its presence alone is never authority to change ordinary
+live-history format. Any fallback that changes the source or representation of
+history must be gated by the smallest exact validated state that requires it,
+such as a confirmed branch generation matching the same rollout.
 
 Every regression fix must protect both sides of its boundary: add a positive
 test for the broken case and a negative behavior-preservation test for the

@@ -115,6 +115,10 @@ def test_options_path_open_policy_persists(tmp_path, monkeypatch):
     modal = app._open_full_sidebar_modal.call_args.args[0]
     modal._option_rows["path_open"][0].keypress((60,), "enter")
     assert app._settings.path_open_policy == "internal"
+    app._set_status.assert_called_with(
+        "Clicked paths: Inside · managed Vim; applies to the next click in "
+        "native Windows or railmux ssh."
+    )
     modal._option_rows["path_open"][2].keypress((60,), "enter")
     assert app._settings.path_open_policy == "external"
 

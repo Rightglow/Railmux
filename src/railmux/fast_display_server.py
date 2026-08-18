@@ -78,6 +78,7 @@ from railmux.fast_display_protocol import (
     encode_path_open_result,
     encode_update,
 )
+from railmux.fast_display_history import HistoryCaptureJob, HistoryCaptureWorker
 from railmux.terminal_screen import (
     Osc52ClipboardDecoder as _Osc52ClipboardDecoder,
     ScreenState as _ScreenState,
@@ -164,125 +165,6 @@ _WINDOW_SIZE_ATTEMPTS = 3
 # scrollback may therefore return fewer lines than requested, which the client
 # treats as the effective end instead of allowing the helper to fail.
 _HISTORY_SNAPSHOT_RAW_BUDGET = 12 * 1024 * 1024
-@dataclass(frozen=True)
-class _HistoryJob:
-    kind: str
-    session_id: str
-    request: tuple[int, ...]
-    claude_history_policy: str | None
-
-
-class _HistoryWorker:
-    """Run expensive read-only history capture away from the PTY select loop."""
-
-    _CAPACITY = 4
-
-    def __init__(self, pyte: object) -> None:
-        self._pyte = pyte
-        self._condition = threading.Condition()
-        self._jobs: deque[_HistoryJob] = deque()
-        self._results: deque[bytes] = deque()
-        self._in_flight = 0
-        self._closed = False
-        self.read_fd, self._write_fd = os.pipe()
-        os.set_blocking(self.read_fd, False)
-        os.set_blocking(self._write_fd, False)
-        self._thread = threading.Thread(
-            target=self._run,
-            name="railmux-history",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def submit(self, job: _HistoryJob) -> bool:
-        with self._condition:
-            if self._closed:
-                return False
-            if job.kind == "batch":
-                # Only the newest not-yet-started routing snapshot is useful.
-                self._jobs = deque(item for item in self._jobs if item.kind != "batch")
-            if len(self._jobs) + self._in_flight + len(self._results) >= self._CAPACITY:
-                return False
-            self._jobs.append(job)
-            self._condition.notify()
-            return True
-
-    def drain(self) -> tuple[bytes, ...]:
-        while True:
-            try:
-                if not os.read(self.read_fd, 4096):
-                    break
-            except BlockingIOError:
-                break
-            except OSError:
-                break
-        with self._condition:
-            results = tuple(self._results)
-            self._results.clear()
-        return results
-
-    def close(self) -> None:
-        with self._condition:
-            self._closed = True
-            self._jobs.clear()
-            self._condition.notify()
-        self._thread.join(timeout=2.0)
-        for fd in (self.read_fd, self._write_fd):
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-
-    def _run(self) -> None:
-        while True:
-            with self._condition:
-                while not self._jobs and not self._closed:
-                    self._condition.wait()
-                if self._closed:
-                    return
-                job = self._jobs.popleft()
-                self._in_flight += 1
-            try:
-                if job.kind == "snapshot":
-                    snapshot = capture_history_snapshot(
-                        job.session_id,
-                        *job.request,
-                        pyte=self._pyte,
-                        claude_history_policy=job.claude_history_policy,
-                        use_topology_cache=True,
-                    )
-                    packet = encode_history_snapshot(snapshot)
-                else:
-                    request_id, max_lines = job.request
-                    batch = capture_history_batch(
-                        self._pyte,
-                        job.session_id,
-                        request_id,
-                        max_lines,
-                        claude_history_policy=job.claude_history_policy,
-                        use_topology_cache=True,
-                    )
-                    packet = encode_history_batch(batch)
-            except Exception:
-                # This is an isolation boundary: one malformed provider row,
-                # renderer edge case, or subprocess failure must not kill the
-                # worker and strand all later history requests. The response
-                # remains a bounded rejection and provider files are untouched.
-                request_id = job.request[0]
-                packet = (
-                    encode_history_snapshot(HistorySnapshot(request_id, None))
-                    if job.kind == "snapshot"
-                    else encode_history_batch(HistoryBatch(request_id, ()))
-                )
-            with self._condition:
-                self._in_flight -= 1
-                if self._closed:
-                    return
-                self._results.append(packet)
-            try:
-                os.write(self._write_fd, b"\x01")
-            except (BlockingIOError, OSError):
-                pass
 
 
 def _fast_dependency_ready() -> bool:
@@ -2361,7 +2243,11 @@ def _serve_attached(
     if target is None:
         _stop_client(pid, master_fd)
         raise DisplayServerError("dedicated tmux server disappeared after attach")
-    history_worker = _HistoryWorker(pyte)
+    history_worker = HistoryCaptureWorker(
+        pyte,
+        capture_snapshot=capture_history_snapshot,
+        capture_batch=capture_history_batch,
+    )
     path_worker: PathActionWorker | None = None
     history_settings = Settings()
     persisted_history_policy = history_settings.claude_history_policy
@@ -2478,7 +2364,12 @@ def _serve_attached(
 
     try:
         while pty_open and not _child_exited(pid):
-            history_ready.extend(history_worker.drain())
+            history_ready.extend(
+                encode_history_snapshot(result)
+                if isinstance(result, HistorySnapshot)
+                else encode_history_batch(result)
+                for result in history_worker.drain()
+            )
             while history_ready and len(control_packets) < 4:
                 queue_control_packet(history_ready.popleft())
             if path_worker is not None:
@@ -2508,7 +2399,12 @@ def _serve_attached(
                 timeout,
             )
             if history_worker.read_fd in readable:
-                history_ready.extend(history_worker.drain())
+                history_ready.extend(
+                    encode_history_snapshot(result)
+                    if isinstance(result, HistorySnapshot)
+                    else encode_history_batch(result)
+                    for result in history_worker.drain()
+                )
                 while history_ready and len(control_packets) < 4:
                     queue_control_packet(history_ready.popleft())
             if stdin_fd in readable:
@@ -2547,7 +2443,7 @@ def _serve_attached(
                             except ValueError:
                                 continue
                             submitted = history_worker.submit(
-                                _HistoryJob(
+                                HistoryCaptureJob(
                                     "snapshot",
                                     session_id,
                                     request,
@@ -2579,7 +2475,7 @@ def _serve_attached(
                             except ValueError:
                                 continue
                             submitted = history_worker.submit(
-                                _HistoryJob(
+                                HistoryCaptureJob(
                                     "batch",
                                     session_id,
                                     (request_id, max_lines),

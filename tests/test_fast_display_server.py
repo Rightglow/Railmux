@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from railmux.config import Config
+from railmux.fast_display_history import HistoryCaptureJob, HistoryCaptureWorker
 from railmux.fast_display_protocol import (
     HistorySnapshot,
     PROTOCOL_VERSION,
@@ -51,19 +52,22 @@ def test_history_worker_keeps_capture_off_caller_and_signals_result(monkeypatch)
         return HistorySnapshot(request_id, None)
 
     monkeypatch.setattr(fast_display_server, "capture_history_snapshot", slow_capture)
-    worker = fast_display_server._HistoryWorker(object())
+    worker = HistoryCaptureWorker(
+        object(),
+        capture_snapshot=slow_capture,
+        capture_batch=fast_display_server.capture_history_batch,
+    )
     try:
         before = time.monotonic()
         assert worker.submit(
-            fast_display_server._HistoryJob("snapshot", "railmux", (7, 1, 1, 50), None)
+            HistoryCaptureJob("snapshot", "railmux", (7, 1, 1, 50), None)
         )
         assert time.monotonic() - before < 0.1
         assert started.wait(1)
         release.set()
         readable, _, _ = select.select([worker.read_fd], [], [], 2)
         assert readable == [worker.read_fd]
-        messages = ServerMessageDecoder().feed(worker.drain()[0])
-        assert messages == [HistorySnapshot(7, None)]
+        assert worker.drain() == (HistorySnapshot(7, None),)
     finally:
         release.set()
         worker.close()
@@ -81,18 +85,21 @@ def test_history_worker_coalesces_unstarted_prefetches(monkeypatch):
             assert release.wait(2)
         return fast_display_server.HistoryBatch(request_id, ())
 
-    monkeypatch.setattr(fast_display_server, "capture_history_batch", capture)
-    worker = fast_display_server._HistoryWorker(object())
+    worker = HistoryCaptureWorker(
+        object(),
+        capture_snapshot=fast_display_server.capture_history_snapshot,
+        capture_batch=capture,
+    )
     try:
         assert worker.submit(
-            fast_display_server._HistoryJob("batch", "railmux", (1, 300), None)
+            HistoryCaptureJob("batch", "railmux", (1, 300), None)
         )
         assert started.wait(1)
         assert worker.submit(
-            fast_display_server._HistoryJob("batch", "railmux", (2, 300), None)
+            HistoryCaptureJob("batch", "railmux", (2, 300), None)
         )
         assert worker.submit(
-            fast_display_server._HistoryJob("batch", "railmux", (3, 300), None)
+            HistoryCaptureJob("batch", "railmux", (3, 300), None)
         )
         release.set()
         deadline = time.monotonic() + 2

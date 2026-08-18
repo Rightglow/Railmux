@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1.dev3] - 2026-08-18
+
+### Added
+
+- Give native Windows the same bounded, per-pane wheel and Page-key history
+  model as `railmux ssh`. Capture remains asynchronous, live provider output
+  keeps draining behind an immutable viewport, and input/resize/topology
+  changes return safely to live output without entering tmux copy-mode.
+
+### Changed
+
+- Share one history controller, capture queue, Claude policy, and
+  transport-neutral `[interaction].history_lines` / `claude_history` settings
+  between native Windows and `railmux ssh`. Released `[ssh]` spellings remain
+  validated read aliases, and POSIX/WSL local scrolling is unchanged.
+- Make idle tips more actionable by explaining list filtering and row context
+  menus instead of exposing internal Codex thread-selection details.
+
+### Fixed
+
+- Hide the inert Kill action from stopped-session context menus while retaining
+  it for running sessions, and explain when a right-clicked Running row changed
+  or has not published its session details yet.
+- Describe the shared clicked-path preference accurately for both native
+  Windows and `railmux ssh`.
+- Make single-setting and remote resets remove both canonical interaction keys
+  and released SSH aliases, so an older value cannot silently reappear.
+
 ## [0.4.1.dev2] - 2026-08-17
 
 ### Fixed
@@ -3138,7 +3166,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev2...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev3...HEAD
+[0.4.1.dev3]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev2...v0.4.1.dev3
 [0.4.1.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev1...v0.4.1.dev2
 [0.4.1.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1.dev1
 [0.4.0]: https://github.com/Rightglow/Railmux/compare/v0.4.0rc25...v0.4.0

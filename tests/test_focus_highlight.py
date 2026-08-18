@@ -1734,6 +1734,7 @@ def test_session_context_menu_preview_uses_space_action():
     menu = app._show_overlay.call_args.args[0]
     labels = [row._wrapped_widget.base_widget.text for row in menu._walker]
     assert any("Preview" in label and "␣" in label for label in labels)
+    assert any("Kill" in label for label in labels)
     preview_row = next(
         row for row in menu._walker
         if "Preview" in row._wrapped_widget.base_widget.text)
@@ -1759,12 +1760,52 @@ def test_session_context_menu_copy_title_uses_provider_title():
     app._open_session_context_menu(session)
 
     menu = app._show_overlay.call_args.args[0]
+    labels = [row._wrapped_widget.base_widget.text for row in menu._walker]
+    assert not any("Kill" in label for label in labels)
     copy_row = next(
         row for row in menu._walker
         if "Copy title" in row._wrapped_widget.base_widget.text
     )
     copy_row._on_click()
     app._copy_session_title.assert_called_once_with("Review layout policy")
+
+
+def test_stale_running_context_click_explains_that_the_row_changed():
+    app = App.__new__(App)
+    app._by_tmux = MagicMock(return_value=None)
+    app._set_status = MagicMock()
+    entry = MagicMock()
+    entry.tmux_name = "cx-ended"
+
+    app._on_running_context_menu(entry)
+
+    app._set_status.assert_called_once_with(
+        "That Running entry changed; refresh and try again.", "warn"
+    )
+
+
+def test_running_context_click_explains_unpublished_session_details():
+    app = App.__new__(App)
+    running = MagicMock(
+        orphan=None,
+        is_placeholder=False,
+        is_legacy=False,
+        logical_session_id="starting-id",
+        project=MagicMock(),
+        session_type="codex",
+    )
+    app._by_tmux = MagicMock(return_value=running)
+    app._find_session_meta = MagicMock(return_value=None)
+    app._running_pane = MagicMock()
+    app._railmux_pane_id = None
+    app._set_status = MagicMock()
+    entry = MagicMock(tmux_name="cx-starting")
+
+    app._on_running_context_menu(entry)
+
+    app._set_status.assert_called_once_with(
+        "Waiting for the provider history file…", "tip"
+    )
 
 
 def test_project_context_menu_has_only_requested_actions(tmp_path):

@@ -1,20 +1,25 @@
-"""Local, pane-scoped history state for the fast SSH display.
+"""Local, pane-scoped history state for Railmux-managed displays.
 
-The state machine is transport-agnostic: callers supply decoded snapshots and
-send the returned protocol frames without letting history pacing flow-control
-the remote agent process.
+The state machine is transport-agnostic: SSH supplies snapshots through its
+wire protocol, while the native-Windows display proxy supplies the same
+snapshots from a local asynchronous tmux capture worker. Neither path lets
+history pacing flow-control the provider process.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import threading
 import time
+from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
-from railmux.config import (
-    SSH_HISTORY_DEFAULT_LINES,
-    SSH_HISTORY_MAX_LINES,
-    SSH_HISTORY_MIN_LINES,
+from railmux.setting_contracts import (
+    HISTORY_DEFAULT_LINES,
+    HISTORY_MAX_LINES,
+    HISTORY_MIN_LINES,
 )
 from railmux.fast_display_input import (
     SgrMouseEvent,
@@ -39,6 +44,136 @@ _HISTORY_DEEP_TIMEOUT = 10.0
 _HISTORY_CONTENT_PANES = 8
 _TIMELINE_MIN_UNIQUE_VOTES = 3
 _TIMELINE_MIN_CONTIGUOUS_ROWS = 4
+
+
+@dataclass(frozen=True)
+class HistoryCaptureJob:
+    """One transport-neutral request for an authoritative history source."""
+
+    kind: str
+    session_id: str
+    request: tuple[int, ...]
+    claude_history_policy: str | None = None
+
+
+class HistoryCaptureWorker:
+    """Run bounded read-only capture away from an interactive display loop.
+
+    The callbacks keep tmux/provider discovery out of this leaf module. SSH and
+    native Windows use the same queue, coalescing, wakeup, and shutdown rules;
+    only their result delivery adapter differs.
+    """
+
+    _CAPACITY = 4
+
+    def __init__(
+        self,
+        pyte: object,
+        *,
+        capture_snapshot: Callable[..., HistorySnapshot],
+        capture_batch: Callable[..., HistoryBatch],
+    ) -> None:
+        self._pyte = pyte
+        self._capture_snapshot = capture_snapshot
+        self._capture_batch = capture_batch
+        self._condition = threading.Condition()
+        self._jobs: deque[HistoryCaptureJob] = deque()
+        self._results: deque[HistorySnapshot | HistoryBatch] = deque()
+        self._in_flight = 0
+        self._closed = False
+        self.read_fd, self._write_fd = os.pipe()
+        os.set_blocking(self.read_fd, False)
+        os.set_blocking(self._write_fd, False)
+        self._thread = threading.Thread(
+            target=self._run,
+            name="railmux-history",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def submit(self, job: HistoryCaptureJob) -> bool:
+        if job.kind not in {"snapshot", "batch"}:
+            raise ValueError("invalid history capture job")
+        with self._condition:
+            if self._closed:
+                return False
+            if job.kind == "batch":
+                # Only the newest not-yet-started routing snapshot is useful.
+                self._jobs = deque(item for item in self._jobs if item.kind != "batch")
+            if len(self._jobs) + self._in_flight + len(self._results) >= self._CAPACITY:
+                return False
+            self._jobs.append(job)
+            self._condition.notify()
+            return True
+
+    def drain(self) -> tuple[HistorySnapshot | HistoryBatch, ...]:
+        while True:
+            try:
+                if not os.read(self.read_fd, 4096):
+                    break
+            except BlockingIOError:
+                break
+            except OSError:
+                break
+        with self._condition:
+            results = tuple(self._results)
+            self._results.clear()
+        return results
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._jobs.clear()
+            self._condition.notify()
+        self._thread.join(timeout=2.0)
+        for fd in (self.read_fd, self._write_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                while not self._jobs and not self._closed:
+                    self._condition.wait()
+                if self._closed:
+                    return
+                job = self._jobs.popleft()
+                self._in_flight += 1
+            try:
+                if job.kind == "snapshot":
+                    result: HistorySnapshot | HistoryBatch = self._capture_snapshot(
+                        job.session_id,
+                        *job.request,
+                        pyte=self._pyte,
+                        claude_history_policy=job.claude_history_policy,
+                        use_topology_cache=True,
+                    )
+                else:
+                    request_id, max_lines = job.request
+                    result = self._capture_batch(
+                        self._pyte,
+                        job.session_id,
+                        request_id,
+                        max_lines,
+                        claude_history_policy=job.claude_history_policy,
+                        use_topology_cache=True,
+                    )
+            except Exception:
+                if job.kind == "snapshot":
+                    result = HistorySnapshot(job.request[0], None)
+                else:
+                    result = HistoryBatch(job.request[0], ())
+            with self._condition:
+                self._in_flight -= 1
+                if self._closed:
+                    return
+                self._results.append(result)
+            try:
+                os.write(self._write_fd, b"\0")
+            except (BlockingIOError, OSError):
+                pass
 
 
 @dataclass(frozen=True)
@@ -122,11 +257,11 @@ class LocalHistoryView:
 
     def __init__(
         self,
-        history_limit: int = SSH_HISTORY_DEFAULT_LINES,
+        history_limit: int = HISTORY_DEFAULT_LINES,
         *,
         wheel_lines: int = _HISTORY_SCROLL_BASE_LINES,
     ) -> None:
-        if not SSH_HISTORY_MIN_LINES <= history_limit <= SSH_HISTORY_MAX_LINES:
+        if not HISTORY_MIN_LINES <= history_limit <= HISTORY_MAX_LINES:
             raise ValueError("invalid local history limit")
         if not 1 <= wheel_lines <= 100:
             raise ValueError("invalid local history wheel distance")

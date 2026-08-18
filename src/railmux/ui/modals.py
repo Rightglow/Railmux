@@ -807,6 +807,16 @@ class OptionsModal(urwid.WidgetWrap):
         ("ask", "Ask every time"),
         ("never", "Never"),
     )
+    _PATH_OPEN_LABELS = (
+        ("internal", "Inside · managed Vim"),
+        ("ask", "Ask every time"),
+        ("external", "Outside Railmux"),
+    )
+
+    @classmethod
+    def path_open_label(cls, policy: str) -> str:
+        """Return the exact user-facing label shown for a path policy."""
+        return dict(cls._PATH_OPEN_LABELS)[policy]
 
     def __init__(
         self,
@@ -888,10 +898,10 @@ class OptionsModal(urwid.WidgetWrap):
         ))
         rows.extend([
             urwid.Divider(),
-            urwid.Text(("title", "Claude history in railmux ssh")),
+            urwid.Text(("title", "Claude managed history")),
             urwid.Text(
-                "Choose smooth local or Claude's clickable history. Current "
-                "railmux ssh connections adopt it on the next refresh."
+                "Choose Railmux-managed or Claude's clickable history. "
+                "Managed displays adopt it on the next refresh."
             ),
         ])
         rows.extend(self._build_group(
@@ -902,7 +912,7 @@ class OptionsModal(urwid.WidgetWrap):
                 "native": "Claude Code history; clickable but may redraw slowly",
             },
             labels=(
-                ("local", "Local transcript"),
+                ("local", "Railmux managed"),
                 ("ask", "Ask on first scroll"),
                 ("native", "Claude native"),
             ),
@@ -922,11 +932,7 @@ class OptionsModal(urwid.WidgetWrap):
                 "ask": "ask before choosing an opening surface",
                 "external": "the client operating system opens the path",
             },
-            labels=(
-                ("internal", "Inside · managed Vim"),
-                ("ask", "Ask every time"),
-                ("external", "Outside Railmux"),
-            ),
+            labels=self._PATH_OPEN_LABELS,
         ))
         rows.extend([
             urwid.Divider(),
@@ -935,7 +941,7 @@ class OptionsModal(urwid.WidgetWrap):
                  "~/.config/railmux/config.toml")
             ),
             urwid.Text(
-                ("dim", "For program paths, SSH history capacity, locale, "
+                ("dim", "For program paths, managed history capacity, locale, "
                  "or resets, run railmux config outside the workspace.")
             ),
         ])

@@ -14,13 +14,57 @@ import pytest
 
 from railmux import __version__, windows_attach_relay
 from railmux.tmux_server import TmuxServerTarget
+from railmux.fast_display_history import LocalHistoryView, PeriodicPrefetchGate
 from railmux.fast_display_input import ClickTarget, LocalTextSelection, SgrMouseEvent
 from railmux.fast_display_protocol import (
+    HistoryBatch,
     HistorySnapshot,
     PathKind,
     PathOpenResult,
     PathResult,
+    InputFrameDecoder,
 )
+
+
+def _set_local_history_state(client) -> None:
+    history = LocalHistoryView(wheel_lines=3)
+    history.visible_routes = tuple(getattr(client, "_routes", ()))
+    history._routes_ready = True
+    client._history = history
+    client._history_worker = None
+    client._history_request_decoder = InputFrameDecoder()
+    client._history_prefetch = PeriodicPrefetchGate()
+    client._next_history_prefetch = 0.0
+    client._routes_force_refresh = False
+    client._claude_history_override = None
+    client._claude_history_prompt_input = None
+    client._claude_history_prompt_mouse_button = None
+
+
+def _install_local_history_snapshot(client, snapshot: HistorySnapshot) -> None:
+    frame = client._history.begin_prefetch(time.monotonic(), force=True)
+    assert frame
+    request_id = client._history.prefetch_pending_id
+    assert request_id is not None
+    snapshot = HistorySnapshot(
+        request_id,
+        snapshot.pane_id,
+        snapshot.x,
+        snapshot.y,
+        snapshot.width,
+        snapshot.height,
+        lines=snapshot.lines,
+        mouse_forwardable=snapshot.mouse_forwardable,
+        transcript_backed=snapshot.transcript_backed,
+        transcript_available=snapshot.transcript_available,
+        history_choice_required=snapshot.history_choice_required,
+        more_available=snapshot.more_available,
+        generation=snapshot.generation,
+        timeline_start=snapshot.timeline_start,
+        timeline_end=snapshot.timeline_end,
+    )
+    client._history.accept_prefetch(HistoryBatch(request_id, (snapshot,)))
+    client._routes = client._history.visible_routes
 
 
 def test_terminal_selector_batch_processes_input_before_output():
@@ -173,6 +217,36 @@ def test_local_proxy_requires_managed_windows(monkeypatch):
         )
 
 
+def test_local_proxy_uses_default_history_if_config_changes_after_validation(
+    monkeypatch,
+):
+    input_read, input_write = os.pipe()
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    proxy_socket, child_socket = socket.socketpair()
+    monkeypatch.setattr(windows_attach_relay, "_terminal_size", lambda _fd: (80, 24))
+    monkeypatch.setattr(windows_attach_relay, "_child_status", lambda _pid: None)
+    monkeypatch.setattr(windows_attach_relay, "_stop_child", lambda _pid: 0)
+    monkeypatch.setattr(
+        windows_attach_relay,
+        "load_config",
+        MagicMock(side_effect=windows_attach_relay.ConfigError("changed")),
+    )
+    client = windows_attach_relay.LocalPtyClient(
+        999999,
+        proxy_socket.detach(),
+        stdin_fd=input_read,
+        stdout_fd=output_fd,
+    )
+    try:
+        assert client._history.history_limit == 10000
+    finally:
+        client.close()
+        child_socket.close()
+        os.close(input_read)
+        os.close(input_write)
+        os.close(output_fd)
+
+
 def test_local_proxy_preserves_large_bracketed_paste_byte_exact(monkeypatch):
     input_read, input_write = os.pipe()
     output_fd = os.open(os.devnull, os.O_WRONLY)
@@ -235,6 +309,7 @@ def test_local_semantic_click_opens_url_but_replays_an_ordinary_click(monkeypatc
     client._routes_checked_at = time.monotonic()
     client._path_prompt = None
     client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
     screen = SimpleNamespace(
         width=80,
         height=1,
@@ -281,6 +356,7 @@ def test_local_semantic_drag_copies_without_forwarding_mouse(monkeypatch):
     client._routes_checked_at = time.monotonic()
     client._path_prompt = None
     client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
     renderer = MagicMock()
     renderer.presentation_stable = True
     renderer.screen = SimpleNamespace(
@@ -302,6 +378,209 @@ def test_local_semantic_drag_copies_without_forwarding_mouse(monkeypatch):
         child_socket.close()
 
 
+def test_local_windows_wheel_uses_shared_managed_history_without_tmux_copy_mode():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    _install_local_history_snapshot(
+        client,
+        HistorySnapshot(
+            0,
+            "%8",
+            0,
+            0,
+            20,
+            2,
+            lines=tuple(f"row-{index}".encode() for index in range(8)),
+        ),
+    )
+    renderer = MagicMock()
+    renderer.presentation_stable = True
+    renderer.screen = SimpleNamespace(
+        width=20,
+        height=3,
+        cursor_x=1,
+        cursor_y=0,
+        rows=(b"live-0", b"live-1", b"status"),
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(
+            SgrMouseEvent(b"wheel-up", 64, 2, 1, True)
+        )
+
+        overlays = client._history.overlays()
+        assert overlays[0][1] == (b"row-3", b"row-4")
+        renderer.set_history_overlays.assert_called_with(overlays)
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_sidebar_wheel_stays_tmux_owned():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    _install_local_history_snapshot(
+        client,
+        HistorySnapshot(0, "%8", 10, 0, 10, 2, lines=(b"a", b"b")),
+    )
+    renderer = MagicMock()
+    renderer.presentation_stable = True
+    renderer.screen = SimpleNamespace(
+        width=20,
+        height=3,
+        cursor_x=11,
+        cursor_y=0,
+        rows=(b"sidebar".ljust(10) + b"agent", b"", b"status"),
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    child_socket.settimeout(0.5)
+    try:
+        client._forward_input_part(
+            SgrMouseEvent(b"sidebar-wheel", 64, 2, 1, True)
+        )
+        assert child_socket.recv(64) == b"sidebar-wheel"
+        renderer.set_history_overlays.assert_not_called()
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_page_up_uses_managed_history_for_focused_agent():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    _install_local_history_snapshot(
+        client,
+        HistorySnapshot(
+            0,
+            "%8",
+            0,
+            0,
+            20,
+            3,
+            lines=tuple(f"row-{index}".encode() for index in range(12)),
+        ),
+    )
+    renderer = MagicMock()
+    renderer.screen = SimpleNamespace(
+        width=20,
+        height=4,
+        cursor_x=1,
+        cursor_y=1,
+        rows=(b"live-0", b"live-1", b"live-2", b"status"),
+    )
+    client._renderer = renderer
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(b"\x1b[5~")
+
+        assert client._history.active
+        renderer.set_history_overlays.assert_called_with(
+            client._history.overlays()
+        )
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_claude_history_choice_uses_shared_setting(monkeypatch):
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._routes_force_refresh = False
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    client._claude_history_prompt_input = b"wheel-up"
+    renderer = MagicMock()
+    client._renderer = renderer
+    settings = MagicMock()
+    settings.set_claude_history_policy.return_value = True
+    monkeypatch.setattr("railmux.settings.Settings", lambda: settings)
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(b"1")
+
+        settings.set_claude_history_policy.assert_called_once_with("local")
+        assert client._claude_history_override is None
+        assert client._claude_history_prompt_input is None
+        renderer.clear_claude_history_prompt.assert_called_once_with()
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_one_time_native_claude_history_replays_wheel():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._routes_force_refresh = False
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    client._claude_history_prompt_input = b"wheel-up"
+    client._renderer = MagicMock()
+    child_socket.settimeout(0.5)
+    try:
+        client._forward_input_part(b"4")
+
+        assert client._claude_history_override == "native"
+        assert child_socket.recv(64) == b"wheel-up"
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
 def test_local_semantic_drag_keeps_ownership_during_frame_transition():
     proxy_socket, child_socket = socket.socketpair()
     client = windows_attach_relay.LocalPtyClient.__new__(
@@ -314,6 +593,7 @@ def test_local_semantic_drag_keeps_ownership_during_frame_transition():
     client._routes_checked_at = time.monotonic()
     client._path_prompt = None
     client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
     client._size = (20, 1)
     renderer = MagicMock()
     renderer.presentation_stable = True
@@ -352,6 +632,7 @@ def test_local_semantic_url_in_unfocused_agent_replays_focus_click():
     client._routes_checked_at = time.monotonic()
     client._path_prompt = None
     client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
     renderer = MagicMock()
     renderer.presentation_stable = True
     renderer.screen = SimpleNamespace(
@@ -385,6 +666,7 @@ def test_local_path_choice_completes_outside_input_loop(monkeypatch):
     client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
     client._routes_checked_at = 10.0
     client._routes_force_refresh = False
+    _set_local_history_state(client)
     client._pending_path_open = None
     worker = MagicMock()
     worker.submit.return_value = True
@@ -430,6 +712,7 @@ def test_local_internal_path_open_invalidates_old_visible_topology():
     client._routes = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
     client._routes_checked_at = 10.0
     client._routes_force_refresh = False
+    _set_local_history_state(client)
     target = ClickTarget("path", "~", "%8")
     resolved = PathResult(11, PathKind.DIRECTORY, "/home/user", "internal")
     worker = MagicMock()
@@ -452,7 +735,7 @@ def test_local_internal_path_open_invalidates_old_visible_topology():
     client._renderer.cancel_fresh_presentation_requirement.assert_called_once_with()
 
 
-def test_local_route_refresh_bypasses_cache_after_topology_change(monkeypatch):
+def test_local_route_refresh_uses_async_shared_history_source():
     client = windows_attach_relay.LocalPtyClient.__new__(
         windows_attach_relay.LocalPtyClient
     )
@@ -463,18 +746,20 @@ def test_local_route_refresh_bypasses_cache_after_topology_change(monkeypatch):
     client._routes = ()
     client._routes_checked_at = time.monotonic()
     client._routes_force_refresh = True
-    snapshots = (HistorySnapshot(0, "%8", 0, 0, 20, 1),)
-    query = MagicMock(return_value=snapshots)
-    monkeypatch.setattr(
-        "railmux.fast_display_server.visible_agent_snapshots",
-        query,
-    )
+    _set_local_history_state(client)
+    client._routes_force_refresh = True
+    worker = MagicMock()
+    worker.submit.return_value = True
+    client._history_worker = worker
 
     client._refresh_routes()
 
-    query.assert_called_once_with("$4", use_cache=False)
-    assert client._routes == snapshots
-    assert client._routes_force_refresh is False
+    job = worker.submit.call_args.args[0]
+    assert job.kind == "batch"
+    assert job.session_id == "$4"
+    assert job.request[1] == 300
+    assert client._routes == ()
+    assert client._history.prefetch_pending_id == job.request[0]
 
 
 def test_local_path_resolution_completes_outside_input_loop():
@@ -667,6 +952,40 @@ def test_semantic_renderer_does_not_repaint_unchanged_prompt_for_working_tick():
     assert b"Working." in rendered
     assert b"PROMPT" not in rendered
     assert b"\033[4;1H\033[2K" not in rendered
+
+
+def test_semantic_renderer_keeps_history_overlay_while_live_screen_advances():
+    output_fd = os.open(os.devnull, os.O_WRONLY)
+    renderer = windows_attach_relay._SemanticTerminalRenderer(output_fd, 30, 4)
+    paint = MagicMock()
+    renderer.surface.paint = paint
+    snapshot = HistorySnapshot(
+        1,
+        "%7",
+        0,
+        0,
+        30,
+        3,
+        lines=(b"frozen-history",),
+    )
+    overlay = ((snapshot, (b"frozen-history",)),)
+    try:
+        renderer.set_history_overlays(overlay)
+        renderer.feed(b"\033[2J\033[Hlive-one")
+        assert renderer.paint_due(1.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
+
+        renderer.feed(b"\033[H\033[2Klive-two")
+        assert renderer.paint_due(2.0, force=True)
+        assert renderer.writer.wait_idle(1.0)
+    finally:
+        renderer.close()
+        os.close(output_fd)
+
+    assert paint.call_count == 2
+    assert paint.call_args_list[0].args[1] == overlay
+    assert paint.call_args_list[1].args[1] == overlay
+    assert b"live-two" in paint.call_args_list[1].args[0].rows[0]
 
 
 def test_semantic_renderer_never_paints_a_partial_synchronized_frame():
@@ -946,10 +1265,17 @@ def test_local_pointer_is_dropped_while_visible_frame_is_transitioning():
     client._selection = LocalTextSelection()
     client._path_prompt = None
     client._path_prompt_mouse_button = None
+    client._routes = ()
+    _set_local_history_state(client)
     client._size = (80, 24)
     renderer = MagicMock()
     renderer.presentation_stable = False
-    renderer.screen = SimpleNamespace(height=24)
+    renderer.screen = SimpleNamespace(
+        height=24,
+        cursor_x=0,
+        cursor_y=0,
+        rows=(b"",) * 24,
+    )
     renderer.surface.translate_mouse_event.side_effect = (
         lambda event, **_kwargs: event
     )
@@ -979,6 +1305,7 @@ def test_local_left_gesture_outside_agent_route_remains_tmux_owned():
     client._routes_checked_at = time.monotonic()
     client._path_prompt = None
     client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
     client._size = (20, 2)
     renderer = MagicMock()
     renderer.presentation_stable = True
@@ -1013,6 +1340,8 @@ def test_local_explicit_tmux_copy_mode_key_remains_byte_exact():
     client._path_prompt = None
     client._path_prompt_mouse_button = None
     client._renderer = MagicMock()
+    client._routes = ()
+    _set_local_history_state(client)
     child_socket.settimeout(0.5)
     try:
         client._forward_input_part(b"\x02[")
