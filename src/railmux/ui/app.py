@@ -305,7 +305,7 @@ def _compact_tmux_status_left(
     page: WorkspacePage,
     panes: tuple[str | None, str | None, str | None],
     width: int,
-    range_wrapper: Callable[[str, str], str] | None = None,
+    page_range_wrapper: Callable[[str, str], str] | None = None,
     action_range_wrapper: Callable[[str, str], str] | None = None,
     layout_indicator: str | None = None,
 ) -> tuple[str, int]:
@@ -332,19 +332,26 @@ def _compact_tmux_status_left(
         WorkspacePage.PRIMARY,
         WorkspacePage.SECONDARY,
     )
+    page_actions = (
+        tmux_ctl.STATUS_ACTION_PAGE_SIDEBAR,
+        tmux_ctl.STATUS_ACTION_PAGE_PRIMARY,
+        tmux_ctl.STATUS_ACTION_PAGE_SECONDARY,
+    )
     fg_inactive = "colour231" if error else "colour0"
     fg_active = "colour220" if error else "colour231"
     rendered: list[str] = []
     visible = 0
-    for candidate, pane_id, label in zip(pages, panes, labels):
+    for candidate, action, pane_id, label in zip(
+        pages, page_actions, panes, labels,
+    ):
         # Keep all three positions stable even before F8 creates Pane 2. A
         # missing pane has no tmux range, so it is visible but not clickable.
         content = (
             f"#[fg={fg_active if candidate is page else fg_inactive}]"
             f"[{label}]"
         )
-        if range_wrapper is not None and pane_id is not None:
-            content = range_wrapper(pane_id, content)
+        if page_range_wrapper is not None and pane_id is not None:
+            content = page_range_wrapper(action, content)
         rendered.append(content)
         visible += len(label) + 2
     mode_content = mode
@@ -3418,6 +3425,7 @@ class App:
             for changed in reversed(parked):
                 self._resume_compact_slot(changed)
             return False
+        resume_required = bool(desired is not None and desired.display_parked)
         if desired is not None and not self._resume_compact_slot(desired):
             fallback_page = workspace.compact_page
             fallback_pane = self._pane_for_workspace_page(fallback_page)
@@ -3434,6 +3442,14 @@ class App:
             return False
         pane_id = self._pane_for_workspace_page(page)
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
+            return False
+        # swap-pane unzooms a window when the active compact placeholder moves
+        # back to the provider's home window.  Re-establish zoom against the
+        # real pane that is now visible before committing the logical page.
+        if resume_required and not self._zoom_pane(pane_id):
+            if announce:
+                self._set_status(
+                    "That compact page could not fill the screen.", "warn")
             return False
 
         workspace.compact_page = page
@@ -8332,6 +8348,17 @@ class App:
         if key == COMPACT_RESIZE_KEY.lower():
             self._handle_remote_compact_prepare()
             return
+        compact_pages = {
+            "f13": WorkspacePage.SIDEBAR,
+            "f14": WorkspacePage.PRIMARY,
+            "f15": WorkspacePage.SECONDARY,
+        }
+        if key in compact_pages:
+            if (self._agent_workspace().presentation
+                    is WorkspacePresentation.COMPACT):
+                self._select_workspace_page(
+                    compact_pages[key], announce=True)
+            return
         for slot_key, (restore_key, _sequence) in (
                 tmux_ctl.RAILMUX_HISTORY_RESTORE_KEYS.items()):
             if key == restore_key.lower():
@@ -11785,16 +11812,15 @@ class App:
                 is WorkspacePresentation.COMPACT):
             width = (getattr(self, "_last_workspace_size", None) or (80, 24))[0]
             manager = getattr(self, "_tmux_binding_manager", None)
-            pane_range_helper = getattr(tmux_ctl, "status_pane_range", None)
             action_range_helper = getattr(
                 tmux_ctl, "status_action_range", None)
             wrap_pane = None
             wrap_action = None
             if (getattr(manager, "status_navigation_available", False)
-                    is True and callable(pane_range_helper)):
-                def wrap_pane(pane_id: str, content: str) -> str:
+                    is True and callable(action_range_helper)):
+                def wrap_pane(action: str, content: str) -> str:
                     try:
-                        return pane_range_helper(pane_id, content)
+                        return action_range_helper(action, content)
                     except (TypeError, ValueError):
                         return content
             if (getattr(manager, "status_navigation_available", False)

@@ -970,6 +970,9 @@ def test_status_action_range_requires_tmux_34_and_known_action():
             tmux_ctl.STATUS_ACTION_MODE,
             tmux_ctl.STATUS_ACTION_LAYOUT,
             tmux_ctl.STATUS_ACTION_COPY,
+            tmux_ctl.STATUS_ACTION_PAGE_SIDEBAR,
+            tmux_ctl.STATUS_ACTION_PAGE_PRIMARY,
+            tmux_ctl.STATUS_ACTION_PAGE_SECONDARY,
         )
     )
     with patch.object(tmux_ctl, "tmux_version", return_value=(3, 3)):
@@ -984,6 +987,10 @@ def test_status_action_range_requires_tmux_34_and_known_action():
         assert tmux_ctl.status_action_range(
             tmux_ctl.STATUS_ACTION_LAYOUT, "◨") == (
             "#[range=control|1]◨#[norange]"
+        )
+        assert tmux_ctl.status_action_range(
+            tmux_ctl.STATUS_ACTION_PAGE_PRIMARY, "[1]") == (
+            "#[range=user|railmux-page-1][1]#[norange]"
         )
         try:
             tmux_ctl.status_action_range("railmux-arbitrary", "unsafe")
@@ -1013,7 +1020,7 @@ def test_root_status_click_scopes_ranges_and_dispatches_actions():
     assert "-t" not in argv[5:8]
     assert "mouse_status_range" in argv[7]
     assert "%[0-9]+" in argv[7]
-    assert "railmux-(mode|layout|copy)" in argv[7]
+    assert "railmux-(mode|layout|copy|page-[r12])" in argv[7]
     assert tmux_ctl.RAILMUX_CONTROLLER_OPTION in argv[7]
     assert "railmux-status-pane-v1-owner123" in argv[7]
     assert "tmux select-pane -Z -t '#{mouse_status_range}'" in argv[8]
@@ -1023,6 +1030,11 @@ def test_root_status_click_scopes_ranges_and_dispatches_actions():
     assert "' F7 ;;" in argv[8]
     assert "railmux-copy) tmux send-keys" in argv[8]
     assert "' F6 ;;" in argv[8]
+    assert "railmux-page-r) tmux send-keys -l" in argv[8]
+    assert "railmux-page-1) tmux send-keys -l" in argv[8]
+    assert "railmux-page-2) tmux send-keys -l" in argv[8]
+    for _key, sequence in tmux_ctl.RAILMUX_COMPACT_PAGE_KEYS.values():
+        assert sequence in argv[8]
     assert argv[-1] == "select-window -t ="
 
 

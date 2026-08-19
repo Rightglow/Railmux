@@ -2046,6 +2046,9 @@ _ROOT_TERMUX_TAP_MARKER = "railmux-termux-tap-v1"
 STATUS_ACTION_MODE = "railmux-mode"
 STATUS_ACTION_LAYOUT = "railmux-layout"
 STATUS_ACTION_COPY = "railmux-copy"
+STATUS_ACTION_PAGE_SIDEBAR = "railmux-page-r"
+STATUS_ACTION_PAGE_PRIMARY = "railmux-page-1"
+STATUS_ACTION_PAGE_SECONDARY = "railmux-page-2"
 _ROOT_STATUS_ACTION_KEYS = {
     STATUS_ACTION_MODE: "MouseDown1Control0",
     STATUS_ACTION_LAYOUT: "MouseDown1Control1",
@@ -2059,6 +2062,9 @@ _STATUS_ACTIONS = frozenset({
     STATUS_ACTION_MODE,
     STATUS_ACTION_LAYOUT,
     STATUS_ACTION_COPY,
+    STATUS_ACTION_PAGE_SIDEBAR,
+    STATUS_ACTION_PAGE_PRIMARY,
+    STATUS_ACTION_PAGE_SECONDARY,
 })
 _PREFIX_TARGET_KEY = "Tab"
 _PREFIX_TARGET_MARKER = "railmux-target-toggle-v1"
@@ -2084,6 +2090,15 @@ RAILMUX_LEGACY_CANONICAL_HISTORY_PREFIXES = (
 RAILMUX_HISTORY_RESTORE_KEYS = {
     "primary": ("F23", "\x1b[42~"),
     "secondary": ("F24", "\x1b[43~"),
+}
+# Compact status clicks must reach the controller before pane focus changes so
+# it can park the visible provider, switch the zoomed page, and resume the new
+# provider as one transaction.  tmux names keys only through F12, therefore
+# these private routes use canonical xterm sequences in literal mode.
+RAILMUX_COMPACT_PAGE_KEYS = {
+    STATUS_ACTION_PAGE_SIDEBAR: ("F13", "\x1b[25~"),
+    STATUS_ACTION_PAGE_PRIMARY: ("F14", "\x1b[26~"),
+    STATUS_ACTION_PAGE_SECONDARY: ("F15", "\x1b[28~"),
 }
 RAILMUX_SELECTION_KEY_OPTION = "@railmux_selection_key"
 RAILMUX_SELECTION_PEER_OPTION = "@railmux_selection_peer"
@@ -2124,7 +2139,9 @@ def status_pane_range(pane_id: str, content: str) -> str:
     # A pane range sets ``mouse_status_range`` to only the literal ``pane``;
     # ``=`` still resolves to the pane geometrically below the status cell,
     # not to X. A user range preserves the strict pane ID as its argument, so
-    # the managed binding can select the intended compact page explicitly.
+    # the managed binding can select a pane-targeted status control explicitly.
+    # Compact page navigation uses controller actions instead so parking,
+    # resuming, and zooming remain one ordered transaction.
     #
     # Status strings also pass through tmux's strftime expansion.  Escape the
     # pane-ID percent sign so IDs such as ``%76`` are not parsed as padding
@@ -2149,8 +2166,8 @@ def status_action_range(action: str, content: str) -> str:
     # keys avoids routing fixed actions through the generic user-range
     # dispatcher and provides deterministic bindings on the 3.7b version
     # bundled by the managed Windows runtime.
-    if tmux_version() >= (3, 7):
-        key = _ROOT_STATUS_ACTION_KEYS[action]
+    key = _ROOT_STATUS_ACTION_KEYS.get(action)
+    if tmux_version() >= (3, 7) and key is not None:
         index = key.removeprefix("MouseDown1Control")
         return f"#[range=control|{index}]{content}#[norange]"
     return f"#[range=user|{action}]{content}#[norange]"
@@ -3079,7 +3096,7 @@ def set_root_status_click_forwarding(
     marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
     condition = (
         "#{&&:"
-        "#{m/r:^(%[0-9]+|railmux-(mode|layout|copy))$,"
+        "#{m/r:^(%[0-9]+|railmux-(mode|layout|copy|page-[r12]))$,"
         "#{mouse_status_range}},"
         "#{!=:#{@railmux_controller_pane},},"
         f"#{{==:{marker},{marker}}}}}"
@@ -3097,6 +3114,18 @@ def set_root_status_click_forwarding(
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F7 ;; '
             f'{STATUS_ACTION_COPY}) {_tmux_shell_executable()} send-keys -t '
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F6 ;; '
+            f'{STATUS_ACTION_PAGE_SIDEBAR}) '
+            f'{_tmux_shell_executable()} send-keys -l -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' -- '
+            f'{shlex.quote(RAILMUX_COMPACT_PAGE_KEYS[STATUS_ACTION_PAGE_SIDEBAR][1])} ;; '
+            f'{STATUS_ACTION_PAGE_PRIMARY}) '
+            f'{_tmux_shell_executable()} send-keys -l -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' -- '
+            f'{shlex.quote(RAILMUX_COMPACT_PAGE_KEYS[STATUS_ACTION_PAGE_PRIMARY][1])} ;; '
+            f'{STATUS_ACTION_PAGE_SECONDARY}) '
+            f'{_tmux_shell_executable()} send-keys -l -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' -- '
+            f'{shlex.quote(RAILMUX_COMPACT_PAGE_KEYS[STATUS_ACTION_PAGE_SECONDARY][1])} ;; '
             'esac"'
         )
         subprocess.check_call(

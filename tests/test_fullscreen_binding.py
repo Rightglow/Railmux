@@ -1,6 +1,6 @@
 """Tests for F8/F9 dispatch and managed binding lifecycle."""
 import threading
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 from railmux import tmux_server
 from railmux.config import Config
@@ -845,6 +845,27 @@ def test_compact_page_switch_retargets_and_rezooms_without_losing_layout(
     assert workspace.layout is WorkspaceLayout.SIDE_BY_SIDE
     app._set_railmux_focus.assert_called_once_with(
         False, force_border=True)
+
+
+def test_private_compact_page_keys_delegate_only_in_compact_presentation():
+    app = _bare_app()
+    app._select_workspace_page = MagicMock(return_value=True)
+
+    app._agent_workspace().presentation = WorkspacePresentation.COMPACT
+    app._on_input("f14")
+    app._on_input("f15")
+    app._on_input("f13")
+
+    assert app._select_workspace_page.call_args_list == [
+        call(WorkspacePage.PRIMARY, announce=True),
+        call(WorkspacePage.SECONDARY, announce=True),
+        call(WorkspacePage.SIDEBAR, announce=True),
+    ]
+
+    app._select_workspace_page.reset_mock()
+    app._agent_workspace().presentation = WorkspacePresentation.WIDE
+    app._on_input("f14")
+    app._select_workspace_page.assert_not_called()
 
 
 def test_full_sidebar_modal_restores_preexisting_agent_zoom(monkeypatch):

@@ -1433,9 +1433,12 @@ routing with focus, selection, or history.
   size validation uses the outer zoomed viewport rather than a placeholder's
   hidden split rectangle; valid 40x12-or-larger compact geometry is not judged
   against the desktop pane recommendation. Compact changes presentation,
-  never the logical layout. Returning wide reapplies the
-  pre-compact proportions (or safe 20% sidebar and 50/50 agent defaults) rather
-  than retaining the zoomed page's tmux reflow. Single-agent layout assigns
+  never the logical layout. Compact status-page clicks signal the controller
+  without first selecting a hidden placeholder; the controller parks the old
+  provider, establishes the target page, resumes its provider, and verifies
+  the final full-window zoom before committing the new page. Returning wide
+  reapplies the pre-compact proportions (or safe 20% sidebar and 50/50 agent
+  defaults) rather than retaining the zoomed page's tmux reflow. Single-agent layout assigns
   about 30% of the outer width to the sidebar; either dual layout assigns about
   20%, clamped to at least 30 columns. Ratio changes are best-effort and must
   not make layout creation or recovery fail. Subsequent wide-window resizes

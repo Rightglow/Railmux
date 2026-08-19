@@ -219,6 +219,7 @@ def test_compact_page_switch_parks_old_agent_before_resuming_target(
 
     transport.park.assert_called_once_with(workspace.primary)
     transport.resume.assert_called_once_with(workspace.secondary)
+    assert app._zoom_pane.call_args_list == [call("%30"), call("%3")]
     assert workspace.compact_page.value == "secondary"
 
 

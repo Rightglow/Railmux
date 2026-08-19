@@ -367,6 +367,31 @@ def test_compact_status_left_wraps_mode_and_layout_as_actions():
     assert visible == len("[R][1][2] CC · ◨ ")
 
 
+def test_compact_status_left_routes_available_pages_through_controller_actions():
+    pages = []
+
+    def wrap_page(action, content):
+        pages.append((action, content))
+        return f"<{action}>{content}</{action}>"
+
+    value, _visible = _compact_tmux_status_left(
+        False,
+        "Codex",
+        WorkspacePage.PRIMARY,
+        ("%1", "%2", None),
+        40,
+        page_range_wrapper=wrap_page,
+    )
+
+    assert pages == [
+        ("railmux-page-r", "#[fg=colour0][R]"),
+        ("railmux-page-1", "#[fg=colour231][1]"),
+    ]
+    assert "<railmux-page-r>" in value
+    assert "<railmux-page-1>" in value
+    assert "<railmux-page-2>" not in value
+
+
 def test_apply_bar_uses_dynamic_compact_left_length(monkeypatch):
     run = MagicMock()
     monkeypatch.setattr("subprocess.run", run)
@@ -413,9 +438,9 @@ def test_apply_compact_bar_makes_pages_mode_and_layout_clickable(monkeypatch):
     app._apply_tmux_bar(error=False)
 
     left = _style_calls(run, "status-left")[-1]
-    assert "#[range=user|%%1]" in left
-    assert "#[range=user|%%2]" in left
-    assert "#[range=user|%%3]" in left
+    assert "#[range=user|railmux-page-r]" in left
+    assert "#[range=user|railmux-page-1]" in left
+    assert "#[range=user|railmux-page-2]" in left
     assert "#[range=user|railmux-mode]CC#[norange]" in left
     assert "#[range=user|railmux-layout]◨#[norange]" in left
     visible = len("[R][1][2] CC · ◨ ")
