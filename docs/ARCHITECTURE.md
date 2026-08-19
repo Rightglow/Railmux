@@ -467,6 +467,12 @@ immediately, while input, resize, and reconnect retain their existing
 fail-closed cancellation paths. The per-read one-direction bound applies only
 to wheel input still forwarded to sidebar/modal or another remote owner; it
 must never discard locally owned agent-history distance.
+On native Windows, a content-only frame still being committed to the physical
+terminal does not invalidate the geometry of the last frame already visible to
+the user, so wheel routing may continue against that exact presented screen.
+An explicit resize, split, tool action, or other topology transition raises a
+new presentation requirement and keeps pointer routing fail-closed until the
+matching newer frame is physically visible.
 Native Claude, local transcript, and
 undecided history are separate sources and are never merged. Protocol v16
 carries both the opaque pane-local Codex history generation and, whenever the

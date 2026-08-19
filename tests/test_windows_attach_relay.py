@@ -430,6 +430,114 @@ def test_local_windows_wheel_uses_shared_managed_history_without_tmux_copy_mode(
         child_socket.close()
 
 
+def test_local_windows_real_sgr_wheel_survives_busy_content_paint():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    _install_local_history_snapshot(
+        client,
+        HistorySnapshot(
+            0,
+            "%8",
+            0,
+            0,
+            20,
+            2,
+            lines=tuple(f"row-{index}".encode() for index in range(8)),
+        ),
+    )
+    renderer = MagicMock()
+    renderer.presentation_stable = False
+    renderer.pointer_routing_stable = True
+    renderer.screen = SimpleNamespace(
+        width=20,
+        height=3,
+        cursor_x=1,
+        cursor_y=0,
+        rows=(b"live-0", b"live-1", b"status"),
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    decoder = windows_attach_relay.TerminalInputDecoder()
+    child_socket.setblocking(False)
+    try:
+        parts = decoder.feed(b"\033[<64;2;1M")
+        assert len(parts) == 1
+        client._forward_input_part(parts[0])
+
+        assert client._history.active
+        renderer.set_history_overlays.assert_called_with(
+            client._history.overlays()
+        )
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_wheel_stays_fail_closed_during_topology_transition():
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = ()
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    _install_local_history_snapshot(
+        client,
+        HistorySnapshot(
+            0,
+            "%8",
+            0,
+            0,
+            20,
+            2,
+            lines=tuple(f"row-{index}".encode() for index in range(8)),
+        ),
+    )
+    renderer = MagicMock()
+    renderer.presentation_stable = False
+    renderer.pointer_routing_stable = False
+    renderer.screen = SimpleNamespace(
+        width=20,
+        height=3,
+        cursor_x=1,
+        cursor_y=0,
+        rows=(b"live-0", b"live-1", b"status"),
+    )
+    renderer.surface.translate_mouse_event.side_effect = lambda event, **_kwargs: event
+    client._renderer = renderer
+    decoder = windows_attach_relay.TerminalInputDecoder()
+    child_socket.setblocking(False)
+    try:
+        parts = decoder.feed(b"\033[<64;2;1M")
+        assert len(parts) == 1
+        client._forward_input_part(parts[0])
+
+        assert not client._history.active
+        renderer.set_history_overlays.assert_not_called()
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
 def test_local_windows_sidebar_wheel_stays_tmux_owned():
     proxy_socket, child_socket = socket.socketpair()
     client = windows_attach_relay.LocalPtyClient.__new__(
@@ -1199,18 +1307,24 @@ def test_semantic_renderer_hit_testing_waits_for_physical_frame(monkeypatch):
         assert renderer.screen is old_screen
         assert renderer.presentation_serial == old_serial
         assert renderer.presentation_stable is False
+        # Ordinary content backpressure does not invalidate the pane geometry
+        # of the frame that is still physically visible.
+        assert renderer.pointer_routing_stable is True
 
         # A topology mutation requested while this already-queued frame is
         # writing must wait for one still-newer authoritative frame.
         renderer.require_fresh_presentation()
+        assert renderer.pointer_routing_stable is False
         release.set()
         assert renderer.writer.wait_idle(1.0)
         assert renderer.presentation_stable is False
+        assert renderer.pointer_routing_stable is False
         assert renderer.presentation_serial == old_serial + 1
         renderer.feed(b"\033[H\033[2KNEW-TOPOLOGY-VISIBLE")
         renderer.paint_due(3.0, force=True)
         assert renderer.writer.wait_idle(1.0)
         assert renderer.presentation_stable is True
+        assert renderer.pointer_routing_stable is True
         assert b"NEW-TOPOLOGY-VISIBLE" in renderer.screen.rows[0]
     finally:
         release.set()

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1.dev4] - 2026-08-19
+
+### Fixed
+
+- Keep native-Windows managed wheel history responsive while an ordinary
+  provider content frame is still being written to Windows Terminal. Explicit
+  resize, split, and tool-pane topology transitions remain fail-closed, and a
+  wheel event is still never leaked into tmux copy-mode.
+
 ## [0.4.1.dev3] - 2026-08-18
 
 ### Added
@@ -3166,7 +3175,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev3...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev4...HEAD
+[0.4.1.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev3...v0.4.1.dev4
 [0.4.1.dev3]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev2...v0.4.1.dev3
 [0.4.1.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev1...v0.4.1.dev2
 [0.4.1.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1.dev1

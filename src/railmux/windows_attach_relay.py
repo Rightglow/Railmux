@@ -320,6 +320,22 @@ class _SemanticTerminalRenderer:
             and self._presentation_serial >= self._presentation_required_serial
         )
 
+    @property
+    def pointer_routing_stable(self) -> bool:
+        """Whether the last physical screen still has trusted pointer geometry.
+
+        An ordinary provider repaint can keep one terminal write in flight for
+        long enough to overlap several Windows wheel reports.  That does not
+        invalidate the already visible pane layout.  Explicit topology
+        transitions call :meth:`require_fresh_presentation` and remain
+        fail-closed until the matching newer frame is physically visible.
+        """
+        self._promote_presented_screen()
+        return bool(
+            self._screen is not None
+            and self._presentation_serial >= self._presentation_required_serial
+        )
+
     def require_fresh_presentation(self) -> None:
         """Fail pointer input closed until one newer frame is displayed."""
         required = self._presentation_serial + 1
@@ -1815,14 +1831,19 @@ class LocalPtyClient:
             part,
             logical_height=logical_height,
         )
-        if not self._renderer.presentation_stable:
+        routing_stable = self._renderer.presentation_stable or (
+            event.wheel_direction != 0
+            and self._renderer.pointer_routing_stable
+        )
+        if not routing_stable:
             if not self._selection.capturing and self._selection.cancel():
                 self._renderer.set_selection(self._selection.segments())
             # A queued frame can already represent a new tmux pane topology
-            # while the user still sees the prior one.  Dropping only pointer
-            # input during this bounded transition is safer than forwarding it
-            # to Quit or stock tmux copy-mode. A capture already owns an
-            # immutable visible snapshot and therefore keeps the whole gesture.
+            # while the user still sees the prior one. Explicitly untrusted
+            # geometry stays fail-closed; an ordinary content-only write may
+            # still route wheel input against the last physical screen. A
+            # capture already owns an immutable visible snapshot and therefore
+            # keeps the whole gesture.
             if not self._selection.capturing:
                 return
         if self._selection.capturing:

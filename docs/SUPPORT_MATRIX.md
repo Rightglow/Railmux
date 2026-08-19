@@ -111,7 +111,7 @@ product capability.
 | W12 | Shared config file, standalone editor, and in-product persistent Options | Supported | Supported | `railmux config` works without tmux, uses a temporary interactive screen, validates program/locale overrides, and edits the same remote or local TOML authority; one-time confirmations stay action-local. |
 | W13 | Local and remote privacy-safe diagnostics | Supported | Supported | `doctor --json` and text share one redacted snapshot authority. |
 | W14 | Dedicated tmux watchdog and incident reporting | Supported | Supported | A client may exit after repeated failures but never kills/restarts tmux or a provider. |
-| W15 | Transport-managed live history | Supported on native Windows; POSIX/WSL remain native | Supported | Native Windows and SSH use one pane-scoped controller, bounded asynchronous capture worker, immutable overlay model, Page-key routing, and `[interaction]` settings. Live provider output continues draining behind a frozen viewport; input, resize, and uncertain topology fail closed to live state. |
+| W15 | Transport-managed live history | Supported on native Windows; POSIX/WSL remain native | Supported | Native Windows and SSH use one pane-scoped controller, bounded asynchronous capture worker, immutable overlay model, Page-key routing, and `[interaction]` settings. Live provider output continues draining behind a frozen viewport. Windows wheel routing remains responsive during content-only terminal backpressure, while input, resize, and uncertain topology fail closed to live state. |
 
 ### Full-window SSH client
 
