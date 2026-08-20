@@ -22,6 +22,9 @@ from railmux.fast_display_protocol import (
 
 _SGR_MOUSE_PREFIX = b"\x1b[<"
 _SGR_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
+_OSC8_LINK_RE = re.compile(
+    rb"\x1b\]8;[^;\x07\x1b]*;([^\x07\x1b]*)(?:\x07|\x1b\\)"
+)
 _PAGE_UP = b"\x1b[5~"
 _PAGE_DOWN = b"\x1b[6~"
 _BRACKETED_PASTE_BEGIN = b"\x1b[200~"
@@ -505,27 +508,62 @@ def _display_width(character: str) -> int:
     return max(0, pyte.screens.wcwidth(character))
 
 
-def _plain_display_cells(line: bytes, width: int) -> tuple[str | None, ...]:
-    """Decode one server-rendered SGR row into bounded display cells."""
-    plain = _SGR_STYLE_RE.sub(b"", line).decode("utf-8", errors="replace")
+def _validated_osc8_url(value: bytes) -> str | None:
+    if not value or len(value) > 8192:
+        return None
+    try:
+        decoded = value.decode("utf-8")
+        parsed = urlsplit(decoded)
+        hostname = parsed.hostname
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if (
+        parsed.scheme.lower() not in ("http", "https")
+        or hostname is None
+        or any(ord(character) < 0x20 or character == "\x7f" for character in decoded)
+    ):
+        return None
+    return decoded
+
+
+def _plain_display_row(
+    line: bytes,
+    width: int,
+) -> tuple[tuple[str | None, ...], tuple[str | None, ...]]:
+    """Decode one rendered row and retain bounded OSC 8 targets per cell."""
     cells: list[str | None] = [" "] * width
+    hyperlinks: list[str | None] = [None] * width
     column = 0
-    for character in plain:
-        cell_width = _display_width(character)
-        if cell_width == 0:
-            previous = column - 1
-            while previous >= 0 and cells[previous] is None:
-                previous -= 1
-            if previous >= 0:
-                cells[previous] = (cells[previous] or "") + character
-            continue
-        if column >= width or column + cell_width > width:
-            break
-        cells[column] = character
-        for continuation in range(1, cell_width):
-            cells[column + continuation] = None
-        column += cell_width
-    return tuple(cells)
+    active_hyperlink: str | None = None
+
+    def append_visible(data: bytes) -> None:
+        nonlocal column
+        plain = _SGR_STYLE_RE.sub(b"", data).decode("utf-8", errors="replace")
+        for character in plain:
+            cell_width = _display_width(character)
+            if cell_width == 0:
+                previous = column - 1
+                while previous >= 0 and cells[previous] is None:
+                    previous -= 1
+                if previous >= 0:
+                    cells[previous] = (cells[previous] or "") + character
+                continue
+            if column >= width or column + cell_width > width:
+                return
+            cells[column] = character
+            hyperlinks[column] = active_hyperlink
+            for continuation in range(1, cell_width):
+                cells[column + continuation] = None
+                hyperlinks[column + continuation] = active_hyperlink
+            column += cell_width
+
+    offset = 0
+    for match in _OSC8_LINK_RE.finditer(line):
+        append_visible(line[offset : match.start()])
+        active_hyperlink = _validated_osc8_url(match.group(1))
+        offset = match.end()
+    append_visible(line[offset:])
+    return tuple(cells), tuple(hyperlinks)
 
 
 _CLICK_TOKEN_RE = re.compile(r"""[^\s<>"'`]+""")
@@ -719,6 +757,31 @@ def click_target_at(
     return None
 
 
+def _pane_rows(
+    source: SelectionSource,
+    *,
+    start: int = 0,
+    end: int | None = None,
+) -> tuple[
+    tuple[tuple[str | None, ...], ...],
+    tuple[tuple[str | None, ...], ...],
+]:
+    """Decode pane-local cells and OSC 8 targets in one bounded pass."""
+    route = source.route
+    if end is None:
+        end = route.height
+    decode_width = source.row_x_offset + route.width
+    decoded_cells: list[tuple[str | None, ...]] = []
+    decoded_hyperlinks: list[tuple[str | None, ...]] = []
+    for index in range(start, min(end, route.height)):
+        line = source.rows[index] if index < len(source.rows) else b""
+        cells, hyperlinks = _plain_display_row(line, decode_width)
+        span = slice(source.row_x_offset, source.row_x_offset + route.width)
+        decoded_cells.append(cells[span])
+        decoded_hyperlinks.append(hyperlinks[span])
+    return tuple(decoded_cells), tuple(decoded_hyperlinks)
+
+
 def _pane_cells(
     source: SelectionSource,
     *,
@@ -726,16 +789,65 @@ def _pane_cells(
     end: int | None = None,
 ) -> tuple[tuple[str | None, ...], ...]:
     """Decode pane-local cells from either full-screen or history rows."""
-    route = source.route
-    if end is None:
-        end = route.height
-    decode_width = source.row_x_offset + route.width
-    decoded: list[tuple[str | None, ...]] = []
-    for index in range(start, min(end, route.height)):
-        line = source.rows[index] if index < len(source.rows) else b""
-        cells = _plain_display_cells(line, decode_width)
-        decoded.append(cells[source.row_x_offset : source.row_x_offset + route.width])
-    return tuple(decoded)
+    return _pane_rows(source, start=start, end=end)[0]
+
+
+def _osc8_target(
+    rows: tuple[tuple[str | None, ...], ...],
+    hyperlinks: tuple[tuple[str | None, ...], ...],
+    row: int,
+    column: int,
+    *,
+    route: HistorySnapshot,
+) -> ClickTarget | None:
+    """Resolve one exact OSC 8 target without reconstructing its label."""
+    if not (0 <= row < len(rows) and 0 <= row < len(hyperlinks)):
+        return None
+    if not 0 <= column < len(hyperlinks[row]):
+        return None
+    value = hyperlinks[row][column]
+    if value is None:
+        return None
+
+    segments: list[SelectionSegment] = []
+    first = row
+    while first > 0 and value in hyperlinks[first - 1]:
+        first -= 1
+    last = row
+    while last + 1 < len(hyperlinks) and value in hyperlinks[last + 1]:
+        last += 1
+    for row_index in range(first, last + 1):
+        link_row = hyperlinks[row_index]
+        cell_row = rows[row_index]
+        run_start: int | None = None
+        for cell_index in range(len(link_row) + 1):
+            linked = cell_index < len(link_row) and link_row[cell_index] == value
+            if linked and run_start is None:
+                run_start = cell_index
+            if not linked and run_start is not None:
+                text = "".join(
+                    cell or "" for cell in cell_row[run_start:cell_index]
+                ).encode("utf-8")
+                if text:
+                    segments.append(
+                        (
+                            route.y + row_index,
+                            route.x + run_start,
+                            text,
+                        )
+                    )
+                run_start = None
+    if not segments:
+        return None
+    return ClickTarget(
+        "url",
+        value,
+        route.pane_id or "",
+        highlight_row=segments[0][0],
+        highlight_column=segments[0][1],
+        highlight_text=segments[0][2],
+        highlight_segments=tuple(segments),
+    )
 
 
 def _rows_are_wrapped(
@@ -1124,10 +1236,14 @@ def _target_in_rows(
     column: int,
     *,
     route: HistorySnapshot,
+    hyperlinks: tuple[tuple[str | None, ...], ...] = (),
 ) -> ClickTarget | None:
     """Resolve a semantic target across one bounded visual-wrap chain."""
     if not 0 <= row < len(rows) or route.width <= 0:
         return None
+    exact = _osc8_target(rows, hyperlinks, row, column, route=route)
+    if exact is not None:
+        return exact
     decorated = _decorated_tool_target(
         rows,
         row,
@@ -1200,6 +1316,7 @@ class LocalTextSelection:
         self._press: SgrMouseEvent | None = None
         self._route: HistorySnapshot | None = None
         self._rows: tuple[tuple[str | None, ...], ...] = ()
+        self._hyperlinks: tuple[tuple[str | None, ...], ...] = ()
         self._anchor: tuple[int, int] | None = None
         self._head: tuple[int, int] | None = None
         self._active = False
@@ -1221,6 +1338,7 @@ class LocalTextSelection:
         self._press = None
         self._route = None
         self._rows = ()
+        self._hyperlinks = ()
         self._anchor = None
         self._head = None
         self._active = False
@@ -1240,8 +1358,9 @@ class LocalTextSelection:
             return None
         start = max(0, row - 7)
         end = min(source.route.height, row + 8)
+        rows, hyperlinks = _pane_rows(source, start=start, end=end)
         return _target_in_rows(
-            _pane_cells(source, start=start, end=end),
+            rows,
             row - start,
             column,
             route=replace(
@@ -1249,6 +1368,7 @@ class LocalTextSelection:
                 y=source.route.y + start,
                 height=end - start,
             ),
+            hyperlinks=hyperlinks,
         )
 
     def hover(
@@ -1352,7 +1472,7 @@ class LocalTextSelection:
         route = source.route
         self._press = event
         self._route = route
-        self._rows = _pane_cells(source)
+        self._rows, self._hyperlinks = _pane_rows(source)
         self._anchor = self._point(event, route)
         self._head = self._anchor
         self._active = False
@@ -1385,6 +1505,7 @@ class LocalTextSelection:
                             self._anchor[1],
                             self._anchor[0],
                             route=self._route,
+                            hyperlinks=self._hyperlinks,
                         )
                         if (
                             self._semantic_open

@@ -717,6 +717,66 @@ def test_local_text_selection_joins_url_across_codex_ran_decoration():
         assert action.open_target.value == expected
 
 
+def test_local_text_selection_uses_exact_osc8_target_across_table_rows():
+    target = "https://jirasw.nvidia.com/browse/TRT-28431"
+
+    def linked(label: str) -> bytes:
+        return (
+            b"\033]8;;"
+            + target.encode()
+            + b"\033\\"
+            + label.encode()
+            + b"\033]8;;\033\\"
+        )
+
+    visible = ("TRT-28431", "https://", "jirasw.nvidia.co", "m/browse/TRT-28431")
+    width = max(len(value) for value in visible)
+    route = HistorySnapshot(1, "%8", 7, 3, width, len(visible))
+    source = SelectionSource(
+        route,
+        tuple(linked(value) for value in visible),
+        0,
+    )
+
+    for row, label in enumerate(visible):
+        selection = LocalTextSelection()
+        event_row = route.y + row + 1
+        selection.pointer_event(
+            SgrMouseEvent(b"down", 0, route.x + 2, event_row, True),
+            source,
+        )
+        action = selection.pointer_event(
+            SgrMouseEvent(b"up", 0, route.x + 2, event_row, False),
+            source,
+        )
+        assert action.open_target is not None, label
+        assert action.open_target.kind == "url"
+        assert action.open_target.value == target
+        assert action.open_target.highlight_segments == tuple(
+            (route.y + index, route.x, value.encode())
+            for index, value in enumerate(visible)
+        )
+
+
+def test_local_text_selection_does_not_trust_non_http_osc8_target():
+    route = HistorySnapshot(1, "%8", 0, 0, 24, 1)
+    source = SelectionSource(
+        route,
+        (b"\033]8;;file:///tmp/report\033\\open report\033]8;;\033\\",),
+        0,
+    )
+    selection = LocalTextSelection()
+
+    selection.pointer_event(SgrMouseEvent(b"down", 0, 2, 1, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, 2, 1, False),
+        source,
+    )
+
+    assert action.open_target is None
+    assert action.replay_events
+
+
 def test_local_text_selection_joins_path_across_codex_ran_decoration():
     first = "• Ran /tmp/railmux-published-0.4.1.dev1-"
     second = "  │ 20260816/bin/pip --isolated"

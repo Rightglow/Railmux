@@ -80,6 +80,7 @@ from railmux.fast_display_protocol import (
 )
 from railmux.fast_display_history import HistoryCaptureJob, HistoryCaptureWorker
 from railmux.terminal_screen import (
+    HyperlinkTrackingStream,
     Osc52ClipboardDecoder as _Osc52ClipboardDecoder,
     ScreenState as _ScreenState,
     build_screen_update,
@@ -1226,7 +1227,7 @@ def _render_history_lines(
     result independently paintable for the local history overlay.
     """
     screen = pyte.Screen(width, 1)
-    stream = pyte.ByteStream(screen)
+    stream = HyperlinkTrackingStream(screen, pyte.ByteStream(screen))
     rendered: list[bytes] = []
     for line in lines:
         screen.buffer[0].clear()
@@ -2206,7 +2207,7 @@ def _serve_attached(
     master_fd: int,
 ) -> int:
     screen = pyte.DiffScreen(width, height)
-    stream = pyte.ByteStream(screen)
+    stream = HyperlinkTrackingStream(screen, pyte.ByteStream(screen))
     input_decoder = InputFrameDecoder()
     stdin_fd = sys.stdin.buffer.fileno()
     stdout_fd = sys.stdout.buffer.fileno()

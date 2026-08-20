@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 from types import SimpleNamespace
+from typing import NamedTuple
+from urllib.parse import urlsplit
 
 from railmux.fast_display_protocol import (
     MAX_CLIPBOARD_BYTES,
@@ -65,6 +67,121 @@ _ANSI_BG = {
 }
 _OSC52_PREFIX = b"\033]52;"
 _OSC52_MAX_ENCODED = ((MAX_CLIPBOARD_BYTES + 2) // 3) * 4
+_OSC8_PREFIX = b"\033]8;"
+_OSC8_MAX_BYTES = 16 * 1024
+_MAX_SCREEN_HYPERLINKS = 256
+
+
+class _HyperlinkChar(NamedTuple):
+    """A pyte-compatible cell with one bounded OSC 8 target."""
+
+    data: str
+    fg: str = "default"
+    bg: str = "default"
+    bold: bool = False
+    italics: bool = False
+    underscore: bool = False
+    strikethrough: bool = False
+    reverse: bool = False
+    blink: bool = False
+    hyperlink: str | None = None
+
+
+def _hyperlink_char(char: object, hyperlink: str | None) -> _HyperlinkChar:
+    return _HyperlinkChar(
+        data=char.data,
+        fg=char.fg,
+        bg=char.bg,
+        bold=char.bold,
+        italics=char.italics,
+        underscore=char.underscore,
+        strikethrough=char.strikethrough,
+        reverse=char.reverse,
+        blink=char.blink,
+        hyperlink=hyperlink,
+    )
+
+
+def _safe_hyperlink(value: bytes) -> str | None:
+    if not value or len(value) > 8192:
+        return None
+    try:
+        decoded = value.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if any(ord(character) < 0x20 or character == "\x7f" for character in decoded):
+        return None
+    try:
+        parsed = urlsplit(decoded)
+        hostname = parsed.hostname
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in ("http", "https") or hostname is None:
+        return None
+    return decoded
+
+
+class HyperlinkTrackingStream:
+    """Preserve bounded HTTP(S) OSC 8 targets in pyte screen cells.
+
+    pyte intentionally ignores OSC 8.  Railmux needs the target independently
+    from its often-wrapped display label, so this wrapper consumes only OSC 8,
+    updates the extended screen's cell attribute, and passes every other byte
+    through unchanged.  The parser is incremental and bounded because PTY
+    reads may split either terminator.
+    """
+
+    def __init__(self, screen: object, stream: object) -> None:
+        self.screen = screen
+        self.stream = stream
+        self._buffer = bytearray()
+
+    def _feed_visible(self, data: bytes) -> None:
+        if data:
+            self.stream.feed(data)
+
+    def feed(self, data: bytes) -> None:
+        if not data:
+            return
+        self._buffer.extend(data)
+        while self._buffer:
+            start = self._buffer.find(_OSC8_PREFIX)
+            if start < 0:
+                keep = 0
+                maximum = min(len(self._buffer), len(_OSC8_PREFIX) - 1)
+                for length in range(maximum, 0, -1):
+                    if _OSC8_PREFIX.startswith(self._buffer[-length:]):
+                        keep = length
+                        break
+                visible_end = len(self._buffer) - keep
+                self._feed_visible(bytes(self._buffer[:visible_end]))
+                del self._buffer[:visible_end]
+                return
+            if start:
+                self._feed_visible(bytes(self._buffer[:start]))
+                del self._buffer[:start]
+            bel = self._buffer.find(b"\007", len(_OSC8_PREFIX))
+            st = self._buffer.find(b"\033\\", len(_OSC8_PREFIX))
+            endings = tuple(
+                (position, length)
+                for position, length in ((bel, 1), (st, 2))
+                if position >= 0
+            )
+            if not endings:
+                if len(self._buffer) <= _OSC8_MAX_BYTES:
+                    return
+                # An unterminated lookalike is ordinary terminal output. Feed
+                # one byte and resume scanning without retaining an unbounded
+                # attacker-controlled prefix.
+                self._feed_visible(bytes(self._buffer[:1]))
+                del self._buffer[:1]
+                continue
+            end, terminator_length = min(endings)
+            body = bytes(self._buffer[len(_OSC8_PREFIX) : end])
+            del self._buffer[: end + terminator_length]
+            _params, separator, target = body.partition(b";")
+            hyperlink = _safe_hyperlink(target) if separator else None
+            self.screen.set_hyperlink(hyperlink)
 
 
 class Osc52ClipboardDecoder:
@@ -123,9 +240,29 @@ class _ExtendedScreenMixin:
     _last_graphic_character = ""
     _character_width = staticmethod(lambda _character: 1)
 
+    @property
+    def default_char(self) -> _HyperlinkChar:
+        return _hyperlink_char(super().default_char, None)
+
     def reset(self) -> None:
         self._last_graphic_character = ""
+        self._active_hyperlink: str | None = None
+        self._known_hyperlinks: dict[str, str] = {}
         super().reset()
+        self.cursor.attrs = _hyperlink_char(self.cursor.attrs, None)
+
+    def set_hyperlink(self, hyperlink: str | None) -> None:
+        if hyperlink is not None:
+            known = self._known_hyperlinks.get(hyperlink)
+            if known is None:
+                if len(self._known_hyperlinks) >= _MAX_SCREEN_HYPERLINKS:
+                    hyperlink = None
+                else:
+                    self._known_hyperlinks[hyperlink] = hyperlink
+            else:
+                hyperlink = known
+        self._active_hyperlink = hyperlink
+        self.cursor.attrs = _hyperlink_char(self.cursor.attrs, hyperlink)
 
     def draw(self, data: str) -> None:
         super().draw(data)
@@ -174,6 +311,10 @@ class _ExtendedScreenMixin:
     def select_graphic_rendition(self, *attrs: int) -> None:
         """Retain 256-colour indices instead of baking in pyte's palette."""
         super().select_graphic_rendition(*attrs)
+        self.cursor.attrs = _hyperlink_char(
+            self.cursor.attrs,
+            self._active_hyperlink,
+        )
         values = list(attrs)
         indexed: dict[str, int] = {}
         index = 0
@@ -208,6 +349,14 @@ class _ExtendedScreenMixin:
             self.cursor.attrs = self.cursor.attrs._replace(
                 **{key: f"ansi256:{colour}" for key, colour in indexed.items()}
             )
+
+    def restore_cursor(self) -> None:
+        super().restore_cursor()
+        # OSC 8 state is not part of DECSC/DECRC cursor attributes.
+        self.cursor.attrs = _hyperlink_char(
+            self.cursor.attrs,
+            self._active_hyperlink,
+        )
 
 
 @lru_cache(maxsize=4)
@@ -333,6 +482,7 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
     for row_index in range(screen.lines):
         rendered = [b"\033[0m"]
         previous_style: tuple[object, ...] | None = None
+        previous_hyperlink: str | None = None
         row = screen.buffer[row_index]
         rendered_columns = _last_rendered_column(row, screen.columns)
         continuation_cells = 0
@@ -346,6 +496,17 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
                 continuation_cells = 0
                 continuation_data = ""
             char = row[column]
+            hyperlink = getattr(char, "hyperlink", None)
+            if hyperlink != previous_hyperlink:
+                if previous_hyperlink is not None:
+                    rendered.append(b"\033]8;;\033\\")
+                if hyperlink is not None:
+                    rendered.append(
+                        b"\033]8;;"
+                        + hyperlink.encode("utf-8", errors="strict")
+                        + b"\033\\"
+                    )
+                previous_hyperlink = hyperlink
             style = _style_key(char)
             if style != previous_style:
                 rendered.append(_style(char))
@@ -366,6 +527,8 @@ def render_rows(screen: object) -> tuple[bytes, ...]:
                 )
                 continuation_cells = max(0, cell_width - 1)
                 continuation_data = char.data
+        if previous_hyperlink is not None:
+            rendered.append(b"\033]8;;\033\\")
         rendered.append(b"\033[0m")
         rendered_rows.append(b"".join(rendered))
     return tuple(rendered_rows)
@@ -465,7 +628,10 @@ class ScreenProducer:
         self.width = width
         self.height = height
         self.screen = self.pyte.DiffScreen(width, height)
-        self.stream = self.pyte.ByteStream(self.screen)
+        self.stream = HyperlinkTrackingStream(
+            self.screen,
+            self.pyte.ByteStream(self.screen),
+        )
         self._clipboard = Osc52ClipboardDecoder()
         self._clipboard_ready: list[bytes] = []
         self.delivered: ScreenState | None = None

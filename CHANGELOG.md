@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1.dev6] - 2026-08-20
+
+### Fixed
+
+- Preserve bounded HTTP(S) OSC 8 targets through both native-Windows and
+  `railmux ssh` screen/history rendering. Links whose visible labels are split
+  across narrow table rows now hover and open their exact provider-declared
+  destination instead of being misread as incomplete URLs or local paths.
+
 ## [0.4.1.dev5] - 2026-08-19
 
 ### Fixed
@@ -3184,7 +3193,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev5...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev6...HEAD
+[0.4.1.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev5...v0.4.1.dev6
 [0.4.1.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev4...v0.4.1.dev5
 [0.4.1.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev3...v0.4.1.dev4
 [0.4.1.dev3]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev2...v0.4.1.dev3

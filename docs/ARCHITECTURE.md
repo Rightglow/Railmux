@@ -1620,6 +1620,14 @@ remains a separate highlight segment. This prevents an existing directory at
 the end of the first row from winning over the intended file on the next row.
 It does not join adjacent list items, indented prose, or undecorated command
 output.
+Provider-declared OSC 8 HTTP(S) links take precedence over those visible-text
+heuristics. The shared terminal model validates and stores the bounded target
+on its screen cells, and independently paintable rows reopen and close the
+link around each visible fragment. Native Windows, SSH live frames, and SSH
+history therefore keep an exact destination even when a narrow table wraps
+the label into fragments which are not URLs by themselves. Unsupported
+schemes, malformed targets, control bytes, and overlong targets are discarded;
+ordinary visible-text recognition remains the compatibility fallback.
 The server accepts only a currently visible, non-controller agent pane, resolves
 the correct provider pane's current working directory (including
 identity-validated nested transport), and returns only a readable absolute

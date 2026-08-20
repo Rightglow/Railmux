@@ -1900,6 +1900,70 @@ def test_server_renderer_keeps_visible_styled_trailing_blanks():
     assert b";41m   " in rendered
 
 
+def test_terminal_model_preserves_fragmented_http_osc8_targets_in_rows():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(24, 2)
+    stream = fast_display_server.HyperlinkTrackingStream(
+        screen,
+        terminal.ByteStream(screen),
+    )
+    target = b"https://jirasw.nvidia.com/browse/TRT-28431"
+
+    for chunk in (
+        b"\033]8;i",
+        b"d=issue;" + target[:20],
+        target[20:] + b"\033",
+        b"\\TRT-28431\033]8;;\033\\",
+    ):
+        stream.feed(chunk)
+
+    rendered = render_rows(screen)[0]
+    assert b"TRT-28431" in rendered
+    assert b"\033]8;;" + target + b"\033\\" in rendered
+    assert screen.buffer[0][0].hyperlink == target.decode()
+    assert screen.buffer[0][8].hyperlink == target.decode()
+    assert screen.buffer[0][9].hyperlink is None
+
+
+def test_terminal_model_drops_unsafe_or_stale_osc8_targets():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(8, 1)
+    stream = fast_display_server.HyperlinkTrackingStream(
+        screen,
+        terminal.ByteStream(screen),
+    )
+
+    stream.feed(b"\033]8;;https://safe.test\007ok\033]8;;\007")
+    stream.feed(b"\033[1Gplain")
+    stream.feed(b"\033]8;;file:///tmp/nope\007x\033]8;;\007")
+
+    rendered = render_rows(screen)[0]
+    assert b"https://safe.test" not in rendered
+    assert b"file:///tmp/nope" not in rendered
+    assert all(screen.buffer[0][column].hyperlink is None for column in range(6))
+
+
+def test_terminal_model_bounds_distinct_live_osc8_targets():
+    pyte = pytest.importorskip("pyte")
+    terminal = fast_display_server._extended_pyte(pyte)
+    screen = terminal.Screen(300, 1)
+    stream = fast_display_server.HyperlinkTrackingStream(
+        screen,
+        terminal.ByteStream(screen),
+    )
+
+    for index in range(257):
+        stream.feed(
+            f"\033]8;;https://example.test/{index}\007x\033]8;;\007".encode()
+        )
+
+    assert len(screen._known_hyperlinks) == 256
+    assert screen.buffer[0][255].hyperlink == "https://example.test/255"
+    assert screen.buffer[0][256].hyperlink is None
+
+
 def test_server_renderer_collapses_reported_repeated_cjk_physical_cells():
     text = "基本通了，但发现一个真 bug："
     cells = [
