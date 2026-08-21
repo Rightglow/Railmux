@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-21
+
+### Added
+
+- Give native Windows the same bounded, per-pane wheel and Page-key history
+  model as `railmux ssh`. Capture remains asynchronous, live provider output
+  keeps draining behind an immutable viewport, and input/resize/topology
+  changes return safely to live output without entering tmux copy-mode.
+
+### Changed
+
+- Share one history controller, capture queue, Claude policy, and
+  transport-neutral `[interaction].history_lines` / `claude_history` settings
+  between native Windows and `railmux ssh`. Released `[ssh]` spellings remain
+  validated read aliases, and POSIX/WSL local scrolling is unchanged.
+- Make idle tips more actionable by explaining list filtering and row context
+  menus instead of exposing internal Codex thread-selection details.
+
+### Fixed
+
+- Preserve bounded HTTP(S) OSC 8 targets through both native-Windows and
+  `railmux ssh` screen/history rendering. Links whose visible labels are split
+  across narrow table rows now hover and open their exact provider-declared
+  destination instead of being misread as incomplete URLs or local paths.
+- Keep compact phone page switches on one full-window agent pane. Status-bar
+  page clicks now ask the Railmux controller to perform the complete park,
+  zoom, and resume transaction before focus changes, and a swap-restored agent
+  is re-zoomed before the selected page is committed.
+- Keep native-Windows managed wheel history responsive while an ordinary
+  provider content frame is still being written to Windows Terminal. Explicit
+  resize, split, and tool-pane topology transitions remain fail-closed, and a
+  wheel event is still never leaked into tmux copy-mode.
+- Hide the inert Kill action from stopped-session context menus while retaining
+  it for running sessions, and explain when a right-clicked Running row changed
+  or has not published its session details yet.
+- Describe the shared clicked-path preference accurately for both native
+  Windows and `railmux ssh`.
+- Make single-setting and remote resets remove both canonical interaction keys
+  and released SSH aliases, so an older value cannot silently reappear.
+- Recognize URLs and paths split across Codex's decorated `Ran` command rows,
+  while retaining pane-bounded validation and per-row hover highlighting.
+- Keep native-Windows left-drag ownership stable from press through release so
+  a dropped or invalidated selection cannot leak an orphan drag into tmux
+  copy-mode.
+- Bind native-Windows URL/path hit testing to the screen frame that has actually
+  reached the physical terminal. Pane splits, resize, and slow ConPTY writes
+  now fail pointer input closed until matching geometry is visible, preventing
+  stale clicks from targeting Quit, another pane, or tmux copy-mode.
+- Queue local path prompts and status messages behind bounded terminal
+  backpressure, then refresh pane geometry without the pre-split cache after a
+  managed terminal action. A busy writer can no longer leave an invisible
+  prompt owning input.
+
 ## [0.4.1.dev6] - 2026-08-20
 
 ### Fixed
@@ -3193,7 +3246,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev6...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1
 [0.4.1.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev5...v0.4.1.dev6
 [0.4.1.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev4...v0.4.1.dev5
 [0.4.1.dev4]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev3...v0.4.1.dev4

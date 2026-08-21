@@ -871,9 +871,9 @@ Terminal's `WT_SESSION`, and provider-owned `CODEX_HOME` or
 provider integration, not a Railmux environment-variable API.
 
 Remote subcommands use `--remote HOST` as their public destination spelling.
-The released `doctor --ssh HOST` spelling is a hidden compatibility alias only;
-remove it when Railmux 0.4.0 is developed. It must not appear in help or new
-documentation before then.
+The released `doctor --ssh HOST` spelling remains a hidden compatibility alias
+only. It must not appear in help or new documentation, and may be retired only
+as a separately versioned compatibility change.
 
 The three lists use horizontal labelled rules instead of independent boxes, so
 adjacent section borders do not consume duplicate terminal rows. The sidebar is

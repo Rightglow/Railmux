@@ -1,0 +1,4 @@
+interface:
+  display_name: "Railmux Clean"
+  short_description: "Audit and simplify Railmux release surfaces"
+  default_prompt: "Use $railmux-clean to audit Railmux for release-era clutter and propose a safe, evidence-backed cleanup."
