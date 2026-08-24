@@ -1199,7 +1199,7 @@ class LocalHistoryView:
         # preserves the strongest ambiguity check when the live pane did not
         # change while the deeper capture was in flight.
         # KMP keeps this compatibility path linear even for long repeated
-        # captures. Protocol-v16 coordinates normally bypass it, but bounded
+        # captures. Protocol-v17 coordinates normally bypass it, but bounded
         # transcript tails and older peers still require exact content proof.
         prefix = [0] * len(anchor)
         matched = 0
@@ -1273,7 +1273,7 @@ class LocalHistoryView:
         incoming: HistorySnapshot,
         viewport: _HistoryViewport,
     ) -> int | None:
-        """Map a frozen viewport through v16 absolute timeline coordinates."""
+        """Map a frozen viewport through v17 absolute timeline coordinates."""
         previous = viewport.snapshot
         if not cls._has_timeline(previous) or not cls._has_timeline(incoming):
             return None

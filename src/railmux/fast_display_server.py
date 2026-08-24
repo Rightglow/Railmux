@@ -41,6 +41,7 @@ from typing import Callable, Sequence
 
 from railmux import (
     __version__,
+    image_paste,
     local_open,
     restart_state,
     tmux_ctl,
@@ -54,6 +55,7 @@ from railmux.fast_display_protocol import (
     HistorySnapshot,
     InputKind,
     InputFrameDecoder,
+    ImagePasteResult,
     MAX_HISTORY_LINES,
     PathKind,
     PathOpenResult,
@@ -68,12 +70,16 @@ from railmux.fast_display_protocol import (
     decode_claude_history_choice,
     decode_history_prefetch,
     decode_history_request,
+    decode_image_begin,
+    decode_image_chunk,
+    decode_image_identity,
     decode_path_request,
     decode_path_open_request,
     encode_claude_history_policy_result,
     encode_clipboard_copy,
     encode_history_batch,
     encode_history_snapshot,
+    encode_image_paste_result,
     encode_path_result,
     encode_path_open_result,
     encode_update,
@@ -241,7 +247,112 @@ class _PaneGeometry:
     transcript_provider: str | None = None
     claude_history_policy: str = "ask"
     history_generation: int = 0
+    route_generation: int = 0
     canonical_history: bool = False
+
+
+@dataclass
+class _PendingImageUpload:
+    request_id: int
+    pane_id: str
+    generation: int
+    total_bytes: int
+    digest: bytes
+    data: bytearray
+
+    def append(self, offset: int, chunk: bytes) -> bool:
+        if offset != len(self.data) or offset + len(chunk) > self.total_bytes:
+            return False
+        self.data.extend(chunk)
+        return True
+
+
+class _ImageUploadController:
+    """One bounded in-order image transaction for an attached helper."""
+
+    def __init__(self) -> None:
+        self.pending: _PendingImageUpload | None = None
+
+    def begin(self, session_id: str, data: bytes) -> ImagePasteResult | None:
+        request_id, pane_id, generation, total_bytes, digest = decode_image_begin(data)
+        if self.pending is not None:
+            return ImagePasteResult(
+                request_id,
+                False,
+                "warning",
+                "Another image paste is still active",
+            )
+        route_valid = any(
+            generation != 0
+            and pane.pane_id == pane_id
+            and pane.route_generation == generation
+            for pane in _list_agent_panes(session_id, use_cache=False)
+        )
+        if not route_valid:
+            return ImagePasteResult(
+                request_id,
+                False,
+                "warning",
+                "Image paste cancelled because the active agent pane changed",
+            )
+        self.pending = _PendingImageUpload(
+            request_id,
+            pane_id,
+            generation,
+            total_bytes,
+            digest,
+            bytearray(),
+        )
+        return None
+
+    def chunk(self, data: bytes) -> ImagePasteResult | None:
+        request_id, offset, chunk = decode_image_chunk(data)
+        if (
+            self.pending is not None
+            and self.pending.request_id == request_id
+            and self.pending.append(offset, chunk)
+        ):
+            return None
+        if self.pending is not None and self.pending.request_id == request_id:
+            self.pending = None
+        return ImagePasteResult(
+            request_id,
+            False,
+            "error",
+            "Image upload was incomplete or out of order",
+        )
+
+    def cancel(self, data: bytes) -> None:
+        request_id = decode_image_identity(data)
+        if self.pending is not None and self.pending.request_id == request_id:
+            self.pending = None
+
+    def commit(self, session_id: str, data: bytes) -> ImagePasteResult:
+        request_id = decode_image_identity(data)
+        upload = self.pending
+        self.pending = None
+        if (
+            upload is None
+            or upload.request_id != request_id
+            or len(upload.data) != upload.total_bytes
+            or not secrets.compare_digest(
+                hashlib.sha256(upload.data).digest(),
+                upload.digest,
+            )
+        ):
+            return ImagePasteResult(
+                request_id,
+                False,
+                "error",
+                "Image upload did not pass integrity validation",
+            )
+        return paste_image_into_pane(
+            session_id,
+            upload.request_id,
+            upload.pane_id,
+            upload.generation,
+            bytes(upload.data),
+        )
 
 
 @dataclass(frozen=True)
@@ -300,6 +411,21 @@ def _history_generation(marker: str, server_identity: str = "") -> int:
         ).digest(),
         "big",
     )
+
+
+def _route_generation(server_identity: str, pane_id: str) -> int:
+    """Map one tmux server/pane birth identity to a nonzero wire epoch."""
+    if not server_identity.isdigit() or re.fullmatch(r"%[0-9]+", pane_id) is None:
+        return 0
+    value = int.from_bytes(
+        hashlib.blake2b(
+            f"{server_identity}:{pane_id}".encode("ascii"),
+            digest_size=8,
+            person=b"railmux-route",
+        ).digest(),
+        "big",
+    )
+    return value or 1
 
 
 def _tmux_output(*args: str) -> str:
@@ -777,6 +903,12 @@ def _list_agent_panes(
                 transcript_locator = opened[0]
                 os.close(opened[1])
         history_marker = fields[15]
+        route_server_identity = (
+            str(history_server.server_pid)
+            if history_server is not None
+            else fields[17]
+        )
+        route_pane_id = history_pane_id or pane_id
         canonical_history = bool(
             transcript_backed
             and transcript_locator is not None
@@ -811,11 +943,11 @@ def _list_agent_panes(
                     claude_history_policy=claude_history_policy,
                     history_generation=_history_generation(
                         history_marker,
-                        (
-                            str(history_server.server_pid)
-                            if history_server is not None
-                            else fields[17]
-                        ),
+                        route_server_identity,
+                    ),
+                    route_generation=_route_generation(
+                        route_server_identity,
+                        route_pane_id,
                     ),
                     canonical_history=canonical_history,
                 ),
@@ -902,8 +1034,134 @@ def visible_agent_snapshots(
             pane.width,
             pane.height,
             mouse_forwardable=pane.mouse_forwardable,
+            generation=pane.history_generation,
+            route_generation=pane.route_generation,
         )
         for pane in _list_agent_panes(session_id, use_cache=use_cache)
+    )
+
+
+def _paste_provider_path(pane: _PaneGeometry, path: str) -> bool:
+    """Bracket-paste one generated path into an exact provider pane."""
+    if not path or "\x00" in path or "\r" in path or "\n" in path:
+        return False
+    target_pane = pane.history_pane_id or pane.pane_id
+    buffer_name = f"railmux-image-{secrets.token_hex(8)}"
+    argv = (
+        tmux_server.target_argv
+        if pane.history_server is not None
+        else lambda _target, *args: tmux_server.tmux_argv(*args)
+    )
+    target = pane.history_server
+    try:
+        loaded = subprocess.run(
+            argv(target, "load-buffer", "-b", buffer_name, "-"),
+            input=path.encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        if loaded.returncode != 0:
+            return False
+        pasted = subprocess.run(
+            argv(
+                target,
+                "paste-buffer",
+                "-d",
+                "-p",
+                "-b",
+                buffer_name,
+                "-t",
+                target_pane,
+            ),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+            check=False,
+        )
+        return pasted.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    finally:
+        try:
+            subprocess.run(
+                argv(target, "delete-buffer", "-b", buffer_name),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=0.5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+
+def paste_image_into_pane(
+    session_id: str,
+    request_id: int,
+    pane_id: str,
+    generation: int,
+    png_data: bytes,
+) -> ImagePasteResult:
+    """Validate one live route, store its PNG, and paste it without Enter."""
+    if generation == 0:
+        return ImagePasteResult(
+            request_id,
+            False,
+            "warning",
+            "Image paste is waiting for the agent session identity",
+        )
+    pane = next(
+        (
+            candidate
+            for candidate in _list_agent_panes(session_id, use_cache=False)
+            if candidate.pane_id == pane_id
+            and candidate.route_generation == generation
+        ),
+        None,
+    )
+    if pane is None:
+        return ImagePasteResult(
+            request_id,
+            False,
+            "warning",
+            "Image paste cancelled because the active agent pane changed",
+        )
+    try:
+        path = image_paste.store_png(png_data)
+        visible_path = image_paste.provider_path(path)
+    except image_paste.ImagePasteError as exc:
+        return ImagePasteResult(request_id, False, "error", str(exc))
+    # Revalidate after filesystem work so a reused pane identity cannot receive
+    # an attachment selected for an earlier provider generation.
+    current = next(
+        (
+            candidate
+            for candidate in _list_agent_panes(session_id, use_cache=False)
+            if candidate.pane_id == pane_id
+            and candidate.route_generation == generation
+        ),
+        None,
+    )
+    if current is None:
+        return ImagePasteResult(
+            request_id,
+            False,
+            "warning",
+            "Image paste cancelled because the active agent pane changed",
+        )
+    if not _paste_provider_path(current, visible_path):
+        return ImagePasteResult(
+            request_id,
+            False,
+            "error",
+            "Could not paste the image into the active agent",
+        )
+    return ImagePasteResult(
+        request_id,
+        True,
+        "success",
+        "Image pasted into the active agent input",
     )
 
 
@@ -1072,13 +1330,33 @@ class _PathOpenJob:
     column: int | None
 
 
+@dataclass(frozen=True)
+class _ImagePasteJob:
+    session_id: str
+    request_id: int
+    pane_id: str
+    generation: int
+    shortcut: bytes
+
+
+@dataclass(frozen=True)
+class LocalImagePasteResult:
+    """One background Windows clipboard outcome plus fallback key authority."""
+
+    result: ImagePasteResult
+    shortcut: bytes
+    passthrough: bool
+
+
 class PathActionWorker:
-    """Serialize path validation/actions away from a display/PTY loop."""
+    """Serialize slow semantic actions away from a display/PTY loop."""
 
     def __init__(self) -> None:
         self._condition = threading.Condition()
-        self._job: _PathResolveJob | _PathOpenJob | None = None
-        self._result: PathResult | PathOpenResult | None = None
+        self._job: _PathResolveJob | _PathOpenJob | _ImagePasteJob | None = None
+        self._result: (
+            PathResult | PathOpenResult | LocalImagePasteResult | None
+        ) = None
         self._in_flight = False
         self._closed = False
         self._thread = threading.Thread(
@@ -1134,7 +1412,30 @@ class PathActionWorker:
             self._condition.notify()
             return True
 
-    def drain(self) -> tuple[PathResult | PathOpenResult, ...]:
+    def submit_image(
+        self,
+        session_id: str,
+        request_id: int,
+        pane_id: str,
+        generation: int,
+        shortcut: bytes,
+    ) -> bool:
+        with self._condition:
+            if self._busy_unlocked():
+                return False
+            self._job = _ImagePasteJob(
+                session_id,
+                request_id,
+                pane_id,
+                generation,
+                shortcut,
+            )
+            self._condition.notify()
+            return True
+
+    def drain(
+        self,
+    ) -> tuple[PathResult | PathOpenResult | LocalImagePasteResult, ...]:
         with self._condition:
             if self._result is None:
                 return ()
@@ -1181,7 +1482,7 @@ class PathActionWorker:
                         job.pane_id,
                         job.raw_path,
                     )
-                else:
+                elif isinstance(job, _PathOpenJob):
                     result = apply_path_open_request(
                         job.session_id,
                         job.request_id,
@@ -1192,18 +1493,67 @@ class PathActionWorker:
                         job.line,
                         job.column,
                     )
+                else:
+                    try:
+                        image = image_paste.read_clipboard_png()
+                    except image_paste.ImagePasteError as exc:
+                        result = LocalImagePasteResult(
+                            ImagePasteResult(
+                                job.request_id,
+                                False,
+                                "warning",
+                                str(exc),
+                            ),
+                            job.shortcut,
+                            True,
+                        )
+                    else:
+                        if image is None:
+                            result = LocalImagePasteResult(
+                                ImagePasteResult(
+                                    job.request_id,
+                                    False,
+                                    "info",
+                                    "",
+                                ),
+                                job.shortcut,
+                                True,
+                            )
+                        else:
+                            result = LocalImagePasteResult(
+                                paste_image_into_pane(
+                                    job.session_id,
+                                    job.request_id,
+                                    job.pane_id,
+                                    job.generation,
+                                    image.data,
+                                ),
+                                job.shortcut,
+                                False,
+                            )
             except Exception:
                 # A tool-pane command is a presentation operation. Keep an
                 # unexpected subprocess/config failure out of the transport
                 # loop and never turn it into provider or session mutation.
                 if isinstance(job, _PathResolveJob):
                     result = PathResult(job.request_id, PathKind.UNAVAILABLE)
-                else:
+                elif isinstance(job, _PathOpenJob):
                     result = PathOpenResult(
                         job.request_id,
                         False,
                         "error",
                         "Could not complete path opening",
+                    )
+                else:
+                    result = LocalImagePasteResult(
+                        ImagePasteResult(
+                            job.request_id,
+                            False,
+                            "warning",
+                            "Could not read the image clipboard",
+                        ),
+                        job.shortcut,
+                        True,
                     )
             with self._condition:
                 self._in_flight = False
@@ -1566,6 +1916,7 @@ def _capture_pane_history(
             )
         ),
         generation=pane.history_generation,
+        route_generation=pane.route_generation,
         timeline_start=timeline_start,
         timeline_end=timeline_end,
     )
@@ -2227,6 +2578,7 @@ def _serve_attached(
     clipboard_decoder = _Osc52ClipboardDecoder()
     claude_history_override: str | None = None
     claude_history_persisted_at_override: str | None = None
+    image_uploads = _ImageUploadController()
     input_closed = False
     last_input = time.monotonic()
     watchdog = tmux_health.FailureWatchdog.starting(
@@ -2554,6 +2906,46 @@ def _serve_attached(
                                 ),
                                 priority=True,
                             )
+                        continue
+                    if message.kind is InputKind.IMAGE_BEGIN:
+                        try:
+                            result = image_uploads.begin(session_id, message.data)
+                        except ValueError:
+                            continue
+                        if result is not None:
+                            queue_control_packet(
+                                encode_image_paste_result(result),
+                                priority=True,
+                            )
+                        continue
+                    if message.kind is InputKind.IMAGE_CHUNK:
+                        try:
+                            result = image_uploads.chunk(message.data)
+                        except ValueError:
+                            continue
+                        if result is not None:
+                            queue_control_packet(
+                                encode_image_paste_result(result),
+                                priority=True,
+                            )
+                        continue
+                    if message.kind is InputKind.IMAGE_CANCEL:
+                        try:
+                            image_uploads.cancel(message.data)
+                        except ValueError:
+                            continue
+                        continue
+                    if message.kind is InputKind.IMAGE_COMMIT:
+                        try:
+                            result = image_uploads.commit(session_id, message.data)
+                        except ValueError:
+                            continue
+                        queue_control_packet(
+                            encode_image_paste_result(result),
+                            priority=True,
+                        )
+                        continue
+                    if message.kind is not InputKind.BYTES:
                         continue
                     view = memoryview(message.data)
                     while view:

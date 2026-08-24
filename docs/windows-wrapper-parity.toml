@@ -52,6 +52,7 @@ S17 = "delegated-posix"
 S18 = "not-applicable"
 S19 = "delegated-posix"
 S20 = "runtime-bridge"
+S21 = "runtime-bridge"
 
 [limitations]
 rolling_repository = "The base archive is hash-pinned and pacman signatures are checked, but repository package versions are not yet snapshot-pinned."
@@ -133,7 +134,7 @@ evidence = "2026-08-05 dev24 candidate: the Linux client reached the real manage
 
 [[scenarios]]
 id = "WW-RUNTIME-BRIDGES"
-features = ["W07", "W12", "W13", "S03", "S13", "S15", "S16", "S20"]
-automation = ["tests/test_windows_bootstrap.py", "tests/test_config_cli.py", "tests/test_remote_config.py", "tests/test_diagnostics.py", "tests/test_ssh_doctor.py", "tests/test_fast_display_bootstrap.py", "tests/test_fast_display_selection.py"]
-manual = "Validate config, doctor, Ask Railmux, local update ownership, clipboard, browser, separate terminal, and remote config in managed MSYS2."
-evidence = "Dev24 automation forwards every local/remote config and doctor form through the native bootstrap, pins POSIX/direct command families across both config phases, refuses POSIX installation and in-app self-update for managed Windows, emits bounded runtime/launch-family doctor fields, and keeps remote doctor pre-attach/read-only. On the real Windows 10 host, local config opened read-only and exited cleanly, local doctor emitted schema 4 with the exact managed identity, Linux-to-Windows remote doctor emitted schema 3/direct/windows-msys2, and interactive remote config completed both authenticated phases without changing settings. The native Windows client repeated remote doctor and both config phases through localhost OpenSSH. Clipboard/browser/separate-terminal bridges and the PowerShell update handoff remain manual."
+features = ["W07", "W12", "W13", "S03", "S13", "S15", "S16", "S20", "S21"]
+automation = ["tests/test_windows_bootstrap.py", "tests/test_config_cli.py", "tests/test_remote_config.py", "tests/test_diagnostics.py", "tests/test_ssh_doctor.py", "tests/test_fast_display_bootstrap.py", "tests/test_fast_display_selection.py", "tests/test_image_paste.py", "tests/test_fast_display_protocol.py", "tests/test_fast_display_server.py", "tests/test_windows_attach_relay.py"]
+manual = "Validate config, doctor, Ask Railmux, local update ownership, text and image clipboard actions, browser, separate terminal, and remote config in managed MSYS2."
+evidence = "Dev24 automation forwards every local/remote config and doctor form through the native bootstrap, pins POSIX/direct command families across both config phases, refuses POSIX installation and in-app self-update for managed Windows, emits bounded runtime/launch-family doctor fields, and keeps remote doctor pre-attach/read-only. On the real Windows 10 host, local config opened read-only and exited cleanly, local doctor emitted schema 4 with the exact managed identity, Linux-to-Windows remote doctor emitted schema 3/direct/windows-msys2, and interactive remote config completed both authenticated phases without changing settings. The native Windows client repeated remote doctor and both config phases through localhost OpenSSH. 0.4.2.dev1 automation validates PNG structure, CRC, dimensions, size, generated private storage, protocol v17 chunking and result framing, non-shell clipboard readers, exact pane-generation rejection, bracketed tmux buffer paste, and unchanged shortcut forwarding when no image exists. Real native-Windows and Windows-origin SSH image clipboard receipt remain manual."

@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,6 +18,7 @@ from railmux.config import Config
 from railmux.fast_display_history import HistoryCaptureJob, HistoryCaptureWorker
 from railmux.fast_display_protocol import (
     HistorySnapshot,
+    InputFrameDecoder,
     PROTOCOL_VERSION,
     REMOTE_CONFIG_PROTOCOL,
     REMOTE_ATTACH_BUSY,
@@ -24,6 +26,9 @@ from railmux.fast_display_protocol import (
     ServerMessageDecoder,
     TerminalMode,
     encode_history_snapshot,
+    encode_image_begin,
+    encode_image_chunk,
+    encode_image_commit,
 )
 from railmux.fast_display_server import parse_args as parse_server_args
 from railmux.fast_display_server import render_rows
@@ -40,6 +45,121 @@ def test_remote_server_has_no_bare_tmux_server_argv():
 
     assert '["tmux",' not in source
     assert "['tmux'," not in source
+
+
+def test_image_paste_revalidates_generation_and_bracket_pastes_generated_path(
+    monkeypatch,
+    tmp_path,
+):
+    pane = fast_display_server._PaneGeometry(
+        "%7",
+        1,
+        1,
+        80,
+        24,
+        history_generation=55,
+        route_generation=55,
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_list_agent_panes",
+        lambda _session, **_kwargs: (pane,),
+    )
+    stored = tmp_path / "railmux-image.png"
+    pasted = []
+    monkeypatch.setattr(
+        fast_display_server.image_paste,
+        "store_png",
+        lambda data: stored if data == b"png" else None,
+    )
+    monkeypatch.setattr(
+        fast_display_server.image_paste,
+        "provider_path",
+        lambda path: f"provider:{path}",
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_paste_provider_path",
+        lambda route, path: pasted.append((route, path)) or True,
+    )
+
+    result = fast_display_server.paste_image_into_pane(
+        "railmux", 9, "%7", 55, b"png"
+    )
+
+    assert result.applied is True
+    assert pasted == [(pane, f"provider:{stored}")]
+
+
+def test_image_upload_controller_requires_order_and_integrity(monkeypatch):
+    pane = fast_display_server._PaneGeometry(
+        "%7", 1, 1, 80, 24, history_generation=55, route_generation=55
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_list_agent_panes",
+        lambda _session, **_kwargs: (pane,),
+    )
+    payload = b"complete-png-payload" * 5
+    digest = fast_display_server.hashlib.sha256(payload).digest()
+    decoder = InputFrameDecoder()
+    begin = decoder.feed(encode_image_begin(4, "%7", 55, len(payload), digest))[0]
+    first = decoder.feed(encode_image_chunk(4, 0, payload[:8]))[0]
+    second = decoder.feed(encode_image_chunk(4, 8, payload[8:]))[0]
+    commit = decoder.feed(encode_image_commit(4))[0]
+    applied = fast_display_server.ImagePasteResult(4, True, "success", "done")
+    paste = MagicMock(return_value=applied)
+    monkeypatch.setattr(fast_display_server, "paste_image_into_pane", paste)
+    controller = fast_display_server._ImageUploadController()
+
+    assert controller.begin("railmux", begin.data) is None
+    assert controller.chunk(first.data) is None
+    assert controller.chunk(second.data) is None
+    assert controller.commit("railmux", commit.data) == applied
+    paste.assert_called_once_with("railmux", 4, "%7", 55, payload)
+
+    controller = fast_display_server._ImageUploadController()
+    assert controller.begin("railmux", begin.data) is None
+    rejected = controller.chunk(second.data)
+    assert rejected is not None and rejected.applied is False
+    assert controller.pending is None
+
+
+def test_image_paste_rejects_stale_route_before_writing(monkeypatch):
+    store = MagicMock()
+    monkeypatch.setattr(fast_display_server, "_list_agent_panes", lambda *_a, **_k: ())
+    monkeypatch.setattr(fast_display_server.image_paste, "store_png", store)
+
+    result = fast_display_server.paste_image_into_pane(
+        "railmux", 9, "%7", 55, b"png"
+    )
+
+    assert result.applied is False
+    assert result.level == "warning"
+    store.assert_not_called()
+
+
+def test_provider_image_path_uses_named_bracketed_tmux_buffer(monkeypatch):
+    pane = fast_display_server._PaneGeometry("%7", 1, 1, 80, 24)
+    calls = []
+    monkeypatch.setattr(
+        fast_display_server.tmux_server,
+        "tmux_argv",
+        lambda *argv: ["tmux", *argv],
+    )
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(fast_display_server.subprocess, "run", run)
+
+    assert fast_display_server._paste_provider_path(pane, "/tmp/image.png")
+    assert calls[0][0][1] == "load-buffer"
+    assert calls[0][1]["input"] == b"/tmp/image.png"
+    assert "-p" in calls[1][0]
+    assert calls[1][0][-2:] == ["-t", "%7"]
+    assert calls[2][0][1] == "delete-buffer"
 
 
 def test_history_worker_keeps_capture_off_caller_and_signals_result(monkeypatch):
@@ -880,7 +1000,13 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
         "$4", 40, 5, claude_history_policy="ask"
     )
     assert pane == fast_display_server._PaneGeometry(
-        "%8", 31, 0, 49, 20, mouse_forwardable=True
+        "%8",
+        31,
+        0,
+        49,
+        20,
+        mouse_forwardable=True,
+        route_generation=fast_display_server._route_generation("9001", "%8"),
     )
     assert len(calls) == 2
 
@@ -1093,7 +1219,18 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
         (
             "$4 @1 1 0 %1 101 0 0 30 20 0 0 0     9001 %1\n"
             "$4 @1 1 1 %8 108 0 0 80 24 0 0 0     9001 %1\n",
-            (fast_display_server._PaneGeometry("%8", 0, 0, 80, 24),),
+            (
+                fast_display_server._PaneGeometry(
+                    "%8",
+                    0,
+                    0,
+                    80,
+                    24,
+                    route_generation=fast_display_server._route_generation(
+                        "9001", "%8"
+                    ),
+                ),
+            ),
         ),
         (
             "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1\n"
@@ -1131,7 +1268,17 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
     )
 
     assert fast_display_server._list_agent_panes("$4", claude_history_policy="ask") == (
-        fast_display_server._PaneGeometry("%8", 31, 0, 49, 20, target, "%2", True),
+        fast_display_server._PaneGeometry(
+            "%8",
+            31,
+            0,
+            49,
+            20,
+            target,
+            "%2",
+            True,
+            route_generation=fast_display_server._route_generation("44", "%2"),
+        ),
     )
 
 

@@ -417,6 +417,36 @@ panes that did. The transport restores the local mode on every cooked prompt
 and exit path. Outside that exact boundary, the ordinary local escape, history,
 pointer, and focus routes remain authoritative.
 
+Clipboard-image paste is a separate explicit input transaction shared by the
+SSH client and native-Windows semantic proxy. Ctrl+V and Alt+V remain ordinary
+provider bytes unless the initiating machine can read a PNG image and the
+visible cursor resolves to a current non-controller agent route. A successful
+read freezes that pane ID plus its opaque tmux server/pane generation; a route change,
+pane reuse, malformed image, missing image reader, or unsupported clipboard
+fails closed without guessing another target. Text and bracketed-text paste
+remain on their established byte-exact paths.
+
+Protocol v17 transfers at most one 16 MiB PNG per helper in bounded 48 KiB
+chunks. The local writer is nonblocking and keeps display, heartbeat, history,
+and terminal input progress independent from SSH upload backpressure. Provider
+input typed while the upload is active is bounded and released only after the
+server reports the paste result, preserving input order. The server validates
+declared size, contiguous offsets, SHA-256, PNG chunks/CRC/dimensions, and the
+exact pane generation both before and after storage. It writes only generated
+0600 files below a private 0700 Railmux image directory, prunes only names it
+owns, and never accepts a client-supplied path. Finally it uses a named tmux
+buffer with bracketed paste and no Enter. Codex therefore applies its native
+pasted-image-path attachment behavior, while Claude Code receives its
+documented image-path input. Reconnect abandons an incomplete transfer without
+touching provider session data.
+
+Native Windows runs clipboard capture and the same validated server-side paste
+operation on its existing serialized semantic-action worker, never on the PTY
+read/paint loop. A bounded input queue preserves provider ordering until that
+explicit action finishes. No-image and clipboard-reader failures replay the
+original shortcut before the queued bytes; a recognized image consumes the
+shortcut even when later route validation refuses it.
+
 ### Transport-managed local history and rewind generations
 
 `LocalHistoryView` is a transport-neutral history controller. The SSH client
@@ -474,7 +504,7 @@ An explicit resize, split, tool action, or other topology transition raises a
 new presentation requirement and keeps pointer routing fail-closed until the
 matching newer frame is physically visible.
 Native Claude, local transcript, and
-undecided history are separate sources and are never merged. Protocol v16
+undecided history are separate sources and are never merged. Protocol v17
 carries both the opaque pane-local Codex history generation and, whenever the
 complete source extent is known, an absolute half-open row range. A changed non-content
 generation replaces that pane's cached timeline instead of merging across a
@@ -672,7 +702,7 @@ attach prompts remain cooked-mode interactions.
 
 ### SSH attach contention and helper leases
 
-Protocol v16 reports a second bounded status after the attach boundary and
+Protocol v17 reports a second bounded status after the attach boundary and
 before the first binary display frame. Current helpers may coexist: a flock
 serializes only immutable-session validation plus exact child-PID attach, and
 is released before display service begins. Every helper sends heartbeats; 45
@@ -1640,7 +1670,7 @@ shell-quoted command instead. Clean clicks in an unfocused agent continue to
 mean focus, and drags continue to mean selection, so semantic recognition
 cannot replace either established gesture.
 
-Protocol v16 separates remote path validation from the requested destination.
+Protocol v17 separates remote path validation from the requested destination.
 Native Windows follows the same two-phase validation locally. The
 first response includes the remote workspace's Ask/Inside/Separate policy; an
 Inside or Separate choice is returned in a bounded typed request and the

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import os
 import re
 import select
@@ -22,12 +23,13 @@ import sys
 import termios
 import time
 import tty
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import BinaryIO, Optional, Sequence
 
-from railmux import __version__, local_clipboard, local_open
+from railmux import __version__, image_paste, local_clipboard, local_open
 from railmux.config import (
     ConfigError,
     load_config,
@@ -59,6 +61,8 @@ from railmux.fast_display_protocol import (
     ClaudeHistoryPolicyResult,
     HistoryBatch,
     HistorySnapshot,
+    ImagePasteResult,
+    MAX_IMAGE_CHUNK_BYTES,
     PathKind,
     PathOpenResult,
     PathResult,
@@ -74,6 +78,9 @@ from railmux.fast_display_protocol import (
     encode_heartbeat,
     encode_claude_history_policy,
     encode_input,
+    encode_image_begin,
+    encode_image_chunk,
+    encode_image_commit,
     encode_keyframe_request,
     encode_path_request,
     encode_path_open_request,
@@ -120,9 +127,108 @@ _WINDOWS_HISTORY_WHEEL_LINES = 3
 _SELECTION_HIGHLIGHT_SECONDS = 2.0
 _CLICK_FLASH_SECONDS = 0.18
 _PATH_OPEN_TIMEOUT = 5.0
+_IMAGE_WRITER_LOW_WATER = 96 * 1024
+_PROTOCOL_WRITER_MAX_BYTES = 512 * 1024
+_IMAGE_BUFFERED_INPUT_LIMIT = 64 * 1024
 _TERMUX_TOUCH_HINT = "Tap the prompt again to open the keyboard"
 _REMOTE_ATTACH_TIMEOUT = 30.0
 _REMOTE_INSTALL_TIMEOUT = 300.0
+
+
+class _OutboundProtocolWriter:
+    """Nonblocking ordered writes so image upload cannot stall rendering."""
+
+    def __init__(self, stream: BinaryIO) -> None:
+        self._queue: deque[bytes] = deque()
+        self._offset = 0
+        self._pending_bytes = 0
+        self._fd = -1
+        self.failed = False
+        self.replace(stream)
+
+    @property
+    def pending_bytes(self) -> int:
+        return self._pending_bytes
+
+    def replace(self, stream: BinaryIO) -> None:
+        self._queue.clear()
+        self._offset = 0
+        self._pending_bytes = 0
+        self._fd = stream.fileno()
+        self.failed = False
+        os.set_blocking(self._fd, False)
+
+    def enqueue(self, frame: bytes) -> None:
+        if not frame or self.failed:
+            return
+        if self._pending_bytes + len(frame) > _PROTOCOL_WRITER_MAX_BYTES:
+            self.failed = True
+            return
+        self._queue.append(frame)
+        self._pending_bytes += len(frame)
+
+    def flush(self, budget: int = 256 * 1024) -> None:
+        written_total = 0
+        while self._queue and written_total < budget and not self.failed:
+            frame = self._queue[0]
+            try:
+                written = os.write(self._fd, frame[self._offset :])
+            except BlockingIOError:
+                return
+            except OSError as exc:
+                if exc.errno in (errno.EPIPE, errno.EBADF):
+                    self.failed = True
+                    return
+                raise
+            if written <= 0:
+                return
+            written_total += written
+            self._pending_bytes -= written
+            self._offset += written
+            if self._offset == len(frame):
+                self._queue.popleft()
+                self._offset = 0
+
+
+@dataclass
+class _ClientImageUpload:
+    request_id: int
+    pane_id: str
+    generation: int
+    image: image_paste.ClipboardImage
+    offset: int = 0
+    begun: bool = False
+    committed: bool = False
+
+    def pump(self, writer: _OutboundProtocolWriter) -> None:
+        if self.committed:
+            return
+        if not self.begun:
+            writer.enqueue(
+                encode_image_begin(
+                    self.request_id,
+                    self.pane_id,
+                    self.generation,
+                    len(self.image.data),
+                    self.image.digest,
+                )
+            )
+            self.begun = True
+        while (
+            self.offset < len(self.image.data)
+            and writer.pending_bytes < _IMAGE_WRITER_LOW_WATER
+        ):
+            chunk = self.image.data[
+                self.offset : self.offset + MAX_IMAGE_CHUNK_BYTES
+            ]
+            writer.enqueue(encode_image_chunk(self.request_id, self.offset, chunk))
+            self.offset += len(chunk)
+        if (
+            self.offset == len(self.image.data)
+            and writer.pending_bytes < _IMAGE_WRITER_LOW_WATER
+        ):
+            writer.enqueue(encode_image_commit(self.request_id))
+            self.committed = True
 _FIRST_FRAME_TIMEOUT = 30.0
 _REMOTE_ATTACH_RETRY_DELAY = 0.2
 _HEARTBEAT_INTERVAL = 5.0
@@ -1031,7 +1137,7 @@ class TerminalSurface:
         self,
         requested: TerminalMode,
     ) -> TerminalMode:
-        """Mirror only input-affecting modes explicitly carried by protocol v16."""
+        """Mirror only input-affecting modes explicitly carried by protocol v17."""
         disabled = self.terminal_modes & ~requested
         enabled = requested & ~self.terminal_modes
         controls: list[bytes] = []
@@ -1935,7 +2041,7 @@ def _finish_remote_attach(
         raise ProbeError("remote display helper failed before attaching")
 
     _stop_unstarted_remote(process)
-    # A current v16 helper holds the mutex only while registering its exact tmux
+    # A current v17 helper holds the mutex only while registering its exact tmux
     # child. Give that ordinary race one fresh SSH process before presenting
     # the explicit legacy-lock takeover choice.
     time.sleep(_REMOTE_ATTACH_RETRY_DELAY)
@@ -2442,16 +2548,83 @@ def run(args: argparse.Namespace) -> int:
     path_open_prompt_mouse_button: int | None = None
     local_status_mouse_button: int | None = None
     periodic_prefetch = PeriodicPrefetchGate()
+    protocol_writer = _OutboundProtocolWriter(process.stdin)
+    image_request_id = 0
+    image_upload: _ClientImageUpload | None = None
+    image_buffered_input: list[bytes] = []
+    image_buffered_bytes = 0
 
     def send_protocol_frame(frame: bytes) -> None:
         nonlocal remote_closed
         if remote_closed:
             return
-        try:
-            process.stdin.write(frame)
-            process.stdin.flush()
-        except BrokenPipeError:
+        protocol_writer.enqueue(frame)
+        if protocol_writer.failed:
             remote_closed = True
+
+    def begin_image_paste() -> bool:
+        nonlocal image_request_id, image_upload, history_info_until
+        if image_upload is not None:
+            surface.show_local_status(
+                "Another image paste is still uploading",
+                level="warning",
+            )
+            history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
+            return True
+        if latest_screen is None:
+            return False
+        pane_id = history.pane_id_at_position(
+            latest_screen.cursor_x,
+            latest_screen.cursor_y,
+        )
+        route = next(
+            (
+                candidate
+                for candidate in history.visible_routes
+                if candidate.pane_id == pane_id
+            ),
+            None,
+        )
+        if route is None or route.route_generation == 0:
+            return False
+        try:
+            image = image_paste.read_clipboard_png()
+        except image_paste.ImagePasteError as exc:
+            surface.show_local_status(str(exc), level="warning")
+            history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
+            return False
+        if image is None:
+            return False
+        image_request_id = (image_request_id + 1) & 0xFFFFFFFF
+        if image_request_id == 0:
+            image_request_id = 1
+        image_upload = _ClientImageUpload(
+            image_request_id,
+            route.pane_id,
+            route.route_generation,
+            image,
+        )
+        size_mib = len(image.data) / (1024 * 1024)
+        surface.show_local_status(
+            f"Uploading {image.width}×{image.height} image ({size_mib:.1f} MiB)…"
+        )
+        history_info_until = None
+        return True
+
+    def buffer_provider_input(data: bytes) -> bool:
+        nonlocal image_buffered_bytes, history_info_until
+        if image_upload is None:
+            return False
+        if image_buffered_bytes + len(data) > _IMAGE_BUFFERED_INPUT_LIMIT:
+            surface.show_local_status(
+                "Image upload is still finishing; additional input was not sent",
+                level="warning",
+            )
+            history_info_until = time.monotonic() + _HISTORY_INFO_SECONDS
+            return True
+        image_buffered_input.append(data)
+        image_buffered_bytes += len(data)
+        return True
 
     def show_open_result(result: local_open.OpenResult) -> None:
         nonlocal history_info_until
@@ -2881,6 +3054,16 @@ def run(args: argparse.Namespace) -> int:
             return
         if not part:
             return
+        if not opaque_paste and isinstance(part, bytes):
+            image_parts = image_paste.split_shortcuts(part)
+            if len(image_parts) > 1:
+                for image_part in image_parts:
+                    handle_terminal_part(image_part, input_batch)
+                return
+            if part in image_paste.IMAGE_PASTE_KEYS and begin_image_paste():
+                restore = history.cancel()
+                apply_history_action(HistoryAction(restore_live=restore))
+                return
         if not opaque_paste and touch_keyboard.consumes_focus_out(part):
             # Opening Android's input view can briefly remove focus from the
             # terminal View even though the user is still interacting with
@@ -2965,7 +3148,8 @@ def run(args: argparse.Namespace) -> int:
             # types. Reassert only the cached cursor on Termux focus-in; the
             # remote focus event remains authoritative and is still forwarded.
             surface.reassert_cursor()
-        send_protocol_frame(encode_input(part))
+        if not buffer_provider_input(part):
+            send_protocol_frame(encode_input(part))
 
     surface.show_local_status(
         "Ctrl-] disconnects · Ctrl-B d detaches · "
@@ -2982,6 +3166,11 @@ def run(args: argparse.Namespace) -> int:
             ) as windows_interrupts,
         ):
             while True:
+                if image_upload is not None:
+                    image_upload.pump(protocol_writer)
+                protocol_writer.flush()
+                if protocol_writer.failed:
+                    remote_closed = True
                 pending_interrupts = windows_interrupts.consume()
                 if pending_interrupts:
                     input_batch = _LocalInputBatch(history_paint)
@@ -3166,6 +3355,25 @@ def run(args: argparse.Namespace) -> int:
                                         time.monotonic() + _HISTORY_INFO_SECONDS
                                     )
                                 continue
+                            if isinstance(message, ImagePasteResult):
+                                if (
+                                    image_upload is None
+                                    or message.request_id != image_upload.request_id
+                                ):
+                                    continue
+                                image_upload = None
+                                surface.show_local_status(
+                                    message.message,
+                                    level=message.level,
+                                )
+                                history_info_until = (
+                                    time.monotonic() + _HISTORY_INFO_SECONDS
+                                )
+                                for buffered in image_buffered_input:
+                                    send_protocol_frame(encode_input(buffered))
+                                image_buffered_input.clear()
+                                image_buffered_bytes = 0
+                                continue
                             if isinstance(message, HistoryBatch):
                                 accepted_prefetch_id = history.prefetch_pending_id
                                 action = history.accept_prefetch(message)
@@ -3320,6 +3528,11 @@ def run(args: argparse.Namespace) -> int:
                             now=time.monotonic(),
                         )
                 now = time.monotonic()
+                if image_upload is not None:
+                    image_upload.pump(protocol_writer)
+                protocol_writer.flush()
+                if protocol_writer.failed:
+                    remote_closed = True
                 history_paint.flush(
                     surface,
                     latest_screen,
@@ -3430,7 +3643,7 @@ def run(args: argparse.Namespace) -> int:
                     history_info_until = now + _HISTORY_INFO_SECONDS
                 if local_exit:
                     break
-                connection_ended = remote_closed or (
+                connection_ended = remote_closed or protocol_writer.failed or (
                     process.poll() is not None and not events
                 )
                 if connection_ended:
@@ -3467,6 +3680,11 @@ def run(args: argparse.Namespace) -> int:
                             selectors.EVENT_READ,
                             "remote",
                         )
+                        image_was_cancelled = image_upload is not None
+                        image_upload = None
+                        image_buffered_input.clear()
+                        image_buffered_bytes = 0
+                        protocol_writer.replace(process.stdin)
                         decoder = ServerMessageDecoder()
                         model = ScreenModel()
                         terminal_input = TerminalInputDecoder()
@@ -3510,7 +3728,12 @@ def run(args: argparse.Namespace) -> int:
                         reconnect_metrics["successes"] += 1
                         periodic_prefetch.reset()
                         surface.show_local_status(
-                            "Reconnected; waiting for a fresh screen"
+                            (
+                                "Reconnected; image paste was cancelled safely"
+                                if image_was_cancelled
+                                else "Reconnected; waiting for a fresh screen"
+                            ),
+                            level="warning" if image_was_cancelled else "info",
                         )
                         continue
                     break

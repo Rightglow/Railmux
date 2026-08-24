@@ -12,13 +12,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from railmux import __version__, windows_attach_relay
+from railmux import __version__, fast_display_server, image_paste, windows_attach_relay
 from railmux.tmux_server import TmuxServerTarget
 from railmux.fast_display_history import LocalHistoryView, PeriodicPrefetchGate
 from railmux.fast_display_input import ClickTarget, LocalTextSelection, SgrMouseEvent
 from railmux.fast_display_protocol import (
     HistoryBatch,
     HistorySnapshot,
+    ImagePasteResult,
     PathKind,
     PathOpenResult,
     PathResult,
@@ -60,6 +61,7 @@ def _install_local_history_snapshot(client, snapshot: HistorySnapshot) -> None:
         history_choice_required=snapshot.history_choice_required,
         more_available=snapshot.more_available,
         generation=snapshot.generation,
+        route_generation=snapshot.route_generation,
         timeline_start=snapshot.timeline_start,
         timeline_end=snapshot.timeline_end,
     )
@@ -373,6 +375,146 @@ def test_local_semantic_drag_copies_without_forwarding_mouse(monkeypatch):
         renderer.copy_to_clipboard.assert_called_once_with(b"select")
         with pytest.raises(BlockingIOError):
             child_socket.recv(64)
+    finally:
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_image_shortcut_pastes_into_validated_agent_route(monkeypatch):
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (
+        HistorySnapshot(0, "%8", 0, 0, 20, 1, route_generation=55),
+    )
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    renderer = MagicMock()
+    renderer.screen = SimpleNamespace(
+        width=20, height=1, cursor_x=1, cursor_y=0, rows=(b"prompt",)
+    )
+    client._renderer = renderer
+    image = image_paste.ClipboardImage(b"png", 1, 1)
+    monkeypatch.setattr(image_paste, "read_clipboard_png", lambda: image)
+    pasted = MagicMock(
+        return_value=ImagePasteResult(1, True, "success", "Image pasted")
+    )
+    monkeypatch.setattr(fast_display_server, "paste_image_into_pane", pasted)
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(b"\x1bv")
+
+        worker = client._path_worker
+        deadline = time.monotonic() + 2
+        while worker.busy and time.monotonic() < deadline:
+            time.sleep(0.01)
+        client._drain_path_action_results()
+
+        pasted.assert_called_once_with("$4", 1, "%8", 55, b"png")
+        renderer.show_status.assert_called_with("Image pasted", level="success")
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+    finally:
+        client._path_worker.close()
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_image_shortcut_preserves_provider_key_without_image(
+    monkeypatch,
+):
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (
+        HistorySnapshot(0, "%8", 0, 0, 20, 1, route_generation=55),
+    )
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    _set_local_history_state(client)
+    renderer = MagicMock()
+    renderer.screen = SimpleNamespace(
+        width=20, height=1, cursor_x=1, cursor_y=0, rows=(b"prompt",)
+    )
+    client._renderer = renderer
+    monkeypatch.setattr(image_paste, "read_clipboard_png", lambda: None)
+    try:
+        client._forward_input_part(b"\x16")
+
+        worker = client._path_worker
+        deadline = time.monotonic() + 2
+        while worker.busy and time.monotonic() < deadline:
+            time.sleep(0.01)
+        client._drain_path_action_results()
+
+        assert child_socket.recv(64) == b"\x16"
+    finally:
+        client._path_worker.close()
+        os.close(client.master_fd)
+        child_socket.close()
+
+
+def test_local_windows_image_worker_keeps_later_provider_input_ordered():
+    class Worker:
+        def __init__(self):
+            self.result = ()
+
+        def submit_image(self, *_args):
+            return True
+
+        def drain(self):
+            result, self.result = self.result, ()
+            return result
+
+    proxy_socket, child_socket = socket.socketpair()
+    client = windows_attach_relay.LocalPtyClient.__new__(
+        windows_attach_relay.LocalPtyClient
+    )
+    client.master_fd = proxy_socket.detach()
+    client._session_id = "$4"
+    client._selection = LocalTextSelection()
+    client._routes = (
+        HistorySnapshot(0, "%8", 0, 0, 20, 1, route_generation=55),
+    )
+    client._routes_checked_at = time.monotonic()
+    client._path_prompt = None
+    client._path_prompt_mouse_button = None
+    client._next_path_request_id = 1
+    client._path_worker = Worker()
+    _set_local_history_state(client)
+    renderer = MagicMock()
+    renderer.screen = SimpleNamespace(
+        width=20, height=1, cursor_x=1, cursor_y=0, rows=(b"prompt",)
+    )
+    client._renderer = renderer
+    child_socket.setblocking(False)
+    try:
+        client._forward_input_part(b"\x16")
+        client._forward_input_part(b"later")
+
+        with pytest.raises(BlockingIOError):
+            child_socket.recv(64)
+        client._path_worker.result = (
+            fast_display_server.LocalImagePasteResult(
+                ImagePasteResult(1, True, "success", "Image pasted"),
+                b"\x16",
+                False,
+            ),
+        )
+        client._drain_path_action_results()
+
+        assert child_socket.recv(64) == b"later"
     finally:
         os.close(client.master_fd)
         child_socket.close()

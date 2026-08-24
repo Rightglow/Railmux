@@ -37,7 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from railmux import restart_state, tmux_server
+from railmux import image_paste, restart_state, tmux_server
 from railmux.config import ConfigError, load_config
 from railmux.fast_display_client import (
     ScreenModel,
@@ -99,6 +99,7 @@ _STALE_ENDPOINT_AGE = 5 * 60
 _MAX_STALE_ENDPOINTS = 64
 _LOCAL_FRAME_INTERVAL = 1.0 / 30.0
 _LOCAL_HISTORY_PREFETCH_INTERVAL = 3.0
+_IMAGE_BUFFERED_INPUT_LIMIT = 64 * 1024
 _SYNCHRONIZED_UPDATE_MAX_HOLD = 0.25
 # Consume a busy PTY into the latest semantic screen before painting it.  The
 # time budget keeps terminal input responsive; the byte budget bounds one
@@ -1367,6 +1368,9 @@ class LocalPtyClient:
         ) = None
         self._pending_path_resolve: tuple[int, ClickTarget] | None = None
         self._next_path_request_id = 1
+        self._pending_image_request: int | None = None
+        self._image_buffered_input: list[bytes] = []
+        self._image_buffered_bytes = 0
         self._interrupts = _ActiveWindowsInterruptForwarder(forward_interrupts)
         self._interrupts.start()
         self._closed = False
@@ -1489,7 +1493,7 @@ class LocalPtyClient:
         if action.protocol_frame:
             self._dispatch_history_frame(action.protocol_frame)
         if action.forwarded_input:
-            _write_pty_input(self.master_fd, action.forwarded_input)
+            self._write_provider_input(action.forwarded_input)
         if action.restore_live or action.render_history:
             self._renderer.set_history_overlays(self._history.overlays())
         if action.refresh_routes:
@@ -1528,6 +1532,60 @@ class LocalPtyClient:
         if screen is None:
             return None
         return self._history.pane_id_at_position(screen.cursor_x, screen.cursor_y)
+
+    def _write_provider_input(self, payload: bytes) -> None:
+        """Preserve provider-input order across one slow clipboard action."""
+        if getattr(self, "_pending_image_request", None) is None:
+            _write_pty_input(self.master_fd, payload)
+            return
+        buffered = getattr(self, "_image_buffered_bytes", 0)
+        if buffered + len(payload) > _IMAGE_BUFFERED_INPUT_LIMIT:
+            self._renderer.show_status(
+                "Image paste is still finishing; additional input was not sent",
+                level="warning",
+            )
+            return
+        self._image_buffered_input.append(payload)
+        self._image_buffered_bytes = buffered + len(payload)
+
+    def _paste_clipboard_image(self, shortcut: bytes) -> bool:
+        """Queue one local Windows clipboard image outside the PTY loop."""
+        if not hasattr(self, "_image_buffered_input"):
+            self._image_buffered_input = []
+            self._image_buffered_bytes = 0
+        if getattr(self, "_pending_image_request", None) is not None:
+            self._renderer.show_status(
+                "Another image paste is still completing",
+                level="warning",
+            )
+            return True
+        if self._session_id is None:
+            return False
+        pane_id = self._focused_history_pane_id()
+        route = next(
+            (candidate for candidate in self._routes if candidate.pane_id == pane_id),
+            None,
+        )
+        if route is None or route.route_generation == 0:
+            return False
+        request_id = getattr(self, "_next_path_request_id", 1)
+        self._next_path_request_id = request_id + 1
+        worker = self._ensure_path_worker()
+        if not worker.submit_image(
+            self._session_id,
+            request_id,
+            route.pane_id,
+            route.route_generation,
+            shortcut,
+        ):
+            self._renderer.show_status(
+                "Another semantic action is still completing",
+                level="warning",
+            )
+            return True
+        self._pending_image_request = request_id
+        self._renderer.show_status("Reading clipboard image…")
+        return True
 
     def _status_row(self) -> int | None:
         screen = self._renderer.screen
@@ -1576,6 +1634,34 @@ class LocalPtyClient:
         if worker is None:
             return
         for result in worker.drain():
+            from railmux.fast_display_server import LocalImagePasteResult
+
+            if isinstance(result, LocalImagePasteResult):
+                if result.result.request_id != getattr(
+                    self, "_pending_image_request", None
+                ):
+                    continue
+                self._pending_image_request = None
+                buffered_input = tuple(getattr(self, "_image_buffered_input", ()))
+                self._image_buffered_input.clear()
+                self._image_buffered_bytes = 0
+                if result.passthrough:
+                    _write_pty_input(self.master_fd, result.shortcut)
+                if result.result.message:
+                    self._renderer.show_status(
+                        result.result.message,
+                        level=result.result.level,
+                    )
+                if result.result.applied:
+                    self._selection.cancel()
+                    self._renderer.set_selection(())
+                    restore = self._history.cancel()
+                    self._apply_history_action(
+                        HistoryAction(restore_live=restore)
+                    )
+                for payload in buffered_input:
+                    _write_pty_input(self.master_fd, payload)
+                continue
             if isinstance(result, PathResult):
                 pending_resolve = getattr(
                     self, "_pending_path_resolve", None
@@ -1697,7 +1783,7 @@ class LocalPtyClient:
         self._apply_history_action(HistoryAction(restore_live=restore))
         self._request_history_prefetch(force=True)
         if policy == "native":
-            _write_pty_input(self.master_fd, pending)
+            self._write_provider_input(pending)
             self._renderer.show_status("Claude native history enabled")
         else:
             self._renderer.show_status(
@@ -1774,9 +1860,19 @@ class LocalPtyClient:
                 else self._history.cancel()
             )
             self._apply_history_action(HistoryAction(restore_live=restore))
-            _write_pty_input(self.master_fd, part.raw)
+            self._write_provider_input(part.raw)
             return
         if isinstance(part, bytes):
+            image_parts = image_paste.split_shortcuts(part)
+            if len(image_parts) > 1:
+                for image_part in image_parts:
+                    self._forward_input_part(image_part)
+                return
+            if (
+                part in image_paste.IMAGE_PASTE_KEYS
+                and self._paste_clipboard_image(part)
+            ):
+                return
             if self._selection.cancel():
                 self._renderer.set_selection(self._selection.segments())
             screen = self._renderer.screen
@@ -1823,7 +1919,7 @@ class LocalPtyClient:
                 self._history.invalidate_routes()
             if may_change_routes:
                 self._routes_force_refresh = True
-            _write_pty_input(self.master_fd, part)
+            self._write_provider_input(part)
             return
         screen = self._renderer.screen
         logical_height = self._size[1] if screen is None else screen.height
@@ -1970,7 +2066,7 @@ class LocalPtyClient:
         pending = self._interrupts.consume()
         if not pending:
             return
-        _write_pty_input(self.master_fd, b"\x03" * pending)
+        self._write_provider_input(b"\x03" * pending)
         self._leave_pty_catchup(time.monotonic())
 
     def _drain_ready_pty(self) -> bool:

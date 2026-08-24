@@ -619,7 +619,21 @@ Selection → "Applications in terminal may access clipboard"*.)
 > `Ctrl-B z` also toggles fullscreen (built into tmux) but zooms whichever
 > pane has focus — it may fullscreen the sidebar instead of the agent.
 
-### 2. Mouse buttons or F8/F9 don't work — what's wrong?
+### 2. How do I paste an image into Codex or Claude Code?
+
+With native Windows or `railmux ssh`, copy an image, focus the agent input,
+then press **Ctrl+V**. If the terminal reserves Ctrl+V for text paste, use
+**Alt+V**. Railmux transfers a bounded PNG to private storage visible to that
+agent and pastes it into the current input without pressing Enter. Codex shows
+its normal image attachment; Claude Code receives the image path it supports.
+
+The shortcut is intercepted only when the local clipboard actually contains
+an image and the current agent pane is still verified. Otherwise the original
+key reaches Codex or Claude unchanged. macOS/Linux clipboard capture uses the
+available native image reader (`osascript`/`pngpaste`, `wl-paste`, or `xclip`);
+ordinary local macOS/Linux Railmux keeps the provider's native paste behavior.
+
+### 3. Mouse buttons or F8/F9 don't work — what's wrong?
 
 These are usually terminal‑side settings, not tmux or railmux.
 
@@ -667,7 +681,7 @@ has its own shortcut or key-mapping editor, remove the conflicting mapping or
 configure it to send the corresponding F8/F9 function-key sequence to the
 terminal session.
 
-### 3. Using railmux over SSH
+### 4. Using railmux over SSH
 
 #### Choose a connection mode
 
@@ -813,7 +827,7 @@ do not kill tmux, the shared workspace, or its agents. See
 [the architecture document](https://github.com/Rightglow/Railmux/blob/main/docs/ARCHITECTURE.md) for protocol, lease,
 history-cache, and failure-containment details.
 
-### 4. Will automated review sessions pollute my session list?
+### 5. Will automated review sessions pollute my session list?
 
 **Codex**: sessions created by `codex exec` (headless automation, pre‑commit
 hooks, CI) are filtered automatically — railmux only shows interactive
@@ -829,7 +843,7 @@ claude -p --no-session-persistence "review this diff"
 
 (`--no-session-persistence` is a Claude Code print-mode option.)
 
-### 5. pip reports "externally-managed-environment"
+### 6. pip reports "externally-managed-environment"
 
 Create a virtual environment, then install Railmux with that environment's
 `pip`. This works on macOS, Linux, and WSL without modifying the system Python:
@@ -843,7 +857,7 @@ pip install railmux
 `pipx install railmux` is an optional convenience for a globally available CLI;
 it is not required on macOS or any other platform.
 
-### 6. Can I open Railmux in multiple terminal windows?
+### 7. Can I open Railmux in multiple terminal windows?
 
 Yes, as multiple views of one shared workspace. Normal launches and current
 `railmux ssh` helpers may attach to the same managed `railmux` tmux session.

@@ -1,4 +1,4 @@
-"""Private v16 framing for the coalesced full-window SSH display."""
+"""Private v17 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from enum import IntEnum, IntFlag
 
 
-DISPLAY_MAGIC = b"RMUXD16\x00"
-INPUT_MAGIC = b"RMUXK16\x00"
-PROTOCOL_VERSION = 16
+DISPLAY_MAGIC = b"RMUXD17\x00"
+INPUT_MAGIC = b"RMUXK17\x00"
+PROTOCOL_VERSION = 17
 REMOTE_CONFIG_PROTOCOL = 1
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
@@ -27,16 +27,23 @@ MAX_PREFETCH_HISTORY_LINES = 300
 MAX_HISTORY_PANES = 8
 MAX_CLIPBOARD_BYTES = 64 * 1024
 MAX_PATH_BYTES = 4096
+MAX_IMAGE_BYTES = 16 * 1024 * 1024
+MAX_IMAGE_CHUNK_BYTES = 48 * 1024
+MAX_IMAGE_RESULT_BYTES = 1024
 _UPDATE_METADATA = struct.Struct(">BIHHHHBHI")
-_HISTORY_METADATA = struct.Struct(">IIHHHHBQQQI")
+_HISTORY_METADATA = struct.Struct(">IIHHHHBQQQQI")
 _HISTORY_REQUEST = struct.Struct(">IHHH")
 _HISTORY_BATCH_METADATA = struct.Struct(">II")
-_HISTORY_PANE_METADATA = struct.Struct(">IHHHHBQQQ")
+_HISTORY_PANE_METADATA = struct.Struct(">IHHHHBQQQQ")
 _PREFETCH_HISTORY_REQUEST = struct.Struct(">IH")
 _PATH_REQUEST = struct.Struct(">IIH")
 _PATH_RESULT = struct.Struct(">IBBH")
 _PATH_OPEN_REQUEST = struct.Struct(">IIBBIIH")
 _PATH_OPEN_RESULT = struct.Struct(">IBBH")
+_IMAGE_BEGIN = struct.Struct(">IIQI32s")
+_IMAGE_CHUNK = struct.Struct(">II")
+_IMAGE_COMMIT = struct.Struct(">I")
+_IMAGE_RESULT = struct.Struct(">IBBH")
 _HISTORY_MOUSE_FORWARDABLE = 1 << 0
 _HISTORY_TRANSCRIPT_BACKED = 1 << 1
 _HISTORY_MORE_AVAILABLE = 1 << 2
@@ -64,6 +71,7 @@ class OutputKind(IntEnum):
     CLIPBOARD = 5
     PATH_RESULT = 6
     PATH_OPEN_RESULT = 7
+    IMAGE_PASTE_RESULT = 8
 
 
 class InputKind(IntEnum):
@@ -76,6 +84,10 @@ class InputKind(IntEnum):
     SET_CLAUDE_HISTORY = 7
     RESOLVE_PATH = 8
     OPEN_PATH = 9
+    IMAGE_BEGIN = 10
+    IMAGE_CHUNK = 11
+    IMAGE_COMMIT = 12
+    IMAGE_CANCEL = 13
 
 
 class PathKind(IntEnum):
@@ -145,10 +157,11 @@ class HistorySnapshot:
     history_choice_required: bool = False
     generation: int = 0
     # Absolute half-open row coordinates in the server-owned pane timeline.
-    # A zero/zero span is retained only for local synthetic callers; v16
+    # A zero/zero span is retained only for local synthetic callers; v17
     # servers populate it for every accepted response.
     timeline_start: int = 0
     timeline_end: int = 0
+    route_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -188,6 +201,16 @@ class PathResult:
 @dataclass(frozen=True)
 class PathOpenResult:
     """Outcome of a revalidated internal/external path-open choice."""
+
+    request_id: int
+    applied: bool
+    level: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ImagePasteResult:
+    """Outcome of one bounded clipboard-image transfer and pane paste."""
 
     request_id: int
     applied: bool
@@ -322,6 +345,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
                 snapshot.transcript_available,
                 snapshot.history_choice_required,
                 snapshot.generation,
+                snapshot.route_generation,
                 snapshot.timeline_start,
                 snapshot.timeline_end,
             )
@@ -345,6 +369,8 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
             raise ValueError("history snapshot is shorter than its viewport")
         if not 0 <= snapshot.generation <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("invalid history generation")
+        if not 0 <= snapshot.route_generation <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError("invalid history route generation")
         _validate_history_timeline(snapshot)
     raw_lines = _pack_history_lines(snapshot.lines)
     compressed = zlib.compress(raw_lines, level=3)
@@ -357,6 +383,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
         snapshot.height,
         _history_capabilities(snapshot),
         snapshot.generation,
+        snapshot.route_generation,
         snapshot.timeline_start,
         snapshot.timeline_end,
         len(raw_lines),
@@ -397,6 +424,8 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             raise ValueError("history snapshot is shorter than its viewport")
         if not 0 <= snapshot.generation <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("invalid history generation")
+        if not 0 <= snapshot.route_generation <= 0xFFFFFFFFFFFFFFFF:
+            raise ValueError("invalid history route generation")
         _validate_history_timeline(snapshot)
         packed_lines = _pack_history_lines(snapshot.lines)
         pane_metadata = _HISTORY_PANE_METADATA.pack(
@@ -407,6 +436,7 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
             snapshot.height,
             _history_capabilities(snapshot),
             snapshot.generation,
+            snapshot.route_generation,
             snapshot.timeline_start,
             snapshot.timeline_end,
         )
@@ -490,6 +520,34 @@ def encode_path_open_result(result: PathOpenResult) -> bytes:
     payload = (
         bytes((int(OutputKind.PATH_OPEN_RESULT),))
         + _PATH_OPEN_RESULT.pack(
+            result.request_id,
+            int(result.applied),
+            levels[result.level],
+            len(encoded),
+        )
+        + encoded
+    )
+    return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
+def encode_image_paste_result(result: ImagePasteResult) -> bytes:
+    levels = {"info": 0, "success": 1, "warning": 2, "error": 3}
+    if (
+        not 0 <= result.request_id <= 0xFFFFFFFF
+        or result.level not in levels
+        or not isinstance(result.applied, bool)
+    ):
+        raise ValueError("invalid image-paste result")
+    encoded = result.message.encode("utf-8")
+    if (
+        not encoded
+        or len(encoded) > MAX_IMAGE_RESULT_BYTES
+        or b"\x00" in encoded
+    ):
+        raise ValueError("invalid image-paste result message")
+    payload = (
+        bytes((int(OutputKind.IMAGE_PASTE_RESULT),))
+        + _IMAGE_RESULT.pack(
             result.request_id,
             int(result.applied),
             levels[result.level],
@@ -608,6 +666,8 @@ class ServerMessageDecoder:
         | ClaudeHistoryPolicyResult
         | ClipboardCopy
         | PathResult
+        | PathOpenResult
+        | ImagePasteResult
     ]:
         self._buffer.extend(data)
         messages: list[
@@ -617,6 +677,8 @@ class ServerMessageDecoder:
             | ClaudeHistoryPolicyResult
             | ClipboardCopy
             | PathResult
+            | PathOpenResult
+            | ImagePasteResult
         ] = []
         header_size = len(DISPLAY_MAGIC) + LENGTH_BYTES
         while True:
@@ -656,6 +718,7 @@ class ServerMessageDecoder:
                         height,
                         raw_capabilities,
                         generation,
+                        route_generation,
                         timeline_start,
                         timeline_end,
                         raw_size,
@@ -675,6 +738,7 @@ class ServerMessageDecoder:
                                 lines,
                                 raw_capabilities,
                                 generation,
+                                route_generation,
                                 timeline_start,
                                 timeline_end,
                             )
@@ -711,6 +775,7 @@ class ServerMessageDecoder:
                             raw_capabilities & _HISTORY_CHOICE_REQUIRED
                         ),
                         generation=generation,
+                        route_generation=route_generation,
                         timeline_start=timeline_start,
                         timeline_end=timeline_end,
                     )
@@ -746,6 +811,7 @@ class ServerMessageDecoder:
                             height,
                             raw_capabilities,
                             generation,
+                            route_generation,
                             timeline_start,
                             timeline_end,
                         ) = _HISTORY_PANE_METADATA.unpack(
@@ -787,6 +853,7 @@ class ServerMessageDecoder:
                                 raw_capabilities & _HISTORY_CHOICE_REQUIRED
                             ),
                             generation=generation,
+                            route_generation=route_generation,
                             timeline_start=timeline_start,
                             timeline_end=timeline_end,
                         )
@@ -861,6 +928,36 @@ class ServerMessageDecoder:
                         )
                     )
                     continue
+                if output_kind is OutputKind.IMAGE_PASTE_RESULT:
+                    if len(body) < _IMAGE_RESULT.size:
+                        raise ValueError("truncated image-paste result")
+                    request_id, applied, raw_level, size = _IMAGE_RESULT.unpack(
+                        body[: _IMAGE_RESULT.size]
+                    )
+                    levels = {
+                        0: "info",
+                        1: "success",
+                        2: "warning",
+                        3: "error",
+                    }
+                    encoded = body[_IMAGE_RESULT.size :]
+                    if (
+                        applied not in (0, 1)
+                        or raw_level not in levels
+                        or len(encoded) != size
+                        or not 1 <= size <= MAX_IMAGE_RESULT_BYTES
+                        or b"\x00" in encoded
+                    ):
+                        raise ValueError("invalid image-paste result")
+                    messages.append(
+                        ImagePasteResult(
+                            request_id,
+                            bool(applied),
+                            levels[raw_level],
+                            encoded.decode("utf-8"),
+                        )
+                    )
+                    continue
                 if len(body) < _UPDATE_METADATA.size:
                     raise ValueError("truncated screen metadata")
                 (
@@ -907,7 +1004,7 @@ class ServerMessageDecoder:
 
 
 class ScreenUpdateDecoder:
-    """Compatibility view which ignores v16 control-response messages."""
+    """Compatibility view which ignores v17 control-response messages."""
 
     def __init__(self) -> None:
         self._decoder = ServerMessageDecoder()
@@ -945,6 +1042,106 @@ def encode_keyframe_request() -> bytes:
 
 def encode_heartbeat() -> bytes:
     return _encode_input_message(InputKind.HEARTBEAT, b"")
+
+
+def _image_pane_number(pane_id: str) -> int:
+    if (
+        not pane_id.startswith("%")
+        or not pane_id[1:].isdigit()
+        or not 0 < int(pane_id[1:]) <= 0xFFFFFFFF
+    ):
+        raise ValueError("invalid image pane identity")
+    return int(pane_id[1:])
+
+
+def encode_image_begin(
+    request_id: int,
+    pane_id: str,
+    generation: int,
+    total_bytes: int,
+    digest: bytes,
+) -> bytes:
+    if (
+        not 1 <= request_id <= 0xFFFFFFFF
+        or not 0 <= generation <= 0xFFFFFFFFFFFFFFFF
+        or not 33 <= total_bytes <= MAX_IMAGE_BYTES
+        or not isinstance(digest, bytes)
+        or len(digest) != 32
+    ):
+        raise ValueError("invalid image upload metadata")
+    return _encode_input_message(
+        InputKind.IMAGE_BEGIN,
+        _IMAGE_BEGIN.pack(
+            request_id,
+            _image_pane_number(pane_id),
+            generation,
+            total_bytes,
+            digest,
+        ),
+    )
+
+
+def decode_image_begin(data: bytes) -> tuple[int, str, int, int, bytes]:
+    if len(data) != _IMAGE_BEGIN.size:
+        raise ValueError("invalid image upload metadata")
+    request_id, pane_number, generation, total_bytes, digest = _IMAGE_BEGIN.unpack(data)
+    if (
+        request_id == 0
+        or pane_number == 0
+        or not 33 <= total_bytes <= MAX_IMAGE_BYTES
+    ):
+        raise ValueError("invalid image upload metadata")
+    return request_id, f"%{pane_number}", generation, total_bytes, digest
+
+
+def encode_image_chunk(request_id: int, offset: int, data: bytes) -> bytes:
+    if (
+        not 1 <= request_id <= 0xFFFFFFFF
+        or not 0 <= offset <= MAX_IMAGE_BYTES
+        or not isinstance(data, bytes)
+        or not 1 <= len(data) <= MAX_IMAGE_CHUNK_BYTES
+        or offset + len(data) > MAX_IMAGE_BYTES
+    ):
+        raise ValueError("invalid image upload chunk")
+    return _encode_input_message(
+        InputKind.IMAGE_CHUNK,
+        _IMAGE_CHUNK.pack(request_id, offset) + data,
+    )
+
+
+def decode_image_chunk(data: bytes) -> tuple[int, int, bytes]:
+    if len(data) <= _IMAGE_CHUNK.size:
+        raise ValueError("invalid image upload chunk")
+    request_id, offset = _IMAGE_CHUNK.unpack(data[: _IMAGE_CHUNK.size])
+    chunk = data[_IMAGE_CHUNK.size :]
+    if (
+        request_id == 0
+        or not 1 <= len(chunk) <= MAX_IMAGE_CHUNK_BYTES
+        or offset + len(chunk) > MAX_IMAGE_BYTES
+    ):
+        raise ValueError("invalid image upload chunk")
+    return request_id, offset, chunk
+
+
+def encode_image_commit(request_id: int) -> bytes:
+    if not 1 <= request_id <= 0xFFFFFFFF:
+        raise ValueError("invalid image upload identity")
+    return _encode_input_message(InputKind.IMAGE_COMMIT, _IMAGE_COMMIT.pack(request_id))
+
+
+def encode_image_cancel(request_id: int) -> bytes:
+    if not 1 <= request_id <= 0xFFFFFFFF:
+        raise ValueError("invalid image upload identity")
+    return _encode_input_message(InputKind.IMAGE_CANCEL, _IMAGE_COMMIT.pack(request_id))
+
+
+def decode_image_identity(data: bytes) -> int:
+    if len(data) != _IMAGE_COMMIT.size:
+        raise ValueError("invalid image upload identity")
+    request_id = _IMAGE_COMMIT.unpack(data)[0]
+    if request_id == 0:
+        raise ValueError("invalid image upload identity")
+    return request_id
 
 
 def encode_claude_history_policy(
@@ -1225,6 +1422,21 @@ class InputFrameDecoder:
                         len(message_data) < _PATH_OPEN_REQUEST.size
                         or len(message_data) > _PATH_OPEN_REQUEST.size + MAX_PATH_BYTES
                     )
+                )
+                or (
+                    kind is InputKind.IMAGE_BEGIN
+                    and len(message_data) != _IMAGE_BEGIN.size
+                )
+                or (
+                    kind is InputKind.IMAGE_CHUNK
+                    and not (
+                        _IMAGE_CHUNK.size < len(message_data)
+                        <= _IMAGE_CHUNK.size + MAX_IMAGE_CHUNK_BYTES
+                    )
+                )
+                or (
+                    kind in (InputKind.IMAGE_COMMIT, InputKind.IMAGE_CANCEL)
+                    and len(message_data) != _IMAGE_COMMIT.size
                 )
             ):
                 continue

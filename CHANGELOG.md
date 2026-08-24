@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev1] - 2026-08-24
+
+### Added
+
+- Paste a local clipboard image into the focused Codex or Claude Code input
+  with Ctrl+V or Alt+V in native Windows and `railmux ssh`. Railmux does not
+  press Enter; when the clipboard has no image or the pane route is not
+  authoritative, the provider retains the original key behavior.
+- Transfer SSH images through exact-match protocol v17 as bounded PNG chunks,
+  with SHA-256, PNG structure/CRC/dimension validation, private generated
+  storage, exact pane-generation revalidation, and bracketed provider paste.
+
+### Changed
+
+- Make SSH protocol writes nonblocking during image upload. Display frames,
+  heartbeats, history, and terminal processing continue while the bounded
+  upload drains, and later provider input is released only after the image
+  paste result preserves its order.
+- Run native-Windows clipboard capture and image injection on the existing
+  bounded semantic-action worker so PowerShell or tmux latency cannot stall
+  the PTY renderer; later provider input remains ordered there as well.
+
 ## [0.4.1] - 2026-08-21
 
 ### Added
@@ -3246,7 +3268,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev1...HEAD
+[0.4.2.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2.dev1
 [0.4.1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1
 [0.4.1.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev5...v0.4.1.dev6
 [0.4.1.dev5]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev4...v0.4.1.dev5

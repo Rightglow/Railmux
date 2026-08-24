@@ -137,6 +137,7 @@ product capability.
 | S18 | Termux compact navigation, soft-keyboard projection, touch recovery, and prompt cursor | Field-validated | Android-specific behavior is entered only from Termux environment evidence. Compact page clicks are controller-serialized and commit only after the selected agent regains full-window zoom. |
 | S19 | Emergency local `Ctrl-]`, normal tmux detach, and lifecycle exit classification | Supported | Local escape never becomes provider input. During an established display, `Ctrl-C` remains remote input even when Windows surfaces it as a native console signal; setup and reconnect retain local cancellation. |
 | S20 | Consent-based `railmux config --remote HOST` | Supported on POSIX and managed-Windows local runtimes | Two SSH phases pin one POSIX/direct launch family; the probe never sends the display start token or touches a tmux server, the cooked editor preserves local-only history capacity, and Windows remotes require a preinstalled compatible managed runtime. |
+| S21 | Clipboard-image paste into the focused Codex/Claude input | Supported in native Windows and `railmux ssh`; conditional on a local image clipboard reader | Ctrl+V or Alt+V is intercepted only when the clipboard contains a validated PNG and a current agent route exists. SSH uses bounded v17 chunks, SHA-256, exact pane generation, private generated storage, and bracketed path paste without Enter; other input remains byte-exact. Ordinary POSIX local Railmux retains provider-native image paste. |
 
 ## Terminal emulator validation
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import struct
+import time
 from dataclasses import replace
 from unittest.mock import MagicMock
 
@@ -10,6 +12,7 @@ from railmux.fast_display_protocol import (
     ClaudeHistoryPolicyResult,
     DISPLAY_MAGIC,
     HistorySnapshot,
+    ImagePasteResult,
     InputFrameDecoder,
     InputKind,
     PathKind,
@@ -21,12 +24,19 @@ from railmux.fast_display_protocol import (
     TerminalMode,
     UpdateKind,
     decode_history_request,
+    decode_image_begin,
+    decode_image_chunk,
+    decode_image_identity,
     decode_path_request,
     decode_path_open_request,
     decode_claude_history_policy,
     decode_claude_history_choice,
     encode_history_request,
     encode_history_snapshot,
+    encode_image_begin,
+    encode_image_chunk,
+    encode_image_commit,
+    encode_image_paste_result,
     encode_path_request,
     encode_path_open_request,
     encode_path_open_result,
@@ -35,7 +45,7 @@ from railmux.fast_display_protocol import (
     encode_claude_history_policy_result,
     encode_update,
 )
-from railmux import fast_display_client, fast_display_server
+from railmux import fast_display_client, fast_display_server, image_paste
 from railmux.fast_display_client import (
     UpdateKind as ClientUpdateKind,
 )
@@ -58,6 +68,93 @@ def _keyframe(
         rows=tuple((index, f"row-{index}".encode()) for index in range(height)),
         terminal_modes=terminal_modes,
     )
+
+
+def test_v17_image_upload_frames_are_bounded_and_round_trip():
+    digest = bytes(range(32))
+    decoder = InputFrameDecoder()
+    packet = b"".join(
+        (
+            encode_image_begin(7, "%42", 99, 4096, digest),
+            encode_image_chunk(7, 0, b"png-data"),
+            encode_image_commit(7),
+        )
+    )
+
+    messages = decoder.feed(packet)
+
+    assert [message.kind for message in messages] == [
+        InputKind.IMAGE_BEGIN,
+        InputKind.IMAGE_CHUNK,
+        InputKind.IMAGE_COMMIT,
+    ]
+    assert decode_image_begin(messages[0].data) == (7, "%42", 99, 4096, digest)
+    assert decode_image_chunk(messages[1].data) == (7, 0, b"png-data")
+    assert decode_image_identity(messages[2].data) == 7
+
+
+def test_v17_image_result_round_trips_without_accepting_oversized_chunks():
+    result = ImagePasteResult(8, True, "success", "Image pasted")
+
+    assert ServerMessageDecoder().feed(encode_image_paste_result(result)) == [result]
+    with pytest.raises(ValueError, match="invalid image upload chunk"):
+        encode_image_chunk(8, 0, b"x" * (48 * 1024 + 1))
+
+
+def test_v17_client_image_upload_chunks_without_one_unbounded_frame():
+    class Collector:
+        pending_bytes = 0
+
+        def __init__(self):
+            self.frames = []
+
+        def enqueue(self, frame):
+            self.frames.append(frame)
+
+    data = b"p" * (100 * 1024)
+    upload = fast_display_client._ClientImageUpload(
+        3,
+        "%9",
+        77,
+        image_paste.ClipboardImage(data, 10, 10),
+    )
+    writer = Collector()
+
+    upload.pump(writer)
+    messages = InputFrameDecoder().feed(b"".join(writer.frames))
+
+    assert messages[0].kind is InputKind.IMAGE_BEGIN
+    assert messages[-1].kind is InputKind.IMAGE_COMMIT
+    chunks = [
+        decode_image_chunk(message.data)[2]
+        for message in messages
+        if message.kind is InputKind.IMAGE_CHUNK
+    ]
+    assert b"".join(chunks) == data
+    assert all(len(chunk) <= 48 * 1024 for chunk in chunks)
+
+
+def test_v17_protocol_writer_returns_immediately_under_pipe_backpressure():
+    read_fd, write_fd = os.pipe()
+    stream = os.fdopen(write_fd, "wb", buffering=0)
+    writer = fast_display_client._OutboundProtocolWriter(stream)
+    try:
+        while True:
+            try:
+                os.write(write_fd, b"x" * 65536)
+            except BlockingIOError:
+                break
+        writer.enqueue(b"frame")
+
+        started = time.monotonic()
+        writer.flush()
+
+        assert time.monotonic() - started < 0.1
+        assert writer.pending_bytes == len(b"frame")
+        assert writer.failed is False
+    finally:
+        stream.close()
+        os.close(read_fd)
 
 
 def test_compressed_keyframe_crosses_standalone_client_decoder_in_parts():
@@ -152,6 +249,7 @@ def test_v10_history_snapshot_round_trips_the_maximum_line_count():
         width=50,
         height=2,
         lines=(b"x",) * 20000,
+        route_generation=84,
         timeline_start=10,
         timeline_end=20010,
     )
