@@ -483,6 +483,66 @@ def test_resolve_placeholders_empty_correlation_waits_not_fallback(monkeypatch):
     assert unrelated not in app._running  # heuristic did NOT fire
 
 
+@pytest.mark.parametrize(
+    "pane_title",
+    (
+        "Real session | test-proj",
+        "\u2827 Real session | test-proj",
+    ),
+)
+def test_unresolved_codex_placeholder_uses_exact_pane_title_for_label(
+    pane_title,
+):
+    """A newer Codex may publish no rollout fd, but its exact pane can still
+    replace the stale ``(new)`` display label without weakening UUID binding."""
+    proj = _project()
+    running = _Running(
+        key="__new__-tok-1",
+        tmux_name="cx-new----tok-1",
+        label="test-proj/(new)",
+        project=proj,
+        placeholder_path=proj.real_path,
+        created_at=999.0,
+        session_type="codex",
+        allow_heuristic_resolution=False,
+    )
+    app = App.__new__(App)
+    app._running = {running.key: running}
+    app._codex_index = MagicMock()
+    # The pane title is available before the background index publishes the
+    # rollout, so display refresh must not depend on candidate discovery.
+    app._codex_index.sessions_for_cwd.return_value = []
+    app._correlate_codex_rollout = MagicMock(return_value=set())
+    app._display_transport_manager = MagicMock()
+    app._display_transport_manager.displayed_real_pane.return_value = None
+    server = tmux_ctl.ServerSnapshot(
+        sessions=frozenset({running.tmux_name}),
+        panes=frozenset({"%7"}),
+        pane_titles=((running.tmux_name, "%7", pane_title),),
+    )
+
+    app._resolve_placeholders([proj], server)
+
+    assert running.key in app._running
+    assert running.is_placeholder
+    assert running.label == "test-proj/Real session"
+
+
+@pytest.mark.parametrize(
+    "pane_title",
+    (
+        "bash",
+        "Real session | another-project",
+        "Real\n session | test-proj",
+    ),
+)
+def test_unresolved_codex_placeholder_rejects_untrusted_pane_title(
+    pane_title,
+):
+    proj = _project()
+    assert App._codex_terminal_session_title(pane_title, proj) is None
+
+
 def test_correlate_codex_rollout_fails_closed_without_config(monkeypatch):
     """A helper failure on procfs must wait, never unlock the heuristic."""
     monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: True)

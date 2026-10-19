@@ -195,10 +195,10 @@ def test_copy_to_clipboard_rejects_unsafe_or_unbounded_payload():
 
 def test_server_snapshot_collects_sessions_and_panes():
     output = (
-        "cc-one\t%1\t101\t0\n"
-        "cc-one\t%2\t102\t1\n"
-        "cc-two\t%3\t201\t0\n"
-        "cc-dead\t%4\t301\t1\n"
+        "cc-one\t%1\t101\t0\tReview\\ code\\ \\|\\ repo\n"
+        "cc-one\t%2\t102\t1\told\n"
+        "cc-two\t%3\t201\t0\tSecond\n"
+        "cc-dead\t%4\t301\t1\tdead\n"
     )
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output(output) as call:
@@ -210,9 +210,13 @@ def test_server_snapshot_collects_sessions_and_panes():
     assert snapshot.session_pids == (("cc-one", 101), ("cc-two", 201))
     assert snapshot.pane_pid_for("cc-one") == 101
     assert snapshot.pane_pid_for("missing") is None
+    assert snapshot.pane_title_for("%1") == "Review code | repo"
+    assert snapshot.pane_title_for_session("cc-one") == "Review code | repo"
+    assert snapshot.pane_title_for_session("missing") is None
     assert call.call_args.args[0] == [
         "tmux", "list-panes", "-a", "-F",
-        "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}",
+        "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}"
+        "\t#{q:pane_title}",
     ]
 
 
@@ -224,7 +228,7 @@ def test_server_snapshot_rejects_malformed_output():
 
 def test_server_snapshot_rejects_unknown_dead_state():
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
-         _mock_check_output("cc-one\t%1\t101\tmaybe\n"):
+         _mock_check_output("cc-one\t%1\t101\tmaybe\ttitle\n"):
         assert server_snapshot() is None
 
 

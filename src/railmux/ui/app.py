@@ -9193,7 +9193,7 @@ class App:
         # clicking it spawns a duplicate session; and `force_projects` above
         # stays stuck True, defeating the 3s project-scan cache. Codex
         # resolution must run too or neither ever clears.
-        self._resolve_placeholders(projects)
+        self._resolve_placeholders(projects, server)
         running_ids = self._running_session_ids()
         if self._selected_project is not None:
             matched = next((p for p in projects if p.encoded_name == self._selected_project.encoded_name), None)
@@ -10002,7 +10002,66 @@ class App:
         ]
         self._running_pane.set_running(entries)
 
-    def _resolve_placeholders(self, projects: list[Project]) -> None:
+    @staticmethod
+    def _codex_terminal_session_title(
+        pane_title: str | None,
+        project: Project,
+    ) -> str | None:
+        """Extract a bounded Codex session title from its terminal title.
+
+        Current Codex releases publish ``<title> | <workspace>`` and prefix
+        the title with one braille spinner cell while a turn is active.  Treat
+        every other shape as untrusted display text: a shell or tool running
+        in the pane can also set the terminal title.
+        """
+        if pane_title is None:
+            return None
+        value = pane_title.strip()
+        if value and "\u2800" <= value[0] <= "\u28ff":
+            value = value[1:].lstrip()
+        suffix = f" | {project.display_name}"
+        if not value.endswith(suffix):
+            return None
+        title = value[:-len(suffix)].strip()
+        if not title or len(title) > 512 or not title.isprintable():
+            return None
+        return title
+
+    def _refresh_codex_placeholder_label(
+        self,
+        running: _Running,
+        project: Project,
+        server: tmux_ctl.ServerSnapshot | None,
+    ) -> None:
+        """Refresh only an unresolved placeholder's human-readable label.
+
+        New Codex app-server releases no longer keep their rollout JSONL open
+        in the pane process tree, so exact UUID promotion can correctly remain
+        unresolved.  The terminal title still belongs to this exact pane and
+        is safe as a *display* hint because it is read from the exact owned
+        pane and accepted only in Codex's workspace-qualified title shape.  It
+        deliberately does not promote identity: Resume/Delete keep their
+        existing fail-closed rules.
+        """
+        if server is None or running.session_type != "codex":
+            return
+        real_pane = self._display_transport().displayed_real_pane(
+            running.tmux_name)
+        pane_title = (
+            server.pane_title_for(real_pane)
+            if isinstance(real_pane, str) and real_pane
+            else server.pane_title_for_session(running.tmux_name)
+        )
+        title = self._codex_terminal_session_title(pane_title, project)
+        if title is None:
+            return
+        running.label = f"{project.display_name}/{title}"
+
+    def _resolve_placeholders(
+        self,
+        projects: list[Project],
+        server: tmux_ctl.ServerSnapshot | None = None,
+    ) -> None:
         """Re-key any `__new__-N` placeholder to its real session_id.
 
         For each live placeholder, look at its project's sessions and pick the
@@ -10059,6 +10118,8 @@ class App:
                 and s.session_id not in r.pre_launch_ids  # another process's (#12)
                 and s.last_mtime + 1.0 >= r.created_at
             ]
+            self._refresh_codex_placeholder_label(
+                r, project, server)
             # #12: prefer EXACT child→rollout correlation over the heuristic. The
             # codex process in this placeholder's pane holds its own rollout open;
             # its filename UUID is the exact session_id. This defeats the

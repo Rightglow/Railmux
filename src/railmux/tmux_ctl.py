@@ -29,6 +29,7 @@ class ServerSnapshot:
     sessions: frozenset[str]
     panes: frozenset[str]
     session_pids: tuple[tuple[str, int], ...] = ()
+    pane_titles: tuple[tuple[str, str, str], ...] = ()
 
     def pane_pid_for(self, session_name: str) -> int | None:
         """Return the first pane PID captured for *session_name*."""
@@ -36,6 +37,22 @@ class ServerSnapshot:
             if name == session_name:
                 return pid
         return None
+
+    def pane_title_for(self, pane_id: str) -> str | None:
+        """Return one live pane's terminal title from this same snapshot."""
+        titles = {
+            title for _session_name, candidate, title in self.pane_titles
+            if candidate == pane_id
+        }
+        return next(iter(titles)) if len(titles) == 1 else None
+
+    def pane_title_for_session(self, session_name: str) -> str | None:
+        """Return the title of a single-live-pane provider session."""
+        matches = [
+            title for candidate, _pane_id, title in self.pane_titles
+            if candidate == session_name
+        ]
+        return matches[0] if len(matches) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -277,7 +294,8 @@ def server_snapshot() -> ServerSnapshot | None:
         out = subprocess.check_output(
             [
                 "tmux", "list-panes", "-a", "-F",
-                "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}",
+                "#{session_name}\t#{pane_id}\t#{pane_pid}\t#{pane_dead}"
+                "\t#{q:pane_title}",
             ],
             stderr=subprocess.DEVNULL,
         ).decode()
@@ -287,11 +305,22 @@ def server_snapshot() -> ServerSnapshot | None:
     sessions: set[str] = set()
     panes: set[str] = set()
     session_pids: dict[str, int] = {}
+    pane_titles: list[tuple[str, str, str]] = []
     for line in out.splitlines():
-        fields = line.split("\t", 3)
-        if len(fields) != 4 or not all(fields):
+        fields = line.split("\t", 4)
+        if len(fields) != 5 or not all(fields[:4]):
             return None
-        session_name, pane_id, raw_pid, pane_dead = fields
+        session_name, pane_id, raw_pid, pane_dead, raw_title = fields
+        if raw_title:
+            try:
+                decoded = shlex.split(raw_title)
+            except ValueError:
+                return None
+            if len(decoded) != 1:
+                return None
+            pane_title = decoded[0]
+        else:
+            pane_title = ""
         if pane_dead not in {"0", "1"}:
             return None
         try:
@@ -303,10 +332,12 @@ def server_snapshot() -> ServerSnapshot | None:
         sessions.add(session_name)
         panes.add(pane_id)
         session_pids.setdefault(session_name, pane_pid)
+        pane_titles.append((session_name, pane_id, pane_title))
     return ServerSnapshot(
         frozenset(sessions),
         frozenset(panes),
         tuple(sorted(session_pids.items())),
+        tuple(sorted(pane_titles)),
     )
 
 

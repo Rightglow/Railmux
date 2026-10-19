@@ -1854,6 +1854,11 @@ New-session placeholder resolution follows that same swap-aware real-pane
 identity. On actual Linux, rollout-FD correlation is authoritative when
 available; MSYS2's projected procfs is deliberately non-authoritative for a
 native Windows provider and uses the fenced single-new-candidate fallback.
+Codex app-server releases that do not retain a rollout file descriptor may
+leave that identity deliberately unresolved.  Running may still replace the
+stale ``(new)`` *display label* from the exact owned pane's bounded,
+workspace-qualified terminal title.  That hint never promotes a UUID, changes
+running-session membership, or grants Resume/Delete authority.
 Once the exact rollout becomes visible in the pinned index
 generation, its title, provider status, attention, and activity timestamp are
 promoted to Running together and that one-time identity transition may bypass
