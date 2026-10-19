@@ -3039,6 +3039,7 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     )
     original = tmux_ctl.read_root_function_bindings()
     original_prefix_tab = tmux_ctl.read_prefix_target_binding()
+    original_prefix_note = tmux_ctl._prefix_target_note()
     original_right_click = tmux_ctl.read_root_right_click_binding()
     original_status_click = tmux_ctl.read_root_status_click_binding()
     original_termux_tap = tmux_ctl.read_root_termux_tap_binding()
@@ -3229,6 +3230,7 @@ def test_real_tmux_binding_manager_round_trip_and_user_reload(
     assert restored["F8"] == original["F8"]
     assert restored["F9"] is not None and "new-user-f9" in restored["F9"]
     assert tmux_ctl.read_prefix_target_binding() == original_prefix_tab
+    assert tmux_ctl._prefix_target_note() == original_prefix_note
     assert tmux_ctl.read_root_right_click_binding() == original_right_click
     assert tmux_ctl.read_root_status_click_binding() == original_status_click
     assert tmux_ctl.read_root_termux_tap_binding() == original_termux_tap

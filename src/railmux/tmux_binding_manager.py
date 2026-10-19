@@ -110,7 +110,7 @@ class SharedTmuxBindingManager:
         selection_hook_index = raw.get("selection_hook_index")
         prefix_valid = (
             isinstance(prefix_backup, dict)
-            and set(prefix_backup) == {"Tab"}
+            and set(prefix_backup) in ({"Tab"}, {"Tab", "Tab.note"})
             and all(value is None or isinstance(value, str)
                     for value in prefix_backup.values())
         )

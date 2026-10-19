@@ -308,7 +308,8 @@ def server_snapshot() -> ServerSnapshot | None:
     pane_titles: list[tuple[str, str, str]] = []
     for line in out.splitlines():
         fields = line.split("\t", 4)
-        if len(fields) != 5 or not all(fields[:4]):
+        if (len(fields) != 5 or not fields[0] or not fields[1]
+                or not fields[3]):
             return None
         session_name, pane_id, raw_pid, pane_dead, raw_title = fields
         if raw_title:
@@ -323,12 +324,17 @@ def server_snapshot() -> ServerSnapshot | None:
             pane_title = ""
         if pane_dead not in {"0", "1"}:
             return None
+        if pane_dead == "1":
+            # tmux 3.8 renders pane_pid as empty for a dead remain-on-exit
+            # pane. It is excluded from this live snapshot, so no PID is
+            # required here.
+            continue
         try:
             pane_pid = int(raw_pid)
         except ValueError:
             return None
-        if pane_dead == "1":
-            continue
+        if pane_pid <= 0:
+            return None
         sessions.add(session_name)
         panes.add(pane_id)
         session_pids.setdefault(session_name, pane_pid)
@@ -684,13 +690,20 @@ def pane_identity(pane_id: str) -> PaneIdentity | None:
         fields = raw.split("\t")
         if len(fields) != 8:
             return None
+        dead = fields[5] == "1"
+        # tmux 3.8 leaves ``pane_pid`` empty after a pane dies. Keep zero as
+        # an internal dead-pane sentinel so callers can still identify and
+        # reap the exact remain-on-exit pane; live panes retain positive PIDs.
+        pane_pid = 0 if dead and not fields[1] else int(fields[1])
+        if pane_pid < 0 or (not dead and pane_pid == 0):
+            return None
         return PaneIdentity(
             pane_id=fields[0],
-            pane_pid=int(fields[1]),
+            pane_pid=pane_pid,
             session_name=fields[2],
             session_id=fields[3],
             window_id=fields[4],
-            dead=fields[5] == "1",
+            dead=dead,
             width=int(fields[6]),
             height=int(fields[7]),
         )
@@ -766,17 +779,24 @@ def _tmux_state_snapshot(
             ):
                 return None
             attached = int(attached_raw)
+            dead = dead_raw == "1"
+            pane_pid = (
+                0 if dead and not pane_pid_raw else int(pane_pid_raw)
+            )
             pane = PaneIdentity(
                 pane_id=pane_id,
-                pane_pid=int(pane_pid_raw),
+                pane_pid=pane_pid,
                 session_name=actual_name,
                 session_id=session_id,
                 window_id=window_id,
-                dead=dead_raw == "1",
+                dead=dead,
                 width=int(width_raw),
                 height=int(height_raw),
             )
-            if attached < 0 or pane.pane_pid <= 0 or pane.width <= 0 or pane.height <= 0:
+            if (attached < 0
+                    or (pane.dead and pane.pane_pid < 0)
+                    or (not pane.dead and pane.pane_pid <= 0)
+                    or pane.width <= 0 or pane.height <= 0):
                 return None
             key = (actual_name, session_id)
             group = grouped.setdefault(
@@ -3252,6 +3272,37 @@ def read_prefix_target_binding() -> PrefixTargetBindingBackup:
     return {_PREFIX_TARGET_KEY: _read_key_binding("prefix", _PREFIX_TARGET_KEY)}
 
 
+def _prefix_target_note() -> str | None:
+    """Return Prefix-Tab's descriptive note without its rendered key prefix."""
+    if tmux_version() < (3, 2):
+        return None
+    try:
+        raw = subprocess.check_output(
+            ["tmux", "list-keys", "-N", "-T", "prefix", "-1",
+             _PREFIX_TARGET_KEY],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except (OSError, subprocess.CalledProcessError, UnicodeError):
+        return None
+    fields = raw.split(None, 2)
+    return fields[2] if len(fields) == 3 else None
+
+
+def _tmux_38_default_prefix_target(binding: str, note: str | None) -> bool:
+    """Whether *binding* is tmux 3.8's annotated stock Prefix-Tab action."""
+    if tmux_version() < (3, 8) or note != "Switch to a window":
+        return False
+    try:
+        command = tuple(shlex.split(_binding_command(binding)))
+    except ValueError:
+        return False
+    return command == (
+        "new-pane", "-E", "-X", "0", "-Y", "0", "-x", "75%", "-y",
+        "30%", ";", "move-pane", "-P", "bottom-centre", ";",
+        "switch-mode", "-kw",
+    )
+
+
 def prepare_prefix_target_binding() -> PrefixTargetBindingBackup | None:
     if tmux_version() < (2, 7):
         return None
@@ -3260,8 +3311,9 @@ def prepare_prefix_target_binding() -> PrefixTargetBindingBackup | None:
     if binding and _PREFIX_TARGET_MARKER in binding:
         return None
     # A server-global wrapper cannot preserve repeat semantics only outside
-    # Railmux. Notes are likewise absent from normal list-keys output and would
-    # be lost on restoration, so leave either kind of user binding untouched.
+    # Railmux. Preserve tmux 3.8's known stock note explicitly; leave unknown
+    # annotated user bindings untouched rather than risking lossy restoration.
+    note: str | None = None
     if binding is not None:
         if re.match(r"^bind-key\s+-r\b", binding):
             return None
@@ -3270,17 +3322,10 @@ def prepare_prefix_target_binding() -> PrefixTargetBindingBackup | None:
         except ValueError:
             return None
         if tmux_version() >= (3, 2):
-            try:
-                note = subprocess.check_output(
-                    ["tmux", "list-keys", "-N", "-T", "prefix", "-1",
-                     _PREFIX_TARGET_KEY],
-                    stderr=subprocess.DEVNULL,
-                ).decode().strip()
-            except (subprocess.CalledProcessError, FileNotFoundError):
+            note = _prefix_target_note()
+            if note and not _tmux_38_default_prefix_target(binding, note):
                 return None
-            if note:
-                return None
-    return backup
+    return {**backup, "Tab.note": note}
 
 
 def set_prefix_target_binding(
@@ -3376,7 +3421,15 @@ def restore_prefix_target_binding(
                 prefix="railmux-prefix-target-", suffix=".conf")
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                    fh.write(original + "\n")
+                    note = backup.get("Tab.note")
+                    restored = original
+                    if note:
+                        restored = original.replace(
+                            "bind-key",
+                            f"bind-key -N {shlex.quote(note)}",
+                            1,
+                        )
+                    fh.write(restored + "\n")
                 subprocess.check_call(
                     ["tmux", "source-file", path],
                     stdout=subprocess.DEVNULL,

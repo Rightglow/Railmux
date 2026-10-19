@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workspace-qualified terminal title when newer Codex app-server releases no
   longer expose a rollout file descriptor. The title remains display-only and
   never weakens UUID binding or Resume/Delete authority.
+- Support tmux 3.8's empty PID for dead panes and its new annotated stock
+  Prefix-Tab binding while preserving that binding and note exactly on exit.
 
 ## [0.4.2.dev1] - 2026-08-24
 

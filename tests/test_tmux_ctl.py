@@ -220,6 +220,20 @@ def test_server_snapshot_collects_sessions_and_panes():
     ]
 
 
+def test_server_snapshot_accepts_tmux_38_empty_dead_pane_pid():
+    output = (
+        "cc-live\t%1\t101\t0\tlive\n"
+        "cc-dead\t%2\t\t1\tdead\n"
+    )
+    with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
+         _mock_check_output(output):
+        snapshot = server_snapshot()
+
+    assert snapshot is not None
+    assert snapshot.sessions == frozenset({"cc-live"})
+    assert snapshot.panes == frozenset({"%1"})
+
+
 def test_server_snapshot_rejects_malformed_output():
     with patch("railmux.tmux_ctl.in_tmux", return_value=True), \
          _mock_check_output("cc-one %1\n"):
@@ -291,6 +305,15 @@ def test_pane_identity_parses_stable_location_outside_tmux():
         "%7", 4242, "agent", "$2", "@3", False, 91, 31)
     assert call.call_args.args[0][:5] == [
         "tmux", "display-message", "-p", "-t", "%7"]
+
+
+def test_pane_identity_accepts_tmux_38_empty_dead_pane_pid():
+    output = "%7\t\tagent\t$2\t@3\t1\t91\t31\n"
+    with _mock_check_output(output):
+        pane = tmux_ctl.pane_identity("%7")
+
+    assert pane == tmux_ctl.PaneIdentity(
+        "%7", 0, "agent", "$2", "@3", True, 91, 31)
 
 
 def test_session_topology_requires_exact_server_results(monkeypatch):
@@ -1144,6 +1167,22 @@ def test_prefix_target_binding_rejects_unpreservable_user_binding():
 
     assert not tmux_ctl.set_prefix_target_binding(
         {"Tab": "not replayable tmux config"}, "owner123")
+
+
+def test_prefix_target_binding_accepts_tmux_38_stock_note():
+    stock = (
+        'bind-key -T prefix Tab new-pane -E -X 0 -Y 0 -x "75%" '
+        '-y "30%" \\; move-pane -P bottom-centre \\; switch-mode -kw'
+    )
+    with patch.object(tmux_ctl, "tmux_version", return_value=(3, 8)), \
+            patch.object(tmux_ctl, "read_prefix_target_binding",
+                         return_value={"Tab": stock}), \
+            patch.object(tmux_ctl, "_prefix_target_note",
+                         return_value="Switch to a window"):
+        assert tmux_ctl.prepare_prefix_target_binding() == {
+            "Tab": stock,
+            "Tab.note": "Switch to a window",
+        }
 
 
 def test_unset_window_user_option_requires_exact_owner_value():
