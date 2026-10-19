@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev2] - 2026-10-19
+
+### Fixed
+
+- Replace a stale ``(new)`` Running label from the exact Codex pane's bounded,
+  workspace-qualified terminal title when newer Codex app-server releases no
+  longer expose a rollout file descriptor. The title remains display-only and
+  never weakens UUID binding or Resume/Delete authority.
+
 ## [0.4.2.dev1] - 2026-08-24
 
 ### Added
@@ -3268,7 +3277,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev2...HEAD
+[0.4.2.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev1...v0.4.2.dev2
 [0.4.2.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2.dev1
 [0.4.1]: https://github.com/Rightglow/Railmux/compare/v0.4.0...v0.4.1
 [0.4.1.dev6]: https://github.com/Rightglow/Railmux/compare/v0.4.1.dev5...v0.4.1.dev6
