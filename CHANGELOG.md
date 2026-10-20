@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev6] - 2026-10-20
+
+### Fixed
+
+- Make ``railmux ssh`` Claude history look like Claude's own view. Rows are
+  word-wrapped to the pane with hanging indents, markdown tables are drawn
+  as boxes, loaded skill instructions and other meta prompts are hidden,
+  background-task notifications appear as one status line instead of raw
+  XML, and truncated tool output no longer shows literal ``[2m…[0m`` text.
+- Trim the duplicated newest message even when the top of the live screen
+  shows content the transcript renders differently, such as an edit diff.
+
 ## [0.4.2.dev5] - 2026-10-20
 
 ### Fixed
