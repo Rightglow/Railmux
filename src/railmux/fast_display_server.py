@@ -1747,6 +1747,83 @@ def _transcript_rows(
         os.close(fd)
 
 
+_OVERLAP_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
+_OVERLAP_SPACE_RE = re.compile(r"\s+")
+_OVERLAP_ANCHOR_CHARS = 12
+_OVERLAP_SINGLE_ANCHOR_CHARS = 24
+_OVERLAP_SEARCH_SCREENS = 4
+_OVERLAP_MIN_SEARCH_ROWS = 200
+
+
+def _overlap_text(row: bytes) -> str:
+    """Return a row's visible text without styling or any whitespace.
+
+    The transcript and the provider wrap and indent the same message
+    differently, so only the whitespace-free character stream is comparable.
+    """
+    text = _OVERLAP_STYLE_RE.sub(b"", row).decode("utf-8", errors="replace")
+    return _OVERLAP_SPACE_RE.sub("", text)
+
+
+def _transcript_rows_before_screen(
+    transcript_rows: Sequence[bytes],
+    screen_rows: Sequence[bytes],
+) -> int:
+    """Return how many transcript rows precede the live screen's content.
+
+    Transcript-backed history appends the live viewport after the transcript,
+    whose tail usually holds the same newest message. Locate the screen's
+    text in the transcript tail through distinctive anchor rows and cut the
+    transcript where the screen begins. Two anchors must agree on that start
+    unless one long anchor is the only candidate; without a credible match
+    every transcript row is kept.
+    """
+    total = len(transcript_rows)
+    window = max(
+        _OVERLAP_MIN_SEARCH_ROWS, _OVERLAP_SEARCH_SCREENS * len(screen_rows))
+    first = max(0, total - window)
+    row_starts: list[int] = []
+    parts: list[str] = []
+    offset = 0
+    for row in transcript_rows[first:]:
+        row_starts.append(offset)
+        text = _overlap_text(row)
+        parts.append(text)
+        offset += len(text)
+    haystack = "".join(parts)
+    screen_offset = 0
+    starts: list[tuple[int, int]] = []
+    for row in screen_rows:
+        text = _overlap_text(row)
+        if len(text) >= _OVERLAP_ANCHOR_CHARS and haystack.count(text) == 1:
+            starts.append((haystack.index(text) - screen_offset, len(text)))
+            if len(starts) == 2:
+                break
+        screen_offset += len(text)
+    if not starts:
+        return total
+    if len(starts) == 1:
+        if starts[0][1] < _OVERLAP_SINGLE_ANCHOR_CHARS:
+            return total
+    else:
+        # Allow small rendering differences (list numbering, bullets).
+        tolerance = 16 + abs(starts[0][0]) // 20
+        if abs(starts[0][0] - starts[1][0]) > tolerance:
+            return total
+    start = max(0, starts[0][0])
+    # Keep a row that begins before the screen: it may carry text the screen
+    # no longer shows, and a partial duplicate is better than a loss.
+    keep = len(row_starts)
+    for index, row_start in enumerate(row_starts):
+        if row_start >= start:
+            keep = index
+            break
+    # Drop trailing blank rows so the screen is not preceded by a gap.
+    while keep and not parts[keep - 1]:
+        keep -= 1
+    return first + keep
+
+
 def _capture_pane_history(
     pyte: object,
     pane: _PaneGeometry,
@@ -1852,14 +1929,18 @@ def _capture_pane_history(
     transcript_used = transcript_entry is not None and bool(transcript_entry.rows)
     if transcript_used:
         assert transcript_entry is not None
-        transcript_lines = transcript_entry.rows
+        kept = _transcript_rows_before_screen(transcript_entry.rows, current_raw)
+        trimmed = len(transcript_entry.rows) - kept
+        transcript_lines = transcript_entry.rows[:kept]
         history_count = max(0, max_lines - pane.height)
         source_lines = (
             transcript_lines[-history_count:] if history_count else ()
         ) + current_raw
         timeline_end = max(
             pane.height,
-            (transcript_entry.total_rows or len(transcript_entry.rows)) + pane.height,
+            (transcript_entry.total_rows or len(transcript_entry.rows))
+            - trimmed
+            + pane.height,
         )
     else:
         source_lines = rendered_raw
@@ -1910,7 +1991,7 @@ def _capture_pane_history(
             budget_truncated
             or (
                 transcript_entry.more_available
-                or len(transcript_entry.rows) + pane.height > len(lines)
+                or len(transcript_lines) + pane.height > len(lines)
                 if transcript_used and transcript_entry is not None
                 else pane.history_size + pane.height > len(lines)
             )

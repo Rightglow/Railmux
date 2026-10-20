@@ -1593,6 +1593,85 @@ def test_server_claude_history_uses_stable_transcript_suffix(monkeypatch):
     assert hot.lines[-2:] == (b"live-a", b"live-b")
 
 
+def test_server_claude_history_drops_transcript_tail_shown_on_screen(monkeypatch):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        24,
+        4,
+        mouse_forwardable=True,
+        alternate_on=True,
+        transcript_source="exact-marker",
+        transcript_backed=True,
+        claude_history_policy="local",
+    )
+    # The transcript wraps the newest answer at the pane edge while the live
+    # Claude screen uses a hanging indent and styling for the same text.
+    transcript_rows = (
+        b"\x1b[0mold question here\x1b[0m",
+        b"\x1b[0m\x1b[0m",
+        b"\x1b[0m\xe2\x97\x8f first answer line alph",
+        b"a beta gamma delta\x1b[0m",
+        b"\x1b[0m  second answer line kept\x1b[0m",
+    )
+    live = (
+        b"\xe2\x97\x8f first answer line",
+        b"  \x1b[1malpha beta gamma delta\x1b[0m",
+        b"  second answer line kept",
+        b"\xe2\x9d\xaf",
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"\n".join(live) + b"\n",
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_transcript_rows",
+        lambda *_args, **_kwargs: fast_display_server._TranscriptCacheEntry(
+            (1, 2, 3, 4), transcript_rows, False
+        ),
+    )
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
+    )
+
+    snapshot = fast_display_server._capture_pane_history(object(), pane, 1, 300)
+
+    assert snapshot is not None
+    assert snapshot.lines == (transcript_rows[0],) + live
+    assert snapshot.timeline_end == 1 + pane.height
+
+
+def test_transcript_overlap_keeps_rows_without_credible_screen_match():
+    rows = tuple(
+        f"repeated status line number {index % 2}".encode() for index in range(8)
+    )
+    unrelated = (b"nothing in common with the transcript at all", b"")
+    repeated = (b"repeated status line number 0", b"repeated status line number 1")
+    short = (b"tiny", b"")
+
+    keep = fast_display_server._transcript_rows_before_screen
+    assert keep(rows, unrelated) == len(rows)
+    assert keep(rows, repeated) == len(rows)
+    assert keep(rows, short) == len(rows)
+    assert keep((), unrelated) == 0
+
+
+def test_transcript_overlap_rejects_disagreeing_anchors():
+    rows = (
+        b"first distinctive anchor row",
+        b"filler " * 20,
+        b"second distinctive anchor row",
+    )
+    screen = (b"second distinctive anchor row", b"first distinctive anchor row")
+
+    assert fast_display_server._transcript_rows_before_screen(rows, screen) == 3
+
+
 @pytest.mark.parametrize(
     ("policy", "choice_required"),
     [("ask", True), ("native", False)],
