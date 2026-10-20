@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev4] - 2026-10-20
+
+### Fixed
+
+- Stop transcript-backed history from showing the newest message twice. The
+  transcript tail that the live screen already shows is now matched
+  whitespace-insensitively and dropped, so scrolling up continues seamlessly
+  from the screen into older history. Without a credible match every
+  transcript row is kept.
+- Follow Claude Code ``continued-in`` records to the newer session file.
+  Local Claude history in a pane whose conversation moved to a new session
+  previously stopped at the move; it now includes every later turn.
+
 ## [0.4.2.dev3] - 2026-10-20
 
 ### Fixed
