@@ -898,7 +898,7 @@ def test_claude_native_user_prompt_keeps_raw_markdown():
     assert "keep **this** raw" in rendered
 
 
-def _native(records: list[dict], width: int | None = None) -> str:
+def _native(records, width=None):
     text = "".join(json.dumps(record) + "\n" for record in records)
     return "".join(format_transcript(
         io.StringIO(text), fmt="claude", claude_native=True, width=width))
