@@ -374,7 +374,7 @@ class _TranscriptFormatCacheEntry:
 _TRANSCRIPT_CACHE: OrderedDict[tuple[str, int], _TranscriptCacheEntry] = OrderedDict()
 _TRANSCRIPT_CACHE_LIMIT = 4
 _TRANSCRIPT_FORMAT_CACHE: OrderedDict[
-    tuple[str, str], _TranscriptFormatCacheEntry
+    tuple[str, str, int | None], _TranscriptFormatCacheEntry
 ] = OrderedDict()
 _TRANSCRIPT_FORMAT_CACHE_LIMIT = 2
 _TRANSCRIPT_FORMAT_CACHE_MAX_CHARS = 4 * 1024 * 1024
@@ -1699,7 +1699,9 @@ def _transcript_rows(
         ):
             _TRANSCRIPT_CACHE.move_to_end(key)
             return cached
-        format_key = (str(source.path), source.provider)
+        # Claude history is pre-wrapped to the pane; Codex text is not.
+        format_width = width if source.provider == "claude" else None
+        format_key = (str(source.path), source.provider, format_width)
         formatted_entry = _TRANSCRIPT_FORMAT_CACHE.get(format_key)
         if formatted_entry is not None and formatted_entry.identity == identity:
             _TRANSCRIPT_FORMAT_CACHE.move_to_end(format_key)
@@ -1715,6 +1717,7 @@ def _transcript_rows(
                     io.StringIO(raw),
                     source.provider,
                     claude_native=source.provider == "claude",
+                    width=format_width,
                 )
             )
             if len(formatted) <= _TRANSCRIPT_FORMAT_CACHE_MAX_CHARS:
@@ -1773,10 +1776,12 @@ def _transcript_rows_before_screen(
 
     Transcript-backed history appends the live viewport after the transcript,
     whose tail usually holds the same newest message. Locate the screen's
-    text in the transcript tail through distinctive anchor rows and cut the
-    transcript where the screen begins. Two anchors must agree on that start
-    unless one long anchor is the only candidate; without a credible match
-    every transcript row is kept.
+    text in the transcript tail through distinctive anchor rows: the largest
+    group of anchors that agree on where the screen starts wins, so screen
+    regions the transcript renders differently (such as a diff) cannot veto
+    the match. A lone anchor must be long and unopposed. From the earliest agreeing anchor
+    the cut walks back over screen rows that also precede it in the
+    transcript; without a credible match every transcript row is kept.
     """
     total = len(transcript_rows)
     window = max(
@@ -1791,26 +1796,42 @@ def _transcript_rows_before_screen(
         parts.append(text)
         offset += len(text)
     haystack = "".join(parts)
+    screen_texts = [_overlap_text(row) for row in screen_rows]
     screen_offset = 0
-    starts: list[tuple[int, int]] = []
-    for row in screen_rows:
-        text = _overlap_text(row)
+    # (screen row, transcript position, anchor length, implied screen start)
+    anchors: list[tuple[int, int, int, int]] = []
+    for index, text in enumerate(screen_texts):
         if len(text) >= _OVERLAP_ANCHOR_CHARS and haystack.count(text) == 1:
-            starts.append((haystack.index(text) - screen_offset, len(text)))
-            if len(starts) == 2:
-                break
+            position = haystack.index(text)
+            anchors.append(
+                (index, position, len(text), position - screen_offset))
         screen_offset += len(text)
-    if not starts:
+    if not anchors:
         return total
-    if len(starts) == 1:
-        if starts[0][1] < _OVERLAP_SINGLE_ANCHOR_CHARS:
-            return total
-    else:
+
+    def agreeing(anchor: tuple[int, int, int, int]) -> list:
         # Allow small rendering differences (list numbering, bullets).
-        tolerance = 16 + abs(starts[0][0]) // 20
-        if abs(starts[0][0] - starts[1][0]) > tolerance:
-            return total
-    start = max(0, starts[0][0])
+        tolerance = 16 + abs(anchor[3]) // 20
+        return [
+            other for other in anchors
+            if abs(other[3] - anchor[3]) <= tolerance
+        ]
+
+    group = max(
+        (agreeing(anchor) for anchor in anchors),
+        key=lambda members: (len(members), max(m[3] for m in members)),
+    )
+    if len(group) == 1 and (
+        len(anchors) > 1 or group[0][2] < _OVERLAP_SINGLE_ANCHOR_CHARS
+    ):
+        return total
+    index, start, _length, _implied = min(group)
+    for text in reversed(screen_texts[:index]):
+        if not text:
+            continue
+        if start < len(text) or haystack[start - len(text):start] != text:
+            break
+        start -= len(text)
     # Keep a row that begins before the screen: it may carry text the screen
     # no longer shows, and a partial duplicate is better than a loss.
     keep = len(row_starts)

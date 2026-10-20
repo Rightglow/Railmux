@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -895,3 +896,78 @@ def test_claude_native_user_prompt_keeps_raw_markdown():
     ))
 
     assert "keep **this** raw" in rendered
+
+
+def _native(records: list[dict], width: int | None = None) -> str:
+    text = "".join(json.dumps(record) + "\n" for record in records)
+    return "".join(format_transcript(
+        io.StringIO(text), fmt="claude", claude_native=True, width=width))
+
+
+def _plain_rows(rendered: str) -> list[str]:
+    return re.sub(r"\x1b\[[0-9;]*m", "", rendered).split("\n")
+
+
+def _assistant(text: str) -> dict:
+    return {"type": "assistant", "message": {"role": "assistant", "content": [
+        {"type": "text", "text": text},
+    ]}}
+
+
+def test_claude_native_history_hides_meta_and_summarizes_task_notifications():
+    rendered = _native([
+        {"type": "user", "isMeta": True, "message": {
+            "role": "user", "content": "Base directory for this skill: /x"}},
+        {"type": "user", "message": {"role": "user", "content": (
+            "<task-notification>\n<task-id>b1</task-id>\n"
+            "<summary>Background command \"wait\" completed</summary>\n"
+            "</task-notification>"
+        )}},
+        {"type": "assistant", "message": {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "t1", "name": "Skill",
+            "input": {"skill": "dev-env"},
+        }]}},
+    ])
+
+    assert "Base directory" not in rendered
+    assert "<task" not in rendered and "❯" not in rendered
+    assert "● Background command \"wait\" completed" in "\n".join(
+        _plain_rows(rendered))
+    assert "Skill{RESET}(dev-env)".format(RESET=RESET) in rendered
+
+
+def test_claude_native_truncated_tool_output_keeps_ellipsis_styled():
+    rendered = _native([{"type": "user", "message": {"role": "user", "content": [{
+        "type": "tool_result", "tool_use_id": "t1", "content": "x" * 600,
+    }]}}])
+
+    assert "\033[2m…\033[0m" in rendered
+    assert "[2m" not in rendered.replace("\033[2m", "")
+
+
+def test_claude_native_history_word_wraps_with_hanging_indent():
+    rendered = _native([_assistant(
+        "intro words here\n- alpha beta gamma delta epsilon zeta")], width=20)
+
+    assert _plain_rows(rendered)[1:-1] == [
+        "● intro words here",
+        "  - alpha beta gamma",
+        "    delta epsilon",
+        "    zeta",
+    ]
+
+
+def test_claude_native_history_draws_tables_that_fit_the_pane():
+    table = "| Name | Notes |\n|---|---|\n| **a** | one two three four |"
+    rows = _plain_rows(_native([_assistant(table)], width=30))[1:-1]
+
+    assert rows == [
+        "● ┌──────┬───────────────────┐",
+        "  │ Name │ Notes             │",
+        "  ├──────┼───────────────────┤",
+        "  │ a    │ one two three     │",
+        "  │      │ four              │",
+        "  └──────┴───────────────────┘",
+    ]
+    assert all(len(row) <= 30 for row in rows)
+    assert table.splitlines()[0] in _native([_assistant(table)])

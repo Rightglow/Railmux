@@ -236,6 +236,186 @@ _MD_INLINE_RE = re.compile(
     r"|__(?=\S)(.+?)(?<=\S)__"
     r"|(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])"
 )
+_MD_TABLE_SEPARATOR_RE = re.compile(
+    r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
+_MD_TABLE_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+_LIST_HANG_RE = re.compile(r" *(?:(?:[-*+]|\d+[.)]) +)?")
+_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
+_WRAP_TOKEN_RE = re.compile(r"\x1b\[[0-9;]*m| +|[^ \x1b]+")
+_TASK_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
+
+_char_width_function = None
+
+
+def _char_width(char: str) -> int:
+    """Terminal cell width of *char*, matching pyte's ``wcwidth`` when present."""
+    global _char_width_function
+    if _char_width_function is None:
+        try:
+            from wcwidth import wcwidth as _char_width_function
+        except ImportError:
+            import unicodedata
+
+            def _char_width_function(value: str) -> int:
+                if unicodedata.combining(value):
+                    return 0
+                return 2 if unicodedata.east_asian_width(value) in "WF" else 1
+    return max(0, _char_width_function(char))
+
+
+def _visible_width(text: str) -> int:
+    # Claude pads an emoji-presentation selector (as in "⚠️") to two cells.
+    return sum(
+        1 if char == "\ufe0f" else _char_width(char)
+        for char in _SGR_RE.sub("", text)
+    )
+
+
+def _wrap_styled(line: str, width: int, hang: int) -> list[str]:
+    """Word-wrap one styled line the way Claude's Ink renderer does.
+
+    Rows break at spaces; only a word wider than a whole row is split. Rows
+    after the first are indented by *hang* columns so list items and message
+    bodies keep their hanging indent instead of restarting at column zero.
+    """
+    line = line.expandtabs(8)
+    if width <= 0 or _visible_width(line) <= width:
+        return [line]
+    if hang >= width // 2:
+        hang = 0
+    rows: list[str] = []
+    row: list[str] = []
+    column = 0
+
+    def newline() -> None:
+        nonlocal row, column
+        rows.append("".join(row).rstrip(" "))
+        row = [" " * hang]
+        column = hang
+
+    for token in _WRAP_TOKEN_RE.findall(line):
+        if token.startswith("\x1b"):
+            row.append(token)
+            continue
+        token_width = _visible_width(token)
+        if token.startswith(" "):
+            if column + token_width <= width:
+                row.append(token)
+                column += token_width
+            else:
+                newline()
+            continue
+        if (
+            column + token_width > width
+            and column > hang
+            and token_width <= width - hang
+        ):
+            newline()
+        for char in token:
+            char_width = _char_width(char)
+            if column + char_width > width and column > hang:
+                newline()
+            row.append(char)
+            column += char_width
+    rows.append("".join(row).rstrip(" "))
+    return rows
+
+
+def _hang_for(row: str, prefix: int) -> int:
+    """Hanging indent for a row whose own content starts after *prefix* cells."""
+    content = _SGR_RE.sub("", row)[prefix:]
+    return prefix + len(_LIST_HANG_RE.match(content).group(0))
+
+
+def _close_fragments(fragments: list[str]) -> list[str]:
+    """Make each wrapped fragment carry and close its own SGR state.
+
+    Table cells sit beside other cells on one row, so a style that continues
+    onto a cell's next fragment must not leak across the borders between.
+    """
+    closed: list[str] = []
+    active: list[str] = []
+    for fragment in fragments:
+        prefix = "".join(active)
+        for code in _SGR_RE.findall(fragment):
+            if code == RESET:
+                active.clear()
+            else:
+                active.append(code)
+        closed.append(f"{prefix}{fragment}{RESET}")
+    return closed
+
+
+def _table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|") and not stripped.endswith("\\|"):
+        stripped = stripped[:-1]
+    return [
+        cell.strip().replace("\\|", "|")
+        for cell in _MD_TABLE_CELL_SPLIT_RE.split(stripped)
+    ]
+
+
+def _markdown_table(lines: list[str], width: int) -> list[str] | None:
+    """Draw a markdown table as Claude does: a box whose cells wrap to fit.
+
+    *lines* holds the header, the separator and the body rows. ``None`` means
+    the columns cannot fit *width*, and the caller keeps the source text.
+    """
+    header = [
+        f"{BOLD}{_markdown_inline(cell, bold=True)}{BOLD_OFF}"
+        for cell in _table_cells(lines[0])
+    ]
+    count = len(header)
+    body = []
+    for line in lines[2:]:
+        cells = [_markdown_inline(cell) for cell in _table_cells(line)]
+        body.append((cells + [""] * count)[:count])
+    available = width - 1 - 3 * count
+    if available < 3 * count:
+        return None
+    natural = [
+        max(1, *(_visible_width(row[index]) for row in [header, *body]))
+        for index in range(count)
+    ]
+    widths = natural
+    if sum(natural) > available:
+        low, high = 3, max(natural)
+        while low < high:
+            cap = (low + high + 1) // 2
+            if sum(min(value, cap) for value in natural) <= available:
+                low = cap
+            else:
+                high = cap - 1
+        widths = [min(value, low) for value in natural]
+        spare = available - sum(widths)
+        for index, value in enumerate(natural):
+            if spare and value > widths[index]:
+                widths[index] += 1
+                spare -= 1
+
+    def border(left: str, middle: str, right: str) -> str:
+        return left + middle.join("─" * (cell + 2) for cell in widths) + right
+
+    rendered = [border("┌", "┬", "┐")]
+    for row_index, row in enumerate([header, *body]):
+        if row_index:
+            rendered.append(border("├", "┼", "┤"))
+        fragments = [
+            _close_fragments(_wrap_styled(cell, widths[index], 0))
+            for index, cell in enumerate(row)
+        ]
+        for line_index in range(max(len(cell) for cell in fragments)):
+            parts = []
+            for index, cell in enumerate(fragments):
+                text = cell[line_index] if line_index < len(cell) else ""
+                padding = " " * (widths[index] - _visible_width(text))
+                parts.append(f" {text}{padding} ")
+            rendered.append("│" + "│".join(parts) + "│")
+    rendered.append(border("└", "┴", "┘"))
+    return rendered
 
 
 def _markdown_inline(line: str, *, bold: bool = False) -> str:
@@ -260,21 +440,39 @@ def _markdown_inline(line: str, *, bold: bool = False) -> str:
     return _MD_INLINE_RE.sub(replace, line)
 
 
-def _markdown_lines(lines: list[str]) -> list[str]:
+def _markdown_lines(lines: list[str], width: int | None = None) -> list[str]:
     """Approximate Claude Code's markdown rendering for sanitized text lines.
 
     Styled lines end with a full reset: every span is already closed, and the
-    reset keeps row wrappers from carrying an ever-growing SGR prefix.
+    reset keeps row wrappers from carrying an ever-growing SGR prefix. Tables
+    are drawn as boxes only when the target *width* is known.
     """
     rendered: list[str] = []
     in_fence = False
-    for line in lines:
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
         if _MD_FENCE_RE.match(line):
             in_fence = not in_fence
             continue
         if in_fence:
             rendered.append(line)
             continue
+        if (
+            width is not None
+            and line.lstrip().startswith("|")
+            and index < len(lines)
+            and _MD_TABLE_SEPARATOR_RE.match(lines[index])
+        ):
+            end = index + 1
+            while end < len(lines) and lines[end].lstrip().startswith("|"):
+                end += 1
+            table = _markdown_table(lines[index - 1:end], width)
+            if table is not None:
+                rendered.extend(table)
+                index = end
+                continue
         heading = _MD_HEADING_RE.match(line)
         if heading:
             inner = _markdown_inline(heading.group(2), bold=True)
@@ -285,23 +483,38 @@ def _markdown_lines(lines: list[str]) -> list[str]:
     return rendered
 
 
+def _wrap_rows(rows: list[str], width: int | None, prefix: int) -> list[str]:
+    """Pre-wrap rendered rows when the pane *width* is known."""
+    if width is None:
+        return rows
+    return [
+        wrapped
+        for row in rows
+        for wrapped in _wrap_styled(row, width, _hang_for(row, prefix))
+    ]
+
+
 def _claude_native_block(
     marker: str, text: str, *, colour: str, markdown: bool = False,
+    width: int | None = None,
 ) -> str:
     """Render a static, non-interactive approximation of one Claude TUI block."""
     lines = _sanitize_text(text).strip().splitlines()
     if markdown:
-        lines = _markdown_lines(lines)
+        lines = _markdown_lines(
+            lines, None if width is None else width - 2)
     if not lines:
         return ""
-    continuation = "\n".join(f"  {line}" for line in lines[1:])
-    result = f"\n{colour}{marker}{RESET} {lines[0]}"
-    if continuation:
-        result += "\n" + continuation
-    return result + "\n"
+    rows = [
+        f"{colour}{marker}{RESET} {lines[0]}",
+        *(f"  {line}" for line in lines[1:]),
+    ]
+    return "\n" + "\n".join(_wrap_rows(rows, width, 2)) + "\n"
 
 
-def _render_claude_native_user(record: dict) -> str | None:
+def _render_claude_native_user(
+    record: dict, width: int | None = None,
+) -> str | None:
     message = record.get("message")
     if not isinstance(message, dict):
         return None
@@ -316,11 +529,21 @@ def _render_claude_native_user(record: dict) -> str | None:
         ).strip()
     else:
         text = ""
-    return _claude_native_block("❯", text, colour=CLAUDE_ACCENT) or None
+    if text.startswith("<task-notification>"):
+        # Claude shows a finished background task as one status line, not as
+        # a prompt carrying the notification's XML.
+        summary = _TASK_SUMMARY_RE.search(text)
+        if summary is None:
+            return None
+        return _claude_native_block(
+            "●", summary.group(1).strip(), colour=CLAUDE_MUTED, width=width,
+        ) or None
+    return _claude_native_block(
+        "❯", text, colour=CLAUDE_ACCENT, width=width) or None
 
 
 def _render_claude_native_assistant(
-    record: dict, calls: dict[str, str],
+    record: dict, calls: dict[str, str], width: int | None = None,
 ):
     """Yield Claude-like read-only text/tool rows from semantic JSONL records."""
     message = record.get("message")
@@ -336,7 +559,7 @@ def _render_claude_native_assistant(
         if block_type == "text":
             rendered = _claude_native_block(
                 "●", str(block.get("text", "")), colour=CLAUDE_ACCENT,
-                markdown=True,
+                markdown=True, width=width,
             )
             if rendered:
                 yield rendered
@@ -352,20 +575,19 @@ def _render_claude_native_assistant(
         if isinstance(tool_input, dict):
             for key in (
                 "description", "command", "query", "pattern",
-                "file_path", "path", "url",
+                "file_path", "path", "url", "skill",
             ):
                 value = tool_input.get(key)
                 if isinstance(value, str) and value.strip():
                     summary = _sanitize_text(value.strip()).replace("\n", " ")
                     break
         suffix = f"({_truncate(summary, 180)})" if summary else ""
-        yield (
-            f"\n{CLAUDE_ACCENT}●{RESET} {BOLD}{name}{RESET}{suffix}\n"
-        )
+        row = f"{CLAUDE_ACCENT}●{RESET} {BOLD}{name}{RESET}{suffix}"
+        yield "\n" + "\n".join(_wrap_rows([row], width, 2)) + "\n"
 
 
 def _render_claude_native_tool_results(
-    record: dict, calls: dict[str, str],
+    record: dict, calls: dict[str, str], width: int | None = None,
 ):
     message = record.get("message")
     if not isinstance(message, dict):
@@ -382,13 +604,16 @@ def _render_claude_native_tool_results(
         tool_id = block.get("tool_use_id")
         if isinstance(tool_id, str):
             calls.pop(tool_id, None)
-        lines = _sanitize_text(_truncate(text, 500)).splitlines()
+        # _truncate sanitizes before appending its own styled ellipsis.
+        lines = _truncate(text, 500).splitlines()
         if not lines:
             continue
         colour = RED if block.get("is_error") is True else CLAUDE_MUTED
-        yield f"  {colour}⎿  {lines[0]}\n"
-        for line in lines[1:]:
-            yield f"     {line}\n"
+        rows = [f"  ⎿  {lines[0]}", *(f"     {line}" for line in lines[1:])]
+        yield colour
+        for row in rows:
+            for wrapped in _wrap_rows([row], width, 5):
+                yield f"{wrapped}\n"
         yield RESET
 
 
@@ -435,36 +660,36 @@ def _claude_current_branch(records: list[dict]) -> list[dict]:
 
 
 def _render_claude_records(
-    records: list[dict], *, claude_native: bool,
+    records: list[dict], *, claude_native: bool, width: int | None = None,
 ):
-    """Render only the active Claude branch from buffered JSONL records."""
+    """Render only the active Claude branch from buffered JSONL records.
+
+    *width* pre-wraps native rows to the pane like Claude's own renderer.
+    """
     calls: dict[str, str] = {}
     for record in _claude_current_branch(records):
         rtype = record.get("type", "")
         if rtype in _SKIP_TYPES:
             continue
-        if _is_real_user(record):
-            rendered = (
-                _render_claude_native_user(record)
-                if claude_native
-                else _render_user(record)
-            )
+        if not claude_native:
+            if _is_real_user(record):
+                rendered = _render_user(record)
+                if rendered:
+                    yield rendered
+            if rtype == "user":
+                yield from _render_claude_tool_results(record, calls)
+            elif rtype == "assistant":
+                yield from _render_assistant_blocks(record, calls)
+            continue
+        # Claude hides meta prompts such as a loaded skill's instructions.
+        if _is_real_user(record) and record.get("isMeta") is not True:
+            rendered = _render_claude_native_user(record, width)
             if rendered:
                 yield rendered
         if rtype == "user":
-            renderer = (
-                _render_claude_native_tool_results
-                if claude_native
-                else _render_claude_tool_results
-            )
-            yield from renderer(record, calls)
+            yield from _render_claude_native_tool_results(record, calls, width)
         elif rtype == "assistant":
-            renderer = (
-                _render_claude_native_assistant
-                if claude_native
-                else _render_assistant_blocks
-            )
-            yield from renderer(record, calls)
+            yield from _render_claude_native_assistant(record, calls, width)
 
 
 def format_transcript(
@@ -472,6 +697,7 @@ def format_transcript(
     fmt: str | None = None,
     *,
     claude_native: bool = False,
+    width: int | None = None,
 ):
     """Read a session JSONL and yield ANSI-formatted strings.
 
@@ -481,6 +707,9 @@ def format_transcript(
     When omitted (the default), the format is auto-detected from the record
     types actually present in the stream, so a bounded Codex rollout whose
     leading ``session_meta`` header was omitted still renders as Codex.
+
+    *width* (Claude native history only) wraps rows and draws tables for a
+    pane of that many cells.
 
     Callers should write each chunk to stdout, e.g.::
 
@@ -538,7 +767,7 @@ def format_transcript(
             claude_records.append(record)
         if _codex is False:
             yield from _render_claude_records(
-                claude_records, claude_native=claude_native)
+                claude_records, claude_native=claude_native, width=width)
     except OSError:
         yield f"{YELLOW}Could not read: {source}{RESET}\n"
     finally:

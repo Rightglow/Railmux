@@ -1672,6 +1672,28 @@ def test_transcript_overlap_rejects_disagreeing_anchors():
     assert fast_display_server._transcript_rows_before_screen(rows, screen) == 3
 
 
+def test_transcript_overlap_ignores_screen_regions_rendered_differently():
+    rows = (
+        b"older message mentioning edited readme line",
+        b"filler " * 20,
+        b"truncated tool output",
+        b"",
+        b"newest message first distinctive row",
+        b"newest message second distinctive row",
+    )
+    # A diff view tops the screen: one of its rows also occurs much earlier
+    # in the transcript, disagreeing with the anchors in the newest message.
+    screen = (
+        b"older message mentioning edited readme line",
+        b"+ added diff row only the screen shows",
+        b"",
+        b"newest message first distinctive row",
+        b"newest message second distinctive row",
+    )
+
+    assert fast_display_server._transcript_rows_before_screen(rows, screen) == 3
+
+
 @pytest.mark.parametrize(
     ("policy", "choice_required"),
     [("ask", True), ("native", False)],
@@ -1843,7 +1865,7 @@ def test_transcript_cache_evicts_least_recent_file_width(monkeypatch, tmp_path):
         fast_display_server._TRANSCRIPT_CACHE.clear()
 
 
-def test_transcript_format_cache_reuses_exact_identity_across_widths(
+def test_transcript_format_cache_reuses_exact_identity_per_width(
     monkeypatch, tmp_path,
 ):
     pyte = fast_display_server._extended_pyte(__import__("pyte"))
@@ -1871,16 +1893,22 @@ def test_transcript_format_cache_reuses_exact_identity_across_widths(
         assert fast_display_server._transcript_rows(
             pyte, marker, 40, allow_stale=False
         ) is not None
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 40, allow_stale=False
+        ) is not None
+        assert len(calls) == 1
+        # Claude history is wrapped for the pane, so a new width re-formats.
         assert fast_display_server._transcript_rows(
             pyte, marker, 10, allow_stale=False
         ) is not None
-        assert len(calls) == 1
+        assert len(calls) == 2
 
         path.write_text('{"type":"user","changed":true}\n')
         assert fast_display_server._transcript_rows(
-            pyte, marker, 20, allow_stale=False
+            pyte, marker, 10, allow_stale=False
         ) is not None
-        assert len(calls) == 2
+        assert len(calls) == 3
     finally:
         fast_display_server._TRANSCRIPT_CACHE.clear()
         fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
