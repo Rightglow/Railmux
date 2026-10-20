@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -23,6 +24,10 @@ RED = "\033[31m"
 RESET = "\033[0m"
 CLAUDE_ACCENT = "\033[38;5;147m"
 CLAUDE_MUTED = "\033[38;5;244m"
+ITALIC = "\033[3m"
+BOLD_OFF = "\033[22m"
+ITALIC_OFF = "\033[23m"
+FG_DEFAULT = "\033[39m"
 
 _CODEX_SYNTHETIC_PREFIXES = (
     "<environment_context>",
@@ -223,9 +228,70 @@ def _render_claude_tool_results(record: dict, calls: dict[str, str]):
         yield _truncate(text, 500) + "\n"
 
 
-def _claude_native_block(marker: str, text: str, *, colour: str) -> str:
+_MD_FENCE_RE = re.compile(r"^\s*(```|~~~)")
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+_MD_INLINE_RE = re.compile(
+    r"(`+)(.+?)\1"
+    r"|\*\*(?=\S)(.+?)(?<=\S)\*\*"
+    r"|__(?=\S)(.+?)(?<=\S)__"
+    r"|(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])"
+)
+
+
+def _markdown_inline(line: str, *, bold: bool = False) -> str:
+    """Style inline code, bold and italic spans like Claude's markdown view.
+
+    Only targeted "off" codes close each span, so an enclosing style (for
+    example a bold heading) survives an inner code or italic span. *bold*
+    marks an already-bold context whose nested strong spans must not end it.
+    """
+
+    def replace(match: re.Match[str]) -> str:
+        code, strong, strong_alt, emphasis = (
+            match.group(2), match.group(3), match.group(4), match.group(5))
+        if code is not None:
+            return f"{CLAUDE_ACCENT}{code}{FG_DEFAULT}"
+        if strong is not None or strong_alt is not None:
+            inner = _markdown_inline(
+                strong if strong is not None else strong_alt, bold=True)
+            return inner if bold else f"{BOLD}{inner}{BOLD_OFF}"
+        return f"{ITALIC}{_markdown_inline(emphasis, bold=bold)}{ITALIC_OFF}"
+
+    return _MD_INLINE_RE.sub(replace, line)
+
+
+def _markdown_lines(lines: list[str]) -> list[str]:
+    """Approximate Claude Code's markdown rendering for sanitized text lines.
+
+    Styled lines end with a full reset: every span is already closed, and the
+    reset keeps row wrappers from carrying an ever-growing SGR prefix.
+    """
+    rendered: list[str] = []
+    in_fence = False
+    for line in lines:
+        if _MD_FENCE_RE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            rendered.append(line)
+            continue
+        heading = _MD_HEADING_RE.match(line)
+        if heading:
+            inner = _markdown_inline(heading.group(2), bold=True)
+            rendered.append(f"{BOLD}{inner}{RESET}")
+            continue
+        styled = _markdown_inline(line)
+        rendered.append(styled + RESET if styled != line else line)
+    return rendered
+
+
+def _claude_native_block(
+    marker: str, text: str, *, colour: str, markdown: bool = False,
+) -> str:
     """Render a static, non-interactive approximation of one Claude TUI block."""
     lines = _sanitize_text(text).strip().splitlines()
+    if markdown:
+        lines = _markdown_lines(lines)
     if not lines:
         return ""
     continuation = "\n".join(f"  {line}" for line in lines[1:])
@@ -269,7 +335,8 @@ def _render_claude_native_assistant(
         block_type = block.get("type")
         if block_type == "text":
             rendered = _claude_native_block(
-                "●", str(block.get("text", "")), colour=CLAUDE_ACCENT
+                "●", str(block.get("text", "")), colour=CLAUDE_ACCENT,
+                markdown=True,
             )
             if rendered:
                 yield rendered

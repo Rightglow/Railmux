@@ -856,3 +856,42 @@ def test_transcript_unknown_prefix_does_not_force_claude_detection():
         }),
     ])
     assert "codex hello" in "".join(format_transcript(io.StringIO(text)))
+
+
+def test_claude_native_history_styles_assistant_markdown():
+    text = "\n".join([
+        "## Plan **now**",
+        "Use **bold**, `code_name` and *emphasis* in snake_case 2*3*4.",
+        "```",
+        "**literal** `kept`",
+        "```",
+    ])
+    record = {
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [
+            {"type": "text", "text": text},
+        ]},
+    }
+    rendered = "".join(format_transcript(
+        io.StringIO(json.dumps(record) + "\n"), fmt="claude", claude_native=True
+    ))
+
+    assert f"{BOLD}Plan now{RESET}" in rendered
+    assert f"{BOLD}bold\033[22m" in rendered
+    assert f"{CLAUDE_ACCENT}code_name\033[39m" in rendered
+    assert "\033[3memphasis\033[23m" in rendered
+    assert "snake_case 2*3*4." in rendered
+    assert "  **literal** `kept`\n" in rendered
+    assert "```" not in rendered
+
+
+def test_claude_native_user_prompt_keeps_raw_markdown():
+    record = {
+        "type": "user",
+        "message": {"role": "user", "content": "keep **this** raw"},
+    }
+    rendered = "".join(format_transcript(
+        io.StringIO(json.dumps(record) + "\n"), fmt="claude", claude_native=True
+    ))
+
+    assert "keep **this** raw" in rendered
