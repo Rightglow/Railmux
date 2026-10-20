@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev3] - 2026-10-20
+
+### Fixed
+
+- Keep assistant markdown styling in local Claude Code history. Scrolling a
+  transcript-backed Claude pane now renders headings and ``**bold**`` text as
+  bold, ``*emphasis*`` as italic, and inline code in Claude's accent colour,
+  and hides code-fence markers, instead of showing raw markdown. User prompts,
+  fenced code, and non-Claude transcripts stay verbatim.
+
 ## [0.4.2.dev2] - 2026-10-19
 
 ### Fixed
