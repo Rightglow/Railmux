@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from types import SimpleNamespace
@@ -517,6 +518,65 @@ def test_transcript_source_round_trip_opens_only_exact_same_user_file(tmp_path):
     opened = tmux_server.open_transcript_source(marker)
     assert opened is not None
     os.close(opened[1])
+
+
+def _continued_in(session_id: str) -> str:
+    return json.dumps({
+        "type": "continued-in",
+        "sessionId": "previous",
+        "continuedInSessionId": session_id,
+    }) + "\n"
+
+
+def test_claude_transcript_source_follows_continued_in_chain(tmp_path):
+    first, second, third = (
+        "47fca075-9cb8-44fb-a314-d57ef2256ad9",
+        "96fd3642-6c17-4c9b-8129-08d3d9db3e8a",
+        "02b59000-6bb4-4ec5-bdca-24f7a96b0467",
+    )
+    (tmp_path / f"{first}.jsonl").write_text(
+        '{"type":"user"}\n' + _continued_in(second))
+    (tmp_path / f"{second}.jsonl").write_text(
+        '{"type":"user"}\n' + _continued_in(third))
+    (tmp_path / f"{third}.jsonl").write_text('{"type":"assistant"}\n')
+    marker = tmux_server.encode_transcript_source(
+        "claude", first, tmp_path / f"{first}.jsonl")
+
+    opened = tmux_server.open_transcript_source(marker)
+
+    assert opened is not None
+    source, fd = opened
+    try:
+        assert source.session_id == third
+        assert source.path == tmp_path / f"{third}.jsonl"
+        assert os.read(fd, 100) == b'{"type":"assistant"}\n'
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        _continued_in("missing-successor"),
+        _continued_in("../escape"),
+        _continued_in("47fca075-9cb8-44fb-a314-d57ef2256ad9"),
+        _continued_in("96fd3642-6c17-4c9b-8129-08d3d9db3e8a") + '{"type":"user"}\n',
+    ],
+)
+def test_claude_transcript_source_keeps_file_without_valid_successor(
+    tmp_path, tail,
+):
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ad9"
+    path = tmp_path / f"{session_id}.jsonl"
+    path.write_text('{"type":"user"}\n' + tail)
+    (tmp_path / "96fd3642-6c17-4c9b-8129-08d3d9db3e8a.jsonl").write_text("{}\n")
+    marker = tmux_server.encode_transcript_source("claude", session_id, path)
+
+    opened = tmux_server.open_transcript_source(marker)
+
+    assert opened is not None
+    os.close(opened[1])
+    assert opened[0].session_id == session_id and opened[0].path == path
 
 
 def test_codex_transcript_source_requires_matching_rollout_file(tmp_path):

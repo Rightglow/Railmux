@@ -22,6 +22,8 @@ _SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,256}\Z")
 _HISTORY_SOURCE_SCHEMA = 1
 _TRANSCRIPT_SOURCE_SCHEMA = 1
 _MAX_TRANSCRIPT_SOURCE_BYTES = 8192
+_CONTINUATION_TAIL_BYTES = 4096
+_MAX_CONTINUATION_HOPS = 8
 _DEFAULT_DISCOVERY_TIMEOUT = 2.0
 _WINDOWS_DISCOVERY_TIMEOUT = 5.0
 
@@ -415,11 +417,8 @@ def decode_transcript_source(raw: str) -> TranscriptSource | None:
     return TranscriptSource(provider, session_id, path)
 
 
-def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
-    """Open an exact same-user transcript without following the final symlink."""
-    source = decode_transcript_source(raw)
-    if source is None:
-        return None
+def _open_owned_regular_file(path: Path) -> int | None:
+    """Open a same-user regular file without following the final symlink."""
     flags = os.O_RDONLY
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -427,7 +426,7 @@ def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
         flags |= os.O_NOFOLLOW
     fd = -1
     try:
-        fd = os.open(source.path, flags)
+        fd = os.open(path, flags)
         info = os.fstat(fd)
     except OSError:
         if fd >= 0:
@@ -443,6 +442,67 @@ def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
     ):
         os.close(fd)
         return None
+    return fd
+
+
+def _claude_continuation_id(fd: int) -> str | None:
+    """Return the successor session named by a final ``continued-in`` record.
+
+    Claude Code can move a live conversation to a new session file, copying
+    the full history and ending the old file with one ``continued-in``
+    record. Only that exact final record is trusted.
+    """
+    try:
+        size = os.fstat(fd).st_size
+        tail = os.pread(
+            fd,
+            min(size, _CONTINUATION_TAIL_BYTES),
+            max(0, size - _CONTINUATION_TAIL_BYTES),
+        )
+    except OSError:
+        return None
+    lines = tail.rstrip(b"\n").rsplit(b"\n", 1)
+    if b"continued-in" not in lines[-1]:
+        return None
+    try:
+        record = json.loads(lines[-1])
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("type") != "continued-in":
+        return None
+    successor = record.get("continuedInSessionId")
+    if not isinstance(successor, str) or not _SESSION_ID_RE.fullmatch(successor):
+        return None
+    return successor
+
+
+def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
+    """Open an exact same-user transcript without following the final symlink.
+
+    A Claude transcript that was continued in another session resolves to the
+    newest same-directory successor, so history keeps following the live pane.
+    """
+    source = decode_transcript_source(raw)
+    if source is None:
+        return None
+    fd = _open_owned_regular_file(source.path)
+    if fd is None:
+        return None
+    if source.provider != "claude":
+        return source, fd
+    seen = {source.session_id}
+    for _ in range(_MAX_CONTINUATION_HOPS):
+        successor = _claude_continuation_id(fd)
+        if successor is None or successor in seen:
+            break
+        path = source.path.with_name(f"{successor}.jsonl")
+        next_fd = _open_owned_regular_file(path)
+        if next_fd is None:
+            break
+        os.close(fd)
+        fd = next_fd
+        source = TranscriptSource(source.provider, successor, path)
+        seen.add(successor)
     return source, fd
 
 
