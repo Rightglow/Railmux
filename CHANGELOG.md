@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev5] - 2026-10-20
+
+### Fixed
+
+- Follow Claude Code ``continued-in`` sessions in the Sessions list and live
+  bindings. When Claude moves a live conversation into a new daemon-hosted
+  session file, the stale predecessor is hidden, the successor stays listed
+  even though Claude marks it as a background session, and a user rename or
+  favorite moves forward with it. A running pane is re-keyed to the successor
+  so its row, Preview marker and session lease follow the live conversation.
+
 ## [0.4.2.dev4] - 2026-10-20
 
 ### Fixed
