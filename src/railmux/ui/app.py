@@ -426,6 +426,7 @@ def _session_lease_failure_description(category: str | None) -> str:
 # Unlike the short-lived runtime state file, a session option lives exactly as
 # long as the tmux session and survives Railmux restarts without renaming it.
 _SESSION_BINDING_OPTION = "@railmux_binding_v1"
+_CLAUDE_CONTINUATION_MAX_HOPS = 8
 _HELP_SESSION_OPTION = "@railmux_help_v1"
 _HELP_POLICY_VERSION = "read-only-auto-v2"
 
@@ -9194,6 +9195,7 @@ class App:
         # stays stuck True, defeating the 3s project-scan cache. Codex
         # resolution must run too or neither ever clears.
         self._resolve_placeholders(projects, server)
+        self._follow_claude_continuations()
         running_ids = self._running_session_ids()
         if self._selected_project is not None:
             matched = next((p for p in projects if p.encoded_name == self._selected_project.encoded_name), None)
@@ -10228,6 +10230,83 @@ class App:
             # activity without enabling per-poll row movement.
             self._running_sort_ts = 0.0
 
+    def _follow_claude_continuations(self) -> None:
+        """Move live Claude bindings and favorites to ``continued-in`` successors.
+
+        Claude Code can continue a live conversation in a new session file and
+        end the old file with one ``continued-in`` record. The pane is the
+        same, so re-key its running entry to the newest successor: the binding,
+        Preview marker, lease and Sessions row then follow the live writer.
+        """
+        cache = getattr(self, "_session_cache", None)
+        if cache is None:
+            return
+        continuations = getattr(cache, "continuations", {})
+        if continuations and getattr(self, "_favorites", None) is not None:
+            favorites = self._favorites.get_ids()
+            carried: set[str] = set()
+            for predecessor in favorites & continuations.keys():
+                successor = continuations[predecessor]
+                for _ in range(_CLAUDE_CONTINUATION_MAX_HOPS):
+                    if successor not in continuations:
+                        break
+                    successor = continuations[successor]
+                if successor not in favorites:
+                    carried.add(successor)
+            if carried:
+                self._favorites.set_many(carried, True)
+        claimed = self._running_session_ids() | set(self._running)
+        for r in list(self._running.values()):
+            registered_mode = self._modes().for_tmux_name(r.tmux_name)
+            session_type = (
+                registered_mode.session_type if registered_mode else r.session_type)
+            if (
+                session_type != "claude"
+                or r.is_placeholder
+                or r.is_legacy
+                or r.project is None
+            ):
+                continue
+            meta = cache.get(r.project, r.key)
+            successor_meta = None
+            seen = {r.key}
+            while (
+                meta is not None
+                and meta.continued_in_id is not None
+                and meta.continued_in_id not in seen
+                and len(seen) <= _CLAUDE_CONTINUATION_MAX_HOPS
+            ):
+                seen.add(meta.continued_in_id)
+                meta = cache.get(r.project, meta.continued_in_id)
+                if meta is not None:
+                    successor_meta = meta
+            if successor_meta is None:
+                continue
+            successor = successor_meta.session_id
+            if successor in claimed:
+                continue
+            if r.orphan is not None:
+                resolved_marker = r.orphan.resolved(successor)
+                if not self._write_orphan_marker(resolved_marker):
+                    continue
+                r.orphan = resolved_marker
+            del self._running[r.key]
+            r.key = successor
+            r.provider_session_id = None
+            r.label = f"{r.project.display_name}/{successor_meta.display_title}"
+            r.status = successor_meta.status
+            r.last_mtime = successor_meta.last_mtime
+            r.attention = successor_meta.attention
+            self._running[successor] = r
+            self._stamp_running(r)
+            self._record_session_lease_result(
+                r, self._ensure_running_session_lease(r, successor_meta))
+            claimed.add(successor)
+            displayed_slot = self._agent_workspace().slot_for_agent(r.tmux_name)
+            if displayed_slot is not None:
+                self._set_slot_active_target(
+                    displayed_slot, successor, r.tmux_name)
+
     def _correlate_codex_rollout(self, r: "_Running") -> set[str] | None:
         """Exact child→rollout correlation for a Codex placeholder (#12).
 
@@ -10284,11 +10363,12 @@ class App:
             return self._codex_representative(session_id)
         if project is None:
             return None
-        from railmux.session_index import _scan_session
+        from railmux.session_index import _scan_session_incremental
         jsonl_path = project.claude_dir / f"{session_id}.jsonl"
         if not jsonl_path.exists():
             return None
-        return _scan_session(project, jsonl_path)
+        # An explicit id may name a background ``continued-in`` successor.
+        return _scan_session_incremental(project, jsonl_path).meta
 
     # --- kill / delete session ---
 

@@ -84,6 +84,12 @@ class SessionMeta:
     # A Railmux lease observed in the same shared provider history root. This
     # is a read-time UI overlay, never provider transcript metadata.
     remote_owner: str | None = None
+    # Successor named by a final Claude ``continued-in`` record: the live
+    # conversation moved to that session file. Always None for Codex.
+    continued_in_id: str | None = None
+    # Claude Code background-job (``sessionKind: bg``) session. Listings hide
+    # these unless one is the ``continued-in`` successor of a visible session.
+    background: bool = False
 
     @property
     def display_title(self) -> str:

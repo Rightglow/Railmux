@@ -43,6 +43,7 @@ class _SessionScanState:
     last_rtype: str = ""
     last_stop_reason: str = ""
     background: bool = False
+    continued_in: str | None = None
 
     def clone(self) -> _SessionScanState:
         return _SessionScanState(
@@ -62,6 +63,7 @@ class _SessionScanState:
             last_rtype=self.last_rtype,
             last_stop_reason=self.last_stop_reason,
             background=self.background,
+            continued_in=self.continued_in,
         )
 
 
@@ -169,14 +171,25 @@ def _can_resume(fd: int, st: os.stat_result, state: _SessionScanState) -> bool:
 
 
 def _consume_record(state: _SessionScanState, rec: object) -> None:
-    if not isinstance(rec, dict) or state.background:
+    if not isinstance(rec, dict):
         return
     # Background-job sessions are not interactive — they can't be resumed in
-    # a terminal and shouldn't appear in the sidebar.
+    # a terminal and shouldn't appear in the sidebar. Their metadata is still
+    # collected because Claude Code also hosts a live conversation that was
+    # ``continued-in`` a daemon session this way; listings decide visibility.
     if rec.get("sessionKind") == "bg":
         state.background = True
-        return
     rtype = rec.get("type")
+    # Claude Code ends a session file with ``continued-in`` when the live
+    # conversation moves to a new session. Only a final record counts.
+    successor = rec.get("continuedInSessionId")
+    state.continued_in = (
+        successor
+        if rtype == "continued-in"
+        and isinstance(successor, str)
+        and _looks_like_uuid(successor)
+        else None
+    )
     if rtype == "ai-title":
         state.title = rec.get("aiTitle") or state.title
     # NOTE: "last-prompt" is deliberately NOT treated as a turn. Claude Code
@@ -235,8 +248,6 @@ def _meta_from_state(
     state: _SessionScanState,
     st: os.stat_result,
 ) -> SessionMeta | None:
-    if state.background:
-        return None
     assistant_count = len(state.assistant_token_totals)
     message_count = state.user_count + assistant_count
     if message_count == 0 or (state.user_count > 0 and assistant_count == 0):
@@ -277,6 +288,8 @@ def _meta_from_state(
         last_user_message=preview,
         status=status,
         pending_tool=pending_tool,
+        continued_in_id=state.continued_in,
+        background=state.background,
     )
 
 
@@ -352,7 +365,8 @@ def _scan_session_incremental(
 
 
 def _scan_session(project: Project, jsonl_path: Path) -> SessionMeta | None:
-    return _scan_session_incremental(project, jsonl_path).meta
+    meta = _scan_session_incremental(project, jsonl_path).meta
+    return None if meta is not None and meta.background else meta
 
 
 def _looks_like_uuid(s: str) -> bool:

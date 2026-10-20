@@ -33,6 +33,9 @@ class SessionCache:
         # User-assigned titles, overlaid at read time so they survive Claude
         # Code rewriting its own ai-title record every turn.
         self._renames = renames
+        # Claude ``continued-in`` links seen by listings: predecessor id ->
+        # successor id. The App uses them to move live bindings and favorites.
+        self.continuations: dict[str, str] = {}
 
     def list_sessions(
         self, project: Project, top_n: int = _DEFAULT_TOP_N
@@ -86,8 +89,59 @@ class SessionCache:
             if stale.parent == project.claude_dir and stale not in current_paths:
                 del self._entries[stale]
 
+        results = self._hide_continued(project, results)
         results.sort(key=lambda s: s.last_mtime, reverse=True)
         return results
+
+    def _hide_continued(
+        self, project: Project, results: list[SessionMeta]
+    ) -> list[SessionMeta]:
+        """Drop background sessions and sessions continued in a successor.
+
+        Claude Code copies the whole conversation into the successor, so the
+        predecessor is a stale duplicate. A user rename moves forward with it.
+        A background successor of a visible session is the same interactive
+        conversation now hosted by Claude's daemon, so it stays visible.
+        """
+        by_id = {meta.session_id: meta for meta in results}
+        visible = {meta.session_id for meta in results if not meta.background}
+        pending = list(visible)
+        while pending:
+            successor = by_id[pending.pop()].continued_in_id
+            if successor in by_id and successor not in visible:
+                visible.add(successor)
+                pending.append(successor)
+        results = [meta for meta in results if meta.session_id in visible]
+        hidden: dict[str, str] = {}
+        for meta in results:
+            successor = meta.continued_in_id
+            if (
+                successor is not None
+                and successor != meta.session_id
+                and (project.claude_dir / f"{successor}.jsonl").is_file()
+            ):
+                hidden[meta.session_id] = successor
+        if not hidden:
+            return results
+        self.continuations.update(hidden)
+        carried: set[str] = set()
+        if self._renames is not None:
+            # Walk each chain forward so A -> B -> C carries A's rename to C.
+            for _ in range(len(hidden)):
+                changed = False
+                for predecessor, successor in hidden.items():
+                    title = self._renames.get(predecessor)
+                    if title and not self._renames.get(successor):
+                        self._renames.set(successor, title)
+                        carried.add(successor)
+                        changed = True
+                if not changed:
+                    break
+        return [
+            self._with_override(meta) if meta.session_id in carried else meta
+            for meta in results
+            if meta.session_id not in hidden
+        ]
 
     def get(self, project: Project, session_id: str) -> SessionMeta | None:
         """Cache-backed lookup of a single session's metadata by id.
