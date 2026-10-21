@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev8] - 2026-10-21
+
+### Fixed
+
+- Keep links clickable in ``railmux ssh`` Claude history. Markdown links
+  now carry their HTTP(S) target as a terminal hyperlink, including across
+  wrapped rows and table cells, just as on the live screen.
+
 ## [0.4.2.dev7] - 2026-10-21
 
 ### Fixed
