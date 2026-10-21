@@ -2357,3 +2357,19 @@ def test_server_projects_only_allowlisted_private_terminal_modes():
         mode = {1000 << 5, 1006 << 5, 9999 << 5}
 
     assert terminal_modes_for_screen(OtherModes()) is TerminalMode.NONE
+
+
+def test_transcript_rows_reopen_links_across_wraps_and_drop_unsafe_targets():
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    link = "\x1b]8;;https://example.com/a\x1b\\"
+    close = "\x1b]8;;\x1b\\"
+    text = f"{link}abcdef{close} \x1b]8;;file:///etc/passwd\x1b\\x{close}\n"
+
+    rows, _dropped, _total = fast_display_server._wrap_transcript_rows(
+        pyte, text, 4)
+
+    encoded_link, encoded_close = link.encode(), close.encode()
+    assert rows[0] == b"\x1b[0m" + encoded_link + b"abcd" + encoded_close + b"\x1b[0m"
+    assert rows[1].startswith(b"\x1b[0m" + encoded_link + b"ef" + encoded_close)
+    assert b"file:" not in b"".join(rows)
+    assert fast_display_server._overlap_text(rows[0]) == "abcd"

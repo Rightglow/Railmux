@@ -89,6 +89,7 @@ from railmux.terminal_screen import (
     HyperlinkTrackingStream,
     Osc52ClipboardDecoder as _Osc52ClipboardDecoder,
     ScreenState as _ScreenState,
+    _safe_hyperlink,
     build_screen_update,
     extended_pyte as _extended_pyte,
     render_rows,
@@ -1616,11 +1617,17 @@ def _read_transcript_tail(fd: int) -> tuple[str, bool]:
 def _wrap_transcript_rows(
     pyte: object, text: str, width: int
 ) -> tuple[tuple[bytes, ...], bool, int]:
-    """Wrap allowlisted transcript ANSI into independently paintable rows."""
+    """Wrap allowlisted transcript ANSI into independently paintable rows.
+
+    SGR styles and HTTP(S) OSC 8 links are kept; a link that crosses a row
+    break is closed at the row end and reopened on the next row, as
+    :func:`render_rows` emits links for captured screen rows.
+    """
     rows: deque[bytes] = deque(maxlen=MAX_HISTORY_LINES)
     row = bytearray(b"\033[0m")
     column = 0
     active: list[bytes] = []
+    link = b""
     dropped = False
     total_rows = 0
 
@@ -1629,12 +1636,28 @@ def _wrap_transcript_rows(
         total_rows += 1
         if len(rows) == rows.maxlen:
             dropped = True
-        rows.append(bytes(row) + b"\033[0m")
-        row = bytearray(b"\033[0m" + b"".join(active))
+        rows.append(bytes(row) + (_LINK_END if link else b"") + b"\033[0m")
+        row = bytearray(b"\033[0m" + b"".join(active) + link)
         column = 0
 
-    for match in re.finditer(r"\x1b\[[0-9;]*m|[^\x1b]+", text):
+    for match in re.finditer(
+        r"\x1b\[[0-9;]*m|\x1b\]8;;([^\x1b]*)\x1b\\|[^\x1b]+", text
+    ):
         token = match.group(0)
+        if token.startswith("\x1b]"):
+            target = match.group(1)
+            if target and _safe_hyperlink(target.encode("utf-8")) is None:
+                continue
+            encoded = token.encode("utf-8")
+            if link and target:
+                row.extend(_LINK_END)
+            if target:
+                link = encoded
+                row.extend(encoded)
+            elif link:
+                link = b""
+                row.extend(_LINK_END)
+            continue
         if token.startswith("\x1b["):
             encoded = token.encode("ascii")
             params = token[2:-1].split(";")
@@ -1672,7 +1695,7 @@ def _wrap_transcript_rows(
                 finish()
             row.extend(char.encode("utf-8"))
             column += max(0, cell_width)
-    if column or len(row) > len(b"\033[0m" + b"".join(active)):
+    if column or len(row) > len(b"\033[0m" + b"".join(active) + link):
         finish()
     return tuple(rows), dropped, total_rows
 
@@ -1750,7 +1773,9 @@ def _transcript_rows(
         os.close(fd)
 
 
-_OVERLAP_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
+_LINK_END = b"\033]8;;\033\\"
+_OVERLAP_STYLE_RE = re.compile(
+    rb"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
 _OVERLAP_SPACE_RE = re.compile(r"\s+")
 _OVERLAP_ANCHOR_CHARS = 12
 _OVERLAP_SINGLE_ANCHOR_CHARS = 24

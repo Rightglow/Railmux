@@ -905,7 +905,9 @@ def _native(records, width=None):
 
 
 def _plain_rows(rendered: str) -> list[str]:
-    return re.sub(r"\x1b\[[0-9;]*m", "", rendered).split("\n")
+    return re.sub(
+        r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\", "", rendered
+    ).split("\n")
 
 
 def _assistant(text: str) -> dict:
@@ -1005,3 +1007,12 @@ def test_claude_native_wrap_moves_long_word_when_that_saves_a_break():
     assert _plain_rows(kept)[1:-1] == [
         "● intro " + "x" * 12, "  " + "x" * 18,
     ]
+
+
+def test_claude_native_links_stay_clickable_and_reject_other_schemes():
+    rendered = _native([_assistant(
+        "See [#1](https://example.com/pull/1) and [x](javascript:alert).")])
+
+    assert "\x1b]8;;https://example.com/pull/1\x1b\\#1\x1b]8;;\x1b\\" in rendered
+    assert "javascript" not in rendered
+    assert "See #1 and x." in "\n".join(_plain_rows(rendered))

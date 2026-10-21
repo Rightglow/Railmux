@@ -13,6 +13,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # ── ANSI styles ──────────────────────────────────────────────────────────
 BOLD = "\033[1m"
@@ -28,6 +29,7 @@ ITALIC = "\033[3m"
 BOLD_OFF = "\033[22m"
 ITALIC_OFF = "\033[23m"
 FG_DEFAULT = "\033[39m"
+LINK_END = "\033]8;;\033\\"
 
 _CODEX_SYNTHETIC_PREFIXES = (
     "<environment_context>",
@@ -241,8 +243,10 @@ _MD_TABLE_SEPARATOR_RE = re.compile(
     r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 _MD_TABLE_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
 _LIST_HANG_RE = re.compile(r" *(?:(?:[-*+]|\d+[.)]) +)?")
-_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
-_WRAP_TOKEN_RE = re.compile(r"\x1b\[[0-9;]*m| +|[^ \x1b]+")
+# Zero-width escapes Railmux emits itself: SGR styles and OSC 8 links.
+_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
+_WRAP_TOKEN_RE = re.compile(
+    r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\| +|[^ \x1b]+")
 _TASK_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
 
 _char_width_function = None
@@ -268,7 +272,7 @@ def _visible_width(text: str) -> int:
     # Claude pads an emoji-presentation selector (as in "⚠️") to two cells.
     return sum(
         1 if char == "\ufe0f" else _char_width(char)
-        for char in _SGR_RE.sub("", text)
+        for char in _ESCAPE_RE.sub("", text)
     )
 
 
@@ -328,27 +332,47 @@ def _wrap_styled(line: str, width: int, hang: int) -> list[str]:
 
 def _hang_for(row: str, prefix: int) -> int:
     """Hanging indent for a row whose own content starts after *prefix* cells."""
-    content = _SGR_RE.sub("", row)[prefix:]
+    content = _ESCAPE_RE.sub("", row)[prefix:]
     return prefix + len(_LIST_HANG_RE.match(content).group(0))
 
 
 def _close_fragments(fragments: list[str]) -> list[str]:
-    """Make each wrapped fragment carry and close its own SGR state.
+    """Make each wrapped fragment carry and close its own SGR and link state.
 
-    Table cells sit beside other cells on one row, so a style that continues
-    onto a cell's next fragment must not leak across the borders between.
+    Table cells sit beside other cells on one row, so a style or link that
+    continues onto a cell's next fragment must not leak across the borders.
     """
     closed: list[str] = []
     active: list[str] = []
+    link = ""
     for fragment in fragments:
-        prefix = "".join(active)
-        for code in _SGR_RE.findall(fragment):
-            if code == RESET:
+        prefix = "".join(active) + link
+        for code in _ESCAPE_RE.findall(fragment):
+            if code.startswith("\x1b]"):
+                link = "" if code == LINK_END else code
+            elif code == RESET:
                 active.clear()
             else:
                 active.append(code)
-        closed.append(f"{prefix}{fragment}{RESET}")
+        suffix = LINK_END if link else ""
+        closed.append(f"{prefix}{fragment}{suffix}{RESET}")
     return closed
+
+
+def _link(text: str, url: str) -> str:
+    """Wrap *text* in an OSC 8 link when *url* is a plain HTTP(S) target."""
+    try:
+        parsed = urlsplit(url)
+        valid = (
+            parsed.scheme.lower() in ("http", "https")
+            and parsed.hostname is not None
+            and len(url) <= 8192
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        return text
+    return f"\033]8;;{url}\033\\{text}{LINK_END}"
 
 
 def _table_cells(line: str) -> list[str]:
@@ -391,7 +415,7 @@ def _markdown_table(lines: list[str], width: int) -> list[str] | None:
         max(
             _visible_width(word)
             for row in rows
-            for word in [*_SGR_RE.sub("", row[index]).split(" "), ""]
+            for word in [*_ESCAPE_RE.sub("", row[index]).split(" "), ""]
         )
         for index in range(count)
     ]
@@ -448,7 +472,7 @@ def _markdown_inline(line: str, *, bold: bool = False) -> str:
     Only targeted "off" codes close each span, so an enclosing style (for
     example a bold heading) survives an inner code or italic span. *bold*
     marks an already-bold context whose nested strong spans must not end it.
-    A link shows only its text, as Claude's clickable link does.
+    A link shows only its text and stays clickable through OSC 8.
     """
 
     def replace(match: re.Match[str]) -> str:
@@ -457,7 +481,8 @@ def _markdown_inline(line: str, *, bold: bool = False) -> str:
         if code is not None:
             return f"{CLAUDE_ACCENT}{code}{FG_DEFAULT}"
         if match.group(6) is not None:
-            return _markdown_inline(match.group(6), bold=bold)
+            return _link(_markdown_inline(match.group(6), bold=bold),
+                         match.group(7))
         if strong is not None or strong_alt is not None:
             inner = _markdown_inline(
                 strong if strong is not None else strong_alt, bold=True)
