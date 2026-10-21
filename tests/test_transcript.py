@@ -962,12 +962,46 @@ def test_claude_native_history_draws_tables_that_fit_the_pane():
     rows = _plain_rows(_native([_assistant(table)], width=30))[1:-1]
 
     assert rows == [
-        "● ┌──────┬───────────────────┐",
-        "  │ Name │ Notes             │",
-        "  ├──────┼───────────────────┤",
-        "  │ a    │ one two three     │",
-        "  │      │ four              │",
-        "  └──────┴───────────────────┘",
+        "● ┌──────┬─────────────────┐",
+        "  │ Name │ Notes           │",
+        "  ├──────┼─────────────────┤",
+        "  │ a    │ one two three   │",
+        "  │      │ four            │",
+        "  └──────┴─────────────────┘",
     ]
     assert all(len(row) <= 30 for row in rows)
     assert table.splitlines()[0] in _native([_assistant(table)])
+
+
+def test_claude_native_history_matches_claude_table_and_link_layout():
+    table = "\n".join([
+        "### Title",
+        "| PR | Notes |",
+        "|---|---|",
+        "| [#1](https://example.com/pull/1) | "
+        + "alpha beta gamma delta epsilon zeta eta theta |",
+    ])
+    rows = _plain_rows(_native([_assistant(table)], width=40))[1:-1]
+
+    assert rows == [
+        "● Title",
+        "  ",
+        "  ┌────┬─────────────────────────────┐",
+        "  │ PR │ Notes                       │",
+        "  ├────┼─────────────────────────────┤",
+        "  │ #1 │ alpha beta gamma delta      │",
+        "  │    │ epsilon zeta eta theta      │",
+        "  └────┴─────────────────────────────┘",
+    ]
+
+
+def test_claude_native_wrap_moves_long_word_when_that_saves_a_break():
+    moved = _native([_assistant("intro " + "x" * 36)], width=20)
+    kept = _native([_assistant("intro " + "x" * 30)], width=20)
+
+    assert _plain_rows(moved)[1:-1] == [
+        "● intro", "  " + "x" * 18, "  " + "x" * 18,
+    ]
+    assert _plain_rows(kept)[1:-1] == [
+        "● intro " + "x" * 12, "  " + "x" * 18,
+    ]

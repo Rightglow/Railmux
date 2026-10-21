@@ -235,6 +235,7 @@ _MD_INLINE_RE = re.compile(
     r"|\*\*(?=\S)(.+?)(?<=\S)\*\*"
     r"|__(?=\S)(.+?)(?<=\S)__"
     r"|(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])"
+    r"|\[([^\]\n]+)\]\(([^)\s]+)\)"
 )
 _MD_TABLE_SEPARATOR_RE = re.compile(
     r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
@@ -305,12 +306,16 @@ def _wrap_styled(line: str, width: int, hang: int) -> list[str]:
             else:
                 newline()
             continue
-        if (
-            column + token_width > width
-            and column > hang
-            and token_width <= width - hang
-        ):
-            newline()
+        capacity = width - hang
+        if column + token_width > width and column > hang:
+            # Like wrap-ansi: start a word on a fresh row when that fits it,
+            # or when splitting it from there needs fewer breaks.
+            breaks_here = 1 + (token_width - (width - column) - 1) // capacity
+            if (
+                token_width <= capacity
+                or (token_width - 1) // capacity < breaks_here
+            ):
+                newline()
         for char in token:
             char_width = _char_width(char)
             if column + char_width > width and column > hang:
@@ -373,15 +378,34 @@ def _markdown_table(lines: list[str], width: int) -> list[str] | None:
     for line in lines[2:]:
         cells = [_markdown_inline(cell) for cell in _table_cells(line)]
         body.append((cells + [""] * count)[:count])
-    available = width - 1 - 3 * count
+    # Claude keeps two spare cells beside the borders and padding.
+    available = width - 3 - 3 * count
     if available < 3 * count:
         return None
+    rows = [header, *body]
     natural = [
-        max(1, *(_visible_width(row[index]) for row in [header, *body]))
+        max(1, *(_visible_width(row[index]) for row in rows))
         for index in range(count)
     ]
+    longest_word = [
+        max(
+            _visible_width(word)
+            for row in rows
+            for word in [*_SGR_RE.sub("", row[index]).split(" "), ""]
+        )
+        for index in range(count)
+    ]
+    minimum = [max(1, min(a, b)) for a, b in zip(natural, longest_word)]
     widths = natural
-    if sum(natural) > available:
+    if sum(natural) > available and sum(minimum) <= available:
+        # Claude's split: every column fits its longest word, and the spare
+        # cells go to each column in proportion to how much more it wants.
+        spare = available - sum(minimum)
+        wanted = sum(n - m for n, m in zip(natural, minimum))
+        widths = [
+            m + spare * (n - m) // wanted for n, m in zip(natural, minimum)
+        ]
+    elif sum(natural) > available:
         low, high = 3, max(natural)
         while low < high:
             cap = (low + high + 1) // 2
@@ -419,11 +443,12 @@ def _markdown_table(lines: list[str], width: int) -> list[str] | None:
 
 
 def _markdown_inline(line: str, *, bold: bool = False) -> str:
-    """Style inline code, bold and italic spans like Claude's markdown view.
+    """Style inline code, bold, italic and link spans like Claude's view.
 
     Only targeted "off" codes close each span, so an enclosing style (for
     example a bold heading) survives an inner code or italic span. *bold*
     marks an already-bold context whose nested strong spans must not end it.
+    A link shows only its text, as Claude's clickable link does.
     """
 
     def replace(match: re.Match[str]) -> str:
@@ -431,6 +456,8 @@ def _markdown_inline(line: str, *, bold: bool = False) -> str:
             match.group(2), match.group(3), match.group(4), match.group(5))
         if code is not None:
             return f"{CLAUDE_ACCENT}{code}{FG_DEFAULT}"
+        if match.group(6) is not None:
+            return _markdown_inline(match.group(6), bold=bold)
         if strong is not None or strong_alt is not None:
             inner = _markdown_inline(
                 strong if strong is not None else strong_alt, bold=True)
@@ -477,6 +504,9 @@ def _markdown_lines(lines: list[str], width: int | None = None) -> list[str]:
         if heading:
             inner = _markdown_inline(heading.group(2), bold=True)
             rendered.append(f"{BOLD}{inner}{RESET}")
+            # Claude always leaves a blank line below a heading.
+            if index < len(lines) and lines[index].strip():
+                rendered.append("")
             continue
         styled = _markdown_inline(line)
         rendered.append(styled + RESET if styled != line else line)
