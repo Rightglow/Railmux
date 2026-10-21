@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev7] - 2026-10-21
+
+### Fixed
+
+- Lay out ``railmux ssh`` Claude history tables like Claude's own view, so
+  scrolling from history into the live screen no longer jumps. Markdown
+  links show only their text instead of the raw URL, table columns are
+  sized with Claude's proportional split, headings keep the blank line
+  below them, and over-long words wrap the way Claude wraps them.
+
 ## [0.4.2.dev6] - 2026-10-20
 
 ### Fixed
