@@ -1020,6 +1020,41 @@ def test_claude_native_history_lists_tall_tables_vertically():
     assert all(len(row) <= 60 for row in rows)
 
 
+def test_claude_native_wrap_counts_the_space_after_a_full_row():
+    # Width 20 leaves 18 cells per body row; "aaa…" fills its row exactly,
+    # so the separator space takes the next row's first cell and the
+    # 15-cell word no longer fits beside "bb".
+    rendered = _native([_assistant(
+        "a" * 18 + " bb " + "c" * 15)], width=20)
+
+    assert _plain_rows(rendered)[1:-1] == [
+        "● " + "a" * 18, "  bb", "  " + "c" * 15,
+    ]
+
+
+def test_claude_native_history_crosses_compaction_without_summary():
+    records = [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"role": "user", "content": "before"}},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+         "message": {"role": "assistant",
+                     "content": [{"type": "text", "text": "old answer"}]}},
+        {"type": "system", "subtype": "compact_boundary", "uuid": "b1",
+         "parentUuid": None, "logicalParentUuid": "a1",
+         "content": "Conversation compacted"},
+        {"type": "user", "uuid": "s1", "parentUuid": "b1",
+         "isCompactSummary": True, "isVisibleInTranscriptOnly": True,
+         "message": {"role": "user", "content": "This session is being..."}},
+        {"type": "user", "uuid": "u2", "parentUuid": "s1",
+         "message": {"role": "user", "content": "after"}},
+    ]
+    rows = [row for row in _plain_rows(_native(records)) if row]
+
+    assert rows == [
+        "❯ before", "● old answer", "✻ Conversation compacted", "❯ after",
+    ]
+
+
 def test_claude_native_wrap_moves_long_word_when_that_saves_a_break():
     moved = _native([_assistant("intro " + "x" * 36)], width=20)
     kept = _native([_assistant("intro " + "x" * 30)], width=20)

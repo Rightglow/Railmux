@@ -308,7 +308,10 @@ def _wrap_styled(line: str, width: int, hang: int) -> list[str]:
                 row.append(token)
                 column += token_width
             else:
+                # Like wrap-ansi without trimming: after an exactly full row
+                # the separator space still takes the next row's first cell.
                 newline()
+                column += 1
             continue
         capacity = width - hang
         if column + token_width > width and column > hang:
@@ -775,8 +778,10 @@ def _claude_current_branch(records: list[dict]) -> list[dict]:
     UUID is the active tip; walking its parents retains the shared prefix and
     the replacement suffix while excluding abandoned and sub-agent branches.
 
-    UUID-less metadata is retained for the normal renderer filters. If the
-    input is a bounded tail, walking stops safely at the first missing parent.
+    A compaction boundary starts a new chain; its ``logicalParentUuid`` leads
+    back to the messages before it. UUID-less metadata is retained for the
+    normal renderer filters. If the input is a bounded tail, walking stops
+    safely at the first missing parent.
     """
     by_uuid: dict[str, dict] = {}
     tip: str | None = None
@@ -798,6 +803,9 @@ def _claude_current_branch(records: list[dict]) -> list[dict]:
             break
         current.add(cursor)
         parent = record.get("parentUuid")
+        if not parent and record.get("subtype") == "compact_boundary":
+            # A live session keeps showing the messages before a compaction.
+            parent = record.get("logicalParentUuid")
         cursor = parent if isinstance(parent, str) and parent else None
 
     return [
@@ -818,7 +826,9 @@ def _render_claude_records(
     calls: dict[str, str] = {}
     for record in _claude_current_branch(records):
         rtype = record.get("type", "")
-        if rtype in _SKIP_TYPES:
+        if rtype in _SKIP_TYPES and not (
+            claude_native and record.get("subtype") == "compact_boundary"
+        ):
             continue
         if not claude_native:
             if _is_real_user(record):
@@ -830,8 +840,24 @@ def _render_claude_records(
             elif rtype == "assistant":
                 yield from _render_assistant_blocks(record, calls)
             continue
-        # Claude hides meta prompts such as a loaded skill's instructions.
-        if _is_real_user(record) and record.get("isMeta") is not True:
+        if (
+            rtype == "system"
+            and record.get("subtype") == "compact_boundary"
+        ):
+            # Claude marks a compaction with one dim line, not the summary.
+            yield (
+                f"\n{DIM}✻ Conversation compacted"
+                f"{RESET}\n"
+            )
+            continue
+        # Claude hides meta prompts such as a loaded skill's instructions,
+        # and the compaction summary it only shows in the ctrl+o transcript.
+        if (
+            _is_real_user(record)
+            and record.get("isMeta") is not True
+            and record.get("isCompactSummary") is not True
+            and record.get("isVisibleInTranscriptOnly") is not True
+        ):
             rendered = _render_claude_native_user(record, width)
             if rendered:
                 yield rendered
