@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev9] - 2026-10-26
+
+### Fixed
+
+- Resolve new Codex sessions whose TUI runs through Codex's shared
+  app-server daemon. Such sessions stayed ``(new)`` placeholders, so their
+  right-click menu lacked Rename, Info, Star and the other session actions.
+
 ## [0.4.2.dev8] - 2026-10-21
 
 ### Fixed
