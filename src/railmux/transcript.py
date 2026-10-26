@@ -387,82 +387,178 @@ def _table_cells(line: str) -> list[str]:
     ]
 
 
-def _markdown_table(lines: list[str], width: int) -> list[str] | None:
-    """Draw a markdown table as Claude does: a box whose cells wrap to fit.
+# Claude's table constants: spare columns beside the box, the narrowest
+# column, the most rows a cell may wrap to, and the most body rows shown.
+_TABLE_SPARE = 4
+_TABLE_MIN_COLUMN = 3
+_TABLE_MAX_CELL_ROWS = 4
+_TABLE_MAX_ROWS = 200
 
-    *lines* holds the header, the separator and the body rows. ``None`` means
-    the columns cannot fit *width*, and the caller keeps the source text.
+
+def _table_alignments(separator: str, count: int) -> list[str]:
+    alignments = []
+    for cell in _table_cells(separator):
+        if cell.startswith(":") and cell.endswith(":"):
+            alignments.append("center")
+        elif cell.endswith(":"):
+            alignments.append("right")
+        else:
+            alignments.append("left")
+    return (alignments + ["left"] * count)[:count]
+
+
+def _pad_cell(text: str, width: int, alignment: str) -> str:
+    spare = max(0, width - _visible_width(text))
+    if alignment == "center":
+        return " " * (spare // 2) + text + " " * (spare - spare // 2)
+    if alignment == "right":
+        return " " * spare + text
+    return text + " " * spare
+
+
+def _markdown_table(lines: list[str], width: int) -> list[str]:
+    """Draw a markdown table as Claude does.
+
+    *lines* holds the header, the separator and the body rows; *width* is the
+    message body width, two cells less than Claude's terminal width. Cells
+    wrap inside a box, unless a cell needs more than four rows or the box
+    is too wide: then each row is listed as ``header: value`` lines.
     """
-    header = [
-        f"{BOLD}{_markdown_inline(cell, bold=True)}{BOLD_OFF}"
-        for cell in _table_cells(lines[0])
-    ]
+    header = [_markdown_inline(cell) for cell in _table_cells(lines[0])]
     count = len(header)
+    alignments = _table_alignments(lines[1], count)
     body = []
     for line in lines[2:]:
         cells = [_markdown_inline(cell) for cell in _table_cells(line)]
         body.append((cells + [""] * count)[:count])
-    # Claude keeps two spare cells beside the borders and padding.
-    available = width - 3 - 3 * count
-    if available < 3 * count:
-        return None
+    hidden = max(0, len(body) - _TABLE_MAX_ROWS)
+    body = body[:_TABLE_MAX_ROWS]
+    columns = width + 2
     rows = [header, *body]
     natural = [
-        max(1, *(_visible_width(row[index]) for row in rows))
-        for index in range(count)
+        max(_TABLE_MIN_COLUMN, *(_visible_width(row[i]) for row in rows))
+        for i in range(count)
     ]
-    longest_word = [
+    minimum = [
         max(
-            _visible_width(word)
-            for row in rows
-            for word in [*_ESCAPE_RE.sub("", row[index]).split(" "), ""]
+            _TABLE_MIN_COLUMN,
+            *(
+                _visible_width(word)
+                for row in rows
+                for word in _ESCAPE_RE.sub("", row[i]).split()
+            ),
         )
-        for index in range(count)
+        for i in range(count)
     ]
-    minimum = [max(1, min(a, b)) for a, b in zip(natural, longest_word)]
-    widths = natural
-    if sum(natural) > available and sum(minimum) <= available:
-        # Claude's split: every column fits its longest word, and the spare
-        # cells go to each column in proportion to how much more it wants.
+    available = max(
+        columns - 1 - 3 * count - _TABLE_SPARE, count * _TABLE_MIN_COLUMN)
+    hard = False
+    if sum(natural) <= available:
+        widths = natural
+    elif sum(minimum) <= available:
+        # Every column fits its longest word, and the spare cells go to each
+        # column in proportion to how much more it wants.
         spare = available - sum(minimum)
-        wanted = sum(n - m for n, m in zip(natural, minimum))
+        wants = [n - m for n, m in zip(natural, minimum)]
+        wanted = sum(wants)
         widths = [
-            m + spare * (n - m) // wanted for n, m in zip(natural, minimum)
+            m + (int(want / wanted * spare) if wanted else 0)
+            for m, want in zip(minimum, wants)
         ]
-    elif sum(natural) > available:
-        low, high = 3, max(natural)
-        while low < high:
-            cap = (low + high + 1) // 2
-            if sum(min(value, cap) for value in natural) <= available:
-                low = cap
-            else:
-                high = cap - 1
-        widths = [min(value, low) for value in natural]
-        spare = available - sum(widths)
-        for index, value in enumerate(natural):
-            if spare and value > widths[index]:
-                widths[index] += 1
-                spare -= 1
+    else:
+        hard = True
+        widths = [
+            max(int(m * available / sum(minimum)), _TABLE_MIN_COLUMN)
+            for m in minimum
+        ]
+
+    def wrap(cell: str, index: int) -> list[str]:
+        if not hard and _visible_width(cell) <= widths[index]:
+            return [cell]
+        return _close_fragments(_wrap_styled(cell, widths[index], 0))
+
+    header_cells = [
+        wrap(f"{BOLD}{cell}{BOLD_OFF}" if cell else cell, index)
+        for index, cell in enumerate(header)
+    ]
+    body_cells = [
+        [wrap(cell, index) for index, cell in enumerate(row)] for row in body
+    ]
+    tallest = max(
+        len(cell) for row in [header_cells, *body_cells] for cell in row)
+    if tallest > _TABLE_MAX_CELL_ROWS:
+        return _vertical_table(header, body, columns, hidden)
 
     def border(left: str, middle: str, right: str) -> str:
         return left + middle.join("─" * (cell + 2) for cell in widths) + right
 
-    rendered = [border("┌", "┬", "┐")]
-    for row_index, row in enumerate([header, *body]):
-        if row_index:
-            rendered.append(border("├", "┼", "┤"))
-        fragments = [
-            _close_fragments(_wrap_styled(cell, widths[index], 0))
-            for index, cell in enumerate(row)
-        ]
-        for line_index in range(max(len(cell) for cell in fragments)):
+    def box_rows(cells: list[list[str]], heading: bool) -> list[str]:
+        height = max(len(cell) for cell in cells)
+        out = []
+        for line_index in range(height):
             parts = []
-            for index, cell in enumerate(fragments):
-                text = cell[line_index] if line_index < len(cell) else ""
-                padding = " " * (widths[index] - _visible_width(text))
-                parts.append(f" {text}{padding} ")
-            rendered.append("│" + "│".join(parts) + "│")
+            for index, cell in enumerate(cells):
+                # Short cells sit in the vertical middle of the row.
+                at = line_index - (height - len(cell)) // 2
+                text = cell[at] if 0 <= at < len(cell) else ""
+                alignment = "center" if heading else alignments[index]
+                parts.append(f" {_pad_cell(text, widths[index], alignment)} ")
+            out.append("│" + "│".join(parts) + "│")
+        return out
+
+    rendered = [border("┌", "┬", "┐"), *box_rows(header_cells, True)]
+    for cells in body_cells:
+        rendered.append(border("├", "┼", "┤"))
+        rendered.extend(box_rows(cells, False))
     rendered.append(border("└", "┴", "┘"))
+    if max(_visible_width(row) for row in rendered) > columns - _TABLE_SPARE:
+        return _vertical_table(header, body, columns, hidden)
+    if hidden:
+        rendered.append(_hidden_rows(hidden))
+    return rendered
+
+
+def _hidden_rows(count: int) -> str:
+    return f"… {count:,} more {'row' if count == 1 else 'rows'} not shown"
+
+
+def _vertical_table(
+    header: list[str], body: list[list[str]], columns: int, hidden: int,
+) -> list[str]:
+    """Claude's fallback layout: one ``header: value`` line block per row."""
+    labels = [_ESCAPE_RE.sub("", cell).strip() for cell in header]
+    if not body:
+        labels, body = [""] * len(header), [header]
+    rule = "─" * min(columns - 1, 40)
+    rendered: list[str] = []
+    for row in body:
+        block = []
+        for label, cell in zip(labels, row):
+            value = " ".join(cell.split())
+            if not label and not value:
+                continue
+            first = (
+                columns - _visible_width(label) - 3 if label else columns - 1)
+            lines = _close_fragments(
+                _wrap_styled(value, max(first, 10), 0))
+            if len(lines) > 1:
+                rest = " ".join(line.strip() for line in lines[1:])
+                lines = [
+                    lines[0],
+                    *_close_fragments(_wrap_styled(rest, columns - 3, 0)),
+                ]
+            block.append(
+                f"{BOLD}{label}:{BOLD_OFF} {lines[0]}" if label else lines[0])
+            block.extend(line for line in lines[1:] if line.strip())
+        if not block:
+            continue
+        if rendered:
+            rendered.append(rule)
+        rendered.extend(block)
+    if hidden:
+        if rendered:
+            rendered.append(rule)
+        rendered.append(_hidden_rows(hidden))
     return rendered
 
 
@@ -520,11 +616,9 @@ def _markdown_lines(lines: list[str], width: int | None = None) -> list[str]:
             end = index + 1
             while end < len(lines) and lines[end].lstrip().startswith("|"):
                 end += 1
-            table = _markdown_table(lines[index - 1:end], width)
-            if table is not None:
-                rendered.extend(table)
-                index = end
-                continue
+            rendered.extend(_markdown_table(lines[index - 1:end], width))
+            index = end
+            continue
         heading = _MD_HEADING_RE.match(line)
         if heading:
             inner = _markdown_inline(heading.group(2), bold=True)

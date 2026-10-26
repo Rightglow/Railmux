@@ -965,7 +965,7 @@ def test_claude_native_history_draws_tables_that_fit_the_pane():
 
     assert rows == [
         "● ┌──────┬─────────────────┐",
-        "  │ Name │ Notes           │",
+        "  │ Name │      Notes      │",
         "  ├──────┼─────────────────┤",
         "  │ a    │ one two three   │",
         "  │      │ four            │",
@@ -988,13 +988,36 @@ def test_claude_native_history_matches_claude_table_and_link_layout():
     assert rows == [
         "● Title",
         "  ",
-        "  ┌────┬─────────────────────────────┐",
-        "  │ PR │ Notes                       │",
-        "  ├────┼─────────────────────────────┤",
-        "  │ #1 │ alpha beta gamma delta      │",
-        "  │    │ epsilon zeta eta theta      │",
-        "  └────┴─────────────────────────────┘",
+        "  ┌─────┬────────────────────────────┐",
+        "  │ PR  │           Notes            │",
+        "  ├─────┼────────────────────────────┤",
+        "  │ #1  │ alpha beta gamma delta     │",
+        "  │     │ epsilon zeta eta theta     │",
+        "  └─────┴────────────────────────────┘",
     ]
+
+
+def test_claude_native_history_aligns_table_columns():
+    table = "| L | C | R |\n|:---|:---:|---:|\n| a | b | c |"
+    rows = _plain_rows(_native([_assistant(table)], width=40))[1:-1]
+
+    assert rows[1] == "  │  L  │  C  │  R  │"
+    assert rows[3] == "  │ a   │  b  │   c │"
+
+
+def test_claude_native_history_lists_tall_tables_vertically():
+    long = " ".join(["word"] * 40)
+    table = f"| File | Notes |\n|---|---|\n| a.py | {long} |\n| b.py | short |"
+    rows = _plain_rows(_native([_assistant(table)], width=60))[1:-1]
+
+    first_width = 60 - len("Notes") - 3
+    assert rows[0] == "● File: a.py"
+    assert rows[1].startswith("  Notes: word")
+    assert len(rows[1]) - len("  Notes: ") <= first_width
+    # Continuation rows start at the margin and use the full width.
+    assert rows[2] == "  " + " ".join(["word"] * 11)
+    assert rows[-3:] == ["  " + "─" * 40, "  File: b.py", "  Notes: short"]
+    assert all(len(row) <= 60 for row in rows)
 
 
 def test_claude_native_wrap_moves_long_word_when_that_saves_a_break():
