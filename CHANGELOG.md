@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev11] - 2026-10-26
+
+### Fixed
+
+- Keep refreshing projects when a Claude project path sits beside another
+  user's private directory (such as a shared ``/tmp/claude`` with mode
+  0700). Probing it raised ``Permission denied`` and every background
+  project refresh failed.
+- Follow ``railmux ssh`` Claude history across a compaction, as Claude's own
+  view does: earlier messages stay, the summary is hidden, and one dim line
+  marks the compaction.
+- Wrap Claude history rows where Claude does when a row ends exactly full,
+  so long CJK runs no longer break the join with the live screen.
+
 ## [0.4.2.dev10] - 2026-10-26
 
 ### Fixed
