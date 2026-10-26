@@ -54,6 +54,20 @@ def test_decode_nonexistent_splits_every_dash(tmp_path, monkeypatch):
     assert result == Path("/zzz/foo/bar"), result
 
 
+def test_decode_skips_directories_other_users_keep_private(tmp_path):
+    # Another user's 0700 /tmp/claude made probing /tmp/claude/<uid> raise
+    # while decoding a project in /tmp/claude-<uid>.
+    private = tmp_path / "claude"
+    private.mkdir()
+    real = tmp_path / "claude-49028" / "work"
+    real.mkdir(parents=True)
+    private.chmod(0)
+    try:
+        assert decode(encode(real)) == real
+    finally:
+        private.chmod(0o700)
+
+
 def test_decode_with_dashes_in_intermediate_segment(tmp_path):
     real = tmp_path / "claude-chat" / "src"
     real.mkdir(parents=True)

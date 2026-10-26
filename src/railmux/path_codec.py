@@ -38,24 +38,36 @@ def normalize_encoded_project_name(name: str) -> str:
     return f"-{match.group(1).lower()}-{name[3:]}"
 
 
+def _probe(check, p: Path) -> bool:
+    # A directory another user keeps private (for example a shared /tmp
+    # parent with mode 0700) raises instead of answering; it is not ours.
+    try:
+        return check(p)
+    except OSError:
+        return False
+
+
 def _m_exists(p: Path) -> bool:
     k = str(p)
     if k not in _exists_memo:
-        _exists_memo[k] = p.exists()
+        _exists_memo[k] = _probe(Path.exists, p)
     return _exists_memo[k]
 
 
 def _m_is_dir(p: Path) -> bool:
     k = str(p)
     if k not in _is_dir_memo:
-        _is_dir_memo[k] = p.is_dir()
+        _is_dir_memo[k] = _probe(Path.is_dir, p)
     return _is_dir_memo[k]
 
 
 def _m_iterdir(p: Path) -> list[Path]:
     k = str(p)
     if k not in _iterdir_memo:
-        _iterdir_memo[k] = list(p.iterdir())
+        try:
+            _iterdir_memo[k] = list(p.iterdir())
+        except OSError:
+            _iterdir_memo[k] = []
     return _iterdir_memo[k]
 
 

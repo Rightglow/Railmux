@@ -189,6 +189,14 @@ def _save_path_cache(cache: dict[str, str]) -> None:
         pass
 
 
+def _is_dir(path: Path) -> bool:
+    """``Path.is_dir`` that treats an unreadable parent as a missing path."""
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
 def list_projects(claude_home: Path) -> list[Project]:
     """Return every project directory under <claude_home>/projects/, sorted by recency.
 
@@ -238,7 +246,7 @@ def list_projects(claude_home: Path) -> list[Project]:
             # decode() when the cache misses or is stale.
             real_path: Path | None = None
             cached = path_cache.get(entry.name)
-            if cached is not None and Path(cached).is_dir():
+            if cached is not None and _is_dir(Path(cached)):
                 real_path = Path(cached)
             else:
                 try:
@@ -249,7 +257,7 @@ def list_projects(claude_home: Path) -> list[Project]:
                 # this machine (deleted or moved). They can't be launched —
                 # `cd` into a missing dir fails — so don't list them, and drop
                 # any stale cache entry for them.
-                if decoded is not None and decoded.is_dir():
+                if decoded is not None and _is_dir(decoded):
                     real_path = decoded
                     path_cache[entry.name] = str(decoded)
                 else:
