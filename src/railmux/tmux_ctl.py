@@ -567,6 +567,92 @@ def process_tree_rollout_ids(
     return ids
 
 
+def _socket_inodes_for_pid(pid: int) -> set[str]:
+    """Inode numbers of the sockets *pid* holds open, as decimal strings."""
+    fd_dir = os.path.join("/proc", str(pid), "fd")
+    try:
+        fds = os.listdir(fd_dir)
+    except OSError:
+        return set()
+    inodes: set[str] = set()
+    for fd in fds:
+        try:
+            target = os.readlink(os.path.join(fd_dir, fd))
+        except OSError:
+            continue
+        if target.startswith("socket:[") and target.endswith("]"):
+            inodes.add(target[len("socket:["):-1])
+    return inodes
+
+
+def _unix_socket_peers(inodes: set[str]) -> set[str]:
+    """Peer inodes of the connected unix sockets among *inodes*.
+
+    procfs does not expose unix socket peers, so this asks ``ss``. Each line
+    ends with ``<local addr> <local inode> <peer addr> <peer inode>``.
+    """
+    if not inodes:
+        return set()
+    try:
+        res = subprocess.run(
+            ["ss", "-x", "-a", "-H"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            check=False, timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    peers: set[str] = set()
+    for line in res.stdout.decode(errors="ignore").splitlines():
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        local, peer = fields[-3], fields[-1]
+        if local in inodes and peer.isdigit() and peer != "0":
+            peers.add(peer)
+    return peers
+
+
+def daemon_rollout_ids(pid: int, sessions_dir: Path) -> set[str] | None:
+    """Rollout UUIDs held by the Codex app-server that *pid*'s tree talks to.
+
+    Newer Codex TUIs hand their threads to a shared ``codex app-server``
+    daemon, which then holds every client's rollout open while the pane's own
+    process holds none. Only daemons connected to this process tree over a
+    unix socket count, and the result covers all of that daemon's threads, so
+    callers must still fence it to rollouts that are new and unclaimed.
+    ``None`` means procfs is unavailable.
+    """
+    if not proc_fs_available():
+        return None
+    tree = {pid, *descendant_pids(pid)}
+    local: set[str] = set()
+    for process_id in tree:
+        local |= _socket_inodes_for_pid(process_id)
+    peers = _unix_socket_peers(local)
+    if not peers:
+        return set()
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return set()
+    uid = os.getuid()
+    ids: set[str] = set()
+    for entry in entries:
+        if not entry.isdigit() or int(entry) in tree:
+            continue
+        try:
+            if os.stat(f"/proc/{entry}").st_uid != uid:
+                continue
+            argv = Path(f"/proc/{entry}/cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        if b"app-server" not in argv:
+            continue
+        if _socket_inodes_for_pid(int(entry)) & peers:
+            ids |= open_rollout_uuids_for_pid(int(entry), sessions_dir)
+    return ids
+
+
 def process_tree_has_exact_arg(pid: int, expected: str) -> bool | None:
     """Whether *pid* or a descendant has an argv element equal to *expected*.
 

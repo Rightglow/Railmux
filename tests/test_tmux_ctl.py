@@ -1,5 +1,6 @@
 """Tests for railmux.tmux_ctl — CLI wrappers (mocked, no real tmux needed)."""
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -486,6 +487,48 @@ def test_process_tree_rollout_ids_supports_swapped_real_pane(monkeypatch):
     )
 
     assert process_tree_rollout_ids(100, Path("/s")) == {_UUID_A, _UUID_B}
+
+
+def test_daemon_rollout_ids_follow_connected_app_server(monkeypatch):
+    """A daemon-backed Codex TUI holds no rollout; its connected daemon does."""
+    monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: True)
+    monkeypatch.setattr(tmux_ctl, "descendant_pids", lambda pid: [101])
+    monkeypatch.setattr(os, "getuid", lambda: 7)
+    sockets = {100: set(), 101: {"11", "12"}, 300: {"21"}, 400: {"31"},
+               500: {"22"}}
+    monkeypatch.setattr(
+        tmux_ctl, "_socket_inodes_for_pid", lambda pid: sockets.get(pid, set()))
+    ss_out = (
+        "u_str ESTAB 0 0 * 11 * 21\n"
+        "u_str ESTAB 0 0 /tmp/codex-daemon/sock 21 * 11\n"
+        "u_str ESTAB 0 0 * 12 * 0\n"
+        "u_str ESTAB 0 0 * 99 * 31\n"
+    )
+    monkeypatch.setattr(
+        tmux_ctl.subprocess, "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, ss_out.encode(), b""),
+    )
+    monkeypatch.setattr(os, "listdir", lambda path: ["self", "100", "101",
+                                                     "300", "400", "500"])
+    monkeypatch.setattr(os, "stat", lambda path: MagicMock(st_uid=7))
+    argv = {
+        "300": b"codex\0app-server\0--managed-daemon\0",
+        "400": b"codex\0app-server\0",      # not connected to this pane
+        "500": b"codex\0exec\0",            # not an app-server
+    }
+    monkeypatch.setattr(
+        Path, "read_bytes", lambda path: argv[str(path).split("/")[2]])
+    monkeypatch.setattr(
+        tmux_ctl, "open_rollout_uuids_for_pid",
+        lambda pid, _sessions: {300: {_UUID_A}, 400: {_UUID_B}}.get(pid, set()),
+    )
+
+    assert tmux_ctl.daemon_rollout_ids(100, Path("/s")) == {_UUID_A}
+
+
+def test_daemon_rollout_ids_none_without_procfs(monkeypatch):
+    monkeypatch.setattr(tmux_ctl, "proc_fs_available", lambda: False)
+    assert tmux_ctl.daemon_rollout_ids(100, Path("/s")) is None
 
 
 def test_process_tree_rollout_ids_none_without_procfs(monkeypatch):

@@ -10333,9 +10333,20 @@ class App:
                 identity = tmux_ctl.pane_identity(real_pane)
                 if identity is None:
                     return set() if tmux_ctl.proc_fs_available() else None
-                return tmux_ctl.process_tree_rollout_ids(
-                    identity.pane_pid, sessions_dir)
-            return tmux_ctl.session_rollout_ids(r.tmux_name, sessions_dir)
+                pane_pid = identity.pane_pid
+            else:
+                pane_pid = tmux_ctl.pane_pid_for_session(r.tmux_name)
+                if pane_pid is None:
+                    return set() if tmux_ctl.proc_fs_available() else None
+            ids = tmux_ctl.process_tree_rollout_ids(pane_pid, sessions_dir)
+            if ids:
+                return ids
+            # A Codex TUI backed by a shared app-server daemon holds no
+            # rollout itself; the daemon holds its own and its other clients'
+            # rollouts. The caller fences these to new, unclaimed rollouts in
+            # this cwd and binds only when exactly one remains.
+            daemon_ids = tmux_ctl.daemon_rollout_ids(pane_pid, sessions_dir)
+            return ids if daemon_ids is None else ids | daemon_ids
         except Exception:
             # On a procfs platform an inspection failure is ambiguity, not
             # evidence that procfs is unavailable. Falling back here could

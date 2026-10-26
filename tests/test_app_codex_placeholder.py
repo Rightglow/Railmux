@@ -602,6 +602,72 @@ def test_correlate_codex_rollout_follows_swap_displayed_real_pane(monkeypatch):
     home_probe.assert_not_called()
 
 
+def test_correlate_codex_rollout_uses_connected_daemon(monkeypatch):
+    """Codex app-server daemons hold rollouts for TUIs that hold none."""
+    ours = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    sessions_dir = Path("/codex/sessions")
+    app = App.__new__(App)
+    app._codex_home_path = lambda: sessions_dir.parent
+    manager = MagicMock()
+    manager.displayed_real_pane.return_value = None
+    app._display_transport_manager = manager
+    running = _Running(
+        key="__new__-tok-1",
+        tmux_name="cx-new----tok-1",
+        label="test-proj/(new)",
+        session_type="codex",
+    )
+    monkeypatch.setattr(tmux_ctl, "pane_pid_for_session", lambda _name: 4242)
+    monkeypatch.setattr(
+        tmux_ctl, "process_tree_rollout_ids", lambda _pid, _dir: set())
+    daemon_probe = MagicMock(return_value={ours, other})
+    monkeypatch.setattr(tmux_ctl, "daemon_rollout_ids", daemon_probe)
+
+    assert app._correlate_codex_rollout(running) == {ours, other}
+    daemon_probe.assert_called_once_with(4242, sessions_dir)
+
+
+def test_resolve_placeholders_binds_the_one_new_daemon_rollout():
+    """The daemon also holds other panes' rollouts; claimed ones are fenced."""
+    proj = _project()
+    ours = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    app = App.__new__(App)
+    app._codex_mode = True
+    app._right_pane_claude = None
+    app._running = {
+        "__new__-tok-1": _Running(
+            key="__new__-tok-1",
+            tmux_name="cx-new----tok-1",
+            label="test-proj/(new)",
+            project=proj,
+            placeholder_path=proj.real_path,
+            created_at=999.0,
+            session_type="codex",
+        ),
+        other: _Running(
+            key=other,
+            tmux_name="cx-bbbbbbbb-bbbb-bb",
+            label="test-proj/other",
+            project=proj,
+            session_type="codex",
+        ),
+    }
+    app._codex_index = MagicMock()
+    app._codex_index.sessions_for_cwd.return_value = [
+        _codex_session(proj, other, mtime=1002.0),
+        _codex_session(proj, ours, mtime=1001.0),
+    ]
+    app._correlate_codex_rollout = lambda r: {ours, other}
+
+    app._resolve_placeholders([proj])
+
+    assert ours in app._running and not app._running[ours].is_placeholder
+    assert app._running[other].tmux_name == "cx-bbbbbbbb-bbbb-bb"
+    assert "__new__-tok-1" not in app._running
+
+
 def test_codex_identity_rejects_dead_displayed_provider(monkeypatch):
     app = App.__new__(App)
     running = _Running(
