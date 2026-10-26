@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev10] - 2026-10-26
+
+### Fixed
+
+- Lay out ``railmux ssh`` Claude history tables with Claude Code's current
+  rules: centred headers and short cells, four spare columns, and the
+  ``header: value`` listing Claude switches to when a cell would wrap past
+  four rows or the box is too wide. History no longer drops recent rows or
+  shows an older-looking box above the live screen.
+
 ## [0.4.2.dev9] - 2026-10-26
 
 ### Fixed
