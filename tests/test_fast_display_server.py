@@ -1865,6 +1865,49 @@ def test_transcript_cache_evicts_least_recent_file_width(monkeypatch, tmp_path):
         fast_display_server._TRANSCRIPT_CACHE.clear()
 
 
+def test_prefetch_reuses_a_grown_transcript_only_briefly(
+    monkeypatch, tmp_path,
+):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    session_id = "47fca075-9cb8-44fb-a314-d57ef2256ada"
+    path = tmp_path / f"{session_id}.jsonl"
+    path.write_text('{"type":"user"}\n')
+    marker = fast_display_server.tmux_server.encode_transcript_source(
+        "claude", session_id, path
+    )
+    assert marker is not None
+    now = [100.0]
+    monkeypatch.setattr(fast_display_server.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        fast_display_server.transcript_renderer,
+        "format_transcript",
+        lambda stream, *_args, **_kwargs: iter((stream.getvalue(),)),
+    )
+    fast_display_server._TRANSCRIPT_CACHE.clear()
+    fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+    try:
+        first = fast_display_server._transcript_rows(
+            pyte, marker, 40, allow_stale=True
+        )
+        assert first is not None
+        path.write_text('{"type":"user","reply":"new"}\n')
+        now[0] += 1.0
+        assert fast_display_server._transcript_rows(
+            pyte, marker, 40, allow_stale=True
+        ) is first
+        # A new reply must reach the routing prefetch, which the first
+        # wheel tick paints, once the short reuse window has passed.
+        now[0] += 5.0
+        fresh = fast_display_server._transcript_rows(
+            pyte, marker, 40, allow_stale=True
+        )
+        assert fresh is not None and fresh is not first
+        assert b"new" in b"".join(fresh.rows)
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+        fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+
+
 def test_transcript_format_cache_reuses_exact_identity_per_width(
     monkeypatch, tmp_path,
 ):

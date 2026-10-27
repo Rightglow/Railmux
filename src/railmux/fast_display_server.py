@@ -363,6 +363,7 @@ class _TranscriptCacheEntry:
     more_available: bool
     total_rows: int = 0
     timeline_stable: bool = True
+    built_at: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -374,6 +375,10 @@ class _TranscriptFormatCacheEntry:
 
 _TRANSCRIPT_CACHE: OrderedDict[tuple[str, int], _TranscriptCacheEntry] = OrderedDict()
 _TRANSCRIPT_CACHE_LIMIT = 4
+# Routing prefetches may reuse rows from a transcript that has since grown,
+# but only briefly: the first wheel tick paints that prefetch, and a reply
+# taller than the screen would otherwise lose its rows above the viewport.
+_TRANSCRIPT_STALE_SECONDS = 2.0
 _TRANSCRIPT_FORMAT_CACHE: OrderedDict[
     tuple[str, str, int | None], _TranscriptFormatCacheEntry
 ] = OrderedDict()
@@ -1718,7 +1723,12 @@ def _transcript_rows(
         key = (str(source.path), width)
         cached = _TRANSCRIPT_CACHE.get(key)
         if cached is not None and (
-            cached.identity == identity or (allow_stale and bool(cached.rows))
+            cached.identity == identity
+            or (
+                allow_stale
+                and bool(cached.rows)
+                and time.monotonic() - cached.built_at < _TRANSCRIPT_STALE_SECONDS
+            )
         ):
             _TRANSCRIPT_CACHE.move_to_end(key)
             return cached
@@ -1763,6 +1773,7 @@ def _transcript_rows(
             truncated or dropped,
             total_rows,
             not truncated,
+            time.monotonic(),
         )
         _TRANSCRIPT_CACHE[key] = entry
         _TRANSCRIPT_CACHE.move_to_end(key)
