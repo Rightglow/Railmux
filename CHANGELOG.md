@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev12] - 2026-10-27
+
+### Fixed
+
+- Show a new Claude reply in ``railmux ssh`` history from the first wheel
+  tick. The routing prefetch kept reusing the transcript it had already
+  rendered, so a reply taller than the screen lost its rows above the
+  viewport until a deeper page loaded.
+
 ## [0.4.2.dev11] - 2026-10-26
 
 ### Fixed
