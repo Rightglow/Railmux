@@ -566,7 +566,13 @@ def _plain_display_row(
     return tuple(cells), tuple(hyperlinks)
 
 
-_CLICK_TOKEN_RE = re.compile(r"""[^\s<>"'`]+""")
+# CJK and full-width punctuation never belongs to a URL or path; agents put
+# it directly after one in Chinese prose (``见 notes/a.html，然后``).
+_PROSE_PUNCTUATION = (
+    "\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65"
+)
+_TOKEN_CHARACTERS = f"""[^\\s<>"'`{_PROSE_PUNCTUATION}]"""
+_CLICK_TOKEN_RE = re.compile(f"{_TOKEN_CHARACTERS}+")
 _PATH_LINE_COLUMN_RE = re.compile(r"^(.*):([1-9][0-9]*):([1-9][0-9]*)$")
 _PATH_LINE_RE = re.compile(r"^(.*):([1-9][0-9]*)$")
 _BARE_PATH_RE = re.compile(r"^[A-Za-z0-9_.@+~-]+\.[A-Za-z][A-Za-z0-9]{0,11}$")
@@ -635,6 +641,14 @@ def _trim_click_token(
 
 def _bounded_url_token(token: str) -> str:
     """Stop a visible URL before adjacent Unicode prose and trim punctuation."""
+    candidate = _url_prefix(token)
+    while candidate and candidate[-1] in _TOKEN_TRAILING:
+        candidate = candidate[:-1]
+    return candidate
+
+
+def _url_prefix(token: str) -> str:
+    """Return a URL fragment up to the first character a URL cannot hold."""
     end = next(
         (
             index
@@ -643,10 +657,7 @@ def _bounded_url_token(token: str) -> str:
         ),
         len(token),
     )
-    candidate = token[:end]
-    while candidate and candidate[-1] in _TOKEN_TRAILING:
-        candidate = candidate[:-1]
-    return candidate
+    return token[:end]
 
 
 def _path_parts(token: str) -> tuple[str, int | None, int | None] | None:
@@ -890,7 +901,7 @@ def _hard_wrapped_target(
     first_candidate = max(0, row - 7)
     for first in range(first_candidate, row + 1):
         first_text = _row_text(rows[first])
-        tail = re.search(r"""[^\s<>"'`]+\s*$""", first_text)
+        tail = re.search(f"{_TOKEN_CHARACTERS}+\\s*$", first_text)
         if tail is None:
             continue
         tail_text = tail.group(0).rstrip()
@@ -910,6 +921,13 @@ def _hard_wrapped_target(
         ):
             continue
         first_fragment = target.highlight_text.decode("utf-8", errors="replace")
+        # Join untrimmed fragments: ``image.`` + ``py)`` must keep its dot.
+        # Trailing punctuation is removed once, from the joined whole.
+        raw_start = tail_text.find(first_fragment)
+        if raw_start >= 0:
+            first_fragment = tail_text[raw_start:]
+            if target.kind == "url":
+                first_fragment = _url_prefix(first_fragment)
         fragments: list[tuple[int, int, str]] = [
             (first, target.highlight_column, first_fragment)
         ]
@@ -917,26 +935,37 @@ def _hard_wrapped_target(
         previous_end = target.highlight_column + sum(
             _display_width(character) for character in first_fragment
         )
+        ended = False
         for following in range(first + 1, min(len(rows), first + 8)):
+            if ended:
+                break
             following_text = _row_text(rows[following])
-            continuation = re.fullmatch(
-                r"""(\s{0,8})([^\s<>"'`]+)\s*""",
+            continuation = re.match(
+                f"(\\s{{0,8}})({_TOKEN_CHARACTERS}+)",
                 following_text,
             )
             if continuation is None:
                 break
             indent, fragment = continuation.groups()
-            fragment, _start, _end = _trim_click_token(
-                fragment,
-                len(indent),
-                len(indent) + len(fragment),
-            )
-            if (
-                not fragment
-                or (fragment[0] not in "._~" and not fragment[0].isalnum())
-                or ("/" not in fragment and _path_parts(fragment) is None)
-            ):
-                break
+            # Prose may follow the target on its last row, as in
+            # ``index.html) · 本地文件``; the target then ends on that row.
+            ended = bool(following_text[continuation.end() :].strip())
+            if target.kind == "url":
+                fragment = _url_prefix(fragment)
+                ended = ended or len(fragment) < len(continuation.group(2))
+                # Any URL character may continue a URL split mid-token,
+                # such as ``#discussion_r1`` or ``?focusedCommentId=2``.
+                if not _bounded_url_token(fragment):
+                    break
+            else:
+                trimmed = _trim_click_token(fragment, 0, len(fragment))[0]
+                if (
+                    not trimmed
+                    or fragment[0] in _TOKEN_LEADING
+                    or (trimmed[0] not in "._~" and not trimmed[0].isalnum())
+                    or ("/" not in trimmed and _path_parts(trimmed) is None)
+                ):
+                    break
             # A trailing slash explicitly promises a continuation. Otherwise
             # require the prior fragment to end close to the pane edge, which
             # distinguishes visual wrapping from unrelated adjacent lines.
@@ -951,45 +980,52 @@ def _hard_wrapped_target(
             )
             if not first <= row <= following:
                 continue
-            clicked_fragment = next(
-                (
-                    (fragment_row, fragment_start, fragment_text)
-                    for fragment_row, fragment_start, fragment_text in fragments
-                    if fragment_row == row
-                ),
-                None,
-            )
-            if clicked_fragment is None:
-                continue
-            _fragment_row, fragment_start, fragment_text = clicked_fragment
-            fragment_width = sum(
-                _display_width(character) for character in fragment_text
-            )
-            if not fragment_start <= column < fragment_start + fragment_width:
-                continue
             if target.kind == "url":
-                parsed = urlsplit(joined)
+                value = _bounded_url_token(joined)
+                parsed = urlsplit(value)
                 if (
                     parsed.scheme.lower() not in ("http", "https")
                     or parsed.hostname is None
-                    or len(joined.encode("utf-8")) > 8192
+                    or len(value.encode("utf-8")) > 8192
                 ):
                     continue
-                value = joined
+                shown = value
                 line = None
                 target_column = None
             else:
-                path = _path_parts(joined)
+                shown = _trim_click_token(joined, 0, len(joined))[0]
+                path = _path_parts(shown)
                 if path is None:
                     continue
                 value, line, target_column = path
+            # Highlight only the target: drop what trimming removed from
+            # the end, which may empty the last fragment.
+            excess = len(joined) - len(shown)
+            visible: list[tuple[int, int, str]] = []
+            for fragment_row, fragment_start, fragment_text in reversed(fragments):
+                cut = min(excess, len(fragment_text))
+                excess -= cut
+                kept = fragment_text[: len(fragment_text) - cut]
+                if kept:
+                    visible.append((fragment_row, fragment_start, kept))
+            visible.reverse()
+            clicked = any(
+                fragment_row == row
+                and fragment_start
+                <= column
+                < fragment_start
+                + sum(_display_width(character) for character in fragment_text)
+                for fragment_row, fragment_start, fragment_text in visible
+            )
+            if not clicked:
+                continue
             segments = tuple(
                 (
                     route.y + fragment_row,
                     route.x + fragment_start,
                     fragment_text.encode("utf-8"),
                 )
-                for fragment_row, fragment_start, fragment_text in fragments
+                for fragment_row, fragment_start, fragment_text in visible
             )
             candidate = ClickTarget(
                 target.kind,

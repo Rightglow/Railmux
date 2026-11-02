@@ -1126,3 +1126,76 @@ def test_v10_history_prefetch_batch_round_trip_is_atomic_and_bounded():
     assert ServerMessageDecoder().feed(encode_history_batch(batch)) == [batch]
     with pytest.raises(ValueError):
         encode_history_prefetch(1, 301)
+
+
+def _open_target_at(source, column, row):
+    selection = LocalTextSelection()
+    selection.pointer_event(
+        SgrMouseEvent(b"down", 0, column, row, True), source)
+    action = selection.pointer_event(
+        SgrMouseEvent(b"up", 0, column, row, False), source)
+    return action.open_target
+
+
+def _codex_rows(lines, width):
+    from railmux.fast_display_input import _display_width
+
+    return tuple(
+        (line + " " * (width - sum(map(_display_width, line)))).encode()
+        for line in lines
+    )
+
+
+def test_local_text_selection_joins_codex_link_followed_by_prose():
+    width = 107
+    lines = (
+        "  • 新建目录 notes/visualgen-streaming/，报告网页已完成：打开网页 "
+        "(https://sc.talos.nvidia.com/view/home/",
+        "    scratch.taianz_inf/workspace/notes/visualgen-streaming/"
+        "index.html) · 本地文件 (notes/visualgen-",
+        "    streaming/index.html)。包含概念分层、交互流程。",
+    )
+    route = HistorySnapshot(1, "%8", 0, 0, width, len(lines))
+    source = SelectionSource(route, _codex_rows(lines, width), 0)
+    url = (
+        "https://sc.talos.nvidia.com/view/home/scratch.taianz_inf/"
+        "workspace/notes/visualgen-streaming/index.html"
+    )
+
+    assert _open_target_at(source, 75, 1).value == url
+    assert _open_target_at(source, 10, 2).value == url
+    # Full-width punctuation ends a path instead of joining the prose.
+    assert _open_target_at(source, 15, 1).value == "notes/visualgen-streaming/"
+    local = "notes/visualgen-streaming/index.html"
+    assert _open_target_at(source, 95, 2).value == local
+    assert _open_target_at(source, 8, 3).value == local
+
+
+def test_local_text_selection_joins_codex_url_split_mid_token():
+    width = 92
+    lines = (
+        "  • 已在 PR 下回复评论 "
+        "(https://github.com/NVIDIA/TensorRT-LLM/pull/20931#discussion_",
+        "    r4365945486)，建议设置容量限制。",
+        "  • 代码 (https://github.com/NVIDIA/TensorRT-LLM/blob/"
+        "18e0abfc6f8b9982676828cff1e4ebcb",
+        "    1b52815d/tensorrt_llm/_torch/visual_gen/models/qwen_image/"
+        "transformer_qwen_image.",
+        "    py)。下一步。",
+    )
+    route = HistorySnapshot(1, "%8", 0, 0, width, len(lines))
+    source = SelectionSource(route, _codex_rows(lines, width), 0)
+    discussion = (
+        "https://github.com/NVIDIA/TensorRT-LLM/pull/20931"
+        "#discussion_r4365945486"
+    )
+    blob = (
+        "https://github.com/NVIDIA/TensorRT-LLM/blob/"
+        "18e0abfc6f8b9982676828cff1e4ebcb1b52815d/tensorrt_llm/_torch/"
+        "visual_gen/models/qwen_image/transformer_qwen_image.py"
+    )
+
+    assert _open_target_at(source, 40, 1).value == discussion
+    assert _open_target_at(source, 8, 2).value == discussion
+    for row, column in ((3, 20), (4, 20), (5, 6)):
+        assert _open_target_at(source, column, row).value == blob
