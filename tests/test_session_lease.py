@@ -81,21 +81,45 @@ def test_lease_directory_symlink_is_rejected(tmp_path) -> None:
         session_lease.acquire(tmp_path, "claude", ("session-a",))
 
 
-def test_fallback_process_token_includes_command_identity(monkeypatch) -> None:
+def _fake_ps(monkeypatch, comm: str, ppid: str = "100") -> MagicMock:
     monkeypatch.setattr(
         session_lease.Path, "read_text",
         MagicMock(side_effect=OSError("no procfs")),
     )
-    outputs = iter((
-        "Tue Aug  4 12:00:00 2026 claude",
-        "Tue Aug  4 12:00:00 2026 codex",
-    ))
-    check = MagicMock(side_effect=lambda *_args, **_kwargs: next(outputs))
-    monkeypatch.setattr(session_lease.subprocess, "check_output", check)
 
-    assert session_lease.process_start_token(42) != (
-        session_lease.process_start_token(42))
-    assert "comm=" in check.call_args_list[0].args[0]
+    def ps(argv, **_kwargs):
+        field = argv[4]
+        value = {"comm=": comm, "ppid=": ppid}[field]
+        return f"Tue Aug  4 12:00:00 2026 {value}"
+
+    check = MagicMock(side_effect=ps)
+    monkeypatch.setattr(session_lease.subprocess, "check_output", check)
+    return check
+
+
+def test_fallback_process_token_survives_launcher_execve(monkeypatch) -> None:
+    # Codex's npm launcher execve()s Node into the native binary: same pid,
+    # start time and parent, different command name.
+    _fake_ps(monkeypatch, "node")
+    token = session_lease.process_start_token(42)
+    _fake_ps(monkeypatch, "codex")
+
+    assert token is not None
+    assert session_lease._process_matches(42, token)
+    _fake_ps(monkeypatch, "codex", ppid="101")
+    assert not session_lease._process_matches(42, token)
+
+
+def test_fallback_process_token_accepts_legacy_command_token(
+    monkeypatch,
+) -> None:
+    _fake_ps(monkeypatch, "claude")
+    legacy = session_lease._ps_token(42, "ps", "comm")
+
+    assert legacy is not None and legacy.startswith("ps:")
+    assert session_lease._process_matches(42, legacy)
+    _fake_ps(monkeypatch, "other")
+    assert not session_lease._process_matches(42, legacy)
 
 
 def test_active_owner_lock_service_error_fails_closed(

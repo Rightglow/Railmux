@@ -144,8 +144,30 @@ def _lease_path(provider_root: Path, provider: str, session_id: str) -> Path:
     return _lease_directory(provider_root) / f"{provider}-{digest}.lock"
 
 
+def _ps_token(pid: int, prefix: str, field: str) -> str | None:
+    try:
+        started = subprocess.check_output(
+            ["ps", "-o", "lstart=", "-o", f"{field}=", "-p", str(pid)],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=1.0,
+        ).strip()
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+    return (
+        f"{prefix}:{hashlib.sha256(started.encode('utf-8')).hexdigest()}"
+        if started else None
+    )
+
+
 def process_start_token(pid: int) -> str | None:
-    """Best available immutable birth token for one local process."""
+    """Best available immutable birth token for one local process.
+
+    Without procfs, ``ps`` start time has one-second resolution, so the parent
+    pid narrows same-second pid reuse.  The command name must stay out: Codex's
+    npm launcher replaces Node with the native binary via ``execve``, which
+    keeps the pid, start time and parent but changes ``comm``.
+    """
     if pid <= 0:
         return None
     try:
@@ -157,24 +179,15 @@ def process_start_token(pid: int) -> str | None:
             return f"proc:{start_ticks}"
     except (OSError, UnicodeError, IndexError):
         pass
-    try:
-        started = subprocess.check_output(
-            ["ps", "-o", "lstart=", "-o", "comm=", "-p", str(pid)],
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=1.0,
-        ).strip()
-    except (OSError, subprocess.SubprocessError, UnicodeError):
-        return None
-    return (
-        f"ps:{hashlib.sha256(started.encode('utf-8')).hexdigest()}"
-        if started else None
-    )
+    return _ps_token(pid, "ps-ppid", "ppid")
 
 
 def _process_matches(pid: int, token: str | None) -> bool:
-    if token is None:
+    if token is None or pid <= 0:
         return False
+    if token.startswith("ps:"):
+        # Holders started before 0.4.2.dev13 recorded start time + command.
+        return _ps_token(pid, "ps", "comm") == token
     return process_start_token(pid) == token
 
 
@@ -423,12 +436,15 @@ def owner_matches_pane(
     *,
     process_start: str | None = None,
 ) -> bool:
-    current_start = process_start or process_start_token(pane_pid)
     return bool(
         owner.host == _bounded_host()
         and owner.pane_id == pane_id
         and owner.pane_pid == pane_pid
-        and owner.process_start == current_start
+        and (
+            owner.process_start == process_start
+            if process_start is not None
+            else _process_matches(pane_pid, owner.process_start)
+        )
     )
 
 
