@@ -34,7 +34,9 @@ classifiers = [
 dependencies = [
   "packaging>=23.0; sys_platform != 'win32'",
   "tomlkit>=0.13.2,<1; sys_platform != 'win32'",
-  "urwid>=2.6.16; sys_platform != 'win32'",
+  # urwid 5 stacks nested display attributes instead of replacing them,
+  # which changes Railmux's palette rendering; adopt it deliberately.
+  "urwid>=2.6.16,<5; sys_platform != 'win32'",
   "tomli>=2.0.1; python_version < '3.11' and sys_platform != 'win32'",
 ]
 

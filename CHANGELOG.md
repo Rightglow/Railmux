@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the native binary in place, which changed the command name that the
   fallback process identity included, so a launch could be refused or its
   session lease released while Codex was still running.
+- Keep installing urwid 4.x. urwid 5.0 layers nested display attributes
+  instead of replacing them, which changes sidebar, button, and modal
+  colours; Railmux now declares ``urwid<5`` until it adopts that model.
 
 ## [0.4.2.dev12] - 2026-10-27
 
