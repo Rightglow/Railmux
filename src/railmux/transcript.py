@@ -247,6 +247,17 @@ _LIST_HANG_RE = re.compile(r" *(?:(?:[-*+]|\d+[.)]) +)?")
 _ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
 _WRAP_TOKEN_RE = re.compile(
     r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\| +|[^ \x1b]+")
+_CJK_CHARS = "\u2e80-\u2fff\u3040-\u9fff\uac00-\ud7af\uf900-\ufaff"
+_CJK_PUNCTUATION = (
+    "\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65"
+)
+# A break opportunity after every CJK character; closing punctuation stays
+# with the character before it.
+_CJK_SPLIT_RE = re.compile(
+    f"[{_CJK_CHARS}][{_CJK_PUNCTUATION}]*"
+    f"|[{_CJK_PUNCTUATION}]+"
+    f"|[^{_CJK_CHARS}{_CJK_PUNCTUATION}]+"
+)
 _TASK_SUMMARY_RE = re.compile(r"<summary>(.*?)</summary>", re.DOTALL)
 
 _char_width_function = None
@@ -276,12 +287,16 @@ def _visible_width(text: str) -> int:
     )
 
 
-def _wrap_styled(line: str, width: int, hang: int) -> list[str]:
+def _wrap_styled(
+    line: str, width: int, hang: int, *, cjk_breaks: bool = False,
+) -> list[str]:
     """Word-wrap one styled line the way Claude's Ink renderer does.
 
     Rows break at spaces; only a word wider than a whole row is split. Rows
     after the first are indented by *hang* columns so list items and message
     bodies keep their hanging indent instead of restarting at column zero.
+    *cjk_breaks* also allows a break after each CJK character, as Codex's
+    Unicode line breaking does.
     """
     line = line.expandtabs(8)
     if width <= 0 or _visible_width(line) <= width:
@@ -298,7 +313,18 @@ def _wrap_styled(line: str, width: int, hang: int) -> list[str]:
         row = [" " * hang]
         column = hang
 
-    for token in _WRAP_TOKEN_RE.findall(line):
+    tokens = _WRAP_TOKEN_RE.findall(line)
+    if cjk_breaks:
+        tokens = [
+            piece
+            for token in tokens
+            for piece in (
+                [token]
+                if token.startswith(("\x1b", " "))
+                else _CJK_SPLIT_RE.findall(token)
+            )
+        ]
+    for token in tokens:
         if token.startswith("\x1b"):
             row.append(token)
             continue
@@ -591,13 +617,16 @@ def _markdown_inline(line: str, *, bold: bool = False) -> str:
     return _MD_INLINE_RE.sub(replace, line)
 
 
-def _markdown_lines(lines: list[str], width: int | None = None) -> list[str]:
+def _markdown_lines(
+    lines: list[str], width: int | None = None, *, inline=None,
+) -> list[str]:
     """Approximate Claude Code's markdown rendering for sanitized text lines.
 
     Styled lines end with a full reset: every span is already closed, and the
     reset keeps row wrappers from carrying an ever-growing SGR prefix. Tables
     are drawn as boxes only when the target *width* is known.
     """
+    inline = inline or _markdown_inline
     rendered: list[str] = []
     in_fence = False
     index = 0
@@ -624,25 +653,28 @@ def _markdown_lines(lines: list[str], width: int | None = None) -> list[str]:
             continue
         heading = _MD_HEADING_RE.match(line)
         if heading:
-            inner = _markdown_inline(heading.group(2), bold=True)
+            inner = inline(heading.group(2), bold=True)
             rendered.append(f"{BOLD}{inner}{RESET}")
             # Claude always leaves a blank line below a heading.
             if index < len(lines) and lines[index].strip():
                 rendered.append("")
             continue
-        styled = _markdown_inline(line)
+        styled = inline(line)
         rendered.append(styled + RESET if styled != line else line)
     return rendered
 
 
-def _wrap_rows(rows: list[str], width: int | None, prefix: int) -> list[str]:
+def _wrap_rows(
+    rows: list[str], width: int | None, prefix: int, *, cjk_breaks: bool = False,
+) -> list[str]:
     """Pre-wrap rendered rows when the pane *width* is known."""
     if width is None:
         return rows
     return [
         wrapped
         for row in rows
-        for wrapped in _wrap_styled(row, width, _hang_for(row, prefix))
+        for wrapped in _wrap_styled(
+            row, width, _hang_for(row, prefix), cjk_breaks=cjk_breaks)
     ]
 
 

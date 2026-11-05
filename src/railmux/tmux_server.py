@@ -337,6 +337,14 @@ def encode_history_source(
     )
 
 
+def _codex_rollout_name_matches(name: str, session_id: str) -> bool:
+    """A thread's rollout, including a later ``<thread>_<segment>`` file."""
+    if name.startswith("rollout-") and name.endswith(f"-{session_id}.jsonl"):
+        return True
+    match = _CODEX_SEGMENT_RE.fullmatch(name)
+    return match is not None and match.group(1) == session_id
+
+
 def encode_transcript_source(
     provider: str,
     session_id: str,
@@ -347,10 +355,7 @@ def encode_transcript_source(
     valid_name = (
         path.name == f"{session_id}.jsonl"
         if provider == "claude"
-        else (
-            path.name.startswith("rollout-")
-            and path.name.endswith(f"-{session_id}.jsonl")
-        )
+        else _codex_rollout_name_matches(path.name, session_id)
         if provider == "codex"
         else False
     )
@@ -407,10 +412,7 @@ def decode_transcript_source(raw: str) -> TranscriptSource | None:
     valid_name = (
         path.name == f"{session_id}.jsonl"
         if provider == "claude"
-        else (
-            path.name.startswith("rollout-")
-            and path.name.endswith(f"-{session_id}.jsonl")
-        )
+        else _codex_rollout_name_matches(path.name, session_id)
     )
     if not path.is_absolute() or not valid_name:
         return None
@@ -504,6 +506,45 @@ def open_transcript_source(raw: str) -> tuple[TranscriptSource, int] | None:
         source = TranscriptSource(source.provider, successor, path)
         seen.add(successor)
     return source, fd
+
+
+_CODEX_SEGMENT_RE = re.compile(
+    r"rollout-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d-"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{12})(?:_[0-9a-fA-F-]{36})?\.jsonl\Z"
+)
+_CODEX_SEGMENT_LIMIT = 64
+
+
+def codex_earlier_segments(path: Path) -> list[Path]:
+    """Older same-thread rollout segments of a Codex rollout, oldest first.
+
+    Codex continues a long thread in ``rollout-<time>-<thread>_<segment>``
+    files, possibly under later date directories; each holds only its own
+    turns. Only files of the exact thread under the same sessions root and
+    named before *path* qualify.
+    """
+    match = _CODEX_SEGMENT_RE.fullmatch(path.name)
+    if match is None or len(path.parents) < 4:
+        return []
+    root = path.parents[3]
+    try:
+        candidates = sorted(
+            candidate
+            for candidate in root.glob(f"*/*/*/rollout-*-{match.group(1)}*.jsonl")
+            if _CODEX_SEGMENT_RE.fullmatch(candidate.name) is not None
+            and _CODEX_SEGMENT_RE.fullmatch(candidate.name).group(1)
+            == match.group(1)
+            and candidate.name < path.name
+        )
+    except OSError:
+        return []
+    return candidates[-_CODEX_SEGMENT_LIMIT:]
+
+
+def open_owned_transcript_file(path: Path) -> int | None:
+    """Open one more transcript file under the same safety rules."""
+    return _open_owned_regular_file(path)
 
 
 def resolve_history_pane(

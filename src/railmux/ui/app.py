@@ -6007,6 +6007,18 @@ class App:
                 "refresh automatically.")
             return True
 
+        def set_codex_history(policy: str) -> bool:
+            if not self._settings.set_codex_history_policy(policy):
+                self._set_status(
+                    "Could not save Codex history option; setting unchanged.",
+                    "error",
+                )
+                return False
+            self._set_status(
+                f"Codex SSH history: {policy}; active SSH connections "
+                "refresh automatically.")
+            return True
+
         def set_path_open(policy: str) -> bool:
             if not self._settings.set_path_open_policy(policy):
                 self._set_status(
@@ -6025,12 +6037,14 @@ class App:
             update_policy=self._settings.update_policy,
             claude_history_policy=self._settings.claude_history_policy,
             path_open_policy=self._settings.path_open_policy,
+            codex_history_policy=self._settings.codex_history_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
             on_claude_history_policy=set_claude_history,
             on_path_open_policy=set_path_open,
             on_close=self._close_options_modal,
+            on_codex_history_policy=set_codex_history,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
 

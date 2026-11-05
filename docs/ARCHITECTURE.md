@@ -646,6 +646,29 @@ without clearing another pane's frozen viewport. The dialog, paired
 mouse press/release suppression, and status never enter tmux or alter another
 attached client.
 
+### Codex history policy on managed displays
+
+`[interaction].codex_history` is `native` (default) or `local`, owned by the
+workspace like the Claude policy and read by the helper with a settings-file
+signature, so an Options change applies on the next history capture. `native`
+keeps the established contract: an unrewound live Codex pane uses styled raw
+pane capture, which for Codex's alternate screen means forwarding the wheel to
+Codex. `local` is the explicit user authority to replace only that
+alternate-screen, zero-scrollback view with a transcript projection; a pane
+with real tmux scrollback (for example `--no-alt-screen`) still uses raw
+capture, and the confirmed `canonical-v3:` rewind path is unchanged.
+
+The projection (`codex_transcript.render_codex_native`) draws Codex 0.16x
+`event_msg`/`item_completed` records with Codex's markers, honours
+`thread_rolled_back`, and falls back to `response_item` messages for rollouts
+without those records. Codex continues a long thread in
+`rollout-<time>-<thread>_<segment>.jsonl` files that each hold only their own
+turns; transcript locators accept those names, and the helper prepends the
+same thread's earlier segments under the same sessions root, opened with the
+same owned-regular-file rule, within the shared transcript byte budget. Their
+rendering is cached by exact file identity because finished segments do not
+change.
+
 ### SSH compatibility and installation handshake
 
 The SSH compatibility handshake precedes every tmux lookup, session creation,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import io
+import json
 import select
 import shlex
 import subprocess
@@ -9,6 +10,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -2416,3 +2418,162 @@ def test_transcript_rows_reopen_links_across_wraps_and_drop_unsafe_targets():
     assert rows[1].startswith(b"\x1b[0m" + encoded_link + b"ef" + encoded_close)
     assert b"file:" not in b"".join(rows)
     assert fast_display_server._overlap_text(rows[0]) == "abcd"
+
+
+@pytest.mark.parametrize(
+    ("policy", "alternate_on", "history_size", "managed"),
+    [
+        ("local", True, 0, True),
+        # Default: an unrewound live Codex pane keeps Codex's own wheel.
+        ("native", True, 0, False),
+        # --no-alt-screen Codex already has real tmux scrollback.
+        ("local", False, 120, False),
+    ],
+)
+def test_server_live_codex_history_follows_codex_history_policy(
+    monkeypatch, policy, alternate_on, history_size, managed,
+):
+    pane = fast_display_server._PaneGeometry(
+        "%8",
+        31,
+        0,
+        40,
+        2,
+        mouse_forwardable=True,
+        history_size=history_size,
+        alternate_on=alternate_on,
+        transcript_source="codex-marker",
+        transcript_backed=True,
+        transcript_provider="codex",
+        codex_history_policy=policy,
+        history_generation=21,
+    )
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: b"live-a\nlive-b\n",
+    )
+    transcript_rows = MagicMock(
+        return_value=fast_display_server._TranscriptCacheEntry(
+            (1, 2, 3, 4), (b"\xe2\x80\xba earlier prompt", b"earlier answer"), False
+        )
+    )
+    monkeypatch.setattr(fast_display_server, "_transcript_rows", transcript_rows)
+    monkeypatch.setattr(
+        fast_display_server,
+        "_render_history_lines",
+        lambda _pyte, lines, _width: tuple(lines),
+    )
+
+    snapshot = fast_display_server._capture_pane_history(object(), pane, 7, 100)
+
+    assert snapshot is not None
+    assert snapshot.transcript_available
+    assert not snapshot.history_choice_required
+    assert snapshot.transcript_backed is managed
+    assert snapshot.lines[-2:] == (b"live-a", b"live-b")
+    assert (b"earlier answer" in snapshot.lines) is managed
+    assert transcript_rows.called is managed
+
+
+def test_codex_history_policy_rereads_changed_settings(monkeypatch, tmp_path):
+    path = tmp_path / "config.toml"
+    monkeypatch.setattr(fast_display_server, "default_config_path", lambda: path)
+    monkeypatch.setattr(
+        fast_display_server.Settings,
+        "codex_history_policy",
+        property(lambda _self: "local" if path.exists() else "native"),
+    )
+    monkeypatch.setattr(fast_display_server, "_CODEX_HISTORY_POLICY", [0, "?"])
+
+    assert fast_display_server._codex_history_policy() == "native"
+    path.write_text('[interaction]\ncodex_history = "local"\n')
+    assert fast_display_server._codex_history_policy() == "local"
+
+
+def test_transcript_rows_render_live_codex_items_as_codex_tui(tmp_path):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    session_id = "01a1ad19-810b-7222-b651-c68e2231556d"
+    path = tmp_path / f"rollout-2026-11-05T19-04-52-{session_id}.jsonl"
+    records = [
+        {"type": "session_meta", "payload": {"id": session_id, "cwd": "/w"}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "UserMessage",
+            "content": [{"type": "text", "text": "retained question"}]}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "AgentMessage",
+            "content": [{"type": "Text", "text": "See [docs](https://e.x/a)."}]}}},
+    ]
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    marker = fast_display_server.tmux_server.encode_transcript_source(
+        "codex", session_id, path
+    )
+    assert marker is not None
+    fast_display_server._TRANSCRIPT_CACHE.clear()
+    fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+    try:
+        entry = fast_display_server._transcript_rows(
+            pyte, marker, 60, allow_stale=False
+        )
+        assert entry is not None
+        visible = [
+            fast_display_server._OVERLAP_STYLE_RE.sub(b"", row).decode()
+            for row in entry.rows
+        ]
+        assert "› retained question" in visible
+        answer = next(row for row in entry.rows if b"docs (" in row)
+        assert b"\x1b]8;;https://e.x/a\x1b\\" in answer
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+        fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+
+
+def test_transcript_rows_join_earlier_codex_rollout_segments(tmp_path):
+    pyte = fast_display_server._extended_pyte(__import__("pyte"))
+    thread = "01a19ab1-1a91-7651-9329-f25ee87872ab"
+    segment = "01a1a037-5962-7af1-8dd6-9bdca787060e"
+    other = "01a19ab1-1a91-7651-9329-f25ee87872ac"
+    sessions = tmp_path / "sessions"
+
+    def rollout(day: str, name: str, prompt: str) -> Path:
+        path = sessions / "2026" / "11" / day / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        records = [
+            {"type": "session_meta", "payload": {"id": thread, "cwd": "/w"}},
+            {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+                "type": "UserMessage",
+                "content": [{"type": "text", "text": prompt}]}}},
+        ]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+        return path
+
+    rollout("02", f"rollout-2026-11-02T05-17-40-{thread}.jsonl", "first segment")
+    rollout("02", f"rollout-2026-11-02T06-00-00-{other}.jsonl", "unrelated")
+    newest = rollout(
+        "03", f"rollout-2026-11-03T07-02-24-{thread}_{segment}.jsonl", "newest")
+    marker = fast_display_server.tmux_server.encode_transcript_source(
+        "codex", thread, newest)
+    assert marker is not None
+    assert fast_display_server.tmux_server.decode_transcript_source(marker) is not None
+    for cache in (
+        fast_display_server._TRANSCRIPT_CACHE,
+        fast_display_server._TRANSCRIPT_FORMAT_CACHE,
+        fast_display_server._CODEX_SEGMENT_CACHE,
+    ):
+        cache.clear()
+    try:
+        entry = fast_display_server._transcript_rows(
+            pyte, marker, 60, allow_stale=False)
+    finally:
+        fast_display_server._TRANSCRIPT_CACHE.clear()
+        fast_display_server._TRANSCRIPT_FORMAT_CACHE.clear()
+        fast_display_server._CODEX_SEGMENT_CACHE.clear()
+
+    assert entry is not None
+    visible = [
+        fast_display_server._OVERLAP_STYLE_RE.sub(b"", row).decode()
+        for row in entry.rows
+    ]
+    assert visible.index("› first segment") < visible.index("› newest")
+    assert "› unrelated" not in visible
+    assert sum("OpenAI Codex" in row for row in visible) == 1

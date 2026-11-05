@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 OPTION_POLICIES = frozenset({"always", "ask", "never"})
 MANAGED_HISTORY_POLICIES = frozenset({"ask", "local", "native"})
+CODEX_HISTORY_POLICIES = frozenset({"local", "native"})
 PATH_OPEN_POLICIES = frozenset({"ask", "internal", "external"})
 HISTORY_MIN_LINES = 2000
 HISTORY_MAX_LINES = 20000
@@ -48,6 +49,11 @@ SETTING_CONTRACTS = {
         "interaction.claude_history",
         ("next_managed_history_client", "next_history_refresh"),
         choices=MANAGED_HISTORY_POLICIES,
+    ),
+    "interaction.codex_history": SettingContract(
+        "interaction.codex_history",
+        ("next_managed_history_client", "next_history_refresh"),
+        choices=CODEX_HISTORY_POLICIES,
     ),
     "interaction.path_open": SettingContract(
         "interaction.path_open",

@@ -49,7 +49,8 @@ from railmux import (
     tmux_server,
 )
 from railmux import transcript as transcript_renderer
-from railmux.config import Config, ConfigError, load_config
+from railmux.codex_transcript import render_codex_native
+from railmux.config import Config, ConfigError, default_config_path, load_config
 from railmux.fast_display_protocol import (
     HistoryBatch,
     HistorySnapshot,
@@ -247,6 +248,7 @@ class _PaneGeometry:
     transcript_backed: bool = False
     transcript_provider: str | None = None
     claude_history_policy: str = "ask"
+    codex_history_policy: str = "native"
     history_generation: int = 0
     route_generation: int = 0
     canonical_history: bool = False
@@ -389,7 +391,7 @@ _INFERRED_TRANSCRIPTS: OrderedDict[tuple[str, int], tuple[bool, str | None]] = (
 )
 _INFERRED_TRANSCRIPT_LIMIT = 8
 _PANE_GEOMETRY_CACHE: OrderedDict[
-    tuple[str, str], tuple[float, tuple[_PaneGeometry, ...]]
+    tuple[str, str, str], tuple[float, tuple[_PaneGeometry, ...]]
 ] = OrderedDict()
 _PANE_GEOMETRY_CACHE_LIMIT = 8
 _PANE_GEOMETRY_CACHE_TTL = 0.25
@@ -795,6 +797,22 @@ def _pane_at_pointer(
     return None
 
 
+_CODEX_HISTORY_POLICY: list[object] = [None, "native"]
+
+
+def _codex_history_policy() -> str:
+    """The persisted Codex history policy, reread when the file changes."""
+    try:
+        info = os.stat(default_config_path())
+        signature: object = (
+            info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+    except OSError:
+        signature = None
+    if signature != _CODEX_HISTORY_POLICY[0]:
+        _CODEX_HISTORY_POLICY[:] = [signature, Settings().codex_history_policy]
+    return str(_CODEX_HISTORY_POLICY[1])
+
+
 def _list_agent_panes(
     session_id: str,
     *,
@@ -804,7 +822,8 @@ def _list_agent_panes(
     """Return one coherent, fail-closed generation of visible agent panes."""
     if claude_history_policy is None:
         claude_history_policy = Settings().claude_history_policy
-    cache_key = (session_id, claude_history_policy)
+    codex_history_policy = _codex_history_policy()
+    cache_key = (session_id, claude_history_policy, codex_history_policy)
     now = time.monotonic()
     cached = _PANE_GEOMETRY_CACHE.get(cache_key) if use_cache else None
     if cached is not None and now - cached[0] <= _PANE_GEOMETRY_CACHE_TTL:
@@ -947,6 +966,7 @@ def _list_agent_panes(
                         else None
                     ),
                     claude_history_policy=claude_history_policy,
+                    codex_history_policy=codex_history_policy,
                     history_generation=_history_generation(
                         history_marker,
                         route_server_identity,
@@ -1705,6 +1725,63 @@ def _wrap_transcript_rows(
     return tuple(rows), dropped, total_rows
 
 
+_CODEX_SEGMENT_CACHE: OrderedDict[
+    tuple[str, int, int], tuple[tuple[object, ...], str, bool]
+] = OrderedDict()
+_CODEX_SEGMENT_CACHE_LIMIT = 8
+
+
+def _codex_earlier_history(
+    path: Path, width: int, budget: int,
+) -> tuple[str, bool]:
+    """Render a Codex thread's earlier rollout segments, newest kept first.
+
+    Finished segments do not change, so their rendering is cached by the
+    exact files it was built from.
+    """
+    paths = tmux_server.codex_earlier_segments(path)
+    opened: list[tuple[Path, int, tuple[int, int, int, int]]] = []
+    try:
+        for segment in paths:
+            fd = tmux_server.open_owned_transcript_file(segment)
+            if fd is None:
+                continue
+            info = os.fstat(fd)
+            opened.append(
+                (segment, fd,
+                 (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)))
+        signature = tuple((str(item[0]), item[2]) for item in opened)
+        key = (str(path), width, budget // (1024 * 1024))
+        cached = _CODEX_SEGMENT_CACHE.get(key)
+        if cached is not None and cached[0] == signature:
+            _CODEX_SEGMENT_CACHE.move_to_end(key)
+            return cached[1], cached[2]
+        chunks: list[str] = []
+        truncated = False
+        remaining = budget
+        for index in range(len(opened) - 1, -1, -1):
+            _segment, fd, identity = opened[index]
+            if identity[3] > remaining:
+                truncated = True
+                break
+            remaining -= identity[3]
+            raw, _cut = _read_transcript_tail(fd)
+            chunks.append("".join(
+                render_codex_native(io.StringIO(raw), width, header=index == 0)
+            ))
+        text = "".join(reversed(chunks))
+        _CODEX_SEGMENT_CACHE[key] = (signature, text, truncated)
+        _CODEX_SEGMENT_CACHE.move_to_end(key)
+        while len(_CODEX_SEGMENT_CACHE) > _CODEX_SEGMENT_CACHE_LIMIT:
+            _CODEX_SEGMENT_CACHE.popitem(last=False)
+        return text, truncated
+    except OSError:
+        return "", True
+    finally:
+        for _segment, fd, _identity in opened:
+            os.close(fd)
+
+
 def _transcript_rows(
     pyte: object,
     marker: str,
@@ -1732,8 +1809,8 @@ def _transcript_rows(
         ):
             _TRANSCRIPT_CACHE.move_to_end(key)
             return cached
-        # Claude history is pre-wrapped to the pane; Codex text is not.
-        format_width = width if source.provider == "claude" else None
+        # Both providers' native projections are pre-wrapped to the pane.
+        format_width = width
         format_key = (str(source.path), source.provider, format_width)
         formatted_entry = _TRANSCRIPT_FORMAT_CACHE.get(format_key)
         if formatted_entry is not None and formatted_entry.identity == identity:
@@ -1745,14 +1822,26 @@ def _transcript_rows(
                 raw, truncated = _read_transcript_tail(fd)
             except OSError:
                 return None
-            formatted = "".join(
-                transcript_renderer.format_transcript(
-                    io.StringIO(raw),
-                    source.provider,
-                    claude_native=source.provider == "claude",
-                    width=format_width,
+            if source.provider == "codex":
+                earlier, earlier_truncated = _codex_earlier_history(
+                    source.path,
+                    format_width,
+                    max(0, _TRANSCRIPT_MAX_BYTES - len(raw)),
                 )
-            )
+                truncated = truncated or earlier_truncated
+                formatted = earlier + "".join(
+                    render_codex_native(
+                        io.StringIO(raw), format_width, header=not earlier)
+                )
+            else:
+                formatted = "".join(
+                    transcript_renderer.format_transcript(
+                        io.StringIO(raw),
+                        source.provider,
+                        claude_native=True,
+                        width=format_width,
+                    )
+                )
             if len(formatted) <= _TRANSCRIPT_FORMAT_CACHE_MAX_CHARS:
                 _TRANSCRIPT_FORMAT_CACHE[format_key] = _TranscriptFormatCacheEntry(
                     identity,
@@ -1967,7 +2056,20 @@ def _capture_pane_history(
         pane.transcript_backed
         and pane.transcript_source
         and (
-            (transcript_provider == "codex" and pane.canonical_history)
+            (
+                transcript_provider == "codex"
+                and (
+                    pane.canonical_history
+                    or (
+                        # Opt-in: the user chose Railmux-managed Codex
+                        # history; only Codex's own alternate-screen view
+                        # (no tmux scrollback) is replaced.
+                        pane.codex_history_policy == "local"
+                        and pane.alternate_on
+                        and pane.history_size == 0
+                    )
+                )
+            )
             or (
                 transcript_provider == "claude"
                 and pane.claude_history_policy == "local"

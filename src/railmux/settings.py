@@ -29,7 +29,9 @@ MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "updates": ("auto_update",),
     "projects": ("show_empty_projects",),
     "live": ("poll_interval_ms", "agent_transport"),
-    "interaction": ("history_lines", "claude_history", "path_open"),
+    "interaction": (
+        "history_lines", "claude_history", "codex_history", "path_open",
+    ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
 
@@ -263,6 +265,25 @@ class Settings:
         if policy not in choices_for("interaction.claude_history"):
             return False
         return self._update_section("interaction", {"claude_history": policy})
+
+    # -- Transport-managed Codex history --------------------------------
+    @property
+    def codex_history_policy(self) -> str:
+        """``local`` renders Codex history from its rollout; ``native`` (the
+        default) keeps forwarding the wheel to Codex's own transcript."""
+        self._load()
+        policy = self._get("interaction", "codex_history")
+        return (
+            policy
+            if isinstance(policy, str)
+            and policy in choices_for("interaction.codex_history")
+            else "native"
+        )
+
+    def set_codex_history_policy(self, policy: str) -> bool:
+        if policy not in choices_for("interaction.codex_history"):
+            return False
+        return self._update_section("interaction", {"codex_history": policy})
 
     # -- Semantic clicked paths -----------------------------------------
     @property

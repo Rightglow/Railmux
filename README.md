@@ -527,6 +527,8 @@ path_open = "ask"
 history_lines = 10000
 # Claude Code history on managed displays: "ask", "local", or "native"
 claude_history = "ask"
+# Codex history on managed displays: "native" (default) or "local"
+codex_history = "native"
 ```
 
 Most users should leave `agent_transport` unchanged. Railmux automatically
@@ -538,7 +540,12 @@ the in-app Options screen share the same authority and preserve comments,
 formatting, order, and unknown keys. `interaction.history_lines` belongs to
 the display client: the native Windows machine for local Railmux, or the
 machine that starts `railmux ssh`. `interaction.claude_history` belongs to the
-workspace that runs Claude Code, so it is remote for `railmux ssh`. The
+workspace that runs Claude Code, so it is remote for `railmux ssh`; the same
+holds for `interaction.codex_history`. With `codex_history = "local"`,
+scrolling a Codex pane in `railmux ssh` shows smooth Railmux-managed history
+rendered from the Codex session file, including earlier segments of a long
+thread, instead of sending every wheel step to Codex. The default `native`
+keeps Codex's own scrolling. The
 released `ssh.history_lines`, `ssh.claude_history`, and `ssh.path_open`
 spellings are still read during upgrade, while new writes use `[interaction]`.
 The shared `interaction.path_open` preference controls recognized paths in

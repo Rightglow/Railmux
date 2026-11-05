@@ -826,12 +826,14 @@ class OptionsModal(urwid.WidgetWrap):
         update_policy: str,
         claude_history_policy: str,
         path_open_policy: str,
+        codex_history_policy: str = "native",
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
         on_claude_history_policy: Callable[[str], bool],
         on_path_open_policy: Callable[[str], bool],
         on_close: Callable[[], None],
+        on_codex_history_policy: Callable[[str], bool] | None = None,
     ) -> None:
         self._on_close = on_close
         self._policies = {
@@ -839,6 +841,7 @@ class OptionsModal(urwid.WidgetWrap):
             "yolo": yolo_policy,
             "update": update_policy,
             "claude_history": claude_history_policy,
+            "codex_history": codex_history_policy,
             "path_open": path_open_policy,
         }
         self._callbacks = {
@@ -846,6 +849,7 @@ class OptionsModal(urwid.WidgetWrap):
             "yolo": on_yolo_policy,
             "update": on_update_policy,
             "claude_history": on_claude_history_policy,
+            "codex_history": on_codex_history_policy or (lambda _policy: False),
             "path_open": on_path_open_policy,
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
@@ -915,6 +919,25 @@ class OptionsModal(urwid.WidgetWrap):
                 ("local", "Railmux managed"),
                 ("ask", "Ask on first scroll"),
                 ("native", "Claude native"),
+            ),
+        ))
+        rows.extend([
+            urwid.Divider(),
+            urwid.Text(("title", "Codex managed history")),
+            urwid.Text(
+                "Choose Railmux-managed or Codex's own scrolling in managed "
+                "displays such as railmux ssh. Adopted on the next refresh."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "codex_history",
+            {
+                "local": "smooth local history rendered from the rollout",
+                "native": "Codex's own transcript; each scroll goes to Codex",
+            },
+            labels=(
+                ("local", "Railmux managed"),
+                ("native", "Codex native"),
             ),
         ))
         rows.extend([

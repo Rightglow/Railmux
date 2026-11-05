@@ -234,3 +234,14 @@ def test_resolved_codex_home_translates_native_windows_path(monkeypatch):
     cfg = Config(codex_home=r"D:\provider\codex")
 
     assert cfg.resolved_codex_home() == Path("/d/provider/codex")
+
+
+def test_codex_history_defaults_native_and_validates(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("")
+    assert load_config(config_path=path).codex_history == "native"
+    path.write_text('[interaction]\ncodex_history = "local"\n')
+    assert load_config(config_path=path).codex_history == "local"
+    path.write_text('[interaction]\ncodex_history = "ask"\n')
+    with pytest.raises(ConfigError, match="interaction.codex_history"):
+        load_config(config_path=path)

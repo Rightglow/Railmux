@@ -283,3 +283,15 @@ def test_conflicting_non_table_section_is_preserved_and_update_fails(
 
     assert not store.set_layout_save_policy("always")
     assert path.read_text() == 'ui = "owned by user"\n'
+
+
+def test_codex_history_policy_defaults_native_and_round_trips(settings):
+    store, path = settings
+
+    assert store.codex_history_policy == "native"
+    assert not store.set_codex_history_policy("ask")
+    assert store.set_codex_history_policy("local")
+    assert Settings().codex_history_policy == "local"
+    assert tomlkit.parse(path.read_text()).unwrap()["interaction"][
+        "codex_history"
+    ] == "local"

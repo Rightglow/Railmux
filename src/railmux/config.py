@@ -37,6 +37,7 @@ class Config:
     show_empty_projects: bool = False
     history_lines: int = HISTORY_DEFAULT_LINES
     claude_history: str = "ask"
+    codex_history: str = "native"
     interaction_path_open: str = "ask"
 
     @property
@@ -195,6 +196,13 @@ def load_config(config_path: Path | None = None) -> Config:
             )
             + ' must be "ask", "local", or "native"'
         )
+    codex_history = interaction.get("codex_history", "native")
+    if (
+        not isinstance(codex_history, str)
+        or codex_history not in choices_for("interaction.codex_history")
+    ):
+        raise ConfigError(
+            'interaction.codex_history must be "local" or "native"')
     # The transport-neutral key wins. The released SSH-only spelling remains
     # a read alias so an upgrade never silently forgets the user's choice.
     canonical_path_open = "path_open" in interaction
@@ -218,5 +226,6 @@ def load_config(config_path: Path | None = None) -> Config:
         show_empty_projects=projects.get("show_empty_projects") is True,
         history_lines=history_lines,
         claude_history=claude_history,
+        codex_history=codex_history,
         interaction_path_open=path_open,
     )

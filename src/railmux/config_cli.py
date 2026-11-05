@@ -113,13 +113,25 @@ _BEHAVIOR_SETTINGS = (
          ("external", "Always use a separate terminal")),
         "set_path_open_policy",
     ),
+    _PolicySetting(
+        "Codex managed history", "interaction", "codex_history",
+        "codex_history_policy",
+        (("local", "Always use smooth local history"),
+         ("native", "Always use Codex native history")),
+        "set_codex_history_policy",
+    ),
 )
+
+_RELEASED_POLICIES = 5
+_HISTORY_LINES_ENTRY = object()
 
 _BEHAVIOR_KEYS = {
     "ui": ("layout_retention", "layout_profile"),
     "codex": ("auto_run",),
     "updates": ("auto_update",),
-    "interaction": ("history_lines", "claude_history", "path_open"),
+    "interaction": (
+        "history_lines", "claude_history", "codex_history", "path_open",
+    ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
 _PROGRAM_KEYS = {
@@ -404,17 +416,32 @@ def _behavior_menu(
     while True:
         config = load_config()
         settings = Settings()
-        current = [
-            settings.layout_save_policy,
-            settings.codex_yolo_policy,
-            settings.update_policy,
-            settings.claude_history_policy,
-            settings.path_open_policy,
-        ]
-        labels = [item.title for item in _BEHAVIOR_SETTINGS]
+        policies = {
+            "layout_save_policy": settings.layout_save_policy,
+            "codex_yolo_policy": settings.codex_yolo_policy,
+            "update_policy": settings.update_policy,
+            "claude_history_policy": settings.claude_history_policy,
+            "path_open_policy": settings.path_open_policy,
+            "codex_history_policy": settings.codex_history_policy,
+        }
+        # Released entry numbers stay stable: options added later follow the
+        # local-only history capacity entry.
+        entries: list[object] = list(_BEHAVIOR_SETTINGS[:_RELEASED_POLICIES])
         if not remote_context:
-            current.append(str(config.history_lines))
-            labels.append("Managed history lines")
+            entries.append(_HISTORY_LINES_ENTRY)
+        entries.extend(_BEHAVIOR_SETTINGS[_RELEASED_POLICIES:])
+        current = [
+            str(config.history_lines)
+            if entry is _HISTORY_LINES_ENTRY
+            else policies[entry.config_attr]
+            for entry in entries
+        ]
+        labels = [
+            "Managed history lines"
+            if entry is _HISTORY_LINES_ENTRY
+            else entry.title
+            for entry in entries
+        ]
         _render_category_header(
             stdout,
             remote_context=remote_context,
@@ -440,6 +467,7 @@ def _behavior_menu(
                 if remote_context:
                     behavior_keys["interaction"] = (
                         "claude_history",
+                        "codex_history",
                         "path_open",
                     )
                     behavior_keys["ssh"] = ("claude_history", "path_open")
@@ -448,16 +476,16 @@ def _behavior_menu(
         if not choice.isdigit() or not 1 <= int(choice) <= len(current):
             feedback.set("Choose one of the listed entries.", level="warning")
             continue
-        index = int(choice) - 1
+        entry = entries[int(choice) - 1]
         result = (
             _edit_policy(
-                _BEHAVIOR_SETTINGS[index],
+                entry,
                 stdin,
                 stdout,
                 feedback,
                 remote_context=remote_context,
             )
-            if index < len(_BEHAVIOR_SETTINGS)
+            if entry is not _HISTORY_LINES_ENTRY
             else _edit_history_lines(
                 stdin,
                 stdout,
@@ -719,7 +747,7 @@ def _recover_invalid_config(
 def _managed_reset_keys(*, remote_context: bool) -> dict[str, tuple[str, ...]]:
     keys = dict(MANAGED_CONFIG_KEYS)
     if remote_context:
-        keys["interaction"] = ("claude_history", "path_open")
+        keys["interaction"] = ("claude_history", "codex_history", "path_open")
         keys["ssh"] = ("claude_history", "path_open")
     return keys
 
