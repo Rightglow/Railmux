@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev13] - 2026-11-05
+
+### Added
+
+- Optional Railmux-managed Codex history for ``railmux ssh``. Set
+  ``codex_history = "local"`` under ``[interaction]``, or choose it in
+  Options or ``railmux config``, and scrolling a Codex pane shows smooth
+  local history like Claude's instead of sending every wheel step to Codex.
+  It is drawn the way Codex draws its transcript (prompts, replies, commands,
+  edits, tool calls, "Worked for" footers), follows rewinds, and includes the
+  earlier segment files of a long thread. The default stays ``native``.
+
+### Fixed
+
+- Open wrapped links in Codex output over ``railmux ssh`` when the link's
+  last row continues with prose, when a URL breaks mid-token (``#discussion_``
+  / ``r4365945486``, ``?focusedCommen`` / ``tId=…``), or when a row ends in a
+  dot (``….`` / ``py``). Paths and URLs now also stop at Chinese and
+  full-width punctuation such as ``，。：``.
+- Keep session protection for Codex launched from its npm launcher on
+  systems without procfs (macOS). Codex 0.166's launcher replaces Node with
+  the native binary in place, which changed the command name that the
+  fallback process identity included, so a launch could be refused or its
+  session lease released while Codex was still running.
+
 ## [0.4.2.dev12] - 2026-10-27
 
 ### Fixed
