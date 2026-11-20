@@ -11,7 +11,11 @@ def test_release_waits_for_reusable_cross_platform_test_workflow():
     assert "uses: ./.github/workflows/test.yml" in release
     assert "needs: test" in release
     assert "workflow_call:" in test
-    assert "os: [ubuntu-latest, macos-latest]" in test
+    tmux_job = test.split("\n  tmux-smoke:\n", 1)[1].split(
+        "\n  tmux-27-smoke:", 1)[0]
+    assert "os: ubuntu-24.04" in tmux_job
+    assert "os: macos-latest" in tmux_job
+    assert 'python-version: "3.9"' in tmux_job
     assert "website:" in test
     assert "npm run build" in test
 
