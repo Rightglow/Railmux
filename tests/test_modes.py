@@ -36,6 +36,7 @@ def test_app_mode_action_uses_registry_instead_of_boolean_toggle():
         (CLAUDE_MODE, CODEX_MODE, REVIEW_MODE), default_key="claude")
     app = App.__new__(App)
     app._mode_registry = registry
+    app._mode_availability = frozenset(mode.key for mode in registry.modes)
     app._active_mode_key = "codex"
     app._switch_mode = MagicMock()
 
@@ -49,6 +50,7 @@ def test_unknown_restored_mode_falls_back_to_registry_default():
         (CLAUDE_MODE, CODEX_MODE, REVIEW_MODE), default_key="claude")
     app = App.__new__(App)
     app._mode_registry = registry
+    app._mode_availability = frozenset(mode.key for mode in registry.modes)
 
     assert app._mode_key_from_state({"mode": "removed-provider"}) == "claude"
     assert app._mode_key_from_state({"codex_mode": True}) == "codex"
