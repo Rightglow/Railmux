@@ -339,6 +339,9 @@ def collect_doctor_snapshot(
         "codex": _tool_diagnostic(
             config.codex_binary, environ=effective_env,
             configured=config.codex_binary != "codex"),
+        "devin": _tool_diagnostic(
+            config.devin_binary, environ=effective_env,
+            configured=config.devin_binary != "devin"),
     }
     configured_tmux_missing = (
         config.tmux_binary != "tmux"
@@ -528,6 +531,7 @@ def render_doctor_text(snapshot: DoctorSnapshot) -> str:
         f"Last tmux incident: {_incident_text(snapshot.last_tmux_incident)}",
         f"Claude Code: {_tool_text(snapshot.tools['claude_code'])}",
         f"Codex: {_tool_text(snapshot.tools['codex'])}",
+        f"Devin: {_tool_text(snapshot.tools['devin'])}",
         f"Inside tmux: {_yes_no(snapshot.inside_tmux)}",
         f"SSH transport: {_yes_no(snapshot.ssh_transport)}",
         (

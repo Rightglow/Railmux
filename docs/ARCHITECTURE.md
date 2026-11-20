@@ -808,6 +808,24 @@ the assumption that exactly Claude and Codex exist. Adding a truly new backend
 will require a backend adapter, but must not require redesigning mode cycling or
 per-mode state.
 
+### Devin session authority
+
+The Devin adapter requests paginated metadata over its local ACP interface on
+a bounded worker. It serves the last complete result when a scan fails and
+never opens Devin's session database or loads a conversation to list it.
+Railmux launches interactive sessions with Devin's in-process backend. Tmux
+owns the live process, so closing a Railmux client leaves the pane running and
+Kill can stop that pane without stopping a shared Devin daemon.
+
+For a new pane, a matching ACP lock PID in its exact tmux process tree is
+required to associate the persisted conversation. Directory and timestamp
+matches alone confer no authority. For a resumed session, launch already knows
+the exact provider ID and stamps it on the exact tmux marker. Both paths use
+the provider session lease once the conversation ID is known. A matching
+marker restores live ownership even while the inventory is cold. Devin-owned
+saved history has no Railmux Preview or Delete adapter in this release.
+Managed transports use styled tmux capture for Devin live history.
+
 ## Sidebar rows are disposable views
 
 The periodic refresh publishes value snapshots to Projects, Sessions, and

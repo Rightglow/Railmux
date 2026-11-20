@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 
 import pytest
-import urwid
 
 from railmux.ui import app as app_module
 
@@ -24,7 +23,7 @@ def _screen(monkeypatch, events: list[str], *, failure: Exception | None = None)
         if failure is not None:
             raise failure
 
-    monkeypatch.setattr(urwid.raw_display.Screen, "draw_screen", base_draw)
+    monkeypatch.setattr(app_module.Screen, "draw_screen", base_draw)
     return screen
 
 
@@ -74,7 +73,7 @@ def test_managed_windows_selects_synchronized_screen(monkeypatch):
 def test_posix_keeps_stock_urwid_screen(monkeypatch):
     monkeypatch.setattr(app_module, "running_in_windows_wrapper", lambda: False)
 
-    assert app_module._screen_class_for_platform() is urwid.raw_display.Screen
+    assert app_module._screen_class_for_platform() is app_module.Screen
 
 
 def test_windows_screen_does_not_disable_provider_animation_in_app():

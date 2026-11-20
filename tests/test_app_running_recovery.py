@@ -1355,7 +1355,7 @@ def test_launch_refuses_untracked_preexisting_tmux(monkeypatch):
     session_id = "12345678-1234-1234-1234-1234567890ab"
     app = App.__new__(App)
     app._running = {}
-    app._session_name = lambda _key: "cx-12345678-1234-12"
+    app._session_name = lambda _key, **_kwargs: "cx-12345678-1234-12"
     app._set_status = MagicMock()
     app._ensure_detached_agent = MagicMock()
     monkeypatch.setattr("railmux.ui.app.tmux_ctl.session_exists", lambda _name: True)

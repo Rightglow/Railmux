@@ -201,3 +201,23 @@ def test_deleted_remembered_project_falls_back_to_visible_project(monkeypatch):
     assert app._selected_project is fallback
     selected_projects = [call.args[0] for call in app._pane_sessions.call_args_list]
     assert deleted not in selected_projects[1:]
+
+
+def test_foreign_pane_focus_only_selects_a_visible_project(monkeypatch):
+    from railmux.ui.app import _Running
+
+    claude = _project("claude-a")
+    shared = _project("shared")
+    foreign = _project("foreign", codex_only=True)
+    app = _mode_app(monkeypatch, [claude, shared], [])
+    app._on_project_select(claude)
+    running = _Running("other", "cx-other", "codex/focus", foreign,
+                       session_type="codex")
+    app._running[running.key] = running
+
+    app._sync_sidebar_to_agent_project(running.tmux_name)
+    assert app._selected_project is claude
+
+    running.project = _project("shared", codex_only=True)
+    app._sync_sidebar_to_agent_project(running.tmux_name)
+    assert app._selected_project is shared

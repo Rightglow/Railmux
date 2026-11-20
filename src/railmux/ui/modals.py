@@ -441,7 +441,7 @@ class HelpModal(urwid.WidgetWrap):
         on_close: Callable[[], None],
         *,
         provider_label: str,
-        on_ask: Callable[[], None],
+        on_ask: Callable[[], None] | None,
     ) -> None:
         self._on_close = on_close
         self._on_ask = on_ask
@@ -466,33 +466,35 @@ class HelpModal(urwid.WidgetWrap):
         # the ListBox enters the "must scroll" branch immediately — one
         # keypress / wheel tick scrolls one line.
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
-        self._ask_row = ClickableRow(
-            urwid.AttrMap(
-                urwid.Text([
-                    ("modal_key", "A"),
-                    f"  Ask Railmux with {provider_label}",
-                ], align="center"),
-                "body",
-                "focus",
-            ),
-            on_click=on_ask,
-        )
-        self._header = urwid.Pile([
-            self._ask_row,
-            urwid.Text(
-                ("dim", "Separate safe help session; uses provider tokens."),
-                align="center",
-            ),
-            urwid.Divider(),
-        ])
+        actions = [("Esc / Enter", "close")]
+        if on_ask is None:
+            self._header = urwid.Text(
+                ("dim", "Ask Railmux is unavailable in this mode."), align="center"
+            )
+        else:
+            self._ask_row = ClickableRow(
+                urwid.AttrMap(
+                    urwid.Text([
+                        ("modal_key", "A"),
+                        f"  Ask Railmux with {provider_label}",
+                    ], align="center"),
+                    "body",
+                    "focus",
+                ),
+                on_click=on_ask,
+            )
+            self._header = urwid.Pile([
+                self._ask_row,
+                urwid.Text(
+                    ("dim", "Separate safe help session; uses provider tokens."),
+                    align="center",
+                ),
+                urwid.Divider(),
+            ])
+            actions.append(("A / click", "ask"))
         self._footer = urwid.Pile([
             urwid.Divider(),
-            _action_legend(
-                [("Esc / Enter", "close"), ("A / click", "ask")],
-                align="center",
-                separator=" · ",
-                wrap="space",
-            ),
+            _action_legend(actions, align="center", separator=" · ", wrap="space"),
         ])
         self._frame = urwid.Frame(
             body=self._listbox,
@@ -506,7 +508,7 @@ class HelpModal(urwid.WidgetWrap):
         return True
 
     def keypress(self, size, key):
-        if key in ("a", "A"):
+        if key in ("a", "A") and self._on_ask is not None:
             self._on_ask()
             return None
         if key in ("enter", "esc"):

@@ -42,7 +42,7 @@ One-off non-resumable invocations such as `codex exec` are intentionally
 filtered from the sidebar.
 
 **Quick answers:** [use the mouse](#mouse) ·
-[switch Claude Code and Codex](#switching-between-claude-code-and-codex) ·
+[switch agent modes](#switching-agent-modes) ·
 [start or resume a session](#starting-and-resuming) ·
 [copy text from an agent pane](#1-how-do-i-copy-text-from-the-agent-pane)
 
@@ -194,7 +194,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `d` | Delete the focused session (confirms, then finishes in background) |
 | `t` | Open or return to the managed terminal below the Target agent |
 | `T` | Return to that agent's managed Vim viewer, when open |
-| `m` | Switch agent mode (Claude Code ⇄ Codex) |
+| `m` | Cycle Claude Code, Codex, and Devin |
 | `o` | Open persistent Railmux options |
 | `␣` | Preview canonical history for the selected stopped or running session |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
@@ -219,7 +219,7 @@ empty launch surface without collapsing or reordering the other agent pane.
 After a soft restart the help session is not restored automatically—open Help
 and choose Ask again to reconnect to it.
 
-`+ New project` works in both Claude Code and Codex modes. Browse to an
+`+ New project` works in each available agent mode. Browse to an
 existing directory and choose `. (use this path)`, or type a new relative,
 absolute, or `~`-based path. When no existing entry matches, select the
 explicit `+ create …` row (it is focused automatically) and press `Enter`;
@@ -270,15 +270,29 @@ selected choice confirms and closes the screen; `Esc` or `o` also closes it.
 Layout changes do not resize the current workspace; Codex auto-run changes
 affect new launches, not agents that are already running.
 
-### Switching between Claude Code and Codex
+### Switching agent modes
 
-Press `m`, or select **More → Mode**, to switch the sidebar between Claude Code
-and Codex. The current mode controls which provider's Projects, Sessions, and
+Press `m` or select **More → Mode** to cycle Claude Code, Codex, and Devin. The current mode controls which provider's Projects, Sessions, and
 Running lists are shown, while each mode remembers its selected project and
 Running filter. Agents running in the other mode keep running and reappear when
-you switch back; changing modes never stops them. Either CLI alone is enough to
+you switch back; changing modes never stops them. One CLI is enough to
 use Railmux; selecting a mode whose CLI is not installed shows a warning rather
 than stopping the workspace.
+
+### Devin preview
+
+In `0.4.2.dev14`, install and sign in to Devin CLI on the machine where the
+agent runs. Use Devin CLI 3000.14.30821 or newer. In Railmux, press `m` until the
+status bar says **Devin**. Use **+ New project** for a new directory, `n` for a
+new conversation, or `Enter` on an existing session to reopen it. Use **Running**
+to return to a live Devin pane, and keep your usual `/model` and permission
+controls inside Devin.
+
+Railmux owns the live pane through tmux, so ordinary detach and SSH reconnect
+preserve it. Devin sessions appear in **Sessions** after the first prompt.
+Use Devin to inspect or delete saved history. Railmux saved-history Preview,
+history deletion, and Ask Railmux are unavailable in this mode. The preview
+runs on POSIX and WSL. Native Windows Devin is unavailable.
 
 ### Dual-agent layouts
 
@@ -495,6 +509,10 @@ binary = "codex"
 home = "~/.codex"
 # New Codex launches: "always", "ask", or "never" (default: "ask")
 auto_run = "ask"
+
+[devin]
+# Command name or path to the Devin CLI (default: "devin")
+binary = "devin"
 
 [environment]
 # "inherit", or an installed UTF-8 locale such as C.UTF-8 / en_US.UTF-8

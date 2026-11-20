@@ -63,7 +63,7 @@ pane-bounded drag-to-copy and is not the same as `railmux ssh HOST`.
 | Clickable tmux status ranges and compact `[R][1][2]` labels | tmux 3.4 or newer; keyboard navigation remains portable. |
 | Native Windows full-screen renderer | Windows Terminal 1.24.10621 or newer. This is a host requirement, not a `pip` dependency. `WT_SESSION` is the conservative 0.4 capability gate; `TERM=xterm-256color` alone does not identify a terminal product or synchronized-output support. conhost, IDE terminals, and third-party native Windows terminals are best effort until separately field-validated. |
 | Native Windows `railmux ssh` repaint | A managed MSYS2 client with the validated Windows Terminal marker commits each complete changed-row/overlay/status/cursor repaint inside one DEC synchronized-output boundary. The opaque marker is neither persisted nor transmitted; other terminal hosts keep the ordinary byte-exact repaint path. |
-| Providers | Claude Code, Codex, or both on the machine that runs the provider process. |
+| Providers | Claude Code or Codex for stable support. Devin is a POSIX/WSL development preview, including on POSIX SSH hosts. |
 | History preview | `less`; provider rollout/history files must remain readable. |
 | Managed file viewer | Remote `vim` for supported files; missing Vim falls back without mutating the file. |
 | Mouse | Terminal must report SGR-compatible mouse events to the application. Right-click and hover may require separate terminal settings. |
@@ -91,7 +91,8 @@ product capability.
 | P09 | Delete stopped provider history with confirmation | Supported | Supported | Unknown or changed live identity, a remote lease, or unavailable shared locking fails closed; confirmed cleanup runs in one background transaction with durable status-right progress. |
 | P10 | Activity, blocked, attention, live, remote-owner, and unresolved status | Supported | Supported | Liveness, activity, and attention remain separate states. `running on HOST` is shared-storage ownership, not a locally attachable Running entry. Normal provider exit removes Running before lease/status validation rather than showing a missing-identity warning. |
 | P11 | Per-provider Projects, Sessions, and Running filters | Supported | Supported | Current filters and selection survive soft restart. |
-| P12 | Switch Claude Code/Codex mode without stopping the other provider | Supported | Supported | Each mode keeps independent sidebar view state. |
+| P12 | Cycle provider modes without stopping agents in other modes | Supported | Supported | Each mode keeps independent sidebar view state. Devin is included in the development preview. |
+| P13 | Devin local conversations | Development preview on POSIX/WSL | Development preview on POSIX hosts | CLI discovery, start/resume, Running, stop, sidecar rename/star, and info. Managed live history uses styled pane capture. Saved-history Preview, history deletion, and W07 Ask Railmux are unavailable. Real Linux CLI/tmux validation; macOS and WSL provider flows lack manual evidence. |
 
 ### Workspace, lifecycle, and configuration
 

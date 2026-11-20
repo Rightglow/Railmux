@@ -30,6 +30,7 @@ class Config:
     tmux_binary: str = "tmux"
     claude_binary: str = "claude"
     codex_binary: str = "codex"
+    devin_binary: str = "devin"
     locale: str = "inherit"
     codex_home: str = "~/.codex"
     poll_interval_ms: int = 1000
@@ -137,6 +138,7 @@ def load_config(config_path: Path | None = None) -> Config:
     tmux = _table(data, "tmux")
     claude = _table(data, "claude")
     codex = _table(data, "codex")
+    devin = _table(data, "devin")
     environment = _table(data, "environment")
     live = _table(data, "live")
     projects = _table(data, "projects")
@@ -219,6 +221,7 @@ def load_config(config_path: Path | None = None) -> Config:
         claude_binary=_command(
             claude, "binary", "claude", "claude.binary"),
         codex_binary=_command(codex, "binary", "codex", "codex.binary"),
+        devin_binary=_command(devin, "binary", "devin", "devin.binary"),
         locale=_locale(environment),
         codex_home=_string(codex, "home", "~/.codex", "codex.home"),
         poll_interval_ms=poll_interval_ms,

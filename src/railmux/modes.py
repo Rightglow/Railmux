@@ -18,6 +18,7 @@ class ProjectSource(str, Enum):
 
     CLAUDE = "claude"
     CODEX = "codex"
+    DEVIN = "devin"
 
 
 @dataclass(frozen=True)
@@ -100,5 +101,14 @@ CODEX_MODE = AgentMode(
     prompt_for_auto_run=True,
 )
 
+DEVIN_MODE = AgentMode(
+    key="devin",
+    label="Devin",
+    tmux_prefix="dv-",
+    session_type="devin",
+    project_source=ProjectSource.DEVIN,
+    binary_config_attr="devin_binary",
+)
+
 DEFAULT_MODE_REGISTRY = ModeRegistry(
-    (CLAUDE_MODE, CODEX_MODE), default_key=CLAUDE_MODE.key)
+    (CLAUDE_MODE, CODEX_MODE, DEVIN_MODE), default_key=CLAUDE_MODE.key)

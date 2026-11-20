@@ -703,7 +703,7 @@ def test_launch_snapshots_pre_existing_ids(monkeypatch):
     app._shellify = lambda *a, **k: "SHELLCMD"
     app._ensure_detached_agent = lambda *a, **k: (True, None)
     app._attach_in_right_pane = lambda *a, **k: True
-    app._session_name = lambda key: "cx-abc"
+    app._session_name = lambda key, **_kwargs: "cx-abc"
     app._restart_identity = OuterTmuxIdentity(
         server_digest="a" * 64,
         server_pid=123,

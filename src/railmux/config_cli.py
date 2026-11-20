@@ -137,6 +137,7 @@ _BEHAVIOR_KEYS = {
 _PROGRAM_KEYS = {
     "tmux": ("binary",),
     "claude": ("binary",),
+    "devin": ("binary",),
     "codex": ("binary",),
 }
 _ENVIRONMENT_KEYS = {"environment": ("locale",)}
@@ -569,7 +570,8 @@ def _program_menu(
     *,
     remote_context: bool,
 ) -> object | None:
-    programs = (("tmux", "tmux"), ("claude", "Claude Code"), ("codex", "Codex"))
+    programs = (("tmux", "tmux"), ("claude", "Claude Code"), ("codex", "Codex"),
+                ("devin", "Devin"))
     while True:
         config = load_config()
         _render_category_header(

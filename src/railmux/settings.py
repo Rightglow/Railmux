@@ -23,6 +23,7 @@ from railmux.setting_contracts import bounds_for, choices_for
 MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "tmux": ("binary",),
     "claude": ("binary",),
+    "devin": ("binary",),
     "codex": ("binary", "home", "auto_run"),
     "environment": ("locale",),
     "ui": ("layout_retention", "layout_profile"),
@@ -195,7 +196,7 @@ class Settings:
 
     # -- Program paths and locale --------------------------------------
     def set_program_binary(self, section: str, value: str) -> bool:
-        if section not in {"tmux", "claude", "codex"} or not value.strip():
+        if section not in {"tmux", "claude", "codex", "devin"} or not value.strip():
             return False
         return self._update_section(section, {"binary": value})
 

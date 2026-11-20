@@ -99,7 +99,8 @@ export default function Home() {
               </h1>
               <p className="hero-lede">
                 Run, resume, and switch between Claude Code and Codex sessions
-                from one persistent terminal workspace.
+                from one persistent terminal workspace. Devin CLI support is
+                available in the POSIX development preview.
               </p>
               <div className="hero-actions">
                 <a className="button button-primary" href="#install">

@@ -368,7 +368,7 @@ def acquire(
     needed for its independent holder to observe process exit.
     """
     ids = tuple(sorted(set(session_ids)))
-    if provider not in {"claude", "codex"} or not ids:
+    if provider not in {"claude", "codex", "devin"} or not ids:
         raise LeaseError("invalid provider session lease identity")
     if any(not session_id or len(session_id) > 128 for session_id in ids):
         raise LeaseError("invalid provider session id for lease")
@@ -624,7 +624,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
     sub = parser.add_subparsers(dest="command", required=True)
     hold = sub.add_parser("hold", add_help=False)
-    hold.add_argument("--provider", choices=("claude", "codex"), required=True)
+    hold.add_argument("--provider", choices=("claude", "codex", "devin"), required=True)
     hold.add_argument("--instance", required=True)
     hold.add_argument("--pane-id", required=True)
     hold.add_argument("--pane-pid", type=int, required=True)

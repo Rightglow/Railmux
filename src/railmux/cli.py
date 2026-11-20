@@ -588,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
             "       railmux config [--remote HOST] [OPTIONS]\n"
             "       railmux doctor [--remote HOST] [OPTIONS]"
         ),
-        description="Terminal workspace for Claude Code and Codex sessions",
+        description="Terminal workspace for Claude Code, Codex, and Devin sessions",
         epilog=(
             "Commands:\n"
             "  railmux ssh HOST       responsive remote workspace\n"

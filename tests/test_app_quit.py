@@ -333,7 +333,7 @@ def test_run_defers_saved_agent_focus_and_reverts_bar_if_setup_raises(monkeypatc
     monkeypatch.setattr("subprocess.run", run)
     # Screen construction blows up before the managed status bar is revealed.
     monkeypatch.setattr(
-        "urwid.raw_display.Screen", MagicMock(side_effect=RuntimeError("boom"))
+        "railmux.ui.app.Screen", MagicMock(side_effect=RuntimeError("boom"))
     )
 
     with pytest.raises(RuntimeError, match="boom"):

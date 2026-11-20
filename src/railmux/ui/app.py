@@ -18,8 +18,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import urwid
+from urwid.display.raw import Screen
 
 from railmux import (
+    devin_index,
     legacy_sessions,
     orphan_marker,
     session_lease,
@@ -133,7 +135,7 @@ _SYNC_OUTPUT_BEGIN = "\x1b[?2026h"
 _SYNC_OUTPUT_END = "\x1b[?2026l"
 
 
-class _SynchronizedOutputScreen(urwid.raw_display.Screen):
+class _SynchronizedOutputScreen(Screen):
     """Commit one Urwid paint as one tmux synchronized update.
 
     The managed Windows UI and the agent occupy different tmux panes.  Urwid's
@@ -169,7 +171,7 @@ def _screen_class_for_platform():
     """Keep POSIX rendering byte-for-byte unchanged."""
     if running_in_windows_wrapper():
         return _SynchronizedOutputScreen
-    return urwid.raw_display.Screen
+    return Screen
 
 
 def _tmux_batch_argv(commands: list[list[str]]) -> list[str]:
@@ -462,7 +464,7 @@ class _Running:
     allow_heuristic_resolution: bool = True
     status: str = "idle"                   # "idle" | "busy" | "blocked"
     last_mtime: float = 0.0                # session JSONL mtime, for recency sort
-    session_type: str = "claude"           # "claude" | "codex" — which CLI owns it
+    session_type: str = "claude"           # registered provider key
     attention: AttentionState | None = None
     orphan: orphan_marker.Marker | None = None
     # Sessions created before Railmux moved to its dedicated tmux server stay
@@ -871,6 +873,8 @@ class App:
         windows_tmux_lifecycle.clear_empty_server_exit()
         self._claude_home = claude_home
         self._config = config
+        if not running_in_windows_wrapper():
+            self._devin_index = devin_index.DevinIndex(config.devin_binary)
         self._auto_launched = auto_launched
         # Status-bar state machine. An explicit message (info/warn/error) holds
         # the bar for a level-dependent TTL, then it falls back to cycling idle
@@ -2287,6 +2291,9 @@ class App:
         projection. A Codex rewind lineage is represented by its newest
         rollout; Claude branches are projected by ``transcript``.
         """
+        if session.session_type == "devin":
+            self._set_status("Devin saved-history preview is unavailable. Press Enter to open.", "tip")
+            return
         if session.session_type == "codex":
             representative = self._codex_representative(session.session_id)
             if representative is not None:
@@ -2503,7 +2510,17 @@ class App:
         running = self._by_tmux(tmux_name)
         if running is None or running.project is None:
             return
-        project = self._project_in_current_view(running.project)
+        if running.session_type == self._active_mode().session_type:
+            project = self._project_in_current_view(running.project)
+        else:
+            # Focus does not change the sidebar provider. Cross-provider panes
+            # can select a shared project only if the current sidebar has it.
+            project = self._visible_project_for_path(
+                self._visible_projects(allow_stale=self._mode_refresh_pending()),
+                running.project.real_path,
+            )
+            if project is None:
+                return
         if (self._selected_project is not None
                 and self._selected_project.encoded_name == project.encoded_name):
             return
@@ -2534,12 +2551,10 @@ class App:
         # same tmux name, so counter 10 could hijack counter 1's session (#11).
         return len(key) if key.startswith("__new__-") else 16
 
-    def _session_name(self, key: str) -> str:
-        """Stable tmux session name using the active mode's registered prefix."""
-        return (
-            f"{self._active_mode().tmux_prefix}"
-            f"{self._safe_name(key, self._name_width(key))}"
-        )
+    def _session_name(self, key: str, *, mode: AgentMode | None = None) -> str:
+        """Use a deterministic name in the provider's tmux namespace."""
+        mode = mode or self._active_mode()
+        return f"{mode.tmux_prefix}{self._safe_name(key, self._name_width(key))}"
 
     def _ensure_detached_agent(self, name: str, shell_cmd: str,
                                env: dict[str, str] | None = None,
@@ -5154,6 +5169,10 @@ class App:
             else:  # compatibility for lightweight integrations/test doubles
                 raw = index.sessions_for_cwd(cwd, refresh=True)
                 complete = True
+        elif session_type == "devin":
+            # A lock holder in the live pane's process tree is the only proof
+            # used to associate a newly created Devin session with its pane.
+            return frozenset(), False
         elif project is not None and project.claude_dir != Path():
             raw = self._session_cache.list_sessions(project)
             complete = True
@@ -5193,7 +5212,14 @@ class App:
                 "error",
             )
             return False
-        tmux_name = existing.tmux_name if existing else self._session_name(key)
+        launch_mode = self._modes().resolve(session_type)
+        # Devin resumes also get a marker so a release/restart can recover the
+        # exact pane without asking the index for metadata or relying on procfs.
+        devin_resume = session_type == "devin" and placeholder_path is None
+        marker_key = self._new_placeholder_key() if devin_resume else key
+        marker_path = cwd if devin_resume else placeholder_path
+        tmux_name = (existing.tmux_name if existing else
+                     self._session_name(marker_key, mode=launch_mode))
         # Never adopt an untracked pre-existing tmux session merely because its
         # deterministic name collides.  Resume discovery must validate and
         # register it first; otherwise stamping/reusing it here could hijack an
@@ -5224,7 +5250,7 @@ class App:
             if slot.pane_id is not None else None
         )
         launch_marker: orphan_marker.Marker | None = None
-        if placeholder_path is not None:
+        if marker_path is not None:
             owner = getattr(self, "_restart_identity", None)
             mode = self._modes().for_tmux_name(tmux_name)
             if owner is None or mode is None:
@@ -5237,12 +5263,12 @@ class App:
                 if holder is not None:
                     launch_marker = orphan_marker.Marker(
                         mode_key=mode.key,
-                        placeholder_key=key,
+                        placeholder_key=marker_key,
                         tmux_name=tmux_name,
                         tmux_session_id=holder.session_id,
                         tmux_pane_id=holder.pane_id,
                         owner=owner,
-                        cwd=self._path_key(placeholder_path),
+                        cwd=self._path_key(marker_path),
                         created_at=created_at,
                         creation_token=uuid.uuid4().hex,
                         phase="launching",
@@ -5253,12 +5279,15 @@ class App:
                     else:
                         ok, err = tmux_ctl.start_detached_holder(holder, shell_cmd)
                         if ok:
-                            unresolved = launch_marker.with_phase("unresolved")
+                            started = (
+                                launch_marker.resolved(key) if devin_resume else
+                                launch_marker.with_phase("unresolved")
+                            )
                             # If this transition fails, the durable launching
                             # marker remains sufficient for conservative
                             # recovery after a crash. Never erase it or guess.
-                            if self._write_orphan_marker(unresolved):
-                                launch_marker = unresolved
+                            if self._write_orphan_marker(started):
+                                launch_marker = started
         else:
             ok, err = self._ensure_detached_agent(
                 tmux_name,
@@ -5452,7 +5481,22 @@ class App:
 
         cwd = session_meta.project.real_path
         env: dict[str, str] | None = None
-        if session_meta.session_type == "codex":
+        if session_meta.session_type == "devin":
+            mode = self._modes().get("devin")
+            if self._warn_missing_mode_binary(mode):
+                return False
+            record = self._devin_index.get(session_meta.session_id)
+            if record is not None and record.locked:
+                self._devin_index.refresh()
+                self._set_status("Devin reports this session is already open.", "warn")
+                return False
+            try:
+                cmd = devin_index.command(
+                    self._configured_mode_binary(mode), session_meta.session_id)
+            except ValueError as exc:
+                self._set_status(str(exc), "error")
+                return False
+        elif session_meta.session_type == "codex":
             cmd = build_codex_resume_command(
                 codex_binary=self._config.codex_binary,
                 session_id=session_meta.session_id,
@@ -5521,19 +5565,9 @@ class App:
         proj = self._selected_project
         placeholder = self._new_placeholder_key()
         mode = self._active_mode()
-        env: dict[str, str] | None = None
-        if mode.project_source == ProjectSource.CODEX:
-            cmd = build_codex_new_command(
-                codex_binary=self._config.codex_binary,
-                cwd=proj.real_path,
-                yolo=self._codex_yolo_enabled(),
-            )
-            env = self._codex_env()
-        else:
-            cmd = build_new_session_command(
-                claude_binary=self._config.claude_binary,
-                cwd=proj.real_path,
-            )
+        if mode.project_source == ProjectSource.DEVIN and self._warn_missing_mode_binary(mode):
+            return
+        cmd, env = self._new_agent_command(mode, proj.real_path)
         slot_kwargs = (
             {} if slot is self._primary_slot else {"slot": slot})
         if self._launch(
@@ -5545,33 +5579,39 @@ class App:
                 **slot_kwargs):
             self._set_status(f"→ new session in {proj.display_name}")
 
+    def _new_agent_command(
+        self, mode: AgentMode, cwd: Path,
+    ) -> tuple[list[str], dict[str, str] | None]:
+        if mode.project_source == ProjectSource.DEVIN:
+            return devin_index.command(self._configured_mode_binary(mode)), None
+        if mode.project_source == ProjectSource.CODEX:
+            return build_codex_new_command(
+                codex_binary=self._config.codex_binary, cwd=cwd,
+                yolo=self._codex_yolo_enabled(),
+            ), self._codex_env()
+        return build_new_session_command(
+            claude_binary=self._configured_mode_binary(mode), cwd=cwd,
+        ), None
+
     def _on_new_project_submit(self, path: Path) -> None:
         self._close_modal()
+        mode = self._active_mode()
+        if mode.project_source == ProjectSource.DEVIN and self._warn_missing_mode_binary(mode):
+            return
         path = path.expanduser()
         try:
             path.mkdir(parents=True, exist_ok=True)
             path = path.resolve()
         except OSError as e:
-            msg = str(e)
-            self._set_status(msg, "error")
+            self._set_status(str(e), "error")
             return
         placeholder = self._new_placeholder_key()
-        project: Project | None = None
-        env: dict[str, str] | None = None
-        mode = self._active_mode()
-        session_type = mode.session_type
-        login_shell = mode.login_shell
+        project = None
         if mode.project_source == ProjectSource.CODEX:
             project = self._synthesise_codex_project(path)
-            cmd = build_codex_new_command(
-                codex_binary=self._config.codex_binary,
-                cwd=path,
-                yolo=self._codex_yolo_enabled(),
-            )
-            env = self._codex_env()
-        else:
-            cmd = build_new_session_command(
-                claude_binary=self._config.claude_binary, cwd=path)
+        elif mode.project_source == ProjectSource.DEVIN:
+            project = devin_index.project_for(path)
+        cmd, env = self._new_agent_command(mode, path)
         target_slot = self._agent_workspace().target
         slot_kwargs = (
             {} if target_slot is self._primary_slot
@@ -5579,8 +5619,8 @@ class App:
         if self._launch(
                 placeholder, cmd, path, f"{path.name}/(new)", project,
                 placeholder_path=path, env=env,
-                login_shell=login_shell,
-                session_type=session_type,
+                login_shell=mode.login_shell,
+                session_type=mode.session_type,
                 **slot_kwargs):
             self._set_status(f"→ new project: {path}")
 
@@ -5675,7 +5715,8 @@ class App:
         modal = HelpModal(
             on_close=self._close_help_modal,
             provider_label=self._active_mode().label,
-            on_ask=self._ask_railmux,
+            on_ask=(None if self._active_mode().project_source == ProjectSource.DEVIN
+                    else self._ask_railmux),
         )
         self._open_full_sidebar_modal(modal, self._close_help_modal)
 
@@ -5756,6 +5797,9 @@ class App:
     def _ask_railmux(self) -> None:
         """Open or reuse a safe, untracked help agent in the Target pane."""
         mode = self._active_mode()
+        if mode.project_source == ProjectSource.DEVIN:
+            self._set_status("Ask Railmux is unavailable in Devin mode.", "tip")
+            return
         tmux_name = self._help_session_name(mode)
         expected_identity = self._help_session_identity(mode)
         already_live = tmux_ctl.session_exists(tmux_name)
@@ -6727,6 +6771,8 @@ class App:
         mode = self._right_mode_from_state(state)
         if not isinstance(session_id, str) or mode is None:
             return False
+        if mode.project_source == ProjectSource.DEVIN:
+            return False
         if mode.project_source == ProjectSource.CODEX:
             meta = self._codex_index.get(session_id)
         else:
@@ -7144,6 +7190,8 @@ class App:
             return False
         if mode.project_source == ProjectSource.CLAUDE:
             return command[4:] == [expected_binary]
+        if mode.project_source != ProjectSource.CODEX:
+            return False
         if command[4:7] != ["$SHELL", "-li", "-c"] or len(command) != 8:
             return False
         try:
@@ -7257,6 +7305,7 @@ class App:
         allow_missing_codex_metadata: bool = False,
         probe_live_writer: bool = True,
         trust_codex_history_state: bool = False,
+        trusted_devin_marker: bool = False,
     ) -> _Running | None:
         """Validate one persisted binding against current tmux and metadata.
 
@@ -7275,7 +7324,6 @@ class App:
                    (key, tmux_name, session_type, cwd_raw)):
             return None
         if (not key or len(key) > 256 or not tmux_name or len(tmux_name) > 256
-                or session_type not in {"claude", "codex"}
                 or not cwd_raw or len(cwd_raw) > 4096):
             return None
         cwd = Path(cwd_raw)
@@ -7288,6 +7336,10 @@ class App:
         if mode is None or mode.session_type != session_type:
             return None
         project = projects.get(self._path_key(cwd))
+        if session_type == "devin":
+            if not trusted_devin_marker:
+                return None
+            project = devin_index.project_for(cwd)
         if (project is None and session_type == "codex"
                 and allow_missing_codex_metadata):
             project = self._synthesise_codex_project(cwd, 0)
@@ -7449,6 +7501,14 @@ class App:
                     codex_baseline_rollback_count=baseline_rollback_count,
                 )
             meta = self._codex_representative(key) or meta
+        elif session_type == "devin":
+            meta = self._find_session_meta(key, project, session_type)
+            if meta is None:
+                return _Running(
+                    key=key, tmux_name=tmux_name,
+                    label=f"{project.display_name}/{key}", project=project,
+                    session_type=session_type,
+                )
         else:
             meta = self._session_cache.get(project, key)
             if meta is None:
@@ -7662,7 +7722,7 @@ class App:
         found = 0
         for record in records:
             mode = self._modes().for_tmux_name(record.name)
-            if mode is None:
+            if mode is None or mode.project_source == ProjectSource.DEVIN:
                 continue
             project = projects.get(self._path_key(record.cwd))
             if project is None and mode.project_source == ProjectSource.CODEX:
@@ -7942,7 +8002,9 @@ class App:
 
             cwd_key = self._path_key(marker.cwd)
             project = projects.get(cwd_key)
-            if project is None:
+            if mode.project_source == ProjectSource.DEVIN:
+                project = devin_index.project_for(marker.cwd)
+            elif project is None:
                 if mode.project_source == ProjectSource.CODEX:
                     project = self._synthesise_codex_project(marker.cwd, 0)
                 else:
@@ -7986,6 +8048,7 @@ class App:
                     # defer only that metadata veto until generation 1.
                     probe_live_writer=not allow_missing_codex_metadata,
                     trust_codex_history_state=trusted_stamp,
+                    trusted_devin_marker=mode.project_source == ProjectSource.DEVIN,
                 )
                 if (
                     running is not None
@@ -8123,7 +8186,7 @@ class App:
             if name in claimed_tmux or name in marker_governed:
                 continue
             mode = self._modes().for_tmux_name(name)
-            if mode is None:
+            if mode is None or mode.project_source == ProjectSource.DEVIN:
                 continue
             truncated = name[len(mode.tmux_prefix):]
             project = projects.get(self._path_key(cwd))
@@ -8636,6 +8699,10 @@ class App:
             and not index.has_snapshot
             and not index.is_unavailable
         )
+        if mode.project_source == ProjectSource.DEVIN:
+            devin = getattr(self, "_devin_index", None)
+            loading = bool(devin is not None and devin.snapshot is None
+                           and not devin.failed and shutil.which(devin.binary))
         projects_pane = getattr(self, "_projects_pane", None)
         sessions_pane = getattr(self, "_sessions_pane", None)
         if projects_pane is not None:
@@ -8650,6 +8717,9 @@ class App:
     def _warn_missing_mode_binary(self, mode: AgentMode) -> bool:
         """Warn without echoing a configured command or user-specific path."""
         binary = self._configured_mode_binary(mode)
+        if mode.project_source == ProjectSource.DEVIN and running_in_windows_wrapper():
+            self._set_status("Devin mode is unavailable in native Windows Railmux.", "warn")
+            return True
         if shutil.which(binary) is not None:
             return False
         self._set_status(
@@ -8672,6 +8742,10 @@ class App:
         if outgoing_project is not None:
             self._remember_project_selection(outgoing_project)
         self._active_mode_key = target.key
+        if target.project_source == ProjectSource.DEVIN:
+            index = getattr(self, "_devin_index", None)
+            if index is not None:
+                index.refresh()
         self._set_mode_pane_context(target)
         # Running holds sessions from every mode in one registry; repaint the
         # provider-scoped view immediately instead of showing the outgoing
@@ -8730,7 +8804,7 @@ class App:
 
     def _toggle_codex_mode(self) -> None:
         """Compatibility alias for integrations written before mode cycling."""
-        self._cycle_mode()
+        self._switch_mode("claude" if self._codex_mode else "codex")
 
     def _enter_mode_on_restore(self, mode_key: str) -> None:
         """Activate a registered mode during startup state restoration.
@@ -8743,6 +8817,10 @@ class App:
         self._set_mode_pane_context(mode)
         if mode.project_source == ProjectSource.CODEX:
             self._codex_project_filter = self._codex_index.all_cwds()
+        elif mode.project_source == ProjectSource.DEVIN:
+            index = getattr(self, "_devin_index", None)
+            if index is not None:
+                index.refresh()
         self._projects_pane.set_projects(self._visible_projects())
 
     def _enter_codex_mode_on_restore(self) -> None:
@@ -8778,6 +8856,9 @@ class App:
         configured). Codex mode: only projects whose ``real_path`` has at least
         one Codex session.
         """
+        if self._active_mode().project_source == ProjectSource.DEVIN:
+            index = getattr(self, "_devin_index", None)
+            return index.projects() if index is not None else []
         now = time.monotonic()
         projects = self._project_snapshot
         if (projects is None or force
@@ -9131,6 +9212,14 @@ class App:
         self._consume_mode_refresh()
         mode_refresh_pending = self._mode_refresh_pending()
         mode = self._active_mode()
+        devin = getattr(self, "_devin_index", None)
+        if devin is not None and (
+            mode.project_source == ProjectSource.DEVIN
+            or any(r.session_type == "devin" for r in self._running.values())
+        ):
+            devin.refresh()
+            if mode.project_source == ProjectSource.DEVIN and devin.take_warning():
+                self._set_status("Devin session list unavailable. Check CLI version and devin auth status.", "warn")
         self._set_index_loading(mode)
         needs_liveness = (
             any(slot.pane_id is not None
@@ -9167,9 +9256,9 @@ class App:
             mode.project_source == ProjectSource.CODEX
             or any(r.session_type == "codex" for r in self._running.values())
         )
-        force_projects = any(r.is_placeholder for r in self._running.values())
+        initializing = {r.session_type for r in self._running.values() if r.is_placeholder}
         if refresh_codex:
-            self._request_codex_refresh(force=force_projects)
+            self._request_codex_refresh(force="codex" in initializing)
         warning = (self._codex_index.take_warning()
                    if isinstance(self._codex_index, BackgroundCodexIndex)
                    else None)
@@ -9182,7 +9271,7 @@ class App:
             self._codex_project_filter = self._codex_index.all_cwds(refresh=False)
         # Placeholder resolution must discover its JSONL without extra delay.
         projects = self._visible_projects(
-            force=force_projects and not mode_refresh_pending,
+            force="claude" in initializing and not mode_refresh_pending,
             allow_stale=mode_refresh_pending)
         self._projects_pane.set_projects(projects)
         if projects:
@@ -9483,8 +9572,17 @@ class App:
         SAME status dot here as in the Running pane, in both Claude and Codex
         modes (Running refines via ``_effective_status``; without this the raw
         ``SessionMeta.status`` could disagree)."""
-        if self._active_mode().project_source == ProjectSource.CODEX:
+        source = self._active_mode().project_source
+        if source == ProjectSource.CODEX:
             raw = self._codex_index.sessions_for_cwd(project.real_path, refresh=refresh)
+        elif source == ProjectSource.DEVIN:
+            index = getattr(self, "_devin_index", None)
+            raw = ([
+                self._devin_meta(record)
+                for record in (index.snapshot or {}).values()
+                if record.meta.project.real_path == project.real_path
+            ] if index is not None else [])
+            raw.sort(key=lambda meta: (-meta.last_mtime, meta.session_id))
         elif project.claude_dir == Path():
             raw = []
         else:
@@ -9497,6 +9595,8 @@ class App:
         return sessions
 
     def _session_lease_root(self, session_type: str) -> Path:
+        if session_type == "devin":
+            return devin_index.lease_root()
         if session_type != "codex":
             return getattr(self, "_claude_home", Path.home() / ".claude")
         config = getattr(self, "_config", None)
@@ -9753,6 +9853,9 @@ class App:
             if session_type == "codex":
                 meta = self._codex_representative(
                     r.logical_session_id or r.key)
+            elif session_type == "devin":
+                meta = self._find_session_meta(
+                    r.logical_session_id or r.key, r.project, session_type)
             else:
                 meta = self._session_cache.get(
                     r.project, r.logical_session_id or r.key)
@@ -9988,9 +10091,7 @@ class App:
     def _render_running_pane(self) -> None:
         """Render registry values without doing metadata or process I/O.
 
-        In Claude mode only ``cc-*`` sessions are shown; in Codex mode only
-        ``cx-*`` sessions are shown.  The other type's sessions still run,
-        but they don't belong in the current view.
+        Only sessions in the active provider's namespace enter this view.
         """
         mode = self._active_mode()
         prefix = mode.tmux_prefix
@@ -10118,7 +10219,26 @@ class App:
             registered_mode = self._modes().for_tmux_name(r.tmux_name)
             session_type = (
                 registered_mode.session_type if registered_mode else r.session_type)
-            if session_type == "codex":
+            if session_type == "devin":
+                # A cwd/timestamp match cannot identify a new Devin pane.
+                # ACP's lock holder must be the pane process or a descendant.
+                index = getattr(self, "_devin_index", None)
+                records = [
+                    record for record in (index.snapshot or {}).values()
+                    if record.holder_pid is not None
+                    and record.meta.session_id not in claimed
+                    and self._path_key(record.meta.project.real_path) == placeholder_key
+                ] if index is not None else []
+                pane = self._exact_running_pane(r) if records else None
+                if pane is None:
+                    continue
+                pids = {pane.pane_pid, *tmux_ctl.descendant_pids(pane.pane_pid)}
+                sessions = [self._devin_meta(record) for record in records
+                            if record.holder_pid in pids]
+                if len(sessions) != 1 or self._exact_running_pane(r) != pane:
+                    continue
+                project = sessions[0].project
+            elif session_type == "codex":
                 # Codex index was already refreshed once this tick (see
                 # _refresh); serve from that snapshot rather than re-walking
                 # the tree, and don't use the Claude-only session cache.
@@ -10141,7 +10261,7 @@ class App:
             # its filename UUID is the exact session_id. This defeats the
             # staggered race where an UNRELATED codex wrote a rollout to the same
             # cwd first (which the "exactly one new rollout" heuristic mis-binds).
-            candidate = None
+            candidate = sessions[0] if session_type == "devin" else None
             if (r.orphan is not None
                     and r.orphan.phase == "resolved"
                     and r.orphan.session_id is not None):
@@ -10376,6 +10496,11 @@ class App:
             return focus_w.session
         return None
 
+    def _devin_meta(self, record: devin_index.DevinSession) -> SessionMeta:
+        meta = record.meta
+        renamed = self._renames.get(meta.session_id)
+        return replace(meta, title=renamed) if renamed else meta
+
     def _find_session_meta(self, session_id: str, project: Project | None = None,
                            session_type: str = "claude") -> SessionMeta | None:
         """Look up session metadata by ID.
@@ -10386,7 +10511,16 @@ class App:
         Claude rows keep the on-disk scan scoped to the project (#16)."""
         if session_type == "codex":
             return self._codex_representative(session_id)
-        if project is None:
+        if session_type == "devin":
+            index = getattr(self, "_devin_index", None)
+            record = index.get(session_id) if index is not None else None
+            if record is not None and (
+                project is None or self._path_key(record.meta.project.real_path)
+                == self._path_key(project.real_path)
+            ):
+                return self._devin_meta(record)
+            return None
+        if project is None or project.claude_dir == Path():
             return None
         from railmux.session_index import _scan_session_incremental
         jsonl_path = project.claude_dir / f"{session_id}.jsonl"
@@ -10459,6 +10593,9 @@ class App:
 
     def _on_delete_session(self) -> None:
         """Delete the focused session from the current pane (with confirmation)."""
+        if self._active_mode().project_source == ProjectSource.DEVIN:
+            self._set_status("Use devin rm to delete Devin history, or k to stop a pane.", "tip")
+            return
         pos = self._sidebar.focus_position
 
         if pos == 1:
@@ -10543,6 +10680,8 @@ class App:
         remove the Claude JSONL + session-env or ``codex delete`` the rollout,
         and refresh the UI so pane rows stay aligned."""
         self._close_modal()
+        if session.session_type == "devin":
+            return
         self._cleanup_session(
             session_id=session.session_id,
             jsonl_path=session.jsonl_path,
@@ -10563,12 +10702,12 @@ class App:
         same-named file in railmux's cwd (#1)."""
         self._close_modal()
         r = self._by_tmux(tmux_name)
-        if r is not None and r.is_legacy:
+        if r is not None and (r.is_legacy or r.session_type == "devin"):
             self._kill_tmux_session(tmux_name, r.label, identity_token)
             return
         session_type = r.session_type if r else "claude"
         jsonl_path: Path | None = None
-        if (session_type != "codex" and session_id
+        if (session_type == "claude" and session_id
                 and not session_id.startswith("__new__-") and project):
             jsonl_path = project.claude_dir / f"{session_id}.jsonl"
         self._cleanup_session(
@@ -10599,6 +10738,8 @@ class App:
         Urwid thread. The worker receives only frozen values and never mutates
         widgets, the Running registry, or provider indexes directly.
         """
+        if session_type == "devin":
+            return
         if self._delete_pending():
             self._set_status("A session deletion is already in progress.", "warn")
             return
@@ -11206,7 +11347,10 @@ class App:
         # auto-close the menu (can happen if focus was on the right pane).
         if self._railmux_pane_id:
             tmux_ctl.select_pane(self._railmux_pane_id)
-        if r.is_placeholder or r.is_legacy:
+        if r.is_placeholder or r.is_legacy or (
+            r.session_type == "devin" and self._find_session_meta(
+                r.key, r.project, r.session_type) is None
+        ):
             # Legacy rows retain their exact server identity here; routing
             # through the provider-session menu could select a same-id session
             # on the dedicated server instead.
@@ -11294,6 +11438,9 @@ class App:
             (_context_menu_label("Delete", "d"),
              lambda s=session: self._do_context_delete(s)),
         ]
+        if session.session_type == "devin":
+            unavailable = {_context_menu_label("Preview", "␣"), _context_menu_label("Delete", "d")}
+            items = [item for item in items if item[0] not in unavailable]
         menu = ContextMenu(items, on_close=self._close_modal)
         self._show_overlay(menu, width=36, height=16,
                            click_outside_to_close=True,
@@ -11508,6 +11655,8 @@ class App:
         self._open_managed_terminal(session.project.real_path)
 
     def _do_context_delete(self, session: SessionMeta) -> None:
+        if session.session_type == "devin":
+            return
         title = session.display_title
         modal = DeleteConfirmModal(
             action="Delete session",
