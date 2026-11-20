@@ -12,7 +12,7 @@ from railmux.codex_index import (
     CodexIndex,
     ScanReport,
     _lineage_members,
-    _lineage_representatives,
+    _path_key,
     persistent_cache_path,
 )
 from railmux.models import SessionMeta
@@ -20,6 +20,47 @@ from railmux.renames import Renames
 
 
 _MAX_WARNING = 180
+
+
+@dataclass(frozen=True)
+class _SessionView:
+    by_id: Mapping[str, SessionMeta]
+    lineages: Mapping[str, tuple[SessionMeta, ...]]
+    projects: Mapping[Path, tuple[SessionMeta, ...]]
+    resolved_paths: Mapping[Path, Path]
+
+    @classmethod
+    def build(
+        cls,
+        sessions: tuple[SessionMeta, ...],
+        resolved_paths: Mapping[Path, Path] | None = None,
+    ) -> _SessionView:
+        if resolved_paths is None:
+            resolved_paths = MappingProxyType({
+                path: _path_key(path)
+                for path in {meta.project.real_path for meta in sessions}
+            })
+        lineages = _lineage_members(sessions, path_key=resolved_paths.__getitem__)
+        projects: dict[Path, list[SessionMeta]] = {}
+        by_id = {meta.session_id: meta for meta in sessions}
+        for session_id, members in lineages.items():
+            newest = members[0]
+            if session_id == newest.session_id:
+                cwd = resolved_paths[newest.project.real_path]
+                projects.setdefault(cwd, []).append(newest)
+        return cls(
+            MappingProxyType(by_id),
+            MappingProxyType(lineages),
+            MappingProxyType({
+                cwd: tuple(sorted(
+                    records,
+                    key=lambda meta: (meta.last_mtime, str(meta.jsonl_path), meta.session_id),
+                    reverse=True,
+                ))
+                for cwd, records in projects.items()
+            }),
+            resolved_paths,
+        )
 
 
 @dataclass(frozen=True)
@@ -31,6 +72,7 @@ class IndexSnapshot:
     published_at: float
     report: ScanReport | None
     hidden_statuses: Mapping[str, str]
+    view: _SessionView
 
 
 class BackgroundCodexIndex:
@@ -63,7 +105,7 @@ class BackgroundCodexIndex:
         self._condition = threading.Condition()
         self._reader = threading.local()
         self._snapshot = IndexSnapshot(
-            0, (), 0.0, None, MappingProxyType({}))
+            0, (), 0.0, None, MappingProxyType({}), _SessionView.build(()))
         self._requested = False
         self._force_requested = False
         self._invalidate_requested = False
@@ -194,27 +236,21 @@ class BackgroundCodexIndex:
     def all_cwds(self, *, refresh: bool = True) -> dict[Path, int]:
         if refresh:
             self.refresh()
-        counts: dict[Path, int] = {}
-        for meta in _lineage_representatives(self._visible_sessions()):
-            cwd = meta.project.real_path
-            counts[cwd] = counts.get(cwd, 0) + 1
-        return counts
+        return {cwd: len(rows) for cwd, rows in self._visible_view().projects.items()}
 
     def sessions_for_cwd(
         self, cwd: Path, *, refresh: bool = True,
     ) -> list[SessionMeta]:
         if refresh:
             self.refresh()
-        target = self._path_key(cwd)
-        visible = self._visible_sessions()
-        members_by_id = _lineage_members(visible)
-        results = [
-            self._with_override(meta, members_by_id.get(meta.session_id))
-            for meta in _lineage_representatives(visible)
-            if self._path_key(meta.project.real_path) == target
+        view = self._visible_view()
+        target = view.resolved_paths.get(cwd, cwd)
+        if target not in view.projects:
+            target = _path_key(cwd)
+        return [
+            self._with_override(meta, view.lineages[meta.session_id])
+            for meta in view.projects.get(target, ())
         ]
-        results.sort(key=lambda meta: meta.last_mtime, reverse=True)
-        return results
 
     def lineage_ids(
         self, session_id: str, *, refresh: bool = True,
@@ -222,8 +258,7 @@ class BackgroundCodexIndex:
         """UUID aliases belonging to *session_id*'s logical conversation."""
         if refresh:
             self.refresh()
-        members = _lineage_members(
-            self._visible_sessions()).get(session_id, ())
+        members = self._visible_view().lineages.get(session_id, ())
         return frozenset(meta.session_id for meta in members)
 
     def representative_for(
@@ -232,8 +267,7 @@ class BackgroundCodexIndex:
         """Newest UI representative for the lineage containing *session_id*."""
         if refresh:
             self.refresh()
-        visible = self._visible_sessions()
-        members = _lineage_members(visible).get(session_id)
+        members = self._visible_view().lineages.get(session_id)
         if not members:
             return None
         return self._with_override(members[0], members)
@@ -241,10 +275,8 @@ class BackgroundCodexIndex:
     def get(self, session_id: str, *, refresh: bool = True) -> SessionMeta | None:
         if refresh:
             self.refresh()
-        for meta in self._visible_sessions():
-            if meta.session_id == session_id:
-                return self._with_override(meta)
-        return None
+        meta = self._visible_view().by_id.get(session_id)
+        return self._with_override(meta) if meta is not None else None
 
     def hidden_status(
         self, session_id: str, *, refresh: bool = True,
@@ -263,7 +295,7 @@ class BackgroundCodexIndex:
         self._thread.join(max(0.0, timeout_s))
         return not self._thread.is_alive()
 
-    def _visible_sessions(self) -> tuple[SessionMeta, ...]:
+    def _visible_view(self) -> _SessionView:
         pinned = getattr(self._reader, "view", None)
         if pinned is None:
             with self._condition:
@@ -272,11 +304,16 @@ class BackgroundCodexIndex:
         else:
             snapshot, tombstones = pinned
         if not tombstones:
-            return snapshot.sessions
-        return tuple(
-            meta for meta in snapshot.sessions
-            if meta.session_id not in tombstones
+            return snapshot.view
+        cached = getattr(self._reader, "tombstone_view", None)
+        if cached is not None and cached[:2] == (snapshot.generation, tombstones):
+            return cached[2]
+        view = _SessionView.build(
+            tuple(meta for meta in snapshot.sessions if meta.session_id not in tombstones),
+            snapshot.view.resolved_paths,
         )
+        self._reader.tombstone_view = (snapshot.generation, tombstones, view)
+        return view
 
     def _with_override(
         self,
@@ -290,13 +327,6 @@ class BackgroundCodexIndex:
             if title:
                 return replace(meta, title=title)
         return meta
-
-    @staticmethod
-    def _path_key(path: Path) -> Path:
-        try:
-            return path.resolve()
-        except OSError:
-            return path
 
     def _run(self) -> None:
         while True:
@@ -331,6 +361,7 @@ class BackgroundCodexIndex:
                     self._scanner.invalidate()
                 report = self._scanner.refresh()
                 sessions = self._scanner.snapshot()
+                view = _SessionView.build(sessions)
                 hidden_statuses = getattr(
                     self._scanner, "hidden_statuses", lambda: {})()
                 error: str | None = None
@@ -367,6 +398,7 @@ class BackgroundCodexIndex:
                         report=report,
                         hidden_statuses=MappingProxyType(
                             dict(hidden_statuses)),
+                        view=view,
                     )
                     live_ids = {meta.session_id for meta in sessions}
                     self._tombstones.intersection_update(live_ids)

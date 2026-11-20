@@ -829,6 +829,7 @@ class OptionsModal(urwid.WidgetWrap):
         claude_history_policy: str,
         path_open_policy: str,
         codex_history_policy: str = "native",
+        devin_history_policy: str = "local",
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
@@ -836,6 +837,7 @@ class OptionsModal(urwid.WidgetWrap):
         on_path_open_policy: Callable[[str], bool],
         on_close: Callable[[], None],
         on_codex_history_policy: Callable[[str], bool] | None = None,
+        on_devin_history_policy: Callable[[str], bool] | None = None,
     ) -> None:
         self._on_close = on_close
         self._policies = {
@@ -844,6 +846,7 @@ class OptionsModal(urwid.WidgetWrap):
             "update": update_policy,
             "claude_history": claude_history_policy,
             "codex_history": codex_history_policy,
+            "devin_history": devin_history_policy,
             "path_open": path_open_policy,
         }
         self._callbacks = {
@@ -852,6 +855,7 @@ class OptionsModal(urwid.WidgetWrap):
             "update": on_update_policy,
             "claude_history": on_claude_history_policy,
             "codex_history": on_codex_history_policy or (lambda _policy: False),
+            "devin_history": on_devin_history_policy or (lambda _policy: False),
             "path_open": on_path_open_policy,
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
@@ -934,12 +938,30 @@ class OptionsModal(urwid.WidgetWrap):
         rows.extend(self._build_group(
             "codex_history",
             {
-                "local": "smooth local history rendered from the rollout",
+                "local": "styled pane history with rollout fallback",
                 "native": "Codex's own transcript; each scroll goes to Codex",
             },
             labels=(
                 ("local", "Railmux managed"),
                 ("native", "Codex native"),
+            ),
+        ))
+        rows.extend([
+            urwid.Divider(),
+            urwid.Text(("title", "Devin managed history")),
+            urwid.Text(
+                "Applies in railmux ssh on the next history refresh."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "devin_history",
+            {
+                "local": "smooth scrollback with Devin's terminal styling",
+                "native": "use tmux and Devin's own terminal scrolling",
+            },
+            labels=(
+                ("local", "Railmux managed"),
+                ("native", "Native scrolling"),
             ),
         ))
         rows.extend([
@@ -1410,19 +1432,27 @@ class ContextMenu(urwid.WidgetWrap):
     its callback and then closes the menu.  Esc closes without acting.
     """
 
-    def __init__(self, items: list[tuple[str, Callable[[], None]]],
-                 on_close: Callable[[], None]) -> None:
+    def __init__(self, items: list[tuple[str, Callable[[], None] | None]],
+                 on_close: Callable[[], None], *, title: str = "",
+                 focused: int = 0) -> None:
         self._on_close = on_close
         rows: list = []
         for label, cb in items:
+            if cb is None:
+                rows.append(urwid.Text(("dim", label)))
+                continue
             row = ClickableRow(
                 urwid.AttrMap(urwid.Text(label), None, focus_map="focus"),
                 on_click=lambda cb=cb: self._select(cb),
             )
             rows.append(row)
         self._walker = urwid.SimpleFocusListWalker(rows)
+        if items and items[focused][1] is None:
+            focused = next((i for i, (_, action) in enumerate(items) if action), focused)
+        if items:
+            self._walker.set_focus(focused)
         super().__init__(urwid.LineBox(
-            urwid.ListBox(self._walker), title=""))
+            urwid.ListBox(self._walker), title=title))
 
     def _select(self, callback: Callable[[], None]) -> None:
         self._on_close()  # close menu first so the callback can show a new modal

@@ -984,8 +984,8 @@ def test_server_resolves_only_noncontroller_pane_under_pointer(monkeypatch):
     def list_panes(*args, **kwargs):
         calls.append((args, kwargs))
         return (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %1 \n"
         )
 
     monkeypatch.setattr(
@@ -1018,8 +1018,8 @@ def test_server_rejects_incoherent_controller_identity_in_pane_snapshot(monkeypa
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %9\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %9 \n"
         ),
     )
 
@@ -1036,8 +1036,8 @@ def test_history_worker_topology_cache_reuses_one_gesture_snapshot(monkeypatch):
         nonlocal calls
         calls += 1
         return (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 1     9001 %1 \n"
         )
 
     monkeypatch.setattr(subprocess, "check_output", list_panes)
@@ -1064,8 +1064,8 @@ def test_server_projects_bounded_codex_history_generation(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001 %1 \n"
         ),
     )
 
@@ -1085,8 +1085,8 @@ def test_server_restart_changes_history_generation(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1   {marker}  9001 %1 \n"
         ),
     )
 
@@ -1122,9 +1122,9 @@ def test_server_accepts_canonical_history_only_for_matching_transcript(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
             f"$4 @1 0 0 %8 108 31 0 49 20 10 0 1  "
-            f"{transcript} {generation}  9001 %1\n"
+            f"{transcript} {generation}  9001 %1 \n"
         ),
     )
 
@@ -1168,9 +1168,9 @@ def test_server_released_canonical_marker_fails_back_to_raw(
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
             f"$4 @1 0 0 %8 108 31 0 49 20 10 0 1  "
-            f"{transcript} {generation}  9001 %1\n"
+            f"{transcript} {generation}  9001 %1 \n"
         ),
     )
 
@@ -1196,8 +1196,8 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
         subprocess,
         "check_output",
         lambda *args, **kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1    {marker} 9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            f"$4 @1 0 0 %8 108 31 0 49 20 0 0 1    {marker} 9001 %1 \n"
         ),
     )
 
@@ -1214,13 +1214,13 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
     ("rows", "expected"),
     [
         (
-            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1\n"
-            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0     9001 %1\n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1 \n"
+            "$4 @1 1 0 %8 108 31 0 49 20 0 0 0     9001 %1 \n",
             (),
         ),
         (
-            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0     9001 %1\n"
-            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0     9001 %1\n",
+            "$4 @1 1 0 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
+            "$4 @1 1 1 %8 108 0 0 80 24 0 0 0     9001 %1 \n",
             (
                 fast_display_server._PaneGeometry(
                     "%8",
@@ -1235,8 +1235,8 @@ def test_server_excludes_managed_shell_and_viewer_panes(monkeypatch):
             ),
         ),
         (
-            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1\n"
-            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0     9001 %1\n",
+            "$4 @1 1 1 %1 101 0 0 80 24 0 0 0     9001 %1 \n"
+            "$4 @1 0 0 %8 108 31 0 49 20 0 0 0     9001 %1 \n",
             (),
         ),
     ],
@@ -1258,9 +1258,9 @@ def test_server_maps_nested_history_to_exact_real_pane(monkeypatch):
         subprocess,
         "check_output",
         lambda *_args, **_kwargs: (
-            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1\n"
+            "$4 @1 0 1 %1 101 0 0 30 20 0 0 0     9001 %1 \n"
             "$4 @1 0 0 %8 108 31 0 49 20 0 0 1 "
-            '{"source":1}    9001 %1\n'
+            '{"source":1}    9001 %1 \n'
         ),
     )
     monkeypatch.setattr(
@@ -2481,8 +2481,9 @@ def test_server_live_codex_history_follows_codex_history_policy(
         40,
         2,
         mouse_forwardable=True,
-        history_size=history_size,
-        alternate_on=alternate_on,
+        # The earlier geometry can describe a different screen and depth.
+        history_size=0 if history_size else 10,
+        alternate_on=not alternate_on,
         transcript_source="codex-marker",
         transcript_backed=True,
         transcript_provider="codex",
@@ -2492,7 +2493,9 @@ def test_server_live_codex_history_follows_codex_history_policy(
     monkeypatch.setattr(
         subprocess,
         "check_output",
-        lambda *_args, **_kwargs: b"live-a\nlive-b\n",
+        lambda argv, **_kwargs: (
+            f"live-a\nlive-b\n{argv[-1].split()[0]} {history_size} 2 {int(alternate_on)}\n"
+        ).encode(),
     )
     transcript_rows = MagicMock(
         return_value=fast_display_server._TranscriptCacheEntry(
@@ -2517,19 +2520,21 @@ def test_server_live_codex_history_follows_codex_history_policy(
     assert transcript_rows.called is managed
 
 
-def test_codex_history_policy_rereads_changed_settings(monkeypatch, tmp_path):
+def test_terminal_history_policies_reread_changed_settings(monkeypatch, tmp_path):
+    from railmux import settings
+
     path = tmp_path / "config.toml"
     monkeypatch.setattr(fast_display_server, "default_config_path", lambda: path)
+    monkeypatch.setattr(settings, "default_config_path", lambda: path)
+    monkeypatch.setattr(fast_display_server, "_TERMINAL_HISTORY_SIGNATURE", None)
     monkeypatch.setattr(
-        fast_display_server.Settings,
-        "codex_history_policy",
-        property(lambda _self: "local" if path.exists() else "native"),
-    )
-    monkeypatch.setattr(fast_display_server, "_CODEX_HISTORY_POLICY", [0, "?"])
+        fast_display_server, "_TERMINAL_HISTORY_POLICIES", ("native", "local"))
 
-    assert fast_display_server._codex_history_policy() == "native"
-    path.write_text('[interaction]\ncodex_history = "local"\n')
-    assert fast_display_server._codex_history_policy() == "local"
+    assert fast_display_server._terminal_history_policies() == ("native", "local")
+    path.write_text('[interaction]\ncodex_history = "local"\ndevin_history = "native"\n')
+    assert fast_display_server._terminal_history_policies() == ("local", "native")
+    path.unlink()
+    assert fast_display_server._terminal_history_policies() == ("native", "local")
 
 
 def test_transcript_rows_render_live_codex_items_as_codex_tui(tmp_path):
@@ -2618,3 +2623,90 @@ def test_transcript_rows_join_earlier_codex_rollout_segments(tmp_path):
     assert visible.index("› first segment") < visible.index("› newest")
     assert "› unrelated" not in visible
     assert sum("OpenAI Codex" in row for row in visible) == 1
+
+
+def test_managed_codex_and_devin_keep_styled_deep_history_and_native_input(
+    monkeypatch, tmp_path,
+):
+    from railmux.fast_display_history import LocalHistoryView
+    from railmux.fast_display_input import SgrMouseEvent
+    from railmux.fast_display_protocol import (
+        decode_history_prefetch,
+        decode_history_request,
+        encode_history_batch,
+    )
+
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    path.write_text('{"type":"response_item"}\n')
+    server = fast_display_server
+    locator = server.tmux_server.encode_transcript_source("codex", session_id, path)
+    assert locator is not None
+    captures = []
+
+    def tmux_output(argv, **_kwargs):
+        if "list-panes" in argv:
+            return (
+                "$4 @1 0 1 %1 101 0 0 30 18 0 0 0     9001 %1 \n"
+                f"$4 @1 0 0 %8 108 31 0 40 18 850 0 1  {locator}   9001 %1 \n"
+                "$4 @1 0 0 %9 109 72 0 40 18 850 0 0     9001 %1 devin\n"
+            )
+        pane_id = argv[argv.index("-t") + 1]
+        captures.append(pane_id)
+        depth = int(argv[argv.index("-S") + 1][1:])
+        rows = [
+            f"\x1b[2;38;2;31;89;211;48;5;221m{pane_id} row {i:04d}".encode()
+            for i in range(868 - min(868, depth + 18), 868)
+        ]
+        nonce = argv[-1].split()[0]
+        return b"\n".join((*rows, f"{nonce} 850 18 0".encode(), b""))
+
+    monkeypatch.setattr(subprocess, "check_output", tmux_output)
+    monkeypatch.setattr(server, "_transcript_rows", MagicMock(side_effect=AssertionError(
+        "a locator must not displace real styled pane rows")))
+    monkeypatch.setattr(server, "_terminal_history_policies", lambda: ("local", "local"))
+    pyte = server._extended_pyte(__import__("pyte"))
+    view = LocalHistoryView()
+
+    def prefetch():
+        frame = InputFrameDecoder().feed(view.begin_prefetch(time.monotonic(), force=True))[0]
+        request_id, depth = decode_history_prefetch(frame.data)
+        batch = server.capture_history_batch(pyte, "$4", request_id, depth)
+        decoded, = ServerMessageDecoder().feed(encode_history_batch(batch))
+        return view.accept_prefetch(decoded)
+
+    prefetch()
+    for pane_id, column in (("%8", 34), ("%9", 75)):
+        wheel = SgrMouseEvent(f"\x1b[<64;{column};3M".encode(), 64, column, 3, True)
+        action = view.wheel(wheel)
+        assert action.render_history
+        for _ in range(20):
+            action = view.page(b"\x1b[5~", column - 1, 2)
+            if action.protocol_frame:
+                break
+        message, = InputFrameDecoder().feed(action.protocol_frame)
+        request_id, x, y, depth = decode_history_request(message.data)
+        deep = server.capture_history_snapshot("$4", request_id, x, y, depth, pyte)
+        assert deep.timeline_start == 0
+        before = view.overlays()
+        assert view.accept(deep).render_history
+        assert view.overlays()[0][1] == before[0][1]
+        assert deep.pane_id == pane_id and not deep.transcript_backed
+        assert b"row 0000" in deep.lines[0]
+        visible_row = view.overlays()[0][1][0]
+        screen = pyte.Screen(40, 1)
+        pyte.ByteStream(screen).feed(visible_row)
+        assert screen.buffer[0][0].fg == "1f59d3"
+        assert screen.buffer[0][0].bg != "default"
+        assert screen.buffer[0][0].dim
+        if pane_id == "%8":
+            assert view.cancel_for_input(column - 1, 2)
+
+    captures.clear()
+    monkeypatch.setattr(server, "_terminal_history_policies", lambda: ("local", "native"))
+    assert prefetch().restore_live
+    assert captures == ["%8"]
+    native = SgrMouseEvent(b"\x1b[<64;75;3M", 64, 75, 3, True)
+    assert view.wheel(native).forwarded_input == native.raw
+    assert view.page(b"\x1b[5~", 74, 2).forwarded_input == b"\x1b[5~"
+    assert view.wheel(SgrMouseEvent(b"\x1b[<64;34;3M", 64, 34, 3, True)).render_history

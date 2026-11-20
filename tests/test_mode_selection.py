@@ -44,6 +44,7 @@ def _mode_app(monkeypatch, claude_projects: list[Project],
     app._projects_pane = MagicMock()
     app._sessions_pane = MagicMock()
     app._running_pane = MagicMock()
+    app._running_pane.filter_text = ""
     app._favorites = MagicMock()
     app._favorites.get_ids.return_value = set()
     app._codex_index = MagicMock()
@@ -172,7 +173,7 @@ def test_each_mode_applies_its_own_running_filter(monkeypatch):
     codex = _project("codex", codex_only=True)
     app = _mode_app(monkeypatch, [claude], [codex])
     app._mode_view_states[CLAUDE_MODE.key] = app._current_mode_view_state()
-    app._mode_view_states[CLAUDE_MODE.key].running_filter = "project:claude"
+    app._running_pane.filter_text = "project:claude"
     app._mode_view_states[CODEX_MODE.key] = type(
         app._mode_view_states[CLAUDE_MODE.key])(
             running_filter="project:codex")
@@ -180,6 +181,7 @@ def test_each_mode_applies_its_own_running_filter(monkeypatch):
     app._toggle_codex_mode()
     app._running_pane.set_filter.assert_called_with(
         "project:codex", capture_focus=False)
+    app._running_pane.filter_text = "project:codex"
 
     app._toggle_codex_mode()
     app._running_pane.set_filter.assert_called_with(
@@ -229,3 +231,117 @@ def test_sidebar_mode_key_cycles_all_bundled_providers(monkeypatch):
     for expected in ("codex", "devin", "claude"):
         app._on_input("m")
         assert app._current_mode_key() == expected
+
+
+def test_cycle_and_restore_use_configured_cli_availability(monkeypatch):
+    app = _mode_app(monkeypatch, [], [])
+    app._config = Config(
+        claude_binary="/missing/claude", codex_binary="/custom/codex")
+    available = {"/custom/codex"}
+    monkeypatch.setattr(
+        "railmux.ui.app.shutil.which", lambda name: name if name in available else None)
+    app._mode_availability = app._probe_mode_availability()
+    assert app._mode_key_from_state({"mode": "claude"}) == "codex"
+    assert app._right_mode_from_state({"mode": "claude"}) == CLAUDE_MODE
+
+    app._active_mode_key = "codex"
+    app._cycle_mode()
+    assert app._current_mode_key() == "codex"
+
+    available.add("devin")
+    app._mode_availability = app._probe_mode_availability()
+    assert app._mode_key_from_state({"mode": "devin"}) == "devin"
+    for expected in ("devin", "codex", "devin", "codex"):
+        app._cycle_mode()
+        assert app._current_mode_key() == expected
+
+    app._config = Config(
+        claude_binary="/missing/claude", codex_binary="/custom/codex",
+        hidden_modes=("devin",))
+    assert app._mode_key_from_state({"mode": "devin"}) == "codex"
+    app._cycle_mode()
+    assert app._current_mode_key() == "codex"
+
+
+def test_mode_menu_can_reopen_a_hidden_provider_with_running_sessions(monkeypatch):
+    from railmux.ui.app import _Running
+
+    app = _mode_app(monkeypatch, [], [])
+    app._config = Config(hidden_modes=("devin",))
+    app._mode_availability = frozenset({"codex", "devin"})
+    monkeypatch.setattr(app, "_probe_mode_availability", lambda: app._mode_availability)
+    app._active_mode_key = "codex"
+    app._last_available_mode_key = "codex"
+    app._running["live"] = _Running(
+        "live", "dv-live", "live Devin", None, session_type="devin")
+    app._close_modal = MagicMock()
+    app._show_overlay = MagicMock()
+    app._open_mode_menu()
+    menu = app._show_overlay.call_args.args[0]
+    rendered = b"\n".join(menu.render((40, 5)).text)
+    assert b"Claude Code" in rendered and b"Unavailable" in rendered
+    assert b"Devin" in rendered and b"Running" in rendered and b"Hidden" in rendered
+    menu.keypress((40, 5), "down")
+    menu.keypress((40, 5), "enter")
+    assert app._current_mode_key() == "devin"
+    assert app._view_state_data()["mode"] == "codex"
+    assert app._running_pane.set_running.call_args.args[0][0].tmux_name == "dv-live"
+
+
+def test_warm_switch_restores_rendered_row_and_scroll_without_loading_sessions(monkeypatch):
+    from railmux.ui.projects_pane import ProjectsPane
+
+    projects = [_project(f"work-{i:02d}") for i in range(20)]
+    app = _mode_app(monkeypatch, [], projects)
+    app._active_mode_key = "codex"
+    app._projects_pane = ProjectsPane(projects, on_select=app._on_project_select, boxed=False)
+    app._show_mode_projects(projects)
+    app._on_project_select(projects[13])
+    app._projects_pane.set_filter("work")
+    listbox = app._projects_pane._listbox
+    app._projects_pane._restore_focus(projects[13].encoded_name)
+    listbox.shift_focus((40, 5), 2)
+    before = app._projects_pane.remember_view()
+    assert before.row_key == projects[13].encoded_name
+    assert before.offset_rows == 2
+
+    app._pane_sessions.reset_mock()
+    app._switch_mode("devin")
+    assert app._projects_pane.filter_text == ""
+    assert app._selected_project is None
+    app._switch_mode("codex")
+    assert app._selected_project == projects[13]
+    assert app._projects_pane.filter_text == "work"
+    assert app._projects_pane.remember_view() == before
+    app._pane_sessions.assert_not_called()
+
+
+def test_shared_owner_badge_uses_worker_while_modes_remain_interactive(monkeypatch):
+    from threading import Event
+
+    from railmux import session_lease
+    from railmux.models import SessionMeta
+
+    app = _mode_app(monkeypatch, [], [])
+    session = SessionMeta(
+        _project("shared"), "session-id", Path("/dummy"), "session", 0, 0, 0.0,
+        session_type="devin",
+    )
+    started, release = Event(), Event()
+
+    def slow_probe(_root, provider, ids):
+        started.set()
+        assert release.wait(2)
+        return session_lease.LeaseOwner(provider, ids[0], "remote-host", "test")
+
+    monkeypatch.setattr(session_lease, "active_owner", slow_probe)
+    try:
+        assert app._with_remote_leases([session]) == [session]
+        assert started.wait(2)
+        app._switch_mode("codex")
+        assert app._current_mode_key() == "codex"
+        assert app._with_remote_leases([session]) == [session]
+    finally:
+        release.set()
+        app._session_lease_probe_thread.join(2)
+    assert app._with_remote_leases([session])[0].remote_owner == "remote-host"

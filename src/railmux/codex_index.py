@@ -17,6 +17,7 @@ import stat
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
 
 from railmux.atomic_file import atomic_write_text
 from railmux.models import (
@@ -310,6 +311,8 @@ def _path_key(path: Path) -> Path:
 
 def _lineage_members(
     sessions: tuple[SessionMeta, ...] | list[SessionMeta],
+    *,
+    path_key: Callable[[Path], Path] = _path_key,
 ) -> dict[str, tuple[SessionMeta, ...]]:
     """Map every Codex UUID to its same-project fork lineage.
 
@@ -349,8 +352,8 @@ def _lineage_members(
         parent_id = meta.forked_from_id
         ancestor = by_id.get(parent_id) if parent_id else None
         if (ancestor is not None
-                and _path_key(ancestor.project.real_path)
-                == _path_key(meta.project.real_path)):
+                and path_key(ancestor.project.real_path)
+                == path_key(meta.project.real_path)):
             union(meta.session_id, ancestor.session_id)
 
     grouped: dict[str, list[SessionMeta]] = {}
@@ -1328,7 +1331,7 @@ def _is_codex_synthetic_message(text: str) -> bool:
 def _safe_encoded_name(cwd: Path) -> str:
     """Stable encoded name for a cwd — used as a synthetic Project key."""
     # Use a simple scheme: replace separators and special chars with hyphens.
-    s = str(cwd.resolve())
+    s = str(cwd)
     out = "".join(c if c.isalnum() or c in "/." else "-" for c in s)
     # Prefix with "-" so it doesn't collide with Claude's path-encoded names
     # (which also start with "-").

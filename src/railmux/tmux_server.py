@@ -17,6 +17,7 @@ DEFAULT_SOCKET_LABEL = "railmux"
 SOCKET_LABEL_ENV = "RAILMUX_TMUX_LABEL"
 HISTORY_SOURCE_OPTION = "@railmux_history_source_v1"
 TRANSCRIPT_SOURCE_OPTION = "@railmux_transcript_source_v1"
+HISTORY_PROVIDER_OPTION = "@railmux_history_provider_v1"
 _LABEL_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9-]{1,256}\Z")
 _HISTORY_SOURCE_SCHEMA = 1

@@ -154,3 +154,16 @@ def test_persistent_policy_labels_distinguish_never_from_one_time_no():
     assert App._policy_label("always") == "Always"
     assert App._policy_label("ask") == "Ask every time"
     assert App._policy_label("never") == "Never"
+
+
+def test_codex_and_devin_history_options_persist_independently(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+    assert app._settings.terminal_history_policies() == ("native", "local")
+
+    modal._option_rows["devin_history"][1].keypress((60,), "enter")
+    assert app._settings.terminal_history_policies() == ("native", "native")
+
+    modal._option_rows["codex_history"][0].keypress((60,), "enter")
+    assert app._settings.terminal_history_policies() == ("local", "native")

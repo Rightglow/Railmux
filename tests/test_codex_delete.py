@@ -688,6 +688,7 @@ def test_toggle_to_claude_remaps_synthetic_codex_project(monkeypatch):
     app._selected_project = synth
     app._projects_pane = MagicMock()
     app._sessions_pane = MagicMock()
+    app._running_pane = MagicMock()
     app._favorites = MagicMock()
     app._favorites.get_ids.return_value = set()
     app._running = {}
@@ -695,12 +696,10 @@ def test_toggle_to_claude_remaps_synthetic_codex_project(monkeypatch):
     app._apply_tmux_bar = lambda *a, **k: None
     app._set_status = lambda *a, **k: None
     monkeypatch.setattr(app, "_visible_projects", lambda **k: [real])
-    selected: list = []
-    monkeypatch.setattr(app, "_on_project_select", lambda p: selected.append(p))
     app._toggle_codex_mode()
     assert app._codex_mode is False
     # Remapped to the REAL Claude project (same real_path), not the synthetic.
-    assert selected == [real]
+    assert app._selected_project is real
 
 
 def test_on_project_select_claude_skips_synthetic_project():

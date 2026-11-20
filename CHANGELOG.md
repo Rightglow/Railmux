@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev16] - 2026-11-20
+
+### Changed
+
+- Cycle only installed, visible agents and pick any usable mode directly from
+  **More → Mode**. Mode switches restore the sidebar from memory while indexes
+  and remote-owner indicators refresh in the background.
+- Configure Devin live scrolling independently in Options and `railmux config`.
+  Railmux-managed scrolling keeps the styled tmux capture. Codex uses its
+  transcript fallback only when the exact pane is in the alternate screen
+  without scrollback, or after a confirmed rewind.
+
 ## [0.4.2.dev15] - 2026-11-20
 
 ### Added

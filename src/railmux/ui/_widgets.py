@@ -8,10 +8,18 @@ only defines its own markup and identity key.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
 
 import urwid
+
+
+@dataclass(frozen=True)
+class ListViewPosition:
+    row_key: str | None
+    offset_rows: int
+    inset_fraction: tuple[int, int]
 
 
 class ScrollableSidebarPane:
@@ -24,6 +32,19 @@ class ScrollableSidebarPane:
     """
 
     _listbox: urwid.ListBox
+
+    def remember_view(self) -> ListViewPosition:
+        return ListViewPosition(
+            self._remember_focus(), self._listbox.offset_rows,
+            self._listbox.inset_fraction,
+        )
+
+    def restore_view(self, position: ListViewPosition) -> None:
+        self._restore_focus(position.row_key)
+        matched = position.row_key == self._remember_focus()
+        self._listbox.offset_rows = position.offset_rows if matched else 0
+        self._listbox.inset_fraction = position.inset_fraction if matched else (0, 1)
+        self._listbox._invalidate()
 
     def _wheel_chrome_rows(self) -> int:
         return 2  # LineBox top and bottom borders

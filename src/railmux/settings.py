@@ -17,6 +17,7 @@ from tomlkit.exceptions import TOMLKitError
 
 from railmux.atomic_file import atomic_write_text
 from railmux.config import default_config_path
+from railmux.modes import DEFAULT_MODE_REGISTRY
 from railmux.setting_contracts import bounds_for, choices_for
 
 
@@ -26,12 +27,13 @@ MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "devin": ("binary",),
     "codex": ("binary", "home", "auto_run"),
     "environment": ("locale",),
+    "providers": ("hidden",),
     "ui": ("layout_retention", "layout_profile"),
     "updates": ("auto_update",),
     "projects": ("show_empty_projects",),
     "live": ("poll_interval_ms", "agent_transport"),
     "interaction": (
-        "history_lines", "claude_history", "codex_history", "path_open",
+        "history_lines", "claude_history", "codex_history", "devin_history", "path_open",
     ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
@@ -270,21 +272,46 @@ class Settings:
     # -- Transport-managed Codex history --------------------------------
     @property
     def codex_history_policy(self) -> str:
-        """``local`` renders Codex history from its rollout; ``native`` (the
-        default) keeps forwarding the wheel to Codex's own transcript."""
+        return self.terminal_history_policies()[0]
+
+    @property
+    def devin_history_policy(self) -> str:
+        return self.terminal_history_policies()[1]
+
+    def terminal_history_policies(self) -> tuple[str, str]:
+        """Return Codex and Devin policies from the same settings read."""
         self._load()
-        policy = self._get("interaction", "codex_history")
+        return (
+            self._live_history_policy("codex_history", default="native"),
+            self._live_history_policy("devin_history", default="local"),
+        )
+
+    def _live_history_policy(self, key: str, *, default: str) -> str:
+        policy = self._get("interaction", key)
         return (
             policy
             if isinstance(policy, str)
-            and policy in choices_for("interaction.codex_history")
-            else "native"
+            and policy in choices_for(f"interaction.{key}")
+            else default
         )
 
     def set_codex_history_policy(self, policy: str) -> bool:
-        if policy not in choices_for("interaction.codex_history"):
+        return self._set_live_history_policy("codex_history", policy)
+
+    def set_devin_history_policy(self, policy: str) -> bool:
+        return self._set_live_history_policy("devin_history", policy)
+
+    def _set_live_history_policy(self, key: str, policy: str) -> bool:
+        if policy not in choices_for(f"interaction.{key}"):
             return False
-        return self._update_section("interaction", {"codex_history": policy})
+        return self._update_section("interaction", {key: policy})
+
+    def set_hidden_modes(self, keys: tuple[str, ...]) -> bool:
+        modes = tuple(mode.key for mode in DEFAULT_MODE_REGISTRY.modes)
+        if any(key not in modes for key in keys):
+            return False
+        return self._update_section(
+            "providers", {"hidden": [key for key in modes if key in keys]})
 
     # -- Semantic clicked paths -----------------------------------------
     @property

@@ -55,10 +55,11 @@ def test_active_claude_pane_stamps_and_clears_exact_transcript_source(
         "%8", tmux_server.TRANSCRIPT_SOURCE_OPTION,
     )
     assert f"{session_id}.jsonl" in observed[0][2]
-    assert observed[1] == (
-        "%8", tmux_server.TRANSCRIPT_SOURCE_OPTION, None,
-    )
-    assert len(observed) == 2
+    assert observed[1:] == [
+        ("%8", tmux_server.HISTORY_PROVIDER_OPTION, None),
+        ("%8", tmux_server.TRANSCRIPT_SOURCE_OPTION, None),
+        ("%8", tmux_server.HISTORY_PROVIDER_OPTION, None),
+    ]
 
 
 def test_active_codex_pane_stamps_explicit_preview_transcript_source(
@@ -100,7 +101,9 @@ def test_active_codex_pane_stamps_explicit_preview_transcript_source(
         "%9", tmux_server.TRANSCRIPT_SOURCE_OPTION,
     )
     assert session_id in observed[0][2]
-    assert len(observed) == 1
+    assert observed[1:] == [
+        ("%9", tmux_server.HISTORY_PROVIDER_OPTION, None),
+    ]
 
 
 def test_stable_attach_batches_preview_and_target_projection(
@@ -139,6 +142,10 @@ def test_stable_attach_batches_preview_and_target_projection(
     assert len(batches) == 1
     assert batches[0][0][:4] == ("set-option", "-p", "-t", "%8")
     assert batches[0][1] == (
+        "set-option", "-p", "-t", "%8",
+        "-u", tmux_server.HISTORY_PROVIDER_OPTION,
+    )
+    assert batches[0][2] == (
         "set-window-option", "-t", "%1",
         tmux_ctl.RAILMUX_TARGET_OPTION, "%8",
     )

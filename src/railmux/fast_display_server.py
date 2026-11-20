@@ -252,6 +252,7 @@ class _PaneGeometry:
     history_generation: int = 0
     route_generation: int = 0
     canonical_history: bool = False
+    native_history: bool = False
 
 
 @dataclass
@@ -391,7 +392,7 @@ _INFERRED_TRANSCRIPTS: OrderedDict[tuple[str, int], tuple[bool, str | None]] = (
 )
 _INFERRED_TRANSCRIPT_LIMIT = 8
 _PANE_GEOMETRY_CACHE: OrderedDict[
-    tuple[str, str, str], tuple[float, tuple[_PaneGeometry, ...]]
+    tuple[str, str, str, str], tuple[float, tuple[_PaneGeometry, ...]]
 ] = OrderedDict()
 _PANE_GEOMETRY_CACHE_LIMIT = 8
 _PANE_GEOMETRY_CACHE_TTL = 0.25
@@ -797,20 +798,22 @@ def _pane_at_pointer(
     return None
 
 
-_CODEX_HISTORY_POLICY: list[object] = [None, "native"]
+_TERMINAL_HISTORY_SIGNATURE: tuple[int, int, int, int] | None = None
+_TERMINAL_HISTORY_POLICIES = ("native", "local")
 
 
-def _codex_history_policy() -> str:
-    """The persisted Codex history policy, reread when the file changes."""
+def _terminal_history_policies() -> tuple[str, str]:
+    """Reread both policies together when the settings file changes."""
+    global _TERMINAL_HISTORY_SIGNATURE, _TERMINAL_HISTORY_POLICIES
     try:
         info = os.stat(default_config_path())
-        signature: object = (
-            info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+        signature = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
     except OSError:
         signature = None
-    if signature != _CODEX_HISTORY_POLICY[0]:
-        _CODEX_HISTORY_POLICY[:] = [signature, Settings().codex_history_policy]
-    return str(_CODEX_HISTORY_POLICY[1])
+    if signature != _TERMINAL_HISTORY_SIGNATURE:
+        _TERMINAL_HISTORY_POLICIES = Settings().terminal_history_policies()
+        _TERMINAL_HISTORY_SIGNATURE = signature
+    return _TERMINAL_HISTORY_POLICIES
 
 
 def _list_agent_panes(
@@ -822,8 +825,9 @@ def _list_agent_panes(
     """Return one coherent, fail-closed generation of visible agent panes."""
     if claude_history_policy is None:
         claude_history_policy = Settings().claude_history_policy
-    codex_history_policy = _codex_history_policy()
-    cache_key = (session_id, claude_history_policy, codex_history_policy)
+    codex_history_policy, devin_history_policy = _terminal_history_policies()
+    cache_key = (session_id, claude_history_policy, codex_history_policy,
+                 devin_history_policy)
     now = time.monotonic()
     cached = _PANE_GEOMETRY_CACHE.get(cache_key) if use_cache else None
     if cached is not None and now - cached[0] <= _PANE_GEOMETRY_CACHE_TTL:
@@ -844,7 +848,8 @@ def _list_agent_panes(
                 f"#{{{tmux_server.TRANSCRIPT_SOURCE_OPTION}}} "
                 f"#{{{tmux_ctl.RAILMUX_HISTORY_GENERATION_OPTION}}} "
                 f"#{{{TOOL_PANE_OPTION}}} #{{pid}} "
-                "#{@railmux_controller_pane}",
+                "#{@railmux_controller_pane} "
+                f"#{{{tmux_server.HISTORY_PROVIDER_OPTION}}}",
             ),
             stderr=subprocess.DEVNULL,
             text=True,
@@ -858,7 +863,7 @@ def _list_agent_panes(
     for raw_row in output.splitlines():
         fields = raw_row.split(" ")
         if (
-            len(fields) != 19
+            len(fields) != 20
             or fields[0] != session_id
             or fields[2] not in ("0", "1")
             or fields[3] not in ("0", "1")
@@ -928,6 +933,8 @@ def _list_agent_panes(
                 transcript_locator = opened[0]
                 os.close(opened[1])
         history_marker = fields[15]
+        devin_pane = fields[19] == "devin"
+        native_history = devin_pane and devin_history_policy == "native"
         route_server_identity = (
             str(history_server.server_pid)
             if history_server is not None
@@ -967,15 +974,19 @@ def _list_agent_panes(
                     ),
                     claude_history_policy=claude_history_policy,
                     codex_history_policy=codex_history_policy,
-                    history_generation=_history_generation(
-                        history_marker,
-                        route_server_identity,
+                    history_generation=(
+                        # The exact pane birth is carried separately in
+                        # route_generation. Invalidate this pane's overlay
+                        # when its effective wheel policy changes.
+                        (2 if native_history else 1) if devin_pane
+                        else _history_generation(history_marker, route_server_identity)
                     ),
                     route_generation=_route_generation(
                         route_server_identity,
                         route_pane_id,
                     ),
                     canonical_history=canonical_history,
+                    native_history=native_history,
                 ),
             )
         )
@@ -1978,8 +1989,20 @@ def _capture_pane_history(
     *,
     allow_stale_transcript: bool = False,
 ) -> HistorySnapshot | None:
+    if pane.native_history:
+        # Leave the live pane untouched and let tmux route its wheel as it
+        # would on a direct attach, including when the app itself has no mouse.
+        return HistorySnapshot(
+            request_id, pane.pane_id, pane.x, pane.y, pane.width, pane.height,
+            lines=(b"",) * pane.height, mouse_forwardable=True,
+            generation=pane.history_generation,
+            route_generation=pane.route_generation,
+        )
     nonce = secrets.token_hex(8)
     timeline_marker = f"RAILMUX-HISTORY-{nonce}"
+    timeline_format = (
+        f"{timeline_marker} #{{history_size}} #{{pane_height}} #{{alternate_on}}"
+    )
     try:
         if pane.history_server is not None and pane.history_pane_id is not None:
             if not tmux_server.target_is_live(pane.history_server, timeout=0.25):
@@ -1999,7 +2022,7 @@ def _capture_pane_history(
                 "-p",
                 "-t",
                 pane.history_pane_id,
-                f"{timeline_marker} #{{history_size}} #{{pane_height}}",
+                timeline_format,
             )
         else:
             argv = tmux_server.tmux_argv(
@@ -2016,7 +2039,7 @@ def _capture_pane_history(
                 "-p",
                 "-t",
                 pane.pane_id,
-                f"{timeline_marker} #{{history_size}} #{{pane_height}}",
+                timeline_format,
             )
         output = subprocess.check_output(
             argv,
@@ -2030,10 +2053,11 @@ def _capture_pane_history(
         raw_lines.pop()
     captured_history_size = pane.history_size
     captured_height = pane.height
+    alternate_on = pane.alternate_on
     encoded_marker = timeline_marker.encode("ascii") + b" "
     if raw_lines and raw_lines[-1].startswith(encoded_marker):
         fields = raw_lines.pop().split(b" ")
-        if len(fields) == 3:
+        if len(fields) in (3, 4):
             try:
                 marker_history_size = int(fields[1])
                 marker_height = int(fields[2])
@@ -2043,6 +2067,8 @@ def _capture_pane_history(
                 if marker_history_size >= 0 and marker_height > 0:
                     captured_history_size = marker_history_size
                     captured_height = marker_height
+                    if len(fields) == 4 and fields[3] in (b"0", b"1"):
+                        alternate_on = fields[3] == b"1"
     # Retain the newest suffix when the styled representation reaches its byte
     # budget. Iterate backwards so an oversized response never sacrifices the
     # pane's current viewport merely to retain older scrollback.
@@ -2065,16 +2091,16 @@ def _capture_pane_history(
                         # history; only Codex's own alternate-screen view
                         # (no tmux scrollback) is replaced.
                         pane.codex_history_policy == "local"
-                        and pane.alternate_on
-                        and pane.history_size == 0
+                        and alternate_on
+                        and captured_history_size == 0
                     )
                 )
             )
             or (
                 transcript_provider == "claude"
                 and pane.claude_history_policy == "local"
-                and pane.alternate_on
-                and pane.history_size == 0
+                and alternate_on
+                and captured_history_size == 0
             )
         )
     ):
@@ -2152,7 +2178,7 @@ def _capture_pane_history(
                 transcript_entry.more_available
                 or len(transcript_lines) + pane.height > len(lines)
                 if transcript_used and transcript_entry is not None
-                else pane.history_size + pane.height > len(lines)
+                else captured_history_size + captured_height > len(lines)
             )
         ),
         generation=pane.history_generation,

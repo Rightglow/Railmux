@@ -663,6 +663,11 @@ alternate-screen, zero-scrollback view with a transcript projection; a pane
 with real tmux scrollback (for example `--no-alt-screen`) still uses raw
 capture, and the confirmed `canonical-v3:` rewind path is unchanged.
 
+The capture obtains the history depth and alternate-screen flag in the
+same tmux command queue as the styled rows, from the exact inner pane for
+nested transports. This prevents old outer-pane flags from changing the
+source while a provider starts up or switches screens.
+
 The projection (`codex_transcript.render_codex_native`) draws Codex 0.16x
 `event_msg`/`item_completed` records with Codex's markers, honours
 `thread_rolled_back`, and falls back to `response_item` messages for rollouts
@@ -789,17 +794,26 @@ Non-interactive retry SSH diagnostics never write directly into the retained
 alternate-screen surface; bounded Railmux status remains its only reconnect
 feedback.
 
-## Modes are registered providers, not a boolean
+## Agent mode selection
 
 `railmux.modes.ModeRegistry` is the ordered source of shared mode metadata.
-The application stores a stable `_active_mode_key`; `m` cycles registry order.
-Do not reintroduce paired fields such as `claude_selection` / `codex_selection`
-or a new `is_<provider>` boolean.
+The application stores a stable `_active_mode_key`. Keyboard cycling filters
+registry order by whether each configured executable is available on the
+execution host and by `[providers].hidden`. Availability uses executable
+resolution and platform support. It is independent of credentials and
+provider health. Startup restores the previous usable mode or selects the
+first usable mode. **More → Mode** can also browse a hidden or unavailable
+mode with an existing Running entry. The unfiltered registry still governs
+recovery and pane ownership.
 
 Each mode owns its sidebar view state through `_ModeViewState`, keyed by its
-stable registry key. Project selection, and future filters/cursors, must be
-resolved only against that mode's currently visible objects. A mode with no
-projects must never retain another mode's project as a hidden action target.
+stable registry key. Cached rows let switching paint before the periodic
+refresh, with a stable focus key and a per-list viewport offset. Codex derives
+project and lineage lookups from the generation published by its index worker.
+Shared lock probes for row display run off the UI thread, with current
+ownership validated at resume or delete. Project selection resolves only
+against that mode's visible objects. A mode with no projects clears its
+action target.
 
 Provider-specific backends remain responsible for discovery/indexing, launch,
 resume/delete, transcript parsing, and status inference. Shared UI code should
@@ -807,6 +821,16 @@ branch on declared capabilities (`project_source`, `login_shell`, etc.), not on
 the assumption that exactly Claude and Codex exist. Adding a truly new backend
 will require a backend adapter, but must not require redesigning mode cycling or
 per-mode state.
+
+### Devin managed history
+
+On `railmux ssh`, `[interaction].devin_history` defaults to `local`. Railmux
+stamps the provider on the exact live display pane after attachment and
+captures its styled tmux rows through the shared per-pane history viewport.
+Devin does not advertise a saved transcript locator. The `native` setting
+forwards wheel and paging input even when the provider has no mouse reporting,
+so tmux can apply its usual binding. A policy change invalidates that pane's
+previous viewport on the next managed capture.
 
 ### Devin session authority
 

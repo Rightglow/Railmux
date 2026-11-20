@@ -1053,7 +1053,7 @@ def test_enter_codex_mode_on_restore_applies_filter(monkeypatch):
 def test_toggle_codex_mode_round_trip_uses_cached_snapshot(monkeypatch):
     """A rapid Claude-Codex-Claude round trip never scans NFS on the UI path.
 
-    It paints the warm snapshot immediately and schedules one background refresh.
+    It paints data from memory and leaves refresh to the next tick.
     """
     import time as _time
 
@@ -1069,6 +1069,7 @@ def test_toggle_codex_mode_round_trip_uses_cached_snapshot(monkeypatch):
     app._favorites.get_ids.return_value = set()
     app._projects_pane = MagicMock()
     app._sessions_pane = MagicMock()
+    app._running_pane = MagicMock()
     app._codex_index = MagicMock()
     app._codex_project_filter = {proj.real_path: 1}
     app._codex_index.sessions_for_cwd.return_value = []
@@ -1088,7 +1089,9 @@ def test_toggle_codex_mode_round_trip_uses_cached_snapshot(monkeypatch):
         app._toggle_codex_mode()
 
     assert app._codex_mode is False
-    schedule_refresh.assert_called_once_with()
+    schedule_refresh.assert_not_called()
+    app._session_cache.list_sessions.assert_not_called()
+    app._codex_index.sessions_for_cwd.assert_not_called()
     assert app._project_snapshot_at == snapshot_at
 
 

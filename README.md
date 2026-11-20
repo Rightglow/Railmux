@@ -194,7 +194,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `d` | Delete the focused session (confirms, then finishes in background) |
 | `t` | Open or return to the managed terminal below the Target agent |
 | `T` | Return to that agent's managed Vim viewer, when open |
-| `m` | Cycle Claude Code, Codex, and Devin |
+| `m` | Cycle installed, visible agent modes |
 | `o` | Open persistent Railmux options |
 | `␣` | Preview canonical history for the selected stopped or running session |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
@@ -272,18 +272,21 @@ affect new launches, not agents that are already running.
 
 ### Switching agent modes
 
-Press `m` or select **More → Mode** to cycle Claude Code, Codex, and Devin. The current mode controls which provider's Projects, Sessions, and
-Running lists are shown, while each mode remembers its selected project and
-Running filter. Agents running in the other mode keep running and reappear when
-you switch back; changing modes never stops them. One CLI is enough to
-use Railmux; selecting a mode whose CLI is not installed shows a warning rather
-than stopping the workspace.
+Press `m` to cycle the installed, visible agent CLIs on the machine running
+Railmux. A single installed CLI opens directly and `m` stays in that mode.
+With Codex and Devin, `m` switches between the two. Use **More → Mode** to
+pick a provider directly. Railmux starts in your last mode if it is still
+available.
+
+Each mode remembers its project, filters, sidebar cursor, and scroll position
+when you switch. Other agents keep running. Set agent visibility in
+`railmux config` under **Program paths → Agent visibility**. The Mode menu
+can still show Running sessions for a hidden or unavailable CLI.
 
 ### Devin preview
 
-In `0.4.2.dev15`, install and sign in to Devin CLI on the machine where the
-agent runs. Use Devin CLI 3000.14.30821 or newer. In Railmux, press `m` until the
-status bar says **Devin**. Use **+ New project** for a new directory, `n` for a
+Install and sign in to Devin CLI on the machine where the agent runs.
+Use Devin CLI 3000.14.30821 or newer. In Railmux, choose **More → Mode → Devin**. Use **+ New project** for a new directory, `n` for a
 new conversation, or `Enter` on an existing session to reopen it. Use **Running**
 to return to a live Devin pane, and keep your usual `/model` and permission
 controls inside Devin.
@@ -538,6 +541,10 @@ poll_interval_ms = 1000
 # Set "nested" only when troubleshooting an unusual tmux environment.
 agent_transport = "swap" # or "nested"
 
+[providers]
+# Optional providers to skip in the mode cycle
+hidden = []
+
 [interaction]
 # Clicked paths in native Windows and railmux ssh: "ask", "internal", or "external"
 path_open = "ask"
@@ -547,6 +554,8 @@ history_lines = 10000
 claude_history = "ask"
 # Codex history on managed displays: "native" (default) or "local"
 codex_history = "native"
+# Devin history in railmux ssh: "local" (default) or "native"
+devin_history = "local"
 ```
 
 Most users should leave `agent_transport` unchanged. Railmux automatically
@@ -557,14 +566,20 @@ This is Railmux's only user settings file. Manual edits, `railmux config`, and
 the in-app Options screen share the same authority and preserve comments,
 formatting, order, and unknown keys. `interaction.history_lines` belongs to
 the display client: the native Windows machine for local Railmux, or the
-machine that starts `railmux ssh`. `interaction.claude_history` belongs to the
-workspace that runs Claude Code, so it is remote for `railmux ssh`; the same
-holds for `interaction.codex_history`. With `codex_history = "local"`,
-scrolling a Codex pane in `railmux ssh` shows smooth Railmux-managed history
-rendered from the Codex session file, including earlier segments of a long
-thread, instead of sending every wheel step to Codex. The default `native`
-keeps Codex's own scrolling. The
-released `ssh.history_lines`, `ssh.claude_history`, and `ssh.path_open`
+machine that starts `railmux ssh`. The per-agent history settings belong to
+the machine running the agent. Change them in **Options** (`o`) or
+`railmux config` → **Behavior / Options**. Managed displays adopt the changes
+on their next history refresh.
+
+- **Codex** defaults to `native`. Choose `local` for Railmux-managed scrolling.
+  When tmux has scrollback, Railmux keeps the original terminal styling. When
+  Codex uses the alternate screen without tmux scrollback, Railmux renders
+  earlier turns from the Codex session file and keeps live viewport colors.
+- **Devin** defaults to `local` in `railmux ssh`, using Devin's styled tmux
+  scrollback. Select `native` to send scroll input through tmux to Devin's
+  terminal. Direct POSIX and WSL attaches use tmux and provider scrolling.
+
+The released `ssh.history_lines`, `ssh.claude_history`, and `ssh.path_open`
 spellings are still read during upgrade, while new writes use `[interaction]`.
 The shared `interaction.path_open` preference controls recognized paths in
 native Windows and `railmux ssh`. Current interactive preferences are also

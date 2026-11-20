@@ -18,6 +18,7 @@ from railmux.setting_contracts import (
     bounds_for,
     choices_for,
 )
+from railmux.modes import DEFAULT_MODE_REGISTRY
 from railmux.provider_paths import provider_path
 
 
@@ -40,6 +41,8 @@ class Config:
     claude_history: str = "ask"
     codex_history: str = "native"
     interaction_path_open: str = "ask"
+    devin_history: str = "local"
+    hidden_modes: tuple[str, ...] = ()
 
     @property
     def ssh_history_lines(self) -> int:
@@ -144,6 +147,13 @@ def load_config(config_path: Path | None = None) -> Config:
     projects = _table(data, "projects")
     ssh = _table(data, "ssh")
     interaction = _table(data, "interaction")
+    providers = _table(data, "providers")
+    hidden_modes = providers.get("hidden", [])
+    mode_keys = tuple(mode.key for mode in DEFAULT_MODE_REGISTRY.modes)
+    if not isinstance(hidden_modes, list) or any(
+        key not in mode_keys for key in hidden_modes
+    ):
+        raise ConfigError('providers.hidden must be a list of Claude, Codex, or Devin mode keys')
 
     poll_value = live.get("poll_interval_ms", 1000)
     if isinstance(poll_value, bool):
@@ -205,6 +215,13 @@ def load_config(config_path: Path | None = None) -> Config:
     ):
         raise ConfigError(
             'interaction.codex_history must be "local" or "native"')
+    devin_history = interaction.get("devin_history", "local")
+    if (
+        not isinstance(devin_history, str)
+        or devin_history not in choices_for("interaction.devin_history")
+    ):
+        raise ConfigError(
+            'interaction.devin_history must be "local" or "native"')
     # The transport-neutral key wins. The released SSH-only spelling remains
     # a read alias so an upgrade never silently forgets the user's choice.
     canonical_path_open = "path_open" in interaction
@@ -231,4 +248,6 @@ def load_config(config_path: Path | None = None) -> Config:
         claude_history=claude_history,
         codex_history=codex_history,
         interaction_path_open=path_open,
+        devin_history=devin_history,
+        hidden_modes=tuple(key for key in mode_keys if key in hidden_modes),
     )

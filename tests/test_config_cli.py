@@ -324,3 +324,18 @@ def test_remote_only_argument_errors_return_cli_status(capsys):
 def test_remote_context_conflict_returns_cli_status(capsys):
     assert main(["--remote", "work", "--remote-context"]) == 2
     assert "--remote and --remote-context" in capsys.readouterr().err
+
+
+def test_editor_toggles_devin_history_and_agent_visibility(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    output = StringIO()
+    result = main(
+        stdin=StringIO("1\n8\n2\nb\n2\nv\n1\nq\n"),
+        stdout=output,
+    )
+    assert result == 0
+    config = load_config()
+    assert config.devin_history == config.codex_history == "native"
+    assert config.hidden_modes == ("claude",)
+    assert "Claude Code [" in output.getvalue()
+    assert "hidden from mode switching" in output.getvalue()

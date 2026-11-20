@@ -15,7 +15,9 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
+from typing import Optional
 
 import urwid
 from urwid.display.raw import Screen
@@ -42,6 +44,7 @@ from railmux.favorites import Favorites
 from railmux.project_favorites import ProjectFavorites
 from railmux.fast_display_input import is_termux_environment
 from railmux.help_workspace import (
+    help_workspace_path,
     is_help_workspace,
     materialize_help_workspace,
 )
@@ -59,6 +62,7 @@ from railmux.launcher import (
 from railmux.modes import (
     CODEX_MODE,
     DEFAULT_MODE_REGISTRY,
+    DEVIN_MODE,
     AgentMode,
     ModeRegistry,
     ProjectSource,
@@ -68,10 +72,12 @@ from railmux.tmux_binding_manager import SharedTmuxBindingManager
 from railmux.mouse_manager import RootWheelForwardingManager
 from railmux.renames import Renames
 from railmux import restart_state
+from railmux.runtime_config import normalized_command
 from railmux.session_cache import SessionCache
 from railmux.scroll_manager import ScrollManager
 from railmux.selection_isolation import SelectionIsolationManager
 from railmux.ui import keymap
+from railmux.ui._widgets import ListViewPosition
 from railmux.ui.modals import (
     ContextMenu,
     DeleteConfirmModal,
@@ -130,6 +136,8 @@ _STATUS_RED = "#ff5f5f"
 _TERMINAL_COLORS = 2**24
 _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
 _SESSION_LEASE_PROBE_TTL_S = 2.0
+_LeaseProbeKey = tuple[Path, str, tuple[str, ...]]
+_LeaseProbeResults = dict[_LeaseProbeKey, tuple[float, Optional[session_lease.LeaseOwner]]]
 _SESSION_LEASE_REPAIR_WARN_S = 8.0
 _SYNC_OUTPUT_BEGIN = "\x1b[?2026h"
 _SYNC_OUTPUT_END = "\x1b[?2026l"
@@ -634,16 +642,17 @@ class _FocusAwareFrame(urwid.Frame):
 
 @dataclass
 class _ModeViewState:
-    """UI state owned by one agent mode.
-
-    The dictionary that stores these objects is keyed by a stable mode name, so
-    adding another provider does not require another pair of fields or teach
-    existing modes about one another. More per-mode view state can be added here
-    as switching behaviour grows.
-    """
+    """Cached sidebar rows and navigation state for one registered mode."""
 
     selected_project_path: Path | None = None
+    selected_project_key: str | None = None
+    project_filter: str = ""
+    session_filter: str = ""
     running_filter: str = ""
+    positions: tuple[ListViewPosition, ...] = ()
+    projects: list[Project] | None = None
+    session_project_key: str | None = None
+    sessions: list[SessionMeta] | None = None
 
 
 class App:
@@ -874,7 +883,8 @@ class App:
         self._claude_home = claude_home
         self._config = config
         if not running_in_windows_wrapper():
-            self._devin_index = devin_index.DevinIndex(config.devin_binary)
+            self._devin_index = devin_index.DevinIndex(
+                self._configured_mode_binary(DEVIN_MODE))
         self._auto_launched = auto_launched
         # Status-bar state machine. An explicit message (info/warn/error) holds
         # the bar for a level-dependent TTL, then it falls back to cycling idle
@@ -946,10 +956,9 @@ class App:
         # ownership promptly, but probing every visible lock on every Urwid
         # tick is unnecessary I/O.  Resume still acquires a fresh lock and
         # never trusts this display-only cache.
-        self._session_lease_probe_cache: dict[
-            tuple[str, str, tuple[str, ...]],
-            tuple[float, session_lease.LeaseOwner | None],
-        ] = {}
+        self._session_lease_probe_cache: _LeaseProbeResults = {}
+        self._session_lease_probe_thread: threading.Thread | None = None
+        self._session_lease_probe_result: _LeaseProbeResults = {}
         self._session_lease_warnings: dict[str, str] = {}
         # Wall-clock of the last Running-pane re-sort; throttles reordering to
         # once per _RUNNING_SORT_INTERVAL so rows don't jump under the cursor.
@@ -1054,10 +1063,14 @@ class App:
         self._less_mouse_flag: str = self._detect_less_mouse()
         self._scroll_manager = ScrollManager(enabled=scroll_coalescing)
         self._soft_quit_flag: bool = False
-        # Ordered provider registry + stable active key. No two-mode boolean:
-        # ``m`` cycles the registry and each key owns independent view state.
+        # Keep registration independent from executable availability. Recovery
+        # still needs the original provider of every surviving pane.
         self._mode_registry: ModeRegistry = DEFAULT_MODE_REGISTRY
-        self._active_mode_key: str = self._mode_registry.default_key
+        self._mode_availability = self._probe_mode_availability()
+        self._last_mode_availability_check = time.monotonic()
+        self._active_mode_key = next(
+            iter(self._cycle_mode_keys()), self._mode_registry.default_key)
+        self._last_available_mode_key = self._active_mode_key
         self._codex_index = BackgroundCodexIndex(
             self._codex_home_path(), self._renames)
         # Start the first immutable generation while the widget tree is built.
@@ -1072,9 +1085,8 @@ class App:
         self._codex_provisional_recovery_keys: set[str] = set()
         self._last_orphan_probe_ok: bool = True
         self._codex_project_filter: dict[Path, int] = {}  # cwd → Codex session count
-        # Mode switches paint from existing snapshots immediately. A daemon
-        # worker refreshes both NFS-backed indexes; _refresh consumes the result
-        # on the UI thread so no urwid widget is touched from the worker.
+        # A daemon worker refreshes Claude project discovery. The UI consumes
+        # its results alongside the Codex and Devin background snapshots.
         self._mode_refresh_lock = threading.Lock()
         self._mode_refresh_thread: threading.Thread | None = None
         self._mode_refresh_result: (
@@ -1162,7 +1174,7 @@ class App:
             on_help=self._open_help_modal,
             on_quit=self._open_quit_confirm,
             on_detach=self._on_detach,
-            on_mode_toggle=self._cycle_mode,
+            on_mode_toggle=self._open_mode_menu,
             on_layout=self._rotate_split,
             on_options=self._open_options_modal,
             on_expanded_change=self._on_button_bar_expanded,
@@ -1207,27 +1219,31 @@ class App:
         # against the correct provider source. ``codex_mode`` remains a read-only
         # migration path for state files written by Railmux <= 0.1.1.
         restored_mode = self._mode_key_from_state(state)
-        if restored_mode != self._modes().default_key:
-            self._enter_mode_on_restore(restored_mode)
-        self._warn_missing_mode_binary(self._active_mode())
-        if state:
-            self._projects_pane.set_filter(state.get("project_filter", ""))
-            self._sessions_pane.set_filter(state.get("session_filter", ""))
-            running_filter = state.get("running_filter", "")
+        self._enter_mode_on_restore(restored_mode)
+        if not self._cycle_mode_keys():
+            self._set_status(
+                "No enabled agent CLI found. Run railmux config → Program paths.",
+                "warn",
+            )
+        matching_state = state if restored_mode == self._saved_mode(state).key else None
+        if matching_state:
+            self._current_mode_view_state().selected_project_key = matching_state.get("project")
+            self._projects_pane.set_filter(matching_state.get("project_filter", ""))
+            self._sessions_pane.set_filter(matching_state.get("session_filter", ""))
+            running_filter = matching_state.get("running_filter", "")
             if isinstance(running_filter, str):
                 self._current_mode_view_state().running_filter = running_filter
                 self._running_pane.set_filter(
                     running_filter, capture_focus=False)
         # Apply the mode-specific project view immediately. In Claude mode this
         # also enforces the configured empty-project policy on the first frame.
-        visible = self._visible_projects()
-        self._projects_pane.set_projects(visible)
+        visible = self._current_mode_view_state().projects or []
         # Session to re-focus in the sidebar once its rows are loaded (below,
         # from _load_pending_project). Backward-compatible default.
-        self._pending_focus_session = state.get("session") if state else None
+        self._pending_focus_session = matching_state.get("session") if matching_state else None
         initial_project: Project | None = None
-        if state:
-            proj_name = state.get("project")
+        if matching_state:
+            proj_name = matching_state.get("project")
             if proj_name:
                 initial_project = next(
                     (p for p in visible if p.encoded_name == proj_name), None)
@@ -1326,6 +1342,12 @@ class App:
             tmux_server.TRANSCRIPT_SOURCE_OPTION,
             marker,
         )
+        provider = self._modes().for_tmux_name(tmux_name) if tmux_name else None
+        if provider == DEVIN_MODE or slot.transport_kind is DisplayTransportKind.NESTED:
+            tmux_ctl.set_pane_user_option(
+                pane_id, tmux_server.HISTORY_PROVIDER_OPTION,
+                DEVIN_MODE.key if provider == DEVIN_MODE else None,
+            )
 
     def _transcript_source_marker(
         self,
@@ -1405,6 +1427,17 @@ class App:
                 tmux_server.TRANSCRIPT_SOURCE_OPTION, marker,
             )
         commands: list[tuple[str, ...]] = [transcript_command]
+        if self._modes().for_tmux_name(tmux_name) == DEVIN_MODE:
+            commands.append((
+                "set-option", "-p", "-t", pane_id,
+                tmux_server.HISTORY_PROVIDER_OPTION, DEVIN_MODE.key,
+            ))
+        elif slot.transport_kind is DisplayTransportKind.NESTED:
+            # A nested display can reuse one wrapper pane for another agent.
+            commands.append((
+                "set-option", "-p", "-t", pane_id,
+                "-u", tmux_server.HISTORY_PROVIDER_OPTION,
+            ))
 
         manager = getattr(self, "_tmux_binding_manager", None)
         owner = getattr(self, "_railmux_pane_id", None)
@@ -2074,8 +2107,9 @@ class App:
             return path
 
     def _remember_project_selection(self, project: Project) -> None:
-        self._current_mode_view_state().selected_project_path = (
-            self._selection_path(project.real_path))
+        view = self._current_mode_view_state()
+        view.selected_project_key = project.encoded_name
+        view.selected_project_path = self._selection_path(project.real_path)
 
     def _remembered_project_path(self) -> Path | None:
         return self._current_mode_view_state().selected_project_path
@@ -2117,8 +2151,11 @@ class App:
         """Choose the current mode's remembered project, safely and visibly."""
         if not projects:
             return None
-        remembered = self._visible_project_for_path(
-            projects, self._remembered_project_path())
+        key = self._current_mode_view_state().selected_project_key
+        remembered = next((project for project in projects if project.encoded_name == key), None)
+        if remembered is None:
+            remembered = self._visible_project_for_path(
+                projects, self._remembered_project_path())
         if remembered is not None:
             return remembered
         if fallback is not None:
@@ -2144,8 +2181,7 @@ class App:
         self._set_current_project(project)
         sessions = self._pane_sessions(
             project, refresh=not self._mode_refresh_pending())
-        self._sessions_pane.set_sessions(project, sessions, running_ids=self._running_session_ids(),
-                favorite_ids=self._favorite_ids_for_view())
+        self._show_mode_sessions(project, sessions)
         self._set_status(f"Project: {project.real_path}  ({len(sessions)} sessions)")
 
     def _on_project_double_click(self, project: Project | None) -> None:
@@ -5480,9 +5516,10 @@ class App:
                 return False
 
         cwd = session_meta.project.real_path
+        mode = self._modes().resolve(session_meta.session_type)
+        binary = self._configured_mode_binary(mode)
         env: dict[str, str] | None = None
-        if session_meta.session_type == "devin":
-            mode = self._modes().get("devin")
+        if mode == DEVIN_MODE:
             if self._warn_missing_mode_binary(mode):
                 return False
             record = self._devin_index.get(session_meta.session_id)
@@ -5491,14 +5528,13 @@ class App:
                 self._set_status("Devin reports this session is already open.", "warn")
                 return False
             try:
-                cmd = devin_index.command(
-                    self._configured_mode_binary(mode), session_meta.session_id)
+                cmd = devin_index.command(binary, session_meta.session_id)
             except ValueError as exc:
                 self._set_status(str(exc), "error")
                 return False
-        elif session_meta.session_type == "codex":
+        elif mode == CODEX_MODE:
             cmd = build_codex_resume_command(
-                codex_binary=self._config.codex_binary,
+                codex_binary=binary,
                 session_id=session_meta.session_id,
                 cwd=cwd,
                 yolo=self._codex_yolo_enabled(),
@@ -5506,7 +5542,7 @@ class App:
             env = self._codex_env()
         else:
             cmd = build_resume_command(
-                claude_binary=self._config.claude_binary,
+                claude_binary=binary,
                 session_id=session_meta.session_id,
                 cwd=cwd,
             )
@@ -5586,7 +5622,7 @@ class App:
             return devin_index.command(self._configured_mode_binary(mode)), None
         if mode.project_source == ProjectSource.CODEX:
             return build_codex_new_command(
-                codex_binary=self._config.codex_binary, cwd=cwd,
+                codex_binary=self._configured_mode_binary(mode), cwd=cwd,
                 yolo=self._codex_yolo_enabled(),
             ), self._codex_env()
         return build_new_session_command(
@@ -6063,6 +6099,14 @@ class App:
                 "refresh automatically.")
             return True
 
+        def set_devin_history(policy: str) -> bool:
+            if not self._settings.set_devin_history_policy(policy):
+                self._set_status("Could not save Devin history option.", "error")
+                return False
+            self._set_status(
+                f"Devin history: {policy}; applies on the next managed history refresh.")
+            return True
+
         def set_path_open(policy: str) -> bool:
             if not self._settings.set_path_open_policy(policy):
                 self._set_status(
@@ -6082,6 +6126,7 @@ class App:
             claude_history_policy=self._settings.claude_history_policy,
             path_open_policy=self._settings.path_open_policy,
             codex_history_policy=self._settings.codex_history_policy,
+            devin_history_policy=self._settings.devin_history_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
@@ -6089,6 +6134,7 @@ class App:
             on_path_open_policy=set_path_open,
             on_close=self._close_options_modal,
             on_codex_history_policy=set_codex_history,
+            on_devin_history_policy=set_devin_history,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
 
@@ -6473,12 +6519,30 @@ class App:
         return restart_state.portable_state_path()
 
     def _view_state_data(self) -> dict:
-        data = {"mode": self._current_mode_key()}
+        current_mode = self._current_mode_key()
+        last_mode = getattr(self, "_last_available_mode_key", current_mode)
+        if current_mode != last_mode and current_mode not in self._cycle_mode_keys():
+            previous = self._mode_view_states.get(last_mode, _ModeViewState())
+            return {
+                "mode": last_mode,
+                "project": previous.selected_project_key,
+                "session": previous.positions[1].row_key if previous.positions else None,
+                "project_filter": previous.project_filter,
+                "session_filter": previous.session_filter,
+                "running_filter": previous.running_filter,
+            }
+        data = {"mode": current_mode}
         if self._selected_project is not None:
             data["project"] = self._selected_project.encoded_name
+        else:
+            pending_project = self._current_mode_view_state().selected_project_key
+            if pending_project is not None:
+                data["project"] = pending_project
         session = self._currently_focused_session_meta()
         if session is not None:
             data["session"] = session.session_id
+        elif getattr(self, "_pending_focus_session", None) is not None:
+            data["session"] = self._pending_focus_session
         projects_pane = getattr(self, "_projects_pane", None)
         sessions_pane = getattr(self, "_sessions_pane", None)
         if projects_pane is not None and projects_pane.filter_text:
@@ -6726,21 +6790,26 @@ class App:
         # the last portable value written by another Railmux window.
         return local if local is not None else portable
 
-    def _mode_key_from_state(self, state: dict | None) -> str:
-        """Resolve new registry state, then the <=0.1.1 Codex boolean."""
-        registry = self._modes()
-        if not state:
-            return registry.default_key
+    def _saved_mode(self, state: dict | None) -> AgentMode:
+        """Resolve the saved provider independently of launch availability."""
+        state = state or {}
         stored = state.get("mode")
-        if isinstance(stored, str):
-            return registry.resolve(stored).key
-        if state.get("codex_mode"):
-            return registry.resolve(CODEX_MODE.key).key
-        return registry.default_key
+        if stored is None and state.get("codex_mode"):
+            stored = CODEX_MODE.key
+        return self._modes().resolve(stored)
+
+    def _mode_key_from_state(self, state: dict | None) -> str:
+        saved = self._saved_mode(state).key
+        usable = self._cycle_mode_keys()
+        if saved in usable or not usable:
+            return saved
+        return usable[0]
 
     def _right_mode_from_state(self, state: dict) -> AgentMode | None:
         stored = state.get("right_mode")
         if stored is None:
+            if "mode" in state or "codex_mode" in state:
+                return self._saved_mode(state)
             return self._active_mode()
         if not isinstance(stored, str):
             return None
@@ -8668,20 +8737,102 @@ class App:
         self._codex_project_filter = self._codex_index.all_cwds(refresh=False)
         return True
 
+    def _probe_mode_availability(self) -> frozenset[str]:
+        return frozenset(
+            mode.key for mode in self._modes().modes
+            if (mode != DEVIN_MODE or not running_in_windows_wrapper())
+            and shutil.which(self._configured_mode_binary(mode)) is not None
+        )
+
+    def _cycle_mode_keys(self) -> tuple[str, ...]:
+        installed = getattr(self, "_mode_availability", None)
+        if installed is None:
+            installed = self._probe_mode_availability()
+        hidden = getattr(self, "_config", Config()).hidden_modes
+        return tuple(
+            mode.key for mode in self._modes().modes
+            if mode.key in installed and mode.key not in hidden
+        )
+
     def _cycle_mode(self) -> None:
-        """Move to the next registered agent mode."""
-        target = self._modes().next_key(self._current_mode_key())
-        self._switch_mode(target)
+        """Cycle launchable, visible agents on this execution host."""
+        keys = self._cycle_mode_keys()
+        if not keys:
+            return
+        current = self._current_mode_key()
+        index = (keys.index(current) + 1) % len(keys) if current in keys else 0
+        self._switch_mode(keys[index])
+
+    def _open_mode_menu(self) -> None:
+        self._mode_availability = self._probe_mode_availability()
+        self._last_mode_availability_check = time.monotonic()
+        usable = self._cycle_mode_keys()
+        live = {
+            mode.key
+            for running in self._running.values()
+            if (mode := self._modes().for_tmux_name(running.tmux_name)) is not None
+        }
+        items = []
+        active = self._current_mode_key()
+        for mode in self._modes().modes:
+            label = ("● " if mode.key == active else "  ") + mode.label
+            if mode.key not in usable:
+                if mode.key in self._config.hidden_modes:
+                    label += " · Hidden"
+                else:
+                    label += " · Unavailable"
+                if mode.key in live:
+                    label += " · Running"
+            action = (
+                partial(self._switch_mode, mode.key)
+                if mode.key in usable or mode.key in live else None
+            )
+            items.append((label, action))
+        menu = ContextMenu(
+            items, on_close=self._close_modal, title="Mode",
+            focused=next(i for i, mode in enumerate(self._modes().modes) if mode.key == active),
+        )
+        self._show_overlay(
+            menu, width=39, height=len(items) + 2,
+            fixed_width=True, fixed_height=True, click_outside_to_close=True,
+        )
+
+    def _mode_list_panes(self) -> tuple[ProjectsPane, SessionsPane, RunningSessionsPane]:
+        return self._projects_pane, self._sessions_pane, self._running_pane
+
+    def _remember_mode_view(self) -> None:
+        view = self._current_mode_view_state()
+        projects, sessions, running = self._mode_list_panes()
+        view.project_filter = projects.filter_text
+        view.session_filter = sessions.filter_text
+        view.running_filter = running.filter_text
+        view.positions = tuple(pane.remember_view() for pane in (projects, sessions, running))
+
+    def _show_mode_projects(self, projects: list[Project]) -> None:
+        self._current_mode_view_state().projects = projects
+        self._projects_pane.set_projects(projects)
+
+    def _show_mode_sessions(self, project: Project, sessions: list[SessionMeta]) -> None:
+        view = self._current_mode_view_state()
+        view.session_project_key = project.encoded_name
+        view.sessions = sessions
+        self._sessions_pane.set_sessions(
+            project, sessions, running_ids=self._running_session_ids(),
+            favorite_ids=self._favorite_ids_for_view(),
+        )
 
     def _set_mode_pane_context(self, mode: AgentMode) -> None:
         """Update provider-aware pane copy without coupling panes to mode keys."""
         projects_pane = getattr(self, "_projects_pane", None)
         sessions_pane = getattr(self, "_sessions_pane", None)
         running_pane = getattr(self, "_running_pane", None)
+        view = self._current_mode_view_state()
         if projects_pane is not None:
             projects_pane.set_provider_label(mode.label)
+            projects_pane.set_filter(view.project_filter)
         if sessions_pane is not None:
             sessions_pane.set_provider_label(mode.label)
+            sessions_pane.set_filter(view.session_filter)
         if running_pane is not None:
             running_pane.set_provider_label(mode.label)
             running_pane.set_filter(
@@ -8702,7 +8853,8 @@ class App:
         if mode.project_source == ProjectSource.DEVIN:
             devin = getattr(self, "_devin_index", None)
             loading = bool(devin is not None and devin.snapshot is None
-                           and not devin.failed and shutil.which(devin.binary))
+                           and not devin.failed and mode.key in getattr(
+                               self, "_mode_availability", {mode.key}))
         projects_pane = getattr(self, "_projects_pane", None)
         sessions_pane = getattr(self, "_sessions_pane", None)
         if projects_pane is not None:
@@ -8712,7 +8864,7 @@ class App:
 
     def _configured_mode_binary(self, mode: AgentMode) -> str:
         config = getattr(self, "_config", Config())
-        return getattr(config, mode.binary_config_attr)
+        return normalized_command(getattr(config, mode.binary_config_attr))
 
     def _warn_missing_mode_binary(self, mode: AgentMode) -> bool:
         """Warn without echoing a configured command or user-specific path."""
@@ -8730,77 +8882,63 @@ class App:
         return True
 
     def _switch_mode(self, mode_key: str) -> None:
-        """Switch to *mode_key* without encoding a two-provider toggle.
-
-        Paint immediately from stale-safe snapshots, then let a daemon worker
-        refresh NFS-backed indexes for the next UI refresh tick.
-        """
-        target = self._modes().resolve(mode_key)
+        """Paint the selected provider from memory and refresh on the next tick."""
+        target = self._modes().get(mode_key)
         if target.key == self._current_mode_key():
             return
+        self._cancel_pending_double_focus()
+        self._pending_project = None
+        self._pending_focus_session = None
         outgoing_project = self._selected_project
-        if outgoing_project is not None:
-            self._remember_project_selection(outgoing_project)
+        self._remember_mode_view()
         self._active_mode_key = target.key
-        if target.project_source == ProjectSource.DEVIN:
-            index = getattr(self, "_devin_index", None)
-            if index is not None:
-                index.refresh()
+        usable = self._cycle_mode_keys()
+        if target.key in usable:
+            self._last_available_mode_key = target.key
+
+        view = self._current_mode_view_state()
         self._set_mode_pane_context(target)
-        # Running holds sessions from every mode in one registry; repaint the
-        # provider-scoped view immediately instead of showing the outgoing
-        # mode until the next periodic tick.
-        if getattr(self, "_running_pane", None) is not None:
-            self._render_running_pane()
-        # Repaint the tmux brand while retaining the current error/normal colour.
-        self._apply_tmux_bar(self._tmux_error_bar)
-        next_label = self._modes().get(
-            self._modes().next_key(target.key)).label
-        suffix = f"  (m for {next_label})"
-        if target.prompt_for_auto_run:
-            self._maybe_prompt_codex_yolo()
-        if target.project_source == ProjectSource.CODEX:
-            self._request_codex_refresh(force=True)
-            self._schedule_mode_data_refresh()
-            self._projects_pane.set_projects(self._visible_projects(allow_stale=True))
-            if not self._codex_project_filter:
-                # The current mode visibly has no project, so it must not keep
-                # the outgoing Claude project as a hidden target for ``n``.
-                # Its path remains in the Claude-specific memory for return.
-                self._clear_current_project()
-                if self._mode_refresh_pending():
-                    self._set_status(
-                        f"{target.label} mode — loading sessions…{suffix}")
-                elif (isinstance(self._codex_index, BackgroundCodexIndex)
-                      and self._codex_index.is_unavailable):
-                    self._set_status(
-                        f"{target.label} mode — session index unavailable{suffix}",
-                        "warn",
-                    )
-                else:
-                    self._set_status(
-                        f"{target.label} mode — no sessions found{suffix}")
-                self._warn_missing_mode_binary(target)
-                return
-            self._set_status(f"{target.label} mode{suffix}")
-            visible = self._visible_projects(allow_stale=True)
-            selected = self._preferred_project(visible, outgoing_project)
-            if selected is not None:
-                self._on_project_select(selected)
-            else:
-                self._clear_current_project()
+        self._render_running_pane()
+        projects = view.projects
+        if projects is None:
+            if target == CODEX_MODE and isinstance(self._codex_index, BackgroundCodexIndex):
+                self._codex_project_filter = self._codex_index.all_cwds(refresh=False)
+            projects = self._visible_projects(allow_stale=True, resolve_paths=False)
+        self._show_mode_projects(projects)
+        selected = next(
+            (project for project in projects if project.encoded_name == view.selected_project_key),
+            None,
+        )
+        if selected is None:
+            paths = {project.real_path: project for project in projects}
+            selected = paths.get(view.selected_project_path)
+            if selected is None and outgoing_project is not None:
+                selected = paths.get(outgoing_project.real_path)
+        if selected is None and projects:
+            selected = projects[0]
+        if selected is None:
+            self._clear_current_project()
         else:
-            visible = self._visible_projects(allow_stale=True)
-            self._projects_pane.set_projects(visible)
-            self._set_status(f"{target.label} mode{suffix}")
-            # Resolve only against Claude-visible projects. A stale/deleted
-            # Project object must never fall through to the Claude cache.
-            selected = self._preferred_project(visible, outgoing_project)
-            if selected is not None:
-                self._on_project_select(selected)
-            else:
-                self._clear_current_project()
-        self._warn_missing_mode_binary(target)
+            self._set_current_project(selected, remember=False)
+            cached = view.sessions if view.session_project_key == selected.encoded_name else None
+            if cached is None:
+                self._sessions_pane.set_loading(True)
+            self._sessions_pane.set_sessions(
+                selected, cached or [], running_ids=self._running_session_ids(),
+                favorite_ids=self._favorite_ids_for_view(),
+            )
+        for pane, position in zip(self._mode_list_panes(), view.positions):
+            pane.restore_view(position)
+
+        loop = getattr(self, "_loop", None)
+        if loop is not None and getattr(self, "_mode_bar_alarm", None) is None:
+            self._mode_bar_alarm = loop.set_alarm_in(0, self._paint_mode_bar)
+        if target.prompt_for_auto_run and target.key in usable:
+            self._maybe_prompt_codex_yolo()
+
+    def _paint_mode_bar(self, _loop, _data) -> None:
+        self._mode_bar_alarm = None
+        self._apply_tmux_bar(self._tmux_error_bar)
 
     def _toggle_codex_mode(self) -> None:
         """Compatibility alias for integrations written before mode cycling."""
@@ -8812,8 +8950,9 @@ class App:
         Kept separate from normal switching because the loop and tmux bar are
         not available yet and project selection is handled by the restore path.
         """
-        mode = self._modes().resolve(mode_key)
+        mode = self._modes().get(mode_key)
         self._active_mode_key = mode.key
+        self._last_available_mode_key = mode.key
         self._set_mode_pane_context(mode)
         if mode.project_source == ProjectSource.CODEX:
             self._codex_project_filter = self._codex_index.all_cwds()
@@ -8821,7 +8960,7 @@ class App:
             index = getattr(self, "_devin_index", None)
             if index is not None:
                 index.refresh()
-        self._projects_pane.set_projects(self._visible_projects())
+        self._show_mode_projects(self._visible_projects())
 
     def _enter_codex_mode_on_restore(self) -> None:
         """Compatibility alias for pre-registry tests and extensions."""
@@ -8848,8 +8987,8 @@ class App:
         sources the user's profile and loads their key the normal way."""
         return {"CODEX_HOME": str(self._codex_home_path())}
 
-    def _visible_projects(self, *, force: bool = False,
-                          allow_stale: bool = False) -> list[Project]:
+    def _visible_projects(self, *, force: bool = False, allow_stale: bool = False,
+                          resolve_paths: bool = True) -> list[Project]:
         """Projects for the current mode.
 
         Claude mode: projects with resumable sessions (plus empty projects when
@@ -8861,40 +9000,36 @@ class App:
             return index.projects() if index is not None else []
         now = time.monotonic()
         projects = self._project_snapshot
-        if (projects is None or force
-                or (not allow_stale
-                    and now - self._project_snapshot_at >= self._PROJECT_SCAN_INTERVAL)):
+        if not allow_stale and (
+                projects is None or force
+                or now - self._project_snapshot_at >= self._PROJECT_SCAN_INTERVAL
+        ):
             # The initial snapshot is built before Urwid starts. Thereafter a
             # normal UI tick only schedules the single coalesced discovery
             # worker and keeps painting the last-good project generation.
             if not self._project_refresh_pending():
                 self._schedule_mode_data_refresh()
-            projects = projects or []
+        projects = projects or []
+        help_path = help_workspace_path()
+        path_key = self._selection_path if resolve_paths else lambda path: path
+        help_key = path_key(help_path)
         if self._active_mode().project_source != ProjectSource.CODEX:
             projects = [
                 project for project in projects
-                if not is_help_workspace(project.real_path)
+                if path_key(project.real_path) != help_key
             ]
             if getattr(getattr(self, "_config", None),
                        "show_empty_projects", False):
                 return projects
             return [p for p in projects if p.session_count > 0]
         # Build a resolve-safe lookup: real_path → project.
-        by_resolved: dict[Path, Project] = {}
-        for p in projects:
-            try:
-                by_resolved[p.real_path.resolve()] = p
-            except OSError:
-                by_resolved[p.real_path] = p
+        by_resolved = {path_key(project.real_path): project for project in projects}
         visible: list[Project] = []
         seen_encoded: set[str] = set()
         for cwd, codex_count in self._codex_project_filter.items():
-            if is_help_workspace(cwd):
+            key = path_key(cwd)
+            if key == help_key:
                 continue
-            try:
-                key = cwd.resolve()
-            except OSError:
-                key = cwd
             existing = by_resolved.get(key)
             if existing is not None:
                 if existing.encoded_name not in seen_encoded:
@@ -8905,7 +9040,8 @@ class App:
             else:
                 # Codex-only directory — synthesise a project entry so the
                 # user can browse and launch sessions here.
-                synth = self._synthesise_codex_project(cwd, codex_count)
+                synth = self._synthesise_codex_project(
+                    key, codex_count, resolve_path=False)
                 if synth.encoded_name not in seen_encoded:
                     seen_encoded.add(synth.encoded_name)
                     visible.append(synth)
@@ -8913,7 +9049,7 @@ class App:
         # ones by their most recent Codex session.
         def _sort_key(p: Project) -> float:
             ts = p.last_activity_ts
-            if ts == 0.0:
+            if ts == 0.0 and resolve_paths:
                 sessions = self._codex_index.sessions_for_cwd(p.real_path, refresh=False)
                 if sessions:
                     ts = sessions[0].last_mtime
@@ -8945,13 +9081,12 @@ class App:
         self._project_snapshot_at = 0.0
 
     @staticmethod
-    def _synthesise_codex_project(cwd: Path, session_count: int = 0) -> Project:
+    def _synthesise_codex_project(
+        cwd: Path, session_count: int = 0, *, resolve_path: bool = True,
+    ) -> Project:
         """Create a synthetic Project for a Codex-only directory."""
         from railmux.codex_index import _safe_encoded_name
-        try:
-            resolved = cwd.resolve()
-        except OSError:
-            resolved = cwd
+        resolved = App._selection_path(cwd) if resolve_path else cwd
         return Project(
             real_path=resolved,
             encoded_name=_safe_encoded_name(resolved),
@@ -9163,6 +9298,9 @@ class App:
 
     def _refresh_impl(self) -> None:
         now = time.monotonic()
+        if now - getattr(self, "_last_mode_availability_check", now) >= 5.0:
+            self._mode_availability = self._probe_mode_availability()
+            self._last_mode_availability_check = now
         if now - getattr(self, "_last_geometry_poll_at", 0.0) >= 0.5:
             self._last_geometry_poll_at = now
             # Remote terminals and mobile soft keyboards do not reliably
@@ -9191,6 +9329,8 @@ class App:
                 continue
             if outcome.ok:
                 rebound_for_client = True
+                if slot.agent_tmux_name is not None:
+                    self._sync_attached_slot_projection(slot, slot.agent_tmux_name)
                 self._set_status(
                     "Using nested agent display: an external client attached",
                     "warn",
@@ -9273,7 +9413,7 @@ class App:
         projects = self._visible_projects(
             force="claude" in initializing and not mode_refresh_pending,
             allow_stale=mode_refresh_pending)
-        self._projects_pane.set_projects(projects)
+        self._show_mode_projects(projects)
         if projects:
             # Re-resolve the live object after every project snapshot update.
             # If the mode was previously empty, this also restores its remembered
@@ -9310,8 +9450,11 @@ class App:
                     matched, refresh=False,
                     child_probes=child_probes, server=server,
                     codex_rollout_probes=codex_rollout_probes)
-                self._sessions_pane.set_sessions(matched, sessions, running_ids=running_ids,
-                                                  favorite_ids=self._favorite_ids_for_view())
+                self._show_mode_sessions(matched, sessions)
+                pending_focus = getattr(self, "_pending_focus_session", None)
+                if pending_focus is not None and sessions:
+                    self._pending_focus_session = None
+                    self._sessions_pane._restore_focus(pending_focus)
             else:
                 self._set_current_project(None, remember=False)
                 self._sessions_pane.set_sessions(None, [], running_ids=running_ids,
@@ -9587,12 +9730,11 @@ class App:
             raw = []
         else:
             raw = self._session_cache.list_sessions(project)
-        sessions: list[SessionMeta] = []
-        for session in raw:
-            refined = self._refine_status(
-                session, child_probes, server, codex_rollout_probes)
-            sessions.append(self._with_remote_lease(refined, server))
-        return sessions
+        sessions = [
+            self._refine_status(session, child_probes, server, codex_rollout_probes)
+            for session in raw
+        ]
+        return self._with_remote_leases(sessions)
 
     def _session_lease_root(self, session_type: str) -> Path:
         if session_type == "devin":
@@ -9612,42 +9754,61 @@ class App:
         aliases = self._codex_lineage_ids(session.session_id)
         return frozenset(aliases or {session.session_id})
 
-    def _with_remote_lease(
-        self,
-        session: SessionMeta,
-        server: tmux_ctl.ServerSnapshot | None = None,
-    ) -> SessionMeta:
-        """Overlay a shared-host owner without pretending it is attachable."""
-        running = self._by_session_id(session.session_id)
-        if (running is not None
-                and self._agent_session_alive(running.tmux_name, server)):
-            return replace(session, remote_owner=None)
-        root = self._session_lease_root(session.session_type)
-        ids = tuple(sorted(self._session_lease_ids(session)))
-        cache_key = (session.session_type, str(root), ids)
+    def _with_remote_leases(self, sessions: list[SessionMeta]) -> list[SessionMeta]:
+        """Use display-only ownership probes without blocking the sidebar."""
+        if not sessions:
+            return sessions
         now = time.monotonic()
         cache = getattr(self, "_session_lease_probe_cache", {})
-        cached = cache.get(cache_key)
-        if cached is not None and now - cached[0] < _SESSION_LEASE_PROBE_TTL_S:
-            owner = cached[1]
-        else:
-            try:
-                owner = session_lease.active_owner(
-                    root, session.session_type, ids)
-            except session_lease.LeaseError:
-                # This probe is display-only.  Never invent a remote owner
-                # when the shared lock service is unavailable; resume and
-                # deletion perform fresh fail-closed checks at action time.
-                owner = None
-            cache[cache_key] = (now, owner)
-            self._session_lease_probe_cache = {
-                key: value for key, value in cache.items()
-                if now - value[0] < _SESSION_LEASE_PROBE_TTL_S
+        worker = getattr(self, "_session_lease_probe_thread", None)
+        busy = worker is not None and worker.is_alive()
+        if not busy:
+            cache.update(getattr(self, "_session_lease_probe_result", {}))
+            self._session_lease_probe_result = {}
+            self._session_lease_probe_cache = cache = {
+                key: entry for key, entry in cache.items()
+                if now - entry[0] < 5 * _SESSION_LEASE_PROBE_TTL_S
             }
-        return replace(
-            session,
-            remote_owner=(owner.display_host if owner is not None else None),
-        )
+
+        local_ids = self._running_session_ids()
+        roots: dict[str, Path] = {}
+        pending: set[_LeaseProbeKey] = set()
+        result = []
+        for session in sessions:
+            owner = None
+            if session.session_id not in local_ids:
+                provider = session.session_type
+                if provider not in roots:
+                    roots[provider] = self._session_lease_root(provider)
+                key = (roots[provider], provider, tuple(sorted(self._session_lease_ids(session))))
+                cached = cache.get(key)
+                if cached is not None and now - cached[0] < 5 * _SESSION_LEASE_PROBE_TTL_S:
+                    owner = cached[1]
+                if not busy and (cached is None or now - cached[0] >= _SESSION_LEASE_PROBE_TTL_S):
+                    pending.add(key)
+            host = owner.display_host if owner is not None else None
+            result.append(
+                session if session.remote_owner == host
+                else replace(session, remote_owner=host)
+            )
+        if pending:
+            self._session_lease_probe_thread = threading.Thread(
+                target=self._probe_remote_leases, args=(pending,),
+                name="railmux-lease-probes", daemon=True,
+            )
+            self._session_lease_probe_thread.start()
+        return result
+
+    def _probe_remote_leases(self, pending: set[_LeaseProbeKey]) -> None:
+        result: _LeaseProbeResults = {}
+        for root, provider, ids in pending:
+            try:
+                owner = session_lease.active_owner(root, provider, ids)
+            except session_lease.LeaseError:
+                # Resume and deletion still validate ownership at action time.
+                owner = None
+            result[root, provider, ids] = (time.monotonic(), owner)
+        self._session_lease_probe_result = result
 
     def _record_session_lease_result(
         self,

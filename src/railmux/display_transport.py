@@ -302,6 +302,8 @@ class NestedDisplayTransport:
         NestedDisplayTransport._set_history_source(pane_id, None)
         tmux_ctl.set_pane_user_option(
             pane_id, tmux_server.TRANSCRIPT_SOURCE_OPTION, None)
+        tmux_ctl.set_pane_user_option(
+            pane_id, tmux_server.HISTORY_PROVIDER_OPTION, None)
 
     def attach(
         self,
@@ -784,6 +786,10 @@ class AgentDisplayTransport:
             (
                 "set-option", "-p", "-t", old.placeholder_pane_id,
                 "-u", tmux_server.TRANSCRIPT_SOURCE_OPTION,
+            ),
+            (
+                "set-option", "-p", "-t", old.placeholder_pane_id,
+                "-u", tmux_server.HISTORY_PROVIDER_OPTION,
             ),
             *_marker_commands(prepared, slot.key),
             (

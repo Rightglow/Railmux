@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
@@ -10,9 +11,12 @@ from pathlib import Path
 from typing import Iterator, TextIO
 
 from railmux.config import ConfigError, default_config_path, load_config
+from railmux.modes import DEFAULT_MODE_REGISTRY, DEVIN_MODE
+from railmux.provider_paths import running_in_windows_wrapper
 from railmux.runtime_config import (
     check_executable,
     check_utf8_locale,
+    normalized_command,
     runtime_environment,
 )
 from railmux.settings import MANAGED_CONFIG_KEYS, Settings
@@ -120,6 +124,13 @@ _BEHAVIOR_SETTINGS = (
          ("native", "Always use Codex native history")),
         "set_codex_history_policy",
     ),
+    _PolicySetting(
+        "Devin managed history", "interaction", "devin_history",
+        "devin_history_policy",
+        (("local", "Always use smooth local history"),
+         ("native", "Always use native terminal scrolling")),
+        "set_devin_history_policy",
+    ),
 )
 
 _RELEASED_POLICIES = 5
@@ -130,7 +141,7 @@ _BEHAVIOR_KEYS = {
     "codex": ("auto_run",),
     "updates": ("auto_update",),
     "interaction": (
-        "history_lines", "claude_history", "codex_history", "path_open",
+        "history_lines", "claude_history", "codex_history", "devin_history", "path_open",
     ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
@@ -424,6 +435,7 @@ def _behavior_menu(
             "claude_history_policy": settings.claude_history_policy,
             "path_open_policy": settings.path_open_policy,
             "codex_history_policy": settings.codex_history_policy,
+            "devin_history_policy": settings.devin_history_policy,
         }
         # Released entry numbers stay stable: options added later follow the
         # local-only history capacity entry.
@@ -469,6 +481,7 @@ def _behavior_menu(
                     behavior_keys["interaction"] = (
                         "claude_history",
                         "codex_history",
+                        "devin_history",
                         "path_open",
                     )
                     behavior_keys["ssh"] = ("claude_history", "path_open")
@@ -580,7 +593,16 @@ def _program_menu(
             category_index=2,
         )
         for index, (section, title) in enumerate(programs, 1):
-            _write(stdout, f"  {index}. {title} [{getattr(config, f'{section}_binary')}]")
+            binary = getattr(config, f"{section}_binary")
+            info = [binary]
+            if section == DEVIN_MODE.key and running_in_windows_wrapper():
+                info.append("unavailable in native Windows")
+            elif shutil.which(normalized_command(binary)) is None:
+                info.append("executable not found")
+            if section in config.hidden_modes:
+                info.append("hidden from mode switching")
+            _write(stdout, f"  {index}. {title} [{', '.join(info)}]")
+        _write(stdout, "  v. Agent visibility")
         _write(stdout, "  r. Reset all program paths")
         _write(stdout, "  b. Back")
         _write(stdout, "  q. Exit")
@@ -590,6 +612,11 @@ def _program_menu(
             return _BACK
         if choice == "q":
             return _EXIT
+        if choice == "v":
+            if _edit_mode_visibility(stdin, stdout, feedback, config.hidden_modes,
+                                     remote_context=remote_context) is _EXIT:
+                return _EXIT
+            continue
         if choice == "r":
             if _confirm(stdin, stdout, "Reset every program path to PATH lookup?"):
                 _saved(Settings().reset_keys(_PROGRAM_KEYS), feedback)
@@ -608,6 +635,39 @@ def _program_menu(
         )
         if result is _EXIT:
             return _EXIT
+
+
+def _edit_mode_visibility(
+    stdin: TextIO,
+    stdout: TextIO,
+    feedback: _Feedback,
+    hidden: tuple[str, ...],
+    *,
+    remote_context: bool,
+) -> object | None:
+    _render_editor_header(
+        stdout, remote_context=remote_context, category="Program paths",
+        setting="Agent visibility",
+    )
+    _write(stdout, "Toggle an agent's visibility in mode switching on the next launch.")
+    modes = DEFAULT_MODE_REGISTRY.modes
+    for index, mode in enumerate(modes, 1):
+        state = "hidden" if mode.key in hidden else "shown when installed"
+        _write(stdout, f"  {index}. {mode.label} [{state}]")
+    _write(stdout, "  b. Back")
+    _write(stdout, "  q. Exit")
+    choice = _read(stdin, stdout, "Choose: ").lower()
+    if choice == "q":
+        return _EXIT
+    if choice == "b":
+        return _BACK
+    if not choice.isdigit() or not 1 <= int(choice) <= len(modes):
+        feedback.set("Choose one of the listed entries.", level="warning")
+        return None
+    key = modes[int(choice) - 1].key
+    updated = tuple(item for item in hidden if item != key) if key in hidden else (*hidden, key)
+    _saved(Settings().set_hidden_modes(updated), feedback)
+    return None
 
 
 def _edit_locale(
@@ -749,7 +809,7 @@ def _recover_invalid_config(
 def _managed_reset_keys(*, remote_context: bool) -> dict[str, tuple[str, ...]]:
     keys = dict(MANAGED_CONFIG_KEYS)
     if remote_context:
-        keys["interaction"] = ("claude_history", "codex_history", "path_open")
+        keys["interaction"] = ("claude_history", "codex_history", "devin_history", "path_open")
         keys["ssh"] = ("claude_history", "path_open")
     return keys
 
