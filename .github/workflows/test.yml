@@ -24,8 +24,9 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  # The Python 3.9 floor is unavailable on the Ubuntu 26.04 runner.
   quality:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -40,7 +41,7 @@ jobs:
       - run: python tools/wheel_smoke.py dist/*.whl
 
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -60,12 +61,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-24.04
+            python-version: "3.9"
+          - os: macos-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.9"
+          python-version: ${{ matrix.python-version }}
       - name: Install tmux on Linux
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y tmux
@@ -80,7 +85,7 @@ jobs:
         run: python -m pytest -q tests/test_tmux_integration.py
 
   tmux-27-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
