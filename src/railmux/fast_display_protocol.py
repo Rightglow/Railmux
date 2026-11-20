@@ -1,4 +1,4 @@
-"""Private v17 framing for the coalesced full-window SSH display."""
+"""Private v18 framing for the coalesced full-window SSH display."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from enum import IntEnum, IntFlag
 
 DISPLAY_MAGIC = b"RMUXD17\x00"
 INPUT_MAGIC = b"RMUXK17\x00"
-PROTOCOL_VERSION = 17
+PROTOCOL_VERSION = 18
 REMOTE_CONFIG_PROTOCOL = 1
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
@@ -23,6 +23,7 @@ MAX_INPUT_BYTES = 64 * 1024
 MAX_WIDTH = 1000
 MAX_HEIGHT = 500
 MAX_HISTORY_LINES = 20000
+MAX_HISTORY_PROMPT_BYTES = 2048
 MAX_PREFETCH_HISTORY_LINES = 300
 MAX_HISTORY_PANES = 8
 MAX_CLIPBOARD_BYTES = 64 * 1024
@@ -49,12 +50,14 @@ _HISTORY_TRANSCRIPT_BACKED = 1 << 1
 _HISTORY_MORE_AVAILABLE = 1 << 2
 _HISTORY_TRANSCRIPT_AVAILABLE = 1 << 3
 _HISTORY_CHOICE_REQUIRED = 1 << 4
+_HISTORY_CODEX_PROMPT = 1 << 5
 _KNOWN_HISTORY_CAPABILITIES = (
     _HISTORY_MOUSE_FORWARDABLE
     | _HISTORY_TRANSCRIPT_BACKED
     | _HISTORY_MORE_AVAILABLE
     | _HISTORY_TRANSCRIPT_AVAILABLE
     | _HISTORY_CHOICE_REQUIRED
+    | _HISTORY_CODEX_PROMPT
 )
 
 
@@ -162,6 +165,8 @@ class HistorySnapshot:
     timeline_start: int = 0
     timeline_end: int = 0
     route_generation: int = 0
+    # An empty string enables Codex context when no earlier prompt was retained.
+    codex_prompt_context: str | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +292,18 @@ def _pack_history_lines(lines: tuple[bytes, ...]) -> bytes:
     return b"".join(body)
 
 
+def _pack_history_content(snapshot: HistorySnapshot) -> bytes:
+    lines = _pack_history_lines(snapshot.lines)
+    if snapshot.codex_prompt_context is None:
+        return lines
+    label = snapshot.codex_prompt_context.encode("utf-8")
+    if len(label) > MAX_HISTORY_PROMPT_BYTES or not all(
+        char.isprintable() for char in snapshot.codex_prompt_context
+    ):
+        raise ValueError("invalid Codex history prompt")
+    return lines + struct.pack(">H", len(label)) + label
+
+
 def _history_capabilities(snapshot: HistorySnapshot) -> int:
     capabilities = (
         (_HISTORY_MOUSE_FORWARDABLE if snapshot.mouse_forwardable else 0)
@@ -294,6 +311,7 @@ def _history_capabilities(snapshot: HistorySnapshot) -> int:
         | (_HISTORY_MORE_AVAILABLE if snapshot.more_available else 0)
         | (_HISTORY_TRANSCRIPT_AVAILABLE if snapshot.transcript_available else 0)
         | (_HISTORY_CHOICE_REQUIRED if snapshot.history_choice_required else 0)
+        | (_HISTORY_CODEX_PROMPT if snapshot.codex_prompt_context is not None else 0)
     )
     _validate_history_capabilities(capabilities)
     return capabilities
@@ -307,7 +325,7 @@ def _validate_history_capabilities(capabilities: int) -> None:
         capabilities & ~_KNOWN_HISTORY_CAPABILITIES
         or (transcript_backed or choice_required)
         and not transcript_available
-        or transcript_backed
+        or (transcript_backed or capabilities & _HISTORY_CODEX_PROMPT)
         and choice_required
     ):
         raise ValueError("invalid history capabilities")
@@ -348,6 +366,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
                 snapshot.route_generation,
                 snapshot.timeline_start,
                 snapshot.timeline_end,
+                snapshot.codex_prompt_context is not None,
             )
         ):
             raise ValueError("a rejected history response must be empty")
@@ -372,7 +391,7 @@ def encode_history_snapshot(snapshot: HistorySnapshot) -> bytes:
         if not 0 <= snapshot.route_generation <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("invalid history route generation")
         _validate_history_timeline(snapshot)
-    raw_lines = _pack_history_lines(snapshot.lines)
+    raw_lines = _pack_history_content(snapshot)
     compressed = zlib.compress(raw_lines, level=3)
     metadata = _HISTORY_METADATA.pack(
         snapshot.request_id,
@@ -427,7 +446,7 @@ def encode_history_batch(batch: HistoryBatch) -> bytes:
         if not 0 <= snapshot.route_generation <= 0xFFFFFFFFFFFFFFFF:
             raise ValueError("invalid history route generation")
         _validate_history_timeline(snapshot)
-        packed_lines = _pack_history_lines(snapshot.lines)
+        packed_lines = _pack_history_content(snapshot)
         pane_metadata = _HISTORY_PANE_METADATA.pack(
             pane_number,
             snapshot.x,
@@ -620,11 +639,22 @@ def _unpack_rows(raw: bytes, height: int) -> tuple[tuple[int, bytes], ...]:
     return tuple(rows)
 
 
-def _unpack_history_lines(raw: bytes) -> tuple[bytes, ...]:
-    lines, offset = _unpack_history_lines_at(raw, 0)
-    if offset != len(raw):
-        raise ValueError("trailing history line data")
-    return lines
+def _unpack_history_content(
+    raw: bytes, offset: int, capabilities: int,
+) -> tuple[tuple[bytes, ...], str | None, int]:
+    lines, offset = _unpack_history_lines_at(raw, offset)
+    if not capabilities & _HISTORY_CODEX_PROMPT:
+        return lines, None, offset
+    if len(raw) - offset < 2:
+        raise ValueError("truncated Codex history prompt")
+    size, = struct.unpack_from(">H", raw, offset)
+    offset += 2
+    if size > MAX_HISTORY_PROMPT_BYTES or size > len(raw) - offset:
+        raise ValueError("invalid Codex history prompt size")
+    label = raw[offset:offset + size].decode("utf-8")
+    if not all(char.isprintable() for char in label):
+        raise ValueError("invalid Codex history prompt")
+    return lines, label, offset + size
 
 
 def _unpack_history_lines_at(
@@ -727,7 +757,10 @@ class ServerMessageDecoder:
                     raw_lines = _decompress_rows(
                         body[_HISTORY_METADATA.size :], raw_size
                     )
-                    lines = _unpack_history_lines(raw_lines)
+                    lines, prompt_context, end = _unpack_history_content(
+                        raw_lines, 0, raw_capabilities)
+                    if end != len(raw_lines):
+                        raise ValueError("trailing history data")
                     if pane_number == 0:
                         if any(
                             (
@@ -778,6 +811,7 @@ class ServerMessageDecoder:
                         route_generation=route_generation,
                         timeline_start=timeline_start,
                         timeline_end=timeline_end,
+                        codex_prompt_context=prompt_context,
                     )
                     if pane_id is not None:
                         _validate_history_timeline(snapshot)
@@ -826,7 +860,8 @@ class ServerMessageDecoder:
                             raise ValueError("invalid history geometry")
                         if not 0 <= x < MAX_WIDTH or not 0 <= y < MAX_HEIGHT:
                             raise ValueError("invalid history position")
-                        lines, offset = _unpack_history_lines_at(raw, offset)
+                        lines, prompt_context, offset = _unpack_history_content(
+                            raw, offset, raw_capabilities)
                         if len(lines) < height:
                             raise ValueError("incomplete history viewport")
                         snapshot = HistorySnapshot(
@@ -856,6 +891,7 @@ class ServerMessageDecoder:
                             route_generation=route_generation,
                             timeline_start=timeline_start,
                             timeline_end=timeline_end,
+                            codex_prompt_context=prompt_context,
                         )
                         _validate_history_timeline(snapshot)
                         snapshots.append(snapshot)

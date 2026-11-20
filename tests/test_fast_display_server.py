@@ -2710,3 +2710,45 @@ def test_managed_codex_and_devin_keep_styled_deep_history_and_native_input(
     assert view.wheel(native).forwarded_input == native.raw
     assert view.page(b"\x1b[5~", 74, 2).forwarded_input == b"\x1b[5~"
     assert view.wheel(SgrMouseEvent(b"\x1b[<64;34;3M", 64, 34, 3, True)).render_history
+
+
+def test_codex_history_keeps_the_preceding_prompt_when_hot_capture_starts_mid_answer(
+    monkeypatch, tmp_path,
+):
+    from railmux.fast_display_protocol import ServerMessageDecoder
+
+    server = fast_display_server
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    rows = [
+        {"type": "session_meta", "payload": {"id": session_id}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "UserMessage", "content": [{"type": "text", "text": "Question before the long answer"}]}}},
+        {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": "AgentMessage", "content": [{
+                "type": "Text", "text": "\n".join(f"Answer row {i:04d}" for i in range(400)),
+            }]}}},
+    ]
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    locator = server.tmux_server.encode_transcript_source("codex", session_id, path)
+    assert locator is not None
+    pane = server._PaneGeometry(
+        "%8", 31, 0, 40, 6, mouse_forwardable=True, alternate_on=True,
+        transcript_source=locator, transcript_backed=True,
+        transcript_provider="codex", codex_history_policy="local",
+    )
+    monkeypatch.setattr(subprocess, "check_output", lambda *_a, **_kw: b"\n" * 6)
+    pyte = server._extended_pyte(__import__("pyte"))
+    hot = server._capture_pane_history(pyte, pane, 1, 300)
+    assert hot is not None and hot.more_available
+    assert len(hot.lines) == 300 and hot.transcript_backed
+    assert all(b"Question before" not in row for row in hot.lines)
+    decoded, = ServerMessageDecoder().feed(encode_history_snapshot(hot))
+    assert decoded.codex_prompt_context == "Question before the long answer"
+
+    from dataclasses import replace
+
+    native = server._capture_pane_history(
+        pyte, replace(pane, codex_history_policy="native"), 2, 300)
+    assert native is not None
+    assert native.codex_prompt_context is None and not native.transcript_backed

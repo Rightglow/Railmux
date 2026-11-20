@@ -12,9 +12,11 @@ import os
 import re
 import threading
 import time
+from bisect import bisect_right
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
+from functools import cached_property
 
 from railmux.setting_contracts import (
     HISTORY_DEFAULT_LINES,
@@ -24,6 +26,7 @@ from railmux.setting_contracts import (
 from railmux.fast_display_input import (
     SgrMouseEvent,
     SelectionSource,
+    _display_width,
     page_key_direction,
 )
 from railmux.fast_display_protocol import (
@@ -34,6 +37,9 @@ from railmux.fast_display_protocol import (
 )
 
 _SGR_STYLE_RE = re.compile(rb"\x1b\[[0-9;]*m")
+_HISTORY_ROW_CONTROL_RE = re.compile(
+    rb"\x1b\[[0-9;]*m|\x1b\]8;[^\x1b\x07]*(?:\x1b\\|\x07)"
+)
 _HISTORY_SCROLL_BASE_LINES = 1
 _HISTORY_PREFETCH_LINES = 300
 _HISTORY_INITIAL_LINES = 2000
@@ -229,6 +235,57 @@ class PeriodicPrefetchGate:
         self.accepted_generation = None
 
 
+_CODEX_PROMPT_MARKER = "›".encode()
+
+
+def _history_text(row: bytes) -> str:
+    text = _HISTORY_ROW_CONTROL_RE.sub(b"", row).decode("utf-8", errors="replace")
+    return "".join(char for char in text if char.isprintable())
+
+
+def _codex_prompt(rows: Sequence[bytes], index: int) -> tuple[int, str] | None:
+    if _CODEX_PROMPT_MARKER not in rows[index]:
+        return None
+    text = _history_text(rows[index])
+    if not text.startswith("› ") or not text[2:].strip():
+        return None
+    label = " ".join(text[2:514].split())
+    end = index + 1
+    while end < len(rows):
+        continuation = _history_text(rows[end])
+        if not continuation.startswith("  ") or not continuation.strip():
+            break
+        if len(label) < 512:
+            label = f"{label} {' '.join(continuation[:512].split())}"[:512]
+        end += 1
+    return end, label
+
+
+def codex_prompt_before(rows: Sequence[bytes], start: int, fallback: str = "") -> str:
+    """Find turn context that fell outside a bounded capture."""
+    for index in range(min(start, len(rows)) - 1, -1, -1):
+        prompt = _codex_prompt(rows, index)
+        if prompt is not None:
+            end, label = prompt
+            return label if end <= start else ""
+    return fallback
+
+
+def _render_codex_prompt(label: str, width: int) -> bytes:
+    text = "".join(char for char in label if char.isprintable())
+    remaining = width - 3  # two cells for the marker and one for the right edge
+    parts: list[str] = []
+    for char in text:
+        remaining -= _display_width(char)
+        if remaining < 0:
+            while remaining < 0 and parts:
+                remaining += _display_width(parts.pop())
+            parts.append("…")
+            break
+        parts.append(char)
+    return ("\033[1;2m›\033[22m " + "".join(parts) + "\033[0m").encode()
+
+
 @dataclass
 class _HistoryViewport:
     """One immutable pane snapshot plus its local offset from the bottom."""
@@ -238,6 +295,35 @@ class _HistoryViewport:
     loaded_limit: int
     exhausted: bool = False
     top_notified: bool = False
+
+    @cached_property
+    def prompts(self) -> tuple[list[int], list[tuple[int, str]]]:
+        # The live viewport may contain the Codex composer or a native pinned
+        # prompt. Only the scrolled transcript can supply a turn boundary.
+        rows = self.snapshot.lines[:-self.snapshot.height]
+        starts = []
+        prompts = []
+        for index in range(len(rows)):
+            prompt = _codex_prompt(rows, index)
+            if prompt is not None:
+                starts.append(index)
+                prompts.append(prompt)
+        return starts, prompts
+
+    def prompt_header(self, start: int) -> bytes:
+        snapshot = self.snapshot
+        if (snapshot.codex_prompt_context is None or snapshot.height < 4
+                or snapshot.width < 16):
+            return b""
+        starts, prompts = self.prompts
+        index = bisect_right(starts, start) - 1
+        if index >= 0:
+            end, label = prompts[index]
+            if start < end:
+                return b""
+        else:
+            label = snapshot.codex_prompt_context
+        return _render_codex_prompt(label, snapshot.width) if label else b""
 
 
 @dataclass(frozen=True)
@@ -372,6 +458,7 @@ class LocalHistoryView:
             left.transcript_backed == right.transcript_backed
             and left.history_choice_required == right.history_choice_required
             and left.generation == right.generation
+            and (left.codex_prompt_context is None) == (right.codex_prompt_context is None)
         )
 
     @staticmethod
@@ -508,6 +595,7 @@ class LocalHistoryView:
                 incoming.lines,
                 live_height=incoming.height,
             )
+        prompt_context = incoming.codex_prompt_context
         if delta is None:
             # Never splice two captures whose timelines cannot be aligned.
             # Retaining old history and replacing only the live viewport
@@ -540,7 +628,12 @@ class LocalHistoryView:
             # Prefer the fresher capture for the overlapping live viewport.
             merged[new_start : new_start + len(incoming.lines)] = incoming.lines
             lines = tuple(merged)
+            if delta > 0:
+                prompt_context = previous.codex_prompt_context
         if len(lines) > self.history_limit:
+            if prompt_context is not None:
+                prompt_context = codex_prompt_before(
+                    lines, len(lines) - self.history_limit, prompt_context)
             lines = lines[-self.history_limit :]
         if coordinated and delta is not None:
             timeline_end = max(previous.timeline_end, incoming.timeline_end)
@@ -553,6 +646,7 @@ class LocalHistoryView:
             lines=tuple(lines),
             timeline_start=timeline_start,
             timeline_end=timeline_end,
+            codex_prompt_context=prompt_context,
         )
 
     def _remember_content(
@@ -687,7 +781,7 @@ class LocalHistoryView:
         if viewport is not None:
             return SelectionSource(
                 route,
-                self._visible_lines(viewport),
+                self._display_lines(viewport, for_selection=True),
                 0,
                 semantic_open,
             )
@@ -1167,6 +1261,7 @@ class LocalHistoryView:
             self._anchor_rejects += 1
             return HistoryAction()
         viewport.snapshot = stored
+        viewport.__dict__.pop("prompts", None)
         viewport.offset = stored_offset
         viewport.loaded_limit = min(
             self.history_limit,
@@ -1283,11 +1378,24 @@ class LocalHistoryView:
             return None
         return incoming.timeline_end - anchor_end
 
+    def _display_lines(
+        self, viewport: _HistoryViewport, *, for_selection: bool = False,
+    ) -> tuple[bytes, ...]:
+        lines = self._visible_lines(viewport)
+        snapshot = viewport.snapshot
+        start = max(0, len(snapshot.lines) - viewport.offset - snapshot.height)
+        header = viewport.prompt_header(start)
+        if not header:
+            return lines
+        # Reserve the first row without adding it to scroll/anchor coordinates.
+        # Selection shares the paint geometry and skips the duplicate text.
+        return (b"" if for_selection else header,) + lines[:-1]
+
     def overlays(
         self,
     ) -> tuple[tuple[HistorySnapshot, tuple[bytes, ...]], ...]:
         return tuple(
-            (viewport.snapshot, self._visible_lines(viewport))
+            (viewport.snapshot, self._display_lines(viewport))
             for viewport in self.viewports.values()
         )
 

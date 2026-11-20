@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev17] - 2026-11-20
+
+### Fixed
+
+- Show the agent picker and the current Claude, Codex, and Devin history
+  settings when Options opens, including on short terminals.
+- Open the Mode picker when clicking the agent label in the status bar.
+- Keep wrapped web links clickable in Codex local history and show the
+  question that precedes the answer being read.
+
+The SSH display protocol changed. Update Railmux on the client and remote host
+for managed SSH display.
+
 ## [0.4.2.dev16] - 2026-11-20
 
 ### Changed

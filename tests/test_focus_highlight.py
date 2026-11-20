@@ -102,7 +102,7 @@ def test_active_codex_pane_stamps_explicit_preview_transcript_source(
     )
     assert session_id in observed[0][2]
     assert observed[1:] == [
-        ("%9", tmux_server.HISTORY_PROVIDER_OPTION, None),
+        ("%9", tmux_server.HISTORY_PROVIDER_OPTION, "codex"),
     ]
 
 

@@ -1343,11 +1343,11 @@ class App:
             marker,
         )
         provider = self._modes().for_tmux_name(tmux_name) if tmux_name else None
-        if provider == DEVIN_MODE or slot.transport_kind is DisplayTransportKind.NESTED:
+        provider_key = provider.key if provider in (CODEX_MODE, DEVIN_MODE) else None
+        if provider_key is not None or slot.transport_kind is DisplayTransportKind.NESTED:
             tmux_ctl.set_pane_user_option(
-                pane_id, tmux_server.HISTORY_PROVIDER_OPTION,
-                DEVIN_MODE.key if provider == DEVIN_MODE else None,
-            )
+                pane_id, tmux_server.HISTORY_PROVIDER_OPTION, provider_key)
+
 
     def _transcript_source_marker(
         self,
@@ -1427,10 +1427,11 @@ class App:
                 tmux_server.TRANSCRIPT_SOURCE_OPTION, marker,
             )
         commands: list[tuple[str, ...]] = [transcript_command]
-        if self._modes().for_tmux_name(tmux_name) == DEVIN_MODE:
+        provider = self._modes().for_tmux_name(tmux_name)
+        if provider in (CODEX_MODE, DEVIN_MODE):
             commands.append((
                 "set-option", "-p", "-t", pane_id,
-                tmux_server.HISTORY_PROVIDER_OPTION, DEVIN_MODE.key,
+                tmux_server.HISTORY_PROVIDER_OPTION, provider.key,
             ))
         elif slot.transport_kind is DisplayTransportKind.NESTED:
             # A nested display can reuse one wrapper pane for another agent.
@@ -6120,6 +6121,8 @@ class App:
             return True
 
         modal = OptionsModal(
+            agent_label=self._active_mode().label,
+            mode_choices=self._mode_menu_entries,
             layout_policy=self._settings.layout_save_policy,
             yolo_policy=self._settings.codex_yolo_policy,
             update_policy=self._settings.update_policy,
@@ -8527,14 +8530,13 @@ class App:
             self._copy_current_status()
             return
         # F5/F7 are private targets for clickable Mode/Layout status ranges.
-        # Unlike literal m/F8 they cannot be inserted into an active Edit
-        # widget. Keep modal state intact and give an explicit click response.
+        # Keep an open dialog intact and give an explicit click response.
         if key in ("f5", "f7"):
             if self._loop is not None and self._loop.widget is not self._frame:
                 self._show_tmux_feedback(
                     "Close the dialog before changing Mode or Layout.")
             elif key == "f5":
-                self._cycle_mode()
+                self._open_mode_menu()
             else:
                 self._rotate_split()
             return
@@ -8763,7 +8765,7 @@ class App:
         index = (keys.index(current) + 1) % len(keys) if current in keys else 0
         self._switch_mode(keys[index])
 
-    def _open_mode_menu(self) -> None:
+    def _mode_menu_entries(self) -> list[tuple[str, Callable[[], None] | None]]:
         self._mode_availability = self._probe_mode_availability()
         self._last_mode_availability_check = time.monotonic()
         usable = self._cycle_mode_keys()
@@ -8788,6 +8790,25 @@ class App:
                 if mode.key in usable or mode.key in live else None
             )
             items.append((label, action))
+        return items
+
+    def _open_mode_menu(self) -> None:
+        # A status click can reach the controller while an agent has focus.
+        # Bring the sidebar into view before opening its keyboard/mouse menu.
+        owner = getattr(self, "_railmux_pane_id", None)
+        if owner is not None and tmux_ctl.active_pane_id(owner) != owner:
+            if self._agent_workspace().presentation is WorkspacePresentation.COMPACT:
+                focused = self._select_workspace_page(WorkspacePage.SIDEBAR)
+            else:
+                focused = tmux_ctl.select_pane(owner)
+                if focused:
+                    self._set_railmux_focus(True)
+            if not focused:
+                self._set_status("Could not focus the sidebar for Mode.", "warn")
+                return
+
+        items = self._mode_menu_entries()
+        active = self._current_mode_key()
         menu = ContextMenu(
             items, on_close=self._close_modal, title="Mode",
             focused=next(i for i, mode in enumerate(self._modes().modes) if mode.key == active),

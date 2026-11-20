@@ -2387,3 +2387,57 @@ def test_v16_timeline_gap_or_rewind_is_never_spliced():
 
     assert view._merge_content(previous, gap) == gap
     assert view._merge_content(previous, rewind) == rewind
+
+
+def test_codex_history_pins_the_prompt_for_the_visible_turn_without_shifting_links():
+    from railmux.fast_display_input import _pane_rows, _target_in_rows
+    from railmux.fast_display_protocol import ServerMessageDecoder, encode_history_batch
+
+    x, y, width, height = 30, 1, 38, 5
+    view = LocalHistoryView()
+    message, = InputFrameDecoder().feed(view.begin_prefetch(1.0))
+    request_id, _depth = decode_history_prefetch(message.data)
+    url = "https://example.com/a_(test)/full-destination"
+    link_row = f"see \x1b]8;;{url}\x1b\\wrapped link\x1b]8;;\x1b\\".encode()
+    rows = (
+        "› Earlier question".encode(), b"", b"earlier answer", b"detail",
+        b"", "› Latest question".encode(), b"  with more context", b"",
+        b"first answer row", link_row, b"third row", b"fourth row",
+        b"live 1", b"live 2", b"live 3", b"live 4", b"live 5",
+    )
+    snapshot = HistorySnapshot(
+        request_id, "%8", x, y, width, height, lines=rows,
+        codex_prompt_context="",
+    )
+    decoded, = ServerMessageDecoder().feed(
+        encode_history_batch(HistoryBatch(request_id, (snapshot,))))
+    view.accept_prefetch(decoded)
+    wheel = SgrMouseEvent(b"\x1b[<64;34;4M", 64, 34, 4, True)
+
+    for _ in range(4):
+        assert view.wheel(wheel).render_history
+    _, visible = view.overlays()[0]
+    assert b"Latest question with more context" in visible[0]
+    assert visible[1:3] == (b"first answer row", link_row)
+
+    selection = view.selection_source(wheel, (), focused_pane_id="%8")
+    assert selection is not None and selection.rows[0] == b""
+    cells, links = _pane_rows(selection)
+    target = _target_in_rows(cells, 2, 4, route=snapshot, hyperlinks=links)
+    assert target is not None and target.value == url
+
+    for _ in range(3):
+        view.wheel(wheel)
+    visible = view.overlays()[0][1]
+    assert visible[0] == "› Latest question".encode()  # The actual prompt is visible.
+    for _ in range(3):
+        view.wheel(wheel)
+    assert b"Earlier question" in view.overlays()[0][1][0]
+
+    view.cancel()
+    short = replace(snapshot, height=3)
+    message, = InputFrameDecoder().feed(view.begin_prefetch(2.0))
+    request_id, _depth = decode_history_prefetch(message.data)
+    view.accept_prefetch(HistoryBatch(request_id, (replace(short, request_id=request_id),)))
+    assert view.wheel(wheel).render_history
+    assert view.overlays()[0][1][0] == rows[-4]

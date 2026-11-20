@@ -149,3 +149,34 @@ def test_codex_detail_rows_never_exceed_the_pane_width() -> None:
 
     assert rows and all(len(row) <= 40 for row in rows)
     assert all(not row or row.startswith((" ", "•", ">")) for row in rows)
+
+
+def test_codex_links_retain_full_targets_in_text_tables_and_wrapped_code():
+    from railmux.fast_display_server import _extended_pyte, _wrap_transcript_rows
+
+    explicit = "https://example.com/reference_(preview)/one"
+    angled = "https://example.com/reference_(angle)/two"
+    table = "https://example.com/table_(row)/three"
+    fenced = "https://example.com/fenced/release/with/a/very/long/path?q=term#fragment"
+    text = "\n".join([
+        f"See [documentation]({explicit}) and [another](<{angled}>).",
+        "",
+        "| Reference | Status |",
+        "| --- | --- |",
+        f"| [Link]({table}) | current |",
+        "",
+        "```text",
+        fenced,
+        "```",
+    ])
+    record = {"type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "AgentMessage", "content": [{"type": "Text", "text": text}]}}}
+    projected = "".join(render_codex_native([json.dumps(record)], width=34))
+    rows, _, _ = _wrap_transcript_rows(_extended_pyte(__import__("pyte")), projected, 34)
+
+    def linked_rows(url: str) -> int:
+        sequence = f"\x1b]8;;{url}\x1b\\".encode()
+        return sum(sequence in row for row in rows)
+
+    assert all(linked_rows(url) for url in (explicit, angled, table))
+    assert linked_rows(fenced) >= 2

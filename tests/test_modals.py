@@ -309,6 +309,8 @@ def test_layout_save_actions_remain_visible_when_body_height_is_clamped():
 def test_options_support_keyboard_mouse_and_failed_save():
     changes = []
     modal = OptionsModal(
+        agent_label="Codex",
+        mode_choices=lambda: [],
         layout_policy="ask",
         yolo_policy="never",
         update_policy="ask",
@@ -350,6 +352,8 @@ def test_options_support_keyboard_mouse_and_failed_save():
 
 def test_options_render_current_policies_and_action_legend():
     modal = OptionsModal(
+        agent_label="Codex",
+        mode_choices=lambda: [],
         layout_policy="always",
         yolo_policy="ask",
         update_policy="never",
@@ -368,19 +372,20 @@ def test_options_render_current_policies_and_action_legend():
     assert "Layout retention" in text
     assert "Codex auto-run (YOLO)" in text
     assert "Railmux updates" in text
-    assert "Claude managed history" in text
+    assert "Claude history · Local" in text
     assert "Clicked paths" in text
     assert "Inside · managed Vim" in text
-    assert "Railmux managed" in text
     assert "[x] Always" in text
     assert "[x] Ask every time" in text
     assert "[x] Never" in text
-    assert "Space" in text and "selected closes" in text
+    assert "↵" in text and "Select" in text
 
 
-def test_options_keyboard_starts_on_current_layout_choice():
+def test_options_keyboard_keeps_layout_choices_reachable_from_the_first_screen():
     changes = []
     modal = OptionsModal(
+        agent_label="Codex",
+        mode_choices=lambda: [],
         layout_policy="ask",
         yolo_policy="never",
         update_policy="ask",
@@ -394,7 +399,8 @@ def test_options_keyboard_starts_on_current_layout_choice():
         on_close=lambda: None,
     )
 
-    modal.keypress((60, 24), "down")
+    for _ in range(6):
+        modal.keypress((60, 24), "down")
     modal.keypress((60, 24), "enter")
 
     assert changes == ["never"]

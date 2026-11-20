@@ -445,7 +445,7 @@ def _pad_cell(text: str, width: int, alignment: str) -> str:
     return text + " " * spare
 
 
-def _markdown_table(lines: list[str], width: int) -> list[str]:
+def _markdown_table(lines: list[str], width: int, *, inline) -> list[str]:
     """Draw a markdown table as Claude does.
 
     *lines* holds the header, the separator and the body rows; *width* is the
@@ -453,12 +453,12 @@ def _markdown_table(lines: list[str], width: int) -> list[str]:
     wrap inside a box, unless a cell needs more than four rows or the box
     is too wide: then each row is listed as ``header: value`` lines.
     """
-    header = [_markdown_inline(cell) for cell in _table_cells(lines[0])]
+    header = [inline(cell) for cell in _table_cells(lines[0])]
     count = len(header)
     alignments = _table_alignments(lines[1], count)
     body = []
     for line in lines[2:]:
-        cells = [_markdown_inline(cell) for cell in _table_cells(line)]
+        cells = [inline(cell) for cell in _table_cells(line)]
         body.append((cells + [""] * count)[:count])
     hidden = max(0, len(body) - _TABLE_MAX_ROWS)
     body = body[:_TABLE_MAX_ROWS]
@@ -618,7 +618,7 @@ def _markdown_inline(line: str, *, bold: bool = False) -> str:
 
 
 def _markdown_lines(
-    lines: list[str], width: int | None = None, *, inline=None,
+    lines: list[str], width: int | None = None, *, inline=None, literal=None,
 ) -> list[str]:
     """Approximate Claude Code's markdown rendering for sanitized text lines.
 
@@ -637,7 +637,7 @@ def _markdown_lines(
             in_fence = not in_fence
             continue
         if in_fence:
-            rendered.append(line)
+            rendered.append(literal(line) if literal else line)
             continue
         if (
             width is not None
@@ -648,7 +648,7 @@ def _markdown_lines(
             end = index + 1
             while end < len(lines) and lines[end].lstrip().startswith("|"):
                 end += 1
-            rendered.extend(_markdown_table(lines[index - 1:end], width))
+            rendered.extend(_markdown_table(lines[index - 1:end], width, inline=inline))
             index = end
             continue
         heading = _MD_HEADING_RE.match(line)

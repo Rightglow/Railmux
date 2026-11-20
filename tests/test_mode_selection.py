@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from railmux.config import Config
 from railmux.modes import CLAUDE_MODE, CODEX_MODE
 from railmux.models import Project
@@ -286,6 +288,34 @@ def test_mode_menu_can_reopen_a_hidden_provider_with_running_sessions(monkeypatc
     assert app._current_mode_key() == "devin"
     assert app._view_state_data()["mode"] == "codex"
     assert app._running_pane.set_running.call_args.args[0][0].tmux_name == "dv-live"
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_status_mode_click_focuses_the_sidebar_before_showing_picker(monkeypatch, compact):
+    from railmux import tmux_ctl
+    from railmux.ui.workspace import WorkspacePage, WorkspacePresentation
+
+    app = _mode_app(monkeypatch, [], [])
+    app._active_mode_key = "codex"
+    app._railmux_pane_id = "%1"
+    app._frame = object()
+    app._loop = MagicMock(widget=app._frame)
+    app._probe_mode_availability = lambda: frozenset({"codex", "devin"})
+    app._agent_workspace().presentation = (
+        WorkspacePresentation.COMPACT if compact else WorkspacePresentation.WIDE)
+    events = []
+    monkeypatch.setattr(tmux_ctl, "active_pane_id", lambda _owner: "%2")
+    monkeypatch.setattr(tmux_ctl, "select_pane", lambda pane: events.append(pane) or True)
+    app._select_workspace_page = lambda page: events.append(page) or True
+    app._set_railmux_focus = lambda active: events.append(active)
+    app._show_overlay = lambda modal, **_kwargs: events.append(modal)
+
+    app._on_input("f5")
+
+    assert events[:-1] == ([WorkspacePage.SIDEBAR] if compact else ["%1", True])
+    text = b"\n".join(events[-1].render((39, 5)).text)
+    assert b"Mode" in text and b"Codex" in text and b"Devin" in text
+    assert app._current_mode_key() == "codex"
 
 
 def test_warm_switch_restores_rendered_row_and_scroll_without_loading_sessions(monkeypatch):

@@ -242,9 +242,10 @@ shows the current value. Press `Ctrl-U` in the filter editor to clear it, then
 The first Button Bar row keeps Help, Quit, and Detach visible. Select **More**
 to reveal a second row with **Mode**, **Layout**, and **Options**; **Less**
 collapses it. The `m`, `F8`, and `o` keyboard shortcuts remain available while
-the row is hidden. On tmux 3.4 or newer, the bottom-left mode name and layout
-symbol are also clickable, and clicking the message at bottom-right copies its
-complete text to the local clipboard. Expanding the second Button Bar row takes
+the row is hidden. On tmux 3.4 or newer, click the bottom-left agent label
+to open the Mode picker, or click the layout symbol to cycle layouts.
+Clicking the message at bottom-right copies its complete text to the local
+clipboard. Expanding the second Button Bar row takes
 its one display line from the bottom Running section; Projects and Sessions
 keep the same heights.
 
@@ -260,23 +261,25 @@ uses safe responsive defaults for that run without overwriting the saved
 profile. The first Codex auto-run prompt uses the corresponding choices:
 **Always**, **This Railmux run**, **No**, or **Never**.
 
-Press `o`, or select **More → Options**, to change persistent behavior without
-editing TOML. **Layout retention**, **Codex auto-run**, and **Railmux updates**
-support **Always**, **Ask every time**, and **Never**. Claude history on
-managed Windows/SSH displays supports **Railmux managed**, **Ask on first
-scroll**, and **Claude native**. Use arrow keys plus
-`Enter`/`Space`, or click a choice with the mouse. Activating the already
-selected choice confirms and closes the screen; `Esc` or `o` also closes it.
-Layout changes do not resize the current workspace; Codex auto-run changes
-affect new launches, not agents that are already running.
+Press `o`, or select **More → Options**. The first screen shows the **Agent
+mode** picker and the current **Claude history**, **Codex history**, and
+**Devin history** policies. Open any history row and choose **Local** or
+**Native**. Claude also offers **Ask on scroll**. Select **Back to Options**
+to return to the first screen.
+
+Use the arrow keys and `Enter`/`Space`, or click a row. Selecting the active
+policy closes Options. `Esc` and `o` also close it. Below the agent settings,
+**Layout retention**, **Codex auto-run**, and **Railmux updates** offer
+**Always**, **Ask every time**, and **Never**. Layout retention applies on
+exit. Codex auto-run applies to future launches.
 
 ### Switching agent modes
 
 Press `m` to cycle the installed, visible agent CLIs on the machine running
 Railmux. A single installed CLI opens directly and `m` stays in that mode.
-With Codex and Devin, `m` switches between the two. Use **More → Mode** to
-pick a provider directly. Railmux starts in your last mode if it is still
-available.
+With Codex and Devin, `m` switches between the two. Pick a provider directly
+from the bottom-left agent label, **More → Mode**, or **Options → Agent mode**.
+Railmux starts in your last mode if it is still available.
 
 Each mode remembers its project, filters, sidebar cursor, and scroll position
 when you switch. Other agents keep running. Set agent visibility in
@@ -575,6 +578,8 @@ on their next history refresh.
   When tmux has scrollback, Railmux keeps the original terminal styling. When
   Codex uses the alternate screen without tmux scrollback, Railmux renders
   earlier turns from the Codex session file and keeps live viewport colors.
+  While reading an answer in local history, the top row can show its prompt.
+  Wrapped web links retain their full destination in the scrollback.
 - **Devin** defaults to `local` in `railmux ssh`, using Devin's styled tmux
   scrollback. Select `native` to send scroll input through tmux to Devin's
   terminal. Direct POSIX and WSL attaches use tmux and provider scrolling.
@@ -801,7 +806,7 @@ memory and do not change remote tmux's own history limit.
 Claude Code can use either Railmux's smooth read-only transcript or Claude's
 native clickable history. The first upward scroll asks which behavior to use,
 with **Always** and **this time** choices; change it later under **More →
-Options → Claude managed history**.
+Options → Claude history**.
 
 Dragging inside a visible agent pane selects and copies locally without tmux
 copy-mode. Selection stays within that pane and viewport. `Ctrl-B [` remains

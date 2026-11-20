@@ -70,33 +70,49 @@ _FALLBACK_MARKERS = (
     '"thread_rolled_back"', '"session_meta"',
 )
 
+_WEB_URL = rf"https?://[^\s<>\"'`{_CJK_PUNCTUATION}]+"
+_WEB_URL_RE = re.compile(_WEB_URL, re.IGNORECASE)
 _LINK_RE = re.compile(
-    r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)"
-    f"|(https?://[^\\s<>\"'`{_CJK_PUNCTUATION}]+)"
+    rf"\[([^\]\n]+)\]\((?:<({_WEB_URL})>|"
+    r"(https?://(?:[^\s()<>\\]|\\[()]|\([^()\s]*\))+))\)"
+    rf"|({_WEB_URL})",
+    re.IGNORECASE,
 )
-_URL_TRAILING = ".,;:!?)]}"
 _STYLE_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
 
 
-def _codex_inline(line: str, *, bold: bool = False) -> str:
-    """Inline markdown as Codex shows it: a link keeps its URL visible.
+def _web_url(url: str) -> str:
+    return f"{CODEX_CYAN}{_link(url, url)}{FG_DEFAULT}"
 
-    Codex renders ``[label](url)`` as ``label (url)``. Both that URL and a
-    bare one become OSC 8 links so they stay clickable when wrapped.
-    """
+
+def _bare_web_link(match: re.Match[str]) -> str:
+    raw = match.group(0)
+    url = raw.rstrip(".,;:!?")
+    pairs = {")": "(", "]": "[", "}": "{"}
+    while url and url[-1] in pairs:
+        closer = url[-1]
+        if url.count(closer) <= url.count(pairs[closer]):
+            break
+        url = url[:-1]
+    return _web_url(url) + raw[len(url):]
+
+
+def _link_bare_urls(line: str) -> str:
+    return _WEB_URL_RE.sub(_bare_web_link, line)
+
+
+def _codex_inline(line: str, *, bold: bool = False) -> str:
+    """Keep the visible destination and a full OSC 8 URL on every wrapped row."""
     parts: list[str] = []
     last = 0
     for match in _LINK_RE.finditer(line):
         parts.append(_markdown_inline(line[last:match.start()], bold=bold))
         if match.group(1) is not None:
-            url = match.group(2)
             label = _markdown_inline(match.group(1), bold=bold)
-            parts.append(f"{label} ({CODEX_CYAN}{_link(url, url)}{FG_DEFAULT})")
+            target = match.group(2) or re.sub(r"\\([()])", r"\1", match.group(3))
+            parts.append(f"{label} ({_web_url(target)})")
         else:
-            raw = match.group(3)
-            url = raw.rstrip(_URL_TRAILING)
-            parts.append(f"{CODEX_CYAN}{_link(url, url)}{FG_DEFAULT}")
-            parts.append(raw[len(url):])
+            parts.append(_bare_web_link(match))
         last = match.end()
     parts.append(_markdown_inline(line[last:], bold=bold))
     return "".join(parts)
@@ -296,7 +312,7 @@ class _Renderer:
         if not text or text.lstrip().startswith(_CODEX_SYNTHETIC_PREFIXES):
             return
         self.start_turn()
-        self._block(_PROMPT, text.splitlines())
+        self._block(_PROMPT, [_link_bare_urls(line) for line in text.splitlines()])
 
     def agent(self, text: str) -> None:
         self.flush()
@@ -306,7 +322,7 @@ class _Renderer:
         width = None if self.width is None else self.width - 2
         rows: list[str] = []
         for index, line in enumerate(
-            _markdown_lines(lines, width, inline=_codex_inline)
+            _markdown_lines(lines, width, inline=_codex_inline, literal=_link_bare_urls)
         ):
             lead = f"{_BULLET} " if index == 0 else "  "
             plain = _STYLE_RE.sub("", line)

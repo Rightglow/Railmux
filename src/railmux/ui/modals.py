@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import urwid
@@ -809,6 +810,31 @@ class OptionsModal(urwid.WidgetWrap):
         ("ask", "Ask every time"),
         ("never", "Never"),
     )
+    _HISTORY_TITLES = {
+        "claude_history": "Claude history",
+        "codex_history": "Codex history",
+        "devin_history": "Devin history",
+    }
+    _HISTORY_LABELS = {
+        "local": "Local",
+        "native": "Native",
+        "ask": "Ask on scroll",
+    }
+    _HISTORY_DETAILS = {
+        "claude_history": {
+            "local": "use Railmux scrollback",
+            "ask": "choose on first upward scroll",
+            "native": "use Claude Code's clickable history",
+        },
+        "codex_history": {
+            "local": "styled scrollback with transcript fallback",
+            "native": "use Codex scrolling on its alternate screen",
+        },
+        "devin_history": {
+            "local": "styled tmux scrollback",
+            "native": "use native terminal scrolling",
+        },
+    }
     _PATH_OPEN_LABELS = (
         ("internal", "Inside · managed Vim"),
         ("ask", "Ask every time"),
@@ -823,6 +849,8 @@ class OptionsModal(urwid.WidgetWrap):
     def __init__(
         self,
         *,
+        agent_label: str,
+        mode_choices: Callable[[], list[tuple[str, Callable[[], None] | None]]],
         layout_policy: str,
         yolo_policy: str,
         update_policy: str,
@@ -840,6 +868,7 @@ class OptionsModal(urwid.WidgetWrap):
         on_devin_history_policy: Callable[[str], bool] | None = None,
     ) -> None:
         self._on_close = on_close
+        self._mode_choices = mode_choices
         self._policies = {
             "layout": layout_policy,
             "yolo": yolo_policy,
@@ -859,13 +888,27 @@ class OptionsModal(urwid.WidgetWrap):
             "path_open": on_path_open_policy,
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
+        self._history_links: dict[str, urwid.Button] = {}
         rows: list[urwid.Widget] = [
+            self._link(f"Agent mode · {agent_label}", self._open_mode_page),
+        ]
+        for group, details in self._HISTORY_DETAILS.items():
+            labels = tuple((value, self._HISTORY_LABELS[value]) for value in details)
+            self._build_group(group, details, labels=labels)
+            link = urwid.Button(
+                self._history_link_label(group),
+                on_press=lambda _button, group=group: self._open_history_page(group),
+            )
+            self._history_links[group] = link
+            rows.append(urwid.AttrMap(link, "body", "focus"))
+        rows.extend([
+            urwid.Divider(),
             urwid.Text(("title", "Layout retention")),
             urwid.Text(
                 "Saved when Railmux exits; the current workspace is not "
                 "resized. No restart needed."
             ),
-        ]
+        ])
         rows.extend(self._build_group(
             "layout",
             {
@@ -908,64 +951,6 @@ class OptionsModal(urwid.WidgetWrap):
         ))
         rows.extend([
             urwid.Divider(),
-            urwid.Text(("title", "Claude managed history")),
-            urwid.Text(
-                "Choose Railmux-managed or Claude's clickable history. "
-                "Managed displays adopt it on the next refresh."
-            ),
-        ])
-        rows.extend(self._build_group(
-            "claude_history",
-            {
-                "local": "smooth local history managed by Railmux",
-                "ask": "ask on the first upward scroll",
-                "native": "Claude Code history; clickable but may redraw slowly",
-            },
-            labels=(
-                ("local", "Railmux managed"),
-                ("ask", "Ask on first scroll"),
-                ("native", "Claude native"),
-            ),
-        ))
-        rows.extend([
-            urwid.Divider(),
-            urwid.Text(("title", "Codex managed history")),
-            urwid.Text(
-                "Choose Railmux-managed or Codex's own scrolling in managed "
-                "displays such as railmux ssh. Adopted on the next refresh."
-            ),
-        ])
-        rows.extend(self._build_group(
-            "codex_history",
-            {
-                "local": "styled pane history with rollout fallback",
-                "native": "Codex's own transcript; each scroll goes to Codex",
-            },
-            labels=(
-                ("local", "Railmux managed"),
-                ("native", "Codex native"),
-            ),
-        ))
-        rows.extend([
-            urwid.Divider(),
-            urwid.Text(("title", "Devin managed history")),
-            urwid.Text(
-                "Applies in railmux ssh on the next history refresh."
-            ),
-        ])
-        rows.extend(self._build_group(
-            "devin_history",
-            {
-                "local": "smooth scrollback with Devin's terminal styling",
-                "native": "use tmux and Devin's own terminal scrolling",
-            },
-            labels=(
-                ("local", "Railmux managed"),
-                ("native", "Native scrolling"),
-            ),
-        ))
-        rows.extend([
-            urwid.Divider(),
             urwid.Text(("title", "Clicked paths")),
             urwid.Text(
                 "Choose whether recognized paths open inside Railmux or on "
@@ -992,27 +977,61 @@ class OptionsModal(urwid.WidgetWrap):
                  "or resets, run railmux config outside the workspace.")
             ),
         ])
-        self._walker = urwid.SimpleFocusListWalker(rows)
-        initial_focus = next(
-            index for index, row in enumerate(rows)
-            if isinstance(row, _OptionRow)
-            and row.value == layout_policy
-            and row in self._option_rows["layout"]
-        )
-        self._walker.set_focus(initial_focus)
-        self._listbox = urwid.ListBox(self._walker)
-        self._footer = urwid.Pile([
-            urwid.Divider(),
-            _action_legend([
-                ("↑↓", "navigate"),
-                ("↵ / Space", "apply; selected closes"),
-                ("o / Esc", "close"),
-            ], align="center", wrap="space"),
-        ])
-        frame = urwid.Frame(
-            body=self._listbox, footer=self._footer, focus_part="body")
-        super().__init__(_reading_modal_box(frame, title="Options"))
+        self._main_list = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
+        footer = urwid.Text([
+            ("modal_key", "↑↓"), " Move  ",
+            ("modal_key", "↵"), " Select  ",
+            ("modal_key", "Esc"), " Close",
+        ], align="center")
+        self._frame = urwid.Frame(
+            body=self._main_list, footer=footer, focus_part="body")
+        super().__init__(_reading_modal_box(self._frame, title="Options"))
         self._sync_rows()
+
+    @staticmethod
+    def _link(label: str, callback: Callable[[], None]) -> urwid.AttrMap:
+        return urwid.AttrMap(
+            urwid.Button(label, on_press=lambda _button: callback()),
+            "body", "focus",
+        )
+
+    def _history_link_label(self, group: str) -> str:
+        policy = self._HISTORY_LABELS[self._policies[group]]
+        return f"{self._HISTORY_TITLES[group]} · {policy}"
+
+    def _open_page(self, title: str, rows: list[urwid.Widget]) -> None:
+        self._frame.body = urwid.ListBox(urwid.SimpleFocusListWalker([
+            self._link("Back to Options", self._show_main),
+            urwid.Text(("title", title)),
+            *rows,
+        ]))
+
+    def _show_main(self) -> None:
+        self._frame.body = self._main_list
+
+    def _open_mode_page(self) -> None:
+        rows: list[urwid.Widget] = []
+        for label, switch in self._mode_choices():
+            rows.append(
+                urwid.Text(("dim", label)) if switch is None
+                else self._link(label, partial(self._activate_mode, switch))
+            )
+        self._open_page("Agent mode", rows)
+
+    def _activate_mode(self, switch: Callable[[], None]) -> None:
+        self._on_close()
+        switch()
+
+    def _open_history_page(self, group: str) -> None:
+        scope = (
+            "Applies in railmux ssh."
+            if group == "devin_history"
+            else "Applies in railmux ssh and managed Windows displays."
+        )
+        self._open_page(
+            self._HISTORY_TITLES[group],
+            [urwid.Text(("dim", scope)), *self._option_rows[group]],
+        )
 
     def _build_group(
         self,
@@ -1041,6 +1060,8 @@ class OptionsModal(urwid.WidgetWrap):
             return
         self._policies[group] = policy
         self._sync_rows()
+        if group in self._history_links:
+            self._history_links[group].set_label(self._history_link_label(group))
 
     def _sync_rows(self) -> None:
         for group, rows in self._option_rows.items():
@@ -1056,10 +1077,7 @@ class OptionsModal(urwid.WidgetWrap):
             self._on_close()
             return None
         if key in self._NAV_KEYS or key in ("enter", " "):
-            inner_cols = _reading_modal_inner_cols(size[0])
-            footer_rows = self._footer.rows((inner_cols,))
-            inner_rows = max(1, size[1] - 2 - footer_rows)
-            self._listbox.keypress((inner_cols, inner_rows), key)
+            super().keypress(size, key)
             return None
         return key
 

@@ -677,7 +677,16 @@ turns; transcript locators accept those names, and the helper prepends the
 same thread's earlier segments under the same sessions root, opened with the
 same owned-regular-file rule, within the shared transcript byte budget. Their
 rendering is cached by exact file identity because finished segments do not
-change.
+change. Web destinations are kept on wrapped links in prose, tables, and
+literal code rows. OSC 8 carries the full URL on each rendered fragment.
+
+Protocol v18 lets a Codex local-history snapshot carry the preceding prompt
+when its bounded suffix starts in an answer. The shared history controller
+prefers the prompt preceding its top visible turn and reserves a row for an
+abbreviated label. Prompt text already at the top suppresses the label.
+Viewport alignment and history coordinates still use the original rows.
+Selection maps through the same visible geometry and skips the repeated
+prompt label.
 
 ### SSH compatibility and installation handshake
 
@@ -1645,8 +1654,10 @@ On tmux 3.4+, `MouseDown1Status` is part of the same lease. Closed user ranges
 route compact `R`/`1`/`2` controls to exact pane IDs and route Mode, Layout,
 and status-copy actions to private F5/F7/F6 inputs on the controller. The
 private keys are handled before modal dispatch, so a click cannot type `m` into
-an active editor or mutate layout behind a dialog. Action success is visible
-through the changed label/layout plus a transient acknowledgement. Status-copy
+an active editor or mutate layout behind a dialog. Mode opens the same
+picker as the button bar. When the status click comes from an agent pane,
+Railmux first focuses the sidebar through its compact-page or wide-pane
+focus route. The `m` shortcut still cycles the available modes. Status-copy
 acknowledgement temporarily replaces only status-right with its own success
 colour, then restores the exact copied tip/info/warning/error; it does not
 mutate the copied source. Older tmux keeps

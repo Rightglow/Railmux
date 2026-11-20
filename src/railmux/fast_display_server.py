@@ -85,7 +85,11 @@ from railmux.fast_display_protocol import (
     encode_path_open_result,
     encode_update,
 )
-from railmux.fast_display_history import HistoryCaptureJob, HistoryCaptureWorker
+from railmux.fast_display_history import (
+    HistoryCaptureJob,
+    HistoryCaptureWorker,
+    codex_prompt_before,
+)
 from railmux.terminal_screen import (
     HyperlinkTrackingStream,
     Osc52ClipboardDecoder as _Osc52ClipboardDecoder,
@@ -253,6 +257,7 @@ class _PaneGeometry:
     route_generation: int = 0
     canonical_history: bool = False
     native_history: bool = False
+    codex_pane: bool = False
 
 
 @dataclass
@@ -933,6 +938,10 @@ def _list_agent_panes(
                 transcript_locator = opened[0]
                 os.close(opened[1])
         history_marker = fields[15]
+        codex_pane = fields[19] == "codex" or (
+            transcript_backed and transcript_locator is not None
+            and transcript_locator.provider == "codex"
+        )
         devin_pane = fields[19] == "devin"
         native_history = devin_pane and devin_history_policy == "native"
         route_server_identity = (
@@ -973,7 +982,7 @@ def _list_agent_panes(
                         else None
                     ),
                     claude_history_policy=claude_history_policy,
-                    codex_history_policy=codex_history_policy,
+                    codex_history_policy=codex_history_policy if codex_pane else "native",
                     history_generation=(
                         # The exact pane birth is carried separately in
                         # route_generation. Invalidate this pane's overlay
@@ -987,6 +996,7 @@ def _list_agent_panes(
                     ),
                     canonical_history=canonical_history,
                     native_history=native_history,
+                    codex_pane=codex_pane,
                 ),
             )
         )
@@ -2110,7 +2120,7 @@ def _capture_pane_history(
             pane.width,
             allow_stale=allow_stale_transcript,
         )
-    source_lines: Sequence[tuple[bytes, bool]]
+    source_lines: Sequence[bytes]
     transcript_used = transcript_entry is not None and bool(transcript_entry.rows)
     if transcript_used:
         assert transcript_entry is not None
@@ -2156,6 +2166,13 @@ def _capture_pane_history(
     else:
         timeline_end = max(timeline_end, len(lines))
         timeline_start = timeline_end - len(lines)
+    prompt_context = None
+    if pane.codex_history_policy == "local" and (
+        pane.codex_pane or transcript_provider == "codex"
+    ):
+        history = transcript_lines if transcript_used else rendered_raw[:-pane.height]
+        first = max(0, len(history) + len(current_raw) - len(lines))
+        prompt_context = codex_prompt_before(history, first) if first else ""
     return HistorySnapshot(
         request_id=request_id,
         pane_id=pane.pane_id,
@@ -2185,6 +2202,7 @@ def _capture_pane_history(
         route_generation=pane.route_generation,
         timeline_start=timeline_start,
         timeline_end=timeline_end,
+        codex_prompt_context=prompt_context,
     )
 
 

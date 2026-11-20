@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+from railmux.config import Config
 from railmux.settings import LayoutProfile, Settings
 from railmux.ui.app import App
 from railmux.ui.modals import OptionsModal
@@ -156,14 +157,67 @@ def test_persistent_policy_labels_distinguish_never_from_one_time_no():
     assert App._policy_label("never") == "Never"
 
 
-def test_codex_and_devin_history_options_persist_independently(tmp_path, monkeypatch):
+def _option_text(modal, size: tuple[int, int]) -> str:
+    return "\n".join(row.decode() for row in modal.render(size, focus=True).text)
+
+
+def _click_option(modal, size: tuple[int, int], label: str) -> None:
+    line = next(i for i, text in enumerate(_option_text(modal, size).splitlines())
+                if label in text)
+    assert modal.mouse_event(size, "mouse press", 1, 5, line, True)
+
+
+def test_history_options_show_on_small_first_screen_and_save_independently(
+    tmp_path, monkeypatch,
+):
     app = _app(tmp_path, monkeypatch)
+    app._active_mode_key = "devin"
     app._open_options_modal()
     modal = app._open_full_sidebar_modal.call_args.args[0]
-    assert app._settings.terminal_history_policies() == ("native", "local")
+    size = (38, 13)
+    text = _option_text(modal, size)
+    assert all(label in text for label in (
+        "Agent mode · Devin", "Claude history · Ask on scroll",
+        "Codex history · Native", "Devin history · Local",
+    ))
 
-    modal._option_rows["devin_history"][1].keypress((60,), "enter")
+    _click_option(modal, size, "Devin history ·")
+    assert "Applies in railmux ssh." in _option_text(modal, size)
+    _click_option(modal, size, "Native —")
     assert app._settings.terminal_history_policies() == ("native", "native")
 
-    modal._option_rows["codex_history"][0].keypress((60,), "enter")
+    _click_option(modal, size, "Back to Options")
+    assert "Devin history · Native" in _option_text(modal, size)
+    _click_option(modal, size, "Codex history ·")
+    _click_option(modal, size, "styled scrollback")
     assert app._settings.terminal_history_policies() == ("local", "native")
+
+    _click_option(modal, size, "Back to Options")
+    _click_option(modal, size, "Claude history ·")
+    _click_option(modal, size, "use Railmux scrollback")
+    assert app._settings.claude_history_policy == "local"
+    assert app._settings.terminal_history_policies() == ("local", "native")
+
+
+def test_agent_mode_option_opens_shared_picker_and_switches_with_keyboard(
+    tmp_path, monkeypatch,
+):
+    app = _app(tmp_path, monkeypatch)
+    app._active_mode_key = "devin"
+    app._config = Config()
+    app._running = {}
+    app._probe_mode_availability = lambda: frozenset({"codex", "devin"})
+    actions = []
+    app._close_options_modal = lambda: actions.append("closed")
+    app._switch_mode = lambda key: actions.append(key)
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+    size = (38, 13)
+
+    modal.keypress(size, "enter")
+    text = _option_text(modal, size)
+    assert "Claude Code · Unavailable" in text
+    assert "● Devin" in text
+    modal.keypress(size, "down")
+    modal.keypress(size, "enter")
+    assert actions == ["closed", "codex"]
