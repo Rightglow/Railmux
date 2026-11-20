@@ -221,7 +221,7 @@ def test_agent_context_produces_different_line():
 def test_mode_binding_resolves_to_compatibility_action():
     action = action_for("m", CTX_PROJECTS)
 
-    assert action == "_toggle_codex_mode"
+    assert action == "_cycle_mode"
     assert callable(getattr(App, action))
 
 

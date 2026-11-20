@@ -221,3 +221,11 @@ def test_foreign_pane_focus_only_selects_a_visible_project(monkeypatch):
     running.project = _project("shared", codex_only=True)
     app._sync_sidebar_to_agent_project(running.tmux_name)
     assert app._selected_project is shared
+
+
+def test_sidebar_mode_key_cycles_all_bundled_providers(monkeypatch):
+    app = _mode_app(monkeypatch, [], [])
+    app._loop = None
+    for expected in ("codex", "devin", "claude"):
+        app._on_input("m")
+        assert app._current_mode_key() == expected

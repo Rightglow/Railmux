@@ -71,7 +71,7 @@ BINDINGS: list[Binding] = [
     Binding(("d", "D"), "d", "del", "_on_delete_session",
             contexts=(CTX_SESSIONS, CTX_RUNNING)),
     # All three — cycle through the ordered agent-mode registry.
-    Binding(("m", "M"), "m", "Mode", "_toggle_codex_mode",
+    Binding(("m", "M"), "m", "Mode", "_cycle_mode",
             contexts=_ALL_CTX, show_in_hint=False),
     Binding(("o", "O"), "o", "Options", "_open_options_modal",
             contexts=_ALL_CTX, show_in_hint=False),

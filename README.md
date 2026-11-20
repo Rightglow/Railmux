@@ -281,7 +281,7 @@ than stopping the workspace.
 
 ### Devin preview
 
-In `0.4.2.dev14`, install and sign in to Devin CLI on the machine where the
+In `0.4.2.dev15`, install and sign in to Devin CLI on the machine where the
 agent runs. Use Devin CLI 3000.14.30821 or newer. In Railmux, press `m` until the
 status bar says **Devin**. Use **+ New project** for a new directory, `n` for a
 new conversation, or `Enter` on an existing session to reopen it. Use **Running**
