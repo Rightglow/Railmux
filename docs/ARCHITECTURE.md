@@ -395,6 +395,11 @@ Wide glyphs consume their declared terminal width exactly once. The renderer
 skips a physical continuation cell only when it is empty or repeats the wide
 glyph's data. Different content from a partial repaint is preserved, and a
 legitimate adjacent CJK glyph remains distinct.
+Faint intensity (`SGR 2`) survives parsing, styled-history capture, and row
+serialization independently of bold. `SGR 22` clears both intensities, and
+`SGR 0` restores the default style; palette and RGB operands do not change
+intensity. This keeps provider line numbers and queued messages dim without
+substituting a fixed grey for the user's terminal foreground.
 On the managed-Windows client, a validated Windows Terminal marker enables one
 local synchronized-output boundary around every complete SSH repaint. Row
 cleanup, replacement content, overlays, status, and the final authoritative

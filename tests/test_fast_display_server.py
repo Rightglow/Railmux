@@ -2371,6 +2371,47 @@ def test_server_terminal_model_round_trips_indexed_colours_for_local_palette():
     assert b"38;2;0;205;0" not in rendered
 
 
+@pytest.mark.parametrize("reset", [b"\033[22m", b"\033[0m", b"\033[m"])
+def test_server_terminal_model_preserves_dim_and_resets_intensity(reset):
+    terminal = fast_display_server._extended_pyte(pytest.importorskip("pyte"))
+    screen = terminal.Screen(80, 1)
+    stream = fast_display_server.HyperlinkTrackingStream(
+        screen, terminal.ByteStream(screen)
+    )
+    # Line numbers and queued messages use faint default foreground. Keep
+    # bold independent, OSC 8 intact, and colour operands out of SGR state.
+    stream.feed(b"\033[1;2m42 \033[22mnormal \033[2m")
+    stream.feed(b"\033]8;;https://example.com\033\\queued message\033]8;;\033\\")
+    stream.feed(reset + b" ordinary \033[38;5;2mG\033[38;2;2;22;0mR")
+    rendered = render_rows(screen)[0]
+    copy = terminal.Screen(80, 1)
+    fast_display_server.HyperlinkTrackingStream(
+        copy, terminal.ByteStream(copy)
+    ).feed(rendered)
+
+    assert copy.buffer[0][0].dim and copy.buffer[0][0].bold
+    assert not copy.buffer[0][3].dim and not copy.buffer[0][3].bold
+    assert copy.buffer[0][10].dim
+    assert copy.buffer[0][10].hyperlink == "https://example.com"
+    assert not copy.buffer[0][25].dim
+    assert not copy.buffer[0][34].dim
+    assert not copy.buffer[0][35].dim
+    assert copy.buffer[0] == screen.buffer[0]
+
+
+def test_server_terminal_model_dim_only_repaint_changes_serialized_row():
+    terminal = fast_display_server._extended_pyte(pytest.importorskip("pyte"))
+    screen = terminal.Screen(20, 1)
+    stream = terminal.ByteStream(screen)
+    stream.feed(b"queued message")
+    ordinary = render_rows(screen)
+    stream.feed(b"\r\033[2mqueued message")
+    dimmed = render_rows(screen)
+    assert dimmed != ordinary
+    stream.feed(b"\r\033[22mqueued message")
+    assert render_rows(screen) == ordinary
+
+
 def test_server_terminal_model_ignores_private_device_status_queries():
     pyte = pytest.importorskip("pyte")
     terminal = fast_display_server._extended_pyte(pyte)

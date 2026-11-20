@@ -85,6 +85,7 @@ class _HyperlinkChar(NamedTuple):
     reverse: bool = False
     blink: bool = False
     hyperlink: str | None = None
+    dim: bool = False
 
 
 def _hyperlink_char(char: object, hyperlink: str | None) -> _HyperlinkChar:
@@ -99,6 +100,7 @@ def _hyperlink_char(char: object, hyperlink: str | None) -> _HyperlinkChar:
         reverse=char.reverse,
         blink=char.blink,
         hyperlink=hyperlink,
+        dim=getattr(char, "dim", False),
     )
 
 
@@ -309,7 +311,8 @@ class _ExtendedScreenMixin:
         super().report_device_status(mode)
 
     def select_graphic_rendition(self, *attrs: int) -> None:
-        """Retain 256-colour indices instead of baking in pyte's palette."""
+        """Retain faint intensity and palette indices omitted by stock pyte."""
+        dim = getattr(self.cursor.attrs, "dim", False) if attrs else False
         super().select_graphic_rendition(*attrs)
         self.cursor.attrs = _hyperlink_char(
             self.cursor.attrs,
@@ -323,6 +326,13 @@ class _ExtendedScreenMixin:
             index += 1
             if attr == 0:
                 indexed.clear()
+                dim = False
+                continue
+            elif attr == 2:
+                dim = True
+                continue
+            elif attr == 22:
+                dim = False
                 continue
             if 30 <= attr <= 37 or attr == 39 or 90 <= attr <= 97:
                 indexed.pop("fg", None)
@@ -349,6 +359,7 @@ class _ExtendedScreenMixin:
             self.cursor.attrs = self.cursor.attrs._replace(
                 **{key: f"ansi256:{colour}" for key, colour in indexed.items()}
             )
+        self.cursor.attrs = self.cursor.attrs._replace(dim=dim)
 
     def restore_cursor(self) -> None:
         super().restore_cursor()
@@ -417,6 +428,7 @@ def _style(char: object) -> bytes:
     codes: list[str] = ["0"]
     for enabled, code in (
         (char.bold, "1"),
+        (getattr(char, "dim", False), "2"),
         (char.italics, "3"),
         (char.underscore, "4"),
         (char.blink, "5"),
@@ -440,12 +452,14 @@ def _style_key(char: object) -> tuple[object, ...]:
         char.strikethrough,
         char.reverse,
         char.blink,
+        getattr(char, "dim", False),
     )
 
 
 _DEFAULT_STYLE_KEY = (
     "default",
     "default",
+    False,
     False,
     False,
     False,

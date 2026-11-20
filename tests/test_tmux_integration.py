@@ -851,8 +851,11 @@ def _script_command(command: str) -> list[str]:
     return ["script", "-qefc", command, "/dev/null"]
 
 
-def test_real_tmux_parameterized_scroll_matches_headless_screen():
+@pytest.mark.parametrize("dim", [False, True])
+def test_real_tmux_parameterized_scroll_matches_headless_screen(dim):
     """The advertised xterm client may use CSI S/T; its model must agree."""
+    from railmux.terminal_screen import render_rows
+
     if shutil.which("tmux") is None:
         pytest.skip("tmux is not installed")
     pyte = pytest.importorskip("pyte")
@@ -871,10 +874,12 @@ def test_real_tmux_parameterized_scroll_matches_headless_screen():
     env["TERM"] = "xterm-256color"
     client = None
     try:
+        intensity = "\033[2m" if dim else ""
         program = (
             "import sys,time; time.sleep(.5); "
             "sys.stdout.write('\\x1b[2J\\x1b[H' + "
-            "''.join(str(i) * 20 for i in range(1, 9))); "
+            f"{intensity!r} + '1' * 20 + '2' * 20 + "
+            "'\\x1b[22m' + ''.join(str(i) * 20 for i in range(3, 9))); "
             "sys.stdout.flush(); time.sleep(.5); "
             "sys.stdout.write('\\x1b[2;7r\\x1b[2S'); "
             "sys.stdout.flush(); time.sleep(5)"
@@ -930,6 +935,15 @@ def test_real_tmux_parameterized_scroll_matches_headless_screen():
         terminal.ByteStream(screen).feed(bytes(raw))
 
         assert [row.rstrip() for row in screen.display[:len(captured)]] == captured
+        assert screen.buffer[0][0].dim is dim
+        assert not screen.buffer[1][0].dim
+        replay = terminal.Screen(20, 8)
+        replay_stream = terminal.ByteStream(replay)
+        for index, row in enumerate(render_rows(screen)):
+            replay_stream.feed(f"\033[{index + 1};1H".encode() + row)
+        assert replay.display == screen.display
+        assert replay.buffer[0][0].dim is dim
+        assert not replay.buffer[1][0].dim
 
         stock_screen = pyte.Screen(20, 8)
         try:
