@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-21
+
+### Added
+
+- Preview Devin CLI on POSIX and WSL. Start and resume conversations, return
+  to running sessions, and configure Devin's live SSH scrolling independently.
+- Choose an installed agent from the status bar or Options, with each mode
+  retaining its sidebar view.
+- Enable optional Railmux-managed Codex history. It preserves wrapped links,
+  follows rewinds, and keeps the user prompt at the top of the history view.
+
+### Fixed
+
+- Preserve the ordering of Codex async question replies and answers while
+  scrolling, including when the prompt is clipped.
+- Keep SSH and managed Windows terminal styling, including faint text.
+
+Update the SSH display client and the agent host to use the same protocol.
+Ordinary automatic updates continue to select stable releases.
+
 ## [0.4.2.dev19] - 2026-11-21
 
 ### Fixed
@@ -3470,7 +3490,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev19...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2
 [0.4.2.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev18...v0.4.2.dev19
 [0.4.2.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev17...v0.4.2.dev18
 [0.4.2.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev13...v0.4.2.dev15

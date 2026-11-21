@@ -39,7 +39,24 @@ def test_latest_release_returns_only_newer_stable_version(monkeypatch):
     assert respond("1.2.4") == "1.2.4"
     assert respond("1.2.3") is None
     assert respond("1.2.4rc1") is None
+    assert respond("1.2.4.dev19") is None
     assert respond("not-a-version") is None
+
+
+@pytest.mark.parametrize("preview", ["0.5.0.dev1", "0.5.0rc1"])
+def test_automatic_update_ignores_preview_builds(monkeypatch, preview):
+    monkeypatch.delenv("RAILMUX_WINDOWS_RUNTIME", raising=False)
+    monkeypatch.setattr(self_update, "__version__", "0.4.2")
+    monkeypatch.setattr(
+        self_update.urllib.request, "urlopen",
+        lambda *_args, **_kwargs: _Response({"info": {"version": preview}}),
+    )
+    install = MagicMock()
+    monkeypatch.setattr(self_update.subprocess, "run", install)
+
+    self_update.maybe_upgrade_before_launch((), MagicMock(update_policy="always"))
+
+    install.assert_not_called()
 
 
 def test_latest_release_failure_is_silent(monkeypatch):
