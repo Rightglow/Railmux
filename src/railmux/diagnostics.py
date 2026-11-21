@@ -503,6 +503,13 @@ def _ssh_display_text(diagnostic: SshDisplayDiagnostic) -> str:
     stats = diagnostic.stats or SshDisplayDiagnostic("none").stats
     if stats is None:
         return f"{identity}; {result}; age={diagnostic.age or 'unknown'}"
+    timing_text = "".join(
+        f", {label}={value}" for label, value in (
+            ("first_frame_ms", stats.first_frame_ms),
+            ("first_history_paint_ms", stats.first_history_paint_ms),
+            ("reconnect_first_frame_ms", stats.reconnect_first_frame_ms),
+        ) if value is not None
+    )
     return (
         f"{identity}; {result}; age={diagnostic.age or 'unknown'}; "
         f"frames={stats.frames}, rows={stats.painted_rows}, "
@@ -510,7 +517,7 @@ def _ssh_display_text(diagnostic: SshDisplayDiagnostic) -> str:
         f"{stats.reconnect_attempts}, history_prefetch={stats.history_prefetch_requests}, "
         f"history_deep={stats.history_deep_requests}, "
         f"history_timeouts={stats.history_timeouts}, "
-        f"anchor_rejects={stats.history_anchor_rejects}"
+        f"anchor_rejects={stats.history_anchor_rejects}{timing_text}"
     )
 
 

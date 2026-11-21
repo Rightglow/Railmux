@@ -389,6 +389,7 @@ def _edit_history_lines(
         setting="managed history lines",
     )
     _write(stdout, f"Current: {config.history_lines}")
+    _write(stdout, "This capacity belongs to the machine displaying Railmux.")
     _write(stdout)
     _write(stdout, "Enter 2000-20000, r to reset, b to go back, or q to exit.")
     _render_feedback(stdout, feedback)

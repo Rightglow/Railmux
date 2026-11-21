@@ -36,6 +36,8 @@ _OUTCOMES = frozenset(
 class SshDisplayStats:
     reached_first_frame: bool = False
     first_frame_ms: int | None = None
+    first_history_paint_ms: int | None = None
+    reconnect_first_frame_ms: int | None = None
     duration_ms: int | None = None
     frames: int = 0
     keyframes: int = 0
@@ -226,6 +228,8 @@ def read_diagnostic(*, now: float | None = None) -> SshDisplayDiagnostic:
     stats = SshDisplayStats(
         reached_first_frame=raw_stats.get("reached_first_frame") is True,
         first_frame_ms=_optional_ms(raw_stats.get("first_frame_ms")),
+        first_history_paint_ms=_optional_ms(raw_stats.get("first_history_paint_ms")),
+        reconnect_first_frame_ms=_optional_ms(raw_stats.get("reconnect_first_frame_ms")),
         duration_ms=_optional_ms(raw_stats.get("duration_ms")),
         frames=_bounded_nonnegative(raw_stats.get("frames")),
         keyframes=_bounded_nonnegative(raw_stats.get("keyframes")),

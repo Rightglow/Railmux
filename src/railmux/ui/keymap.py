@@ -55,6 +55,10 @@ BINDINGS: list[Binding] = [
     # All sidebar lists support in-pane filtering.
     Binding(("/",), "/", "filter",
             contexts=_ALL_CTX),
+    Binding(("g", "G"), "g", "Quick Open", "_open_quick_open",
+            contexts=_ALL_CTX),
+    Binding(("a", "A"), "a", "agents", "_toggle_running_scope",
+            contexts=(CTX_RUNNING,)),
     # All three — _open_info_modal adapts to the focused pane.
     Binding(("i", "I"), "i", "info", "_open_info_modal",
             contexts=_ALL_CTX),

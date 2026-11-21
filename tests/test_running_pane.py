@@ -358,7 +358,7 @@ def test_running_select_codex_preserves_projects_and_sessions_highlight(monkeypa
     app._favorites.get_ids.return_value = set()
     app._running = {sess_id: _Running(
         key=sess_id, tmux_name="cx-abc", label="myproj/Codex chat",
-        project=running_proj)}
+        project=running_proj, session_type="codex")}
     app._projects_pane = ProjectsPane([view_proj], on_select=lambda p: None)
     app._sessions_pane = SessionsPane(on_select=lambda *a, **k: None)
     app._codex_index = MagicMock()

@@ -333,6 +333,8 @@ def test_doctor_json_uses_versioned_redacted_snapshot(monkeypatch, tmp_path):
     assert set(payload["ssh_display"]["stats"]) == {
         "duration_ms",
         "first_frame_ms",
+        "first_history_paint_ms",
+        "reconnect_first_frame_ms",
         "frames",
         "history_anchor_rejects",
         "history_deep_requests",

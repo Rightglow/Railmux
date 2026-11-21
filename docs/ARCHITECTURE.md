@@ -378,6 +378,9 @@ the newest attach owns an opaque internal token, so an older client's final
 write cannot overwrite it. Doctor exposes only package/protocol versions,
 coarse age, bounded counters, and a fixed outcome. It never records the SSH
 destination, arguments, session/pane identity, content, paths, or raw errors.
+Timing values include attach-to-first-paint, first handled local-history
+gesture to overlay write, and reconnect initiation to the first new frame
+written to the terminal. They are display-client observations.
 An `in_progress` record is not treated as a lifecycle authority: it may denote
 a live connection or one that ended before recording its outcome.
 
@@ -1299,6 +1302,15 @@ properties exist only as compatibility shims backed by the primary slot.
 An empty Projects or Sessions view must name the currently browsed provider and
 offer its relevant new-project/session action; it must never retain content from
 the previously browsed provider.
+
+`g` opens Quick Open across the agents. Running choices carry the exact
+in-memory binding from the registry. Saved choices use the normal
+provider-specific resume path and its session lease checks. Codex and Devin
+use their published index snapshots. Claude reads its recent projects and
+starred sessions in a worker with a private cache. The picker filters those
+results in memory. `a` toggles a cross-agent Running projection for this
+invocation. Opening a foreign Running entry leaves the browsing mode intact,
+and running actions resolve provider information from the selected entry.
 
 Exact-owner local restart state serializes the layout, both slot contents,
 Target pane, keyboard focus, preview rollback target, and any live collapsed

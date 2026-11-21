@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0rc1] - 2026-11-21
+
+### Added
+
+- Press `g` from the sidebar to find running, recent, or starred conversations
+  across agents. Use Tab or the view button to filter the picker.
+- Press `a` in Running to switch between the current provider and all running
+  agents. Each row identifies its provider in the all-agents view.
+- See the keyboard focus and the sidebar's open destination in the wide
+  status bar. History options explain the owning host and application timing.
+- Read first local-history paint and reconnect-to-first-frame timings in
+  `railmux doctor` after an SSH connection ends.
+
+This candidate is opt-in. Devin remains a preview on POSIX and WSL. The SSH
+display protocol is compatible with 0.4.2.
+
 ## [0.4.2] - 2026-11-21
 
 ### Added
@@ -3490,7 +3506,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc1...HEAD
+[0.5.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.2...v0.5.0rc1
 [0.4.2]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2
 [0.4.2.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev18...v0.4.2.dev19
 [0.4.2.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev17...v0.4.2.dev18

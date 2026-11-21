@@ -2527,6 +2527,10 @@ def run(args: argparse.Namespace) -> int:
     keyframes = 0
     patches = 0
     first_frame_ms: int | None = None
+    first_history_request_at: float | None = None
+    first_history_paint_ms: int | None = None
+    reconnect_started_at: float | None = None
+    reconnect_first_frame_ms: int | None = None
     reconnect_metrics = {"attempts": 0, "successes": 0}
     local_exit = False
     reconnect_cancel_code: int | None = None
@@ -2687,17 +2691,31 @@ def run(args: argparse.Namespace) -> int:
         if frame is not None:
             send_protocol_frame(frame)
 
+    def start_history_timing(action: HistoryAction, now: float) -> None:
+        nonlocal first_history_request_at
+        if (first_history_paint_ms is None
+                and (action.render_history or (action.protocol_frame and history.pending))
+                and (first_history_request_at is None or now - first_history_request_at > 15)):
+            first_history_request_at = now
+
+    def finish_history_timing() -> None:
+        nonlocal first_history_request_at, first_history_paint_ms
+        if first_history_request_at is not None and history.active:
+            first_history_paint_ms = int((time.monotonic() - first_history_request_at) * 1000)
+            first_history_request_at = None
+
     def apply_history_action(
         action: HistoryAction,
         deferred_paint: _DeferredHistoryPaint | None = None,
     ) -> None:
-        nonlocal route_refresh_needed
+        nonlocal route_refresh_needed, first_history_request_at
         nonlocal history_info_until, claude_history_prompt_input
         overlays = history.overlays()
         if deferred_paint is not None:
             deferred_paint.defer(action, now=time.monotonic())
         else:
             if action.restore_live:
+                first_history_request_at = None
                 history_paint.discard()
                 if latest_screen is not None:
                     surface.paint(
@@ -2713,6 +2731,7 @@ def run(args: argparse.Namespace) -> int:
                         overlays,
                         selection.segments(),
                     )
+                    finish_history_timing()
         if action.protocol_frame:
             send_protocol_frame(action.protocol_frame)
         if action.forwarded_input:
@@ -3042,14 +3061,17 @@ def run(args: argparse.Namespace) -> int:
                     begin_path_open(target)
             if selection_action.handled:
                 return
+            received_at = time.monotonic()
             action = history.pointer_event(
                 part,
                 focused_pane_id,
                 status_row=status_row,
-                now=time.monotonic(),
+                now=received_at,
             )
             action, deferred_paint = input_batch.prepare(part, action)
             if action is not None:
+                if part.wheel_direction > 0:
+                    start_history_timing(action, received_at)
                 apply_history_action(action, deferred_paint)
             return
         if not part:
@@ -3101,14 +3123,12 @@ def run(args: argparse.Namespace) -> int:
             )
             is not None
         ):
-            apply_history_action(
-                history.page(
-                    part,
-                    latest_screen.cursor_x,
-                    latest_screen.cursor_y,
-                    now=time.monotonic(),
-                )
+            received_at = time.monotonic()
+            page_action = history.page(
+                part, latest_screen.cursor_x, latest_screen.cursor_y, now=received_at,
             )
+            start_history_timing(page_action, received_at)
+            apply_history_action(page_action)
             return
         may_change_routes = (
             False
@@ -3454,6 +3474,12 @@ def run(args: argparse.Namespace) -> int:
                                 history.overlays(),
                                 selection.segments(),
                             )
+                            finish_history_timing()
+                            if reconnect_started_at is not None:
+                                reconnect_first_frame_ms = int(
+                                    (time.monotonic() - reconnect_started_at) * 1000
+                                )
+                                reconnect_started_at = None
                             redraw_local_prompt()
                             if focus_reporting_started:
                                 # Enabling DECSET 1004 does not require a
@@ -3533,13 +3559,14 @@ def run(args: argparse.Namespace) -> int:
                 protocol_writer.flush()
                 if protocol_writer.failed:
                     remote_closed = True
-                history_paint.flush(
+                if history_paint.flush(
                     surface,
                     latest_screen,
                     history.overlays(),
                     selection.segments(),
                     now=now,
-                )
+                ):
+                    finish_history_timing()
                 keyboard_projected = touch_keyboard.keyboard_projected
                 if touch_keyboard.expire(now):
                     surface.resume_mouse(reassert=keyboard_projected)
@@ -3663,6 +3690,8 @@ def run(args: argparse.Namespace) -> int:
                                 stream.close()
                             except OSError:
                                 pass
+                        reconnect_started_at = time.monotonic()
+                        first_history_request_at = None
                         try:
                             process = _automatic_reconnect(
                                 args,
@@ -3784,6 +3813,8 @@ def run(args: argparse.Namespace) -> int:
             SshDisplayStats(
                 reached_first_frame=frames > 0,
                 first_frame_ms=first_frame_ms,
+                first_history_paint_ms=first_history_paint_ms,
+                reconnect_first_frame_ms=reconnect_first_frame_ms,
                 frames=frames,
                 keyframes=keyframes,
                 patches=patches,

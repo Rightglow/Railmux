@@ -8,7 +8,7 @@
 A persistent terminal workspace to navigate, resume, and run
 [Claude Code](https://claude.com/claude-code) and
 [Codex](https://github.com/openai/codex) sessions across all your projects.
-Devin CLI is available in the [development preview](#devin-preview).
+Devin CLI is available as a [provider preview](#devin-preview).
 Railmux gives tmux a project-aware sidebar and one or two live agent panes.
 Every agent runs independently, so browsing, switching, detaching, and
 responsive layout changes do not interrupt in-progress work.
@@ -73,7 +73,8 @@ pip install railmux
 railmux
 ```
 
-To try Devin, use the pinned [development preview install](https://rightglow.github.io/Railmux/#devin-install).
+To try Devin, use Railmux 0.4.2 or newer on POSIX or WSL and follow the
+[Devin setup](#devin-preview).
 
 On native Windows, that same two-command flow is intentional. The first
 `railmux` launch explains and asks once before installing the private runtime,
@@ -189,6 +190,8 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 |-----|--------|
 | `Enter` | Resume or start the selected session |
 | `n` | Start a fresh session in the current project |
+| `g` | Quick Open across agents |
+| `a` | Toggle all agents while Running has focus |
 | `i` | Popup with session details |
 | `r` | Rename the focused session |
 | `s` | Toggle star — starred sessions pinned to top with ⭐ |
@@ -284,14 +287,17 @@ from the bottom-left agent label, **More → Mode**, or **Options → Agent mode
 Railmux starts in your last mode if it is still available.
 
 Each mode remembers its project, filters, sidebar cursor, and scroll position
-when you switch. Other agents keep running. Set agent visibility in
+when you switch. Press `g` in the sidebar to search running, recent, and starred
+sessions across agents. Use Tab or the view button in the picker to select
+All, Running, or Starred. Press `a` while Running has focus to toggle its
+all-agents view. Other agents keep running. Set agent visibility in
 `railmux config` under **Program paths → Agent visibility**. The Mode menu
 can still show Running sessions for a hidden or unavailable CLI.
 
 ### Devin preview
 
-Install the [Railmux development preview](https://rightglow.github.io/Railmux/#devin-install),
-then install and sign in to Devin CLI on the machine where the agent runs.
+Install Railmux 0.4.2 or newer, then install and sign in to Devin CLI on
+the machine where the agent runs.
 Use Devin CLI 3000.14.30821 or newer. In Railmux, choose **More → Mode → Devin**.
 Use **+ New project** for a new directory, `n` for a
 new conversation, or `Enter` on an existing session to reopen it. Use **Running**

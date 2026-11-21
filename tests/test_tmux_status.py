@@ -563,6 +563,9 @@ def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
 
     app._apply_tmux_bar(error=False)
     assert "· Claude Code · ◨" in _style_calls(run, "status-left")[-1]
+    assert "Keys #{?#{==:#{pane_id},#{@railmux_controller_pane}},Sidebar,2} / Open 2" in (
+        _style_calls(run, "status-left")[-1]
+    )
 
     run.reset_mock()
     app._railmux_has_focus = False

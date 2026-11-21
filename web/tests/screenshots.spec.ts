@@ -82,13 +82,11 @@ test("give stable and Devin preview users the matching install commands", async 
 
   const stable = page.getByRole("region", { name: "Stable release" });
   await expect(stable.getByRole("button", { name: "Copy pip install railmux" })).toBeVisible();
-  const preview = page.getByRole("region", { name: "Devin development preview" });
-  const release = preview.getByRole("link", { name: "Preview release notes" });
-  const href = await release.getAttribute("href");
-  const version = href?.match(/\/releases\/tag\/v(\d+\.\d+\.\d+\.dev\d+)$/)?.[1];
-  expect(version).toBeTruthy();
-
-  const install = `pip install --upgrade "railmux[ssh]==${version}"`;
+  const preview = page.getByRole("region", { name: "Devin CLI preview" });
+  await expect(preview.getByRole("link", { name: "Devin setup" })).toHaveAttribute(
+    "href", "https://github.com/Rightglow/Railmux#devin-preview",
+  );
+  const install = 'pip install --upgrade "railmux[ssh]"';
   const copy = preview.getByRole("button", { name: `Copy ${install}` });
   await copy.click();
   await expect(copy).toHaveText("Copied");

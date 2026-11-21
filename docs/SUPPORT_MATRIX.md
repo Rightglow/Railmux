@@ -93,6 +93,7 @@ product capability.
 | P11 | Per-provider Projects, Sessions, and Running filters | Supported | Supported | Current filters and selection survive soft restart. |
 | P12 | Cycle provider modes without stopping agents in other modes | Supported | Supported | The cycle uses configured, available, visible CLIs on the execution host. The clickable status label, More → Mode, and Options → Agent mode open the picker, including Running entries for hidden modes. Each mode keeps its sidebar cursor and viewport during switching. |
 | P13 | Devin local conversations | Development preview on POSIX/WSL | Development preview on POSIX hosts | CLI discovery, start/resume, Running, stop, sidecar rename/star, and info. Managed live history on `railmux ssh` defaults to styled pane capture with an independent native scrolling option. Saved-history Preview, history deletion, and W07 Ask Railmux are unavailable. Real Linux CLI/tmux validation; macOS and WSL provider flows lack manual evidence. |
+| P14 | Cross-provider Quick Open and Running scope | Supported | Supported | Sidebar `g` searches running, recent, and starred sessions. `a` in Running toggles all agents for this invocation. Running choices retain the exact local binding and saved choices use ordinary provider lease checks. |
 
 ### Workspace, lifecycle, and configuration
 

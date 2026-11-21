@@ -20,6 +20,8 @@ def test_record_is_private_and_doctor_view_omits_internal_identity_and_time(
         SshDisplayStats(
             reached_first_frame=True,
             first_frame_ms=42,
+            first_history_paint_ms=19,
+            reconnect_first_frame_ms=85,
             frames=8,
             wire_bytes=1234,
             history_prefetch_requests=3,
@@ -36,6 +38,8 @@ def test_record_is_private_and_doctor_view_omits_internal_identity_and_time(
     assert diagnostic.age == "1_minutes"
     assert diagnostic.stats is not None
     assert diagnostic.stats.history_prefetch_requests == 3
+    assert diagnostic.stats.first_history_paint_ms == 19
+    assert diagnostic.stats.reconnect_first_frame_ms == 85
     assert "token" not in encoded
     assert "recorded_at" not in encoded
     assert "started_at" not in encoded

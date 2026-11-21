@@ -84,6 +84,7 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._on_context = on_context
         self._on_double_detected = on_double_detected
         self._provider_label = provider_label
+        self._all_agents = False
         self._boxed = boxed
         self._section_title = "Running"
         self._entries: list[RunningEntry] = []
@@ -119,7 +120,8 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
     @property
     def sidebar_title(self) -> str:
         """Stable unified-sidebar title; its count owns a separate column."""
-        return "Running [filtered]" if self._filter else "Running"
+        title = "Running · All" if self._all_agents else "Running"
+        return f"{title} [filtered]" if self._filter else title
 
     @property
     def section_count(self) -> str:
@@ -160,6 +162,11 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
             return
         self._provider_label = label
         self._rerender()
+
+    def set_all_agents(self, enabled: bool) -> None:
+        if enabled != self._all_agents:
+            self._all_agents = enabled
+            self._rerender()
 
     def set_filter(self, needle: str, *, capture_focus: bool = True) -> None:
         # Loading another provider's saved query is not an interactive filter
@@ -209,7 +216,7 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
                 continue
             searchable = " ".join((
                 entry.label, entry.project_label, entry.provider_label,
-                self._provider_label))
+                "" if self._all_agents else self._provider_label))
             if fuzzy_match(text_needle, searchable):
                 visible.append(entry)
         return visible
@@ -232,14 +239,15 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._entries = list(entries)
         visible = self._visible_entries()
         if not visible:
+            scope = "agent" if self._all_agents else self._provider_label
             if self._filter:
                 text = (
-                    f"  (no matching {self._provider_label} sessions — "
+                    f"  (no matching {scope} sessions — "
                     "press / to edit, Ctrl-U to clear)"
                 )
                 title = f"Running (0/{len(entries)})"
             else:
-                text = f"  (no running {self._provider_label} sessions)"
+                text = f"  (no running {scope} sessions)"
                 title = "Running"
             self._walker[:] = [urwid.Text(("dim", text), align="left")]
             self._set_section_title(title)

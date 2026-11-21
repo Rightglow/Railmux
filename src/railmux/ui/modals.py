@@ -417,6 +417,10 @@ class HelpModal(urwid.WidgetWrap):
             ("◧ / ◨", "Side-by-side; filled half is the Target pane"),
             ("⬒ / ⬓", "Stacked; filled half is the Target pane"),
         ]),
+        ("Across agents", [
+            ("g", "Quick Open across agents"),
+            ("a", "Toggle all agents while Running has focus"),
+        ]),
         ("", [
             ("Each session runs in its own detached tmux session.",
              "Switching keeps every agent alive — no responses"),
@@ -944,8 +948,8 @@ class OptionsModal(urwid.WidgetWrap):
         rows.extend(self._build_group(
             "update",
             {
-                "always": "install newer Railmux releases automatically",
-                "ask": "ask before installing each available update",
+                "always": "install newer stable Railmux releases automatically",
+                "ask": "ask before installing each stable update",
                 "never": "do not check PyPI for Railmux updates",
             },
         ))
@@ -1030,7 +1034,13 @@ class OptionsModal(urwid.WidgetWrap):
         )
         self._open_page(
             self._HISTORY_TITLES[group],
-            [urwid.Text(("dim", scope)), *self._option_rows[group]],
+            [
+                urwid.Text(("dim", f"{scope} Saved on the agent host and "
+                            "used on the next managed history refresh.")),
+                *self._option_rows[group],
+                urwid.Text(("dim", "The display client's cache capacity is set "
+                            "with railmux config on the client.")),
+            ],
         )
 
     def _build_group(

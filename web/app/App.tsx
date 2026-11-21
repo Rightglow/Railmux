@@ -3,8 +3,6 @@ import { useEffect } from "react";
 import CopyCommand from "./components/CopyCommand";
 import TerminalRecording from "./components/TerminalRecording";
 
-const DEVIN_PREVIEW_VERSION = "0.4.2.dev19";
-
 export default function Home() {
   useEffect(() => {
     let resizeObserver: ResizeObserver | null = null;
@@ -102,8 +100,8 @@ export default function Home() {
               </h1>
               <p className="hero-lede">
                 Start and resume coding-agent sessions in one persistent tmux
-                workspace. Run Claude Code and Codex on the stable release, or
-                try Devin CLI in the development preview.
+                workspace. Run Claude Code or Codex, and try the Devin CLI
+                preview on a POSIX host.
               </p>
               <div className="hero-actions">
                 <a className="button button-primary" href="#install">
@@ -167,7 +165,7 @@ export default function Home() {
                   clickable web links.</p>
               </article>
               <article>
-                <span>DEVELOPMENT PREVIEW</span>
+                <span>PROVIDER PREVIEW</span>
                 <h3>Devin</h3>
                 <p>Start and resume sessions on POSIX and WSL. Use Devin CLI
                   to browse or delete saved history.</p>
@@ -321,7 +319,7 @@ export default function Home() {
                 </div>
                 <h3>Pick an agent.</h3>
                 <p>
-                  In the preview, <kbd>m</kbd> cycles the installed, visible
+                  Press <kbd>m</kbd> to cycle the installed, visible
                   CLIs. Pick one directly through <strong>More → Mode</strong>
                   {" "}or <strong>Options → Agent mode</strong>. Each mode
                   remembers its sidebar position and filters. Sessions in
@@ -571,7 +569,7 @@ export default function Home() {
                 pane-bounded and local.
               </p>
               <p className="ssh-history-note">
-                In the preview, press <kbd>o</kbd> to choose Local or Native
+                Press <kbd>o</kbd> to choose Local or Native
                 scrolling for each agent. This policy belongs to the agent
                 host. Set the size of the Local cache from the machine running
                 <code> railmux ssh</code> with <code>railmux config</code>.
@@ -680,7 +678,7 @@ export default function Home() {
               <div className="install-commands">
                 <section className="install-channel" aria-labelledby="stable-install-title">
                   <h3 id="stable-install-title">Stable release</h3>
-                  <p>For Claude Code and Codex.</p>
+                  <p>For Claude Code and Codex, with a Devin preview on POSIX and WSL.</p>
                   <CopyCommand command="pip install railmux" />
                   <CopyCommand command="railmux" />
                 </section>
@@ -689,17 +687,18 @@ export default function Home() {
                   id="devin-install"
                   aria-labelledby="devin-install-title"
                 >
-                  <h3 id="devin-install-title">Devin development preview</h3>
+                  <h3 id="devin-install-title">Devin CLI preview</h3>
                   <p>
-                    Install on a POSIX or WSL host and sign in to Devin CLI there.
-                    For <code>railmux ssh</code>, use the matching preview on the
+                    Install Railmux 0.4.2 or newer on a POSIX or WSL host and
+                    sign in to Devin CLI there.
+                    For <code>railmux ssh</code>, use a compatible version on the
                     display client and the agent host. Open Railmux and
                     choose <strong>More → Mode → Devin</strong>.
                   </p>
-                  <CopyCommand command={`pip install --upgrade "railmux[ssh]==${DEVIN_PREVIEW_VERSION}"`} />
+                  <CopyCommand command={'pip install --upgrade "railmux[ssh]"'} />
                   <div className="install-links">
-                    <a href={`https://github.com/Rightglow/Railmux/releases/tag/v${DEVIN_PREVIEW_VERSION}`}>
-                      Preview release notes <span>→</span>
+                    <a href="https://github.com/Rightglow/Railmux#devin-preview">
+                      Devin setup <span>→</span>
                     </a>
                   </div>
                 </section>

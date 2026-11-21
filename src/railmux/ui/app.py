@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from concurrent.futures import Future
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -94,6 +95,7 @@ from railmux.ui.modals import (
     SessionInfoModal,
 )
 from railmux.ui.projects_pane import ProjectsPane
+from railmux.ui.quick_open import QuickOpen, SessionChoice, recent_claude_sessions
 from railmux.ui.running_pane import RunningEntry, RunningSessionsPane
 from railmux.ui.sessions_pane import SessionsPane
 from railmux.ui.sidebar import (
@@ -285,6 +287,7 @@ def _tmux_status_left(
     mode_label: str | bool,
     layout_indicator: str | None = None,
     range_wrapper: Callable[[str, str], str] | None = None,
+    route: str = "",
 ) -> str:
     """The tmux status-left segment: the ``railmux`` brand plus a current-mode
     indicator (``· Claude Code`` / ``· Codex``) and a compact workspace-layout
@@ -306,7 +309,7 @@ def _tmux_status_left(
             indicator = range_wrapper(
                 tmux_ctl.STATUS_ACTION_LAYOUT, indicator)
         layout = f" · {indicator}"
-    return f"{brand}#[fg={fg}]· {mode}{layout} #[default]"
+    return f"{brand}#[fg={fg}]· {mode}{layout}{route} #[default]"
 
 
 def _compact_tmux_status_left(
@@ -677,6 +680,9 @@ class App:
     _PROJECT_SCAN_INTERVAL = 3.0
     _project_snapshot: list[Project] | None = None
     _project_snapshot_at: float = 0.0
+    _running_all_agents = False
+    _quick_claude_result: Future | None = None
+    _quick_claude_requested = 0.0
     # Session to re-focus in the sidebar after a restart, applied once the
     # Sessions pane's rows are (re)built. Class default so bare ``App.__new__``
     # instances in tests are safe before ``__init__`` sets it.
@@ -1842,7 +1848,7 @@ class App:
         if loop is not None and loop.widget is not self._frame:
             # A modal overlay is up; only the text-entry modals accept paste.
             top = getattr(loop.widget, "top_w", None)
-            return isinstance(top, (RenameModal, PathBrowserModal))
+            return isinstance(top, (RenameModal, PathBrowserModal, QuickOpen))
         # No modal — the filter Edit lives in the footer and only gets focus
         # while filtering.
         try:
@@ -2261,7 +2267,7 @@ class App:
             return False
         r = self._by_tmux(entry.tmux_name)
         project = r.project if r else None
-        if project is not None:
+        if project is not None and r.session_type == self._active_mode().session_type:
             # Resolve to the project instance shown in the current mode's
             # Projects pane. A running session's project may carry an
             # encoded_name from a different source (the Codex index) than the
@@ -10270,36 +10276,171 @@ class App:
             reverse=True,
         ))
 
-    def _render_running_pane(self) -> None:
-        """Render registry values without doing metadata or process I/O.
+    @staticmethod
+    def _running_entry(r: _Running, mode: AgentMode, *, show_agent: bool = False) -> RunningEntry:
+        path = r.placeholder_path
+        return RunningEntry(
+            tmux_name=r.tmux_name,
+            label=f"[{mode.label}] {r.label}" if show_agent else r.label,
+            project_label=(
+                r.project.display_name if r.project is not None
+                else path.name if path is not None else ""
+            ),
+            provider_label=mode.label,
+            status=r.status,
+            attention=r.attention,
+            identity_token=r.orphan.creation_token if r.orphan is not None else None,
+            legacy=r.is_legacy,
+            lease_warning=r.lease_warning,
+        )
 
-        Only sessions in the active provider's namespace enter this view.
-        """
-        mode = self._active_mode()
-        prefix = mode.tmux_prefix
-        entries = [
-            RunningEntry(
-                tmux_name=r.tmux_name,
-                label=r.label,
-                project_label=(
-                    r.project.display_name
-                    if r.project is not None
-                    else r.placeholder_path.name
-                    if r.placeholder_path is not None
-                    else ""
-                ),
-                provider_label=mode.label,
-                status=r.status,
-                attention=r.attention,
-                identity_token=(r.orphan.creation_token
-                                if r.orphan is not None else None),
-                legacy=r.is_legacy,
-                lease_warning=r.lease_warning,
-            )
-            for r in self._running.values()
-            if r.tmux_name.startswith(prefix)
-        ]
+    def _toggle_running_scope(self) -> None:
+        self._running_all_agents = not self._running_all_agents
+        self._running_pane.set_all_agents(self._running_all_agents)
+        self._render_running_pane()
+        scope = "all agents" if self._running_all_agents else self._active_mode().label
+        self._set_status(f"Running · {scope}")
+
+    def _render_running_pane(self) -> None:
+        """Render registry values without metadata or process I/O."""
+        active = self._active_mode()
+        all_agents = self._running_all_agents
+        entries = []
+        for running in self._running.values():
+            mode = self._modes().for_tmux_name(running.tmux_name)
+            if mode is not None and (all_agents or mode == active):
+                entries.append(self._running_entry(running, mode, show_agent=all_agents))
         self._running_pane.set_running(entries)
+
+    def _quick_open_choices(self, claude: tuple[SessionMeta, ...]) -> list[SessionChoice]:
+        starred = self._favorite_ids_for_view()
+        usable = self._cycle_mode_keys()
+        choices = []
+        live_ids = set()
+        for running in self._running.values():
+            mode = self._modes().for_tmux_name(running.tmux_name)
+            if mode is None:
+                continue
+            entry = self._running_entry(running, mode)
+            _, separator, title = running.label.partition("/")
+            logical_id = running.logical_session_id
+            if logical_id is not None:
+                ids = (
+                    self._codex_lineage_ids(logical_id) if mode == CODEX_MODE else {logical_id}
+                )
+                live_ids.update((mode.key, session_id) for session_id in ids)
+            else:
+                ids = set()
+            choices.append(SessionChoice(
+                ("running", mode.key, entry.tmux_name),
+                title if separator else entry.label, mode.label, entry.project_label,
+                self._quick_running_status(running),
+                partial(self._open_quick_running, entry, running),
+                bool(ids & starred),
+            ))
+
+        codex = (
+            self._codex_index.listed_sessions()
+            if "codex" in usable and isinstance(self._codex_index, BackgroundCodexIndex)
+            else ()
+        )
+        devin = (
+            tuple(self._devin_meta(record) for record in (self._devin_index.snapshot or {}).values())
+            if "devin" in usable else ()
+        )
+        sessions = sorted((*claude, *codex, *devin), key=lambda meta: (
+            meta.session_id not in starred, -meta.last_mtime, meta.session_id,
+        ))
+        for meta in sessions:
+            key = (meta.session_type, meta.session_id)
+            if key in live_ids or meta.session_type not in usable:
+                continue
+            live_ids.add(key)
+            mode = self._modes().get(meta.session_type)
+            title = self._renames.get(meta.session_id) or meta.display_title
+            choices.append(SessionChoice(
+                ("saved", *key), title, mode.label, meta.project.display_name,
+                "Saved", partial(self._open_quick_saved, meta), meta.session_id in starred,
+            ))
+        return choices
+
+    def _open_quick_running(self, entry: RunningEntry, expected: _Running) -> None:
+        if self._by_tmux(entry.tmux_name) is not expected:
+            self._set_status("The running session changed. Open Quick Open again.", "warn")
+            return
+        self._on_running_select(entry)
+
+    def _open_quick_saved(self, meta: SessionMeta) -> None:
+        if meta.session_type == "codex":
+            current = self._codex_representative(meta.session_id)
+            if current is None:
+                self._set_status("That saved session is no longer in the index.", "warn")
+                return
+            meta = current
+        self._on_session_select(meta)
+
+    def _open_quick_open(self) -> None:
+        """Open instantly from indexes. Load Claude history outside Urwid."""
+        if self._loop is None:
+            return
+        usable = self._cycle_mode_keys()
+        devin = self._devin_index if "devin" in usable else None
+        if devin is not None:
+            devin.refresh()
+        codex = self._codex_index if "codex" in usable else None
+        projects = tuple(
+            sorted(self._project_snapshot or (), key=lambda project: -project.last_activity_ts)
+        ) if "claude" in usable else ()
+        result = self._quick_claude_result
+        previous = result.result() if result is not None and result.done() else ()
+        if projects and (result is None or (
+            result.done() and time.monotonic() - self._quick_claude_requested >= 10
+        )):
+            result = Future()
+            self._quick_claude_result = result
+            self._quick_claude_requested = time.monotonic()
+            favorites = self._favorites.get_ids()
+
+            def load() -> None:
+                try:
+                    result.set_result(recent_claude_sessions(projects, favorites))
+                except (OSError, ValueError):
+                    result.set_result(())
+
+            threading.Thread(target=load, daemon=True, name="railmux-quick-open").start()
+        def loading_sources() -> bool:
+            return bool(
+                (result is not None and not result.done())
+                or (devin is not None and devin.snapshot is None and devin.is_pending)
+                or (isinstance(codex, BackgroundCodexIndex)
+                    and not codex.has_snapshot and codex.is_pending)
+            )
+
+        loading = loading_sources()
+        modal = QuickOpen(
+            self._quick_open_choices(previous), self._close_modal,
+            "Pane 2" if self._agent_workspace().target_slot_key == AgentWorkspace.SECONDARY
+            else "Pane 1", loading=loading,
+        )
+        self._show_overlay(modal, width=88, height=80, click_outside_to_close=True)
+        if loading:
+            def refresh(loop, _data) -> None:
+                if getattr(loop.widget, "top_w", None) is not modal:
+                    return
+                if loading_sources():
+                    loop.set_alarm_in(0.1, refresh)
+                else:
+                    ready = result.result() if result is not None else ()
+                    modal.set_choices(self._quick_open_choices(ready), loading=False)
+
+            self._loop.set_alarm_in(0.1, refresh)
+
+    def _quick_running_status(self, running: _Running) -> str:
+        slot = self._agent_workspace().slot_for_agent(running.tmux_name)
+        return (
+            "Running" if slot is None
+            else f"Running in pane {2 if slot.key == AgentWorkspace.SECONDARY else 1}"
+        )
 
     @staticmethod
     def _codex_terminal_session_title(
@@ -10775,10 +10916,10 @@ class App:
 
     def _on_delete_session(self) -> None:
         """Delete the focused session from the current pane (with confirmation)."""
-        if self._active_mode().project_source == ProjectSource.DEVIN:
+        pos = self._sidebar.focus_position
+        if pos != 2 and self._active_mode().project_source == ProjectSource.DEVIN:
             self._set_status("Use devin rm to delete Devin history, or k to stop a pane.", "tip")
             return
-        pos = self._sidebar.focus_position
 
         if pos == 1:
             # Sessions pane — delete the focused session (JSONL + tmux).
@@ -10820,6 +10961,9 @@ class App:
                 return
             entry = focus_w.entry
             r = self._by_tmux(entry.tmux_name)
+            if r is not None and r.session_type == "devin":
+                self._set_status("Use devin rm to delete Devin history, or k to stop a pane.", "tip")
+                return
             label = r.label if r else entry.tmux_name
             # Real session_id (and project) only exist once resolved — needed
             # to also delete the JSONL.
@@ -12357,11 +12501,20 @@ class App:
                         return range_helper(action, content)
                     except (TypeError, ValueError):
                         return content
+            route = ""
+            if workspace is not None and workspace.primary.pane_id is not None:
+                target = 2 if workspace.target_slot_key == AgentWorkspace.SECONDARY else 1
+                # tmux expands this per client as focus changes, without an
+                # extra set-option subprocess for every focus event.
+                focus = "#{?#{==:#{pane_id},#{@railmux_controller_pane}},Sidebar," + str(target) + "}"
+                route = f" · Keys {focus} / Open {target}"
+                left_length = 57
             brand = _tmux_status_left(
                 error,
                 self._active_mode().label,
                 self._status_layout_indicator(),
                 wrap_action,
+                route,
             )
         state = (
             self._tmux_status_session,

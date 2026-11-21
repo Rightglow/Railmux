@@ -147,9 +147,13 @@ class DevinIndex:
         self._thread: threading.Thread | None = None
         self._last_requested = float("-inf")
 
+    @property
+    def is_pending(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def refresh(self) -> None:
         now = time.monotonic()
-        if ((self._thread is not None and self._thread.is_alive())
+        if (self.is_pending
                 or now - self._last_requested < 5 or not shutil.which(self.binary)):
             return
         self._last_requested = now

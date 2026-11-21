@@ -252,6 +252,15 @@ class BackgroundCodexIndex:
             for meta in view.projects.get(target, ())
         ]
 
+    def listed_sessions(self) -> tuple[SessionMeta, ...]:
+        """One current display row per visible lineage, across all projects."""
+        view = self._visible_view()
+        return tuple(
+            self._with_override(meta, view.lineages[meta.session_id])
+            for rows in view.projects.values()
+            for meta in rows
+        )
+
     def lineage_ids(
         self, session_id: str, *, refresh: bool = True,
     ) -> frozenset[str]:
