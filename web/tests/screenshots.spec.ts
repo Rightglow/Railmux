@@ -74,6 +74,30 @@ test("honor direct section links after React mounts", async ({ page }) => {
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
 });
 
+test("give stable and Devin preview users the matching install commands", async ({ page, context }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 360, height: 800 });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("./#devin-install");
+
+  const stable = page.getByRole("region", { name: "Stable release" });
+  await expect(stable.getByRole("button", { name: "Copy pip install railmux" })).toBeVisible();
+  const preview = page.getByRole("region", { name: "Devin development preview" });
+  const release = preview.getByRole("link", { name: "Preview release notes" });
+  const href = await release.getAttribute("href");
+  const version = href?.match(/\/releases\/tag\/v(\d+\.\d+\.\d+\.dev\d+)$/)?.[1];
+  expect(version).toBeTruthy();
+
+  const install = `pip install --upgrade "railmux[ssh]==${version}"`;
+  const copy = preview.getByRole("button", { name: `Copy ${install}` });
+  await copy.click();
+  await expect(copy).toHaveText("Copied");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(install);
+  expect(await preview.evaluate((element) => element.scrollWidth)).toBe(
+    await preview.evaluate((element) => element.clientWidth),
+  );
+});
+
 test("reserve compact projection for the mobile recording", async () => {
   const headers = await Promise.all(
     [
@@ -437,24 +461,17 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   page.on("pageerror", (error) => pageErrors.push(error));
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto(".");
-  await expect(
-    page.getByText("Switch the whole sidebar.", { exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Agents in the other mode stay alive", { exact: false }),
-  ).toBeVisible();
+  const controls = page.locator(".workspace-control-grid");
+  await expect(controls.getByRole("heading", { name: "Pick an agent." })).toBeVisible();
+  await expect(controls).toContainText("Sessions in other modes keep running.");
   await expect(
     page.getByText("One, side by side, or stacked.", { exact: true }),
   ).toBeVisible();
-  await expect(page.locator(".workspace-control-grid")).toContainText("CC");
-  await expect(page.locator(".workspace-control-grid")).toContainText("CODEX");
-  await expect(page.locator(".workspace-control-grid")).toContainText("F8");
-  await expect(page.locator(".workspace-control-grid")).toContainText(
-    "click the provider name",
-  );
-  await expect(page.locator(".workspace-control-grid")).toContainText(
-    "click the layout symbol",
-  );
+  for (const label of ["CLAUDE", "CODEX", "DEVIN", "F8"]) {
+    await expect(controls).toContainText(label);
+  }
+  await expect(controls).toContainText("click the agent label");
+  await expect(controls).toContainText("click the layout symbol");
   const player = page.locator('[data-demo="controls-recording"]');
   await player.scrollIntoViewIfNeeded();
   await expect(player.locator(".ap-player")).toBeVisible();

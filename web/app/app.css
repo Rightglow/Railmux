@@ -208,8 +208,7 @@ code {
   letter-spacing: -0.068em;
 }
 
-.hero h1 em,
-.statement h2 em {
+.hero h1 em {
   color: var(--acid);
   font-family: Georgia, "Times New Roman", serif;
   font-weight: 400;
@@ -284,9 +283,9 @@ code {
   border-top: 1px solid rgba(255, 255, 255, 0.16);
 }
 
-.hero-note-index {
+.hero-note-label {
   display: block;
-  padding: 12px 0 30px;
+  padding: 16px 0 12px;
   color: rgba(242, 240, 233, 0.62);
   font-family: var(--mono);
   font-size: 9px;
@@ -357,10 +356,6 @@ code {
   padding-bottom: 125px;
 }
 
-.statement .section-kicker {
-  color: rgba(8, 11, 13, 0.5);
-}
-
 .statement h2,
 .section-heading h2,
 .ssh-copy h2,
@@ -373,18 +368,46 @@ code {
   letter-spacing: -0.06em;
 }
 
-.statement h2 em {
-  color: var(--night);
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 9px;
-}
-
-.statement-inner > p:last-child {
-  width: min(480px, 100%);
-  margin: 42px 0 0 auto;
+.statement-inner > p {
+  max-width: 580px;
+  margin: 27px 0 0;
   font-size: 17px;
   line-height: 1.6;
+}
+
+.agent-guide {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 42px;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.agent-guide article {
+  padding: clamp(22px, 3vw, 38px);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: rgba(242, 240, 233, 0.32);
+}
+
+.agent-guide article > span {
+  font: 700 11px var(--mono);
+  letter-spacing: 0.06em;
+}
+
+.agent-guide h3 {
+  margin: 12px 0;
+  font-size: clamp(25px, 3vw, 40px);
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.agent-guide article > p {
+  max-width: 34ch;
+  margin: 12px 0 0;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .terminal-recording-player {
@@ -933,7 +956,7 @@ code {
   line-height: 1.65;
 }
 
-.ssh-copy > .ssh-selection-note {
+.ssh-copy > p.ssh-selection-note {
   max-width: 620px;
   margin: -12px 0 30px;
   padding-left: 14px;
@@ -942,6 +965,11 @@ code {
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1.6;
+}
+
+.ssh-copy > p.ssh-history-note {
+  margin-top: 0;
+  font-size: 14px;
 }
 
 .ssh-copy code {
@@ -1522,24 +1550,19 @@ code {
 
 .mode-switch {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 14px;
+  gap: 7px;
   margin: 52px 0 0;
 }
 
 .mode-switch strong {
-  padding: 12px 16px;
+  padding: 9px 11px;
   color: var(--night);
   background: var(--acid);
   font-family: var(--mono);
-  font-size: clamp(18px, 2vw, 28px);
+  font-size: clamp(13px, 1.7vw, 20px);
   line-height: 1;
-}
-
-.mode-switch i {
-  color: rgba(242,240,233,0.5);
-  font-style: normal;
-  font-size: 23px;
 }
 
 .layout-switch {
@@ -1650,9 +1673,9 @@ code {
 
 .install-grid {
   display: grid;
-  grid-template-columns: 1.4fr 0.8fr;
-  gap: 9vw;
-  align-items: end;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: clamp(30px, 7vw, 110px);
+  align-items: start;
 }
 
 .install h2 {
@@ -1703,12 +1726,43 @@ code {
 
 .install-commands {
   display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.install-channel {
+  display: grid;
   gap: 10px;
+  padding: clamp(15px, 2vw, 24px);
+  border: 1px solid var(--line);
+  background: rgba(242, 240, 233, 0.28);
+}
+
+.install-channel h3 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.install-channel > p {
+  margin: 0 0 5px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.install-channel > .install-links {
+  margin-top: 4px;
 }
 
 .install .copy-command {
   color: #dfe6e2;
   background: var(--night);
+}
+
+.install .copy-command code {
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .install-links {
@@ -1768,17 +1822,6 @@ footer {
 
 .footer-links a:hover {
   color: var(--acid);
-}
-
-.footer-meta {
-  grid-column: 1 / -1;
-  margin: 45px 0 0;
-  padding-top: 20px;
-  color: rgba(242,240,233,0.28);
-  border-top: 1px solid rgba(255,255,255,0.09);
-  font-family: var(--mono);
-  font-size: 9px;
-  letter-spacing: 0.06em;
 }
 
 @media (max-width: 1050px) {
@@ -1925,8 +1968,8 @@ footer {
     font-size: clamp(42px, 13vw, 58px);
   }
 
-  .statement-inner > p:last-child {
-    margin-left: 0;
+  .agent-guide {
+    grid-template-columns: 1fr;
   }
 
   .features {
@@ -2097,16 +2140,20 @@ footer {
     gap: 55px;
   }
 
+  .install .copy-command code {
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+
+  .install .copy-command button {
+    padding-inline: 12px;
+  }
+
   .footer-grid {
     grid-template-columns: 1fr;
     gap: 45px;
     padding-top: 70px;
     padding-bottom: 70px;
-  }
-
-  .footer-meta {
-    grid-column: auto;
-    margin-top: 0;
   }
 }
 

@@ -3,6 +3,8 @@ import { useEffect } from "react";
 import CopyCommand from "./components/CopyCommand";
 import TerminalRecording from "./components/TerminalRecording";
 
+const DEVIN_PREVIEW_VERSION = "0.4.2.dev19";
+
 export default function Home() {
   useEffect(() => {
     let resizeObserver: ResizeObserver | null = null;
@@ -71,6 +73,7 @@ export default function Home() {
           <span>RAILMUX</span>
         </a>
         <nav aria-label="Main navigation">
+          <a href="#agents">Agents</a>
           <a href="#workflow">Workflow</a>
           <a href="#controls">Controls</a>
           <a href="#features">Features</a>
@@ -98,19 +101,16 @@ export default function Home() {
                 <em>within reach.</em>
               </h1>
               <p className="hero-lede">
-                Run, resume, and switch between Claude Code and Codex sessions
-                from one persistent terminal workspace. Devin CLI support is
-                available in the POSIX development preview.
+                Start and resume coding-agent sessions in one persistent tmux
+                workspace. Run Claude Code and Codex on the stable release, or
+                try Devin CLI in the development preview.
               </p>
               <div className="hero-actions">
                 <a className="button button-primary" href="#install">
                   Get Railmux <span>→</span>
                 </a>
-                <a
-                  className="button button-secondary"
-                  href="https://github.com/Rightglow/Railmux"
-                >
-                  View source
+                <a className="button button-secondary" href="#devin-install">
+                  Try Devin preview
                 </a>
               </div>
               <div className="platform-line">
@@ -119,16 +119,13 @@ export default function Home() {
                 <span>REMOTE</span> Linux · macOS · Windows
               </div>
             </div>
-            <div className="hero-note">
-              <span className="hero-note-index">01 / WORKSPACE</span>
+            <aside className="hero-note">
+              <span className="hero-note-label">PERSISTENT SESSIONS</span>
               <p>
-                One sidebar.
-                <br />
-                Two live agents.
-                <br />
-                Zero lost context.
+                Run up to two agents side by side. Detach or disconnect from
+                SSH while the agents keep running on their host.
               </p>
-            </div>
+            </aside>
           </div>
           <div className="hero-demo">
             <div className="capture-meta">
@@ -147,19 +144,36 @@ export default function Home() {
           </div>
         </section>
 
-        <section className="statement">
+        <section className="statement" id="agents">
           <div className="section-wrap statement-inner">
-            <p className="section-kicker">THE PROBLEM</p>
-            <h2>
-              Agent sessions multiply.
-              <br />
-              Your mental overhead <em>shouldn&apos;t.</em>
-            </h2>
+            <h2>Choose your agent.</h2>
             <p>
-              Stop hunting through tmux windows and copying session IDs.
-              Railmux turns scattered agent work into one visible, durable
-              workspace.
+              Install and sign in to your preferred agent CLI on the machine
+              where it will run. One CLI is enough to start.
             </p>
+            <div className="agent-guide">
+              <article>
+                <span>STABLE</span>
+                <h3>Claude Code</h3>
+                <p>Start, resume, and preview saved sessions.</p>
+                <p><strong>Managed scrolling</strong> defaults to Ask on scroll.</p>
+              </article>
+              <article>
+                <span>STABLE</span>
+                <h3>Codex</h3>
+                <p>Start, resume, and preview saved sessions.</p>
+                <p><strong>Managed scrolling</strong> defaults to Native. The
+                  preview adds optional Local history with prompt headers and
+                  clickable web links.</p>
+              </article>
+              <article>
+                <span>DEVELOPMENT PREVIEW</span>
+                <h3>Devin</h3>
+                <p>Start and resume sessions on POSIX and WSL. Use Devin CLI
+                  to browse or delete saved history.</p>
+                <p><strong>Managed scrolling</strong> defaults to Local over SSH.</p>
+              </article>
+            </div>
           </div>
         </section>
 
@@ -301,20 +315,21 @@ export default function Home() {
               <article>
                 <span>MODE / <kbd>m</kbd></span>
                 <div className="mode-switch" aria-hidden="true">
-                  <strong>CC</strong>
-                  <i>↔</i>
+                  <strong>CLAUDE</strong>
                   <strong>CODEX</strong>
+                  <strong>DEVIN</strong>
                 </div>
-                <h3>Switch the whole sidebar.</h3>
+                <h3>Pick an agent.</h3>
                 <p>
-                  Projects, Sessions, and Running follow the selected
-                  provider. Agents in the other mode stay alive and reappear
-                  when you switch back.
+                  In the preview, <kbd>m</kbd> cycles the installed, visible
+                  CLIs. Pick one directly through <strong>More → Mode</strong>
+                  {" "}or <strong>Options → Agent mode</strong>. Each mode
+                  remembers its sidebar position and filters. Sessions in
+                  other modes keep running.
                 </p>
                 <small className="status-click-note">
-                  <strong>BUTTON BAR FOLDED?</strong>
-                  On tmux 3.4+, click the provider name in the lower-left
-                  status bar.
+                  On tmux 3.4+, click the agent label in the lower-left
+                  status bar to open the Mode picker.
                 </small>
               </article>
               <article>
@@ -379,9 +394,8 @@ export default function Home() {
                   <span>QUIT</span>
                   <h3><kbd>q</kbd> then <kbd>y</kbd></h3>
                   <p>
-                    Close Railmux and stop every running agent session after
-                    explicit confirmation. Click <strong>Quit</strong>, then
-                    press <kbd>y</kbd> in the confirmation.
+                    Choose Quit, then confirm a second time to close Railmux
+                    and stop the workspace&apos;s running agents.
                   </p>
                 </article>
               </div>
@@ -556,6 +570,12 @@ export default function Home() {
                 inside Railmux or in a separate terminal. Drag-to-copy stays
                 pane-bounded and local.
               </p>
+              <p className="ssh-history-note">
+                In the preview, press <kbd>o</kbd> to choose Local or Native
+                scrolling for each agent. This policy belongs to the agent
+                host. Set the size of the Local cache from the machine running
+                <code> railmux ssh</code> with <code>railmux config</code>.
+              </p>
               <CopyCommand command="railmux ssh your-server" />
             </div>
             <div className="ssh-visual" aria-hidden="true">
@@ -629,14 +649,10 @@ export default function Home() {
             <p className="section-kicker">QUICK START</p>
             <div className="install-grid">
               <div>
-                <h2>
-                  Your agents are already working.
-                  <br />
-                  Give them a better station.
-                </h2>
+                <h2>Install Railmux.</h2>
                 <p>
-                  On macOS and Linux, Railmux requires Python 3.9+, tmux, and
-                  at least one supported agent CLI. Native Windows uses
+                  On macOS, Linux, and WSL, Railmux requires Python 3.9+, tmux,
+                  and at least one supported agent CLI. Native Windows uses
                   Python 3.10+ and provisions its own private managed
                   MSYS2/tmux runtime on first launch.
                 </p>
@@ -662,8 +678,31 @@ export default function Home() {
                 </aside>
               </div>
               <div className="install-commands">
-                <CopyCommand command="pip install railmux" />
-                <CopyCommand command="railmux" />
+                <section className="install-channel" aria-labelledby="stable-install-title">
+                  <h3 id="stable-install-title">Stable release</h3>
+                  <p>For Claude Code and Codex.</p>
+                  <CopyCommand command="pip install railmux" />
+                  <CopyCommand command="railmux" />
+                </section>
+                <section
+                  className="install-channel"
+                  id="devin-install"
+                  aria-labelledby="devin-install-title"
+                >
+                  <h3 id="devin-install-title">Devin development preview</h3>
+                  <p>
+                    Install on a POSIX or WSL host and sign in to Devin CLI there.
+                    For <code>railmux ssh</code>, use the matching preview on the
+                    display client and the agent host. Open Railmux and
+                    choose <strong>More → Mode → Devin</strong>.
+                  </p>
+                  <CopyCommand command={`pip install --upgrade "railmux[ssh]==${DEVIN_PREVIEW_VERSION}"`} />
+                  <div className="install-links">
+                    <a href={`https://github.com/Rightglow/Railmux/releases/tag/v${DEVIN_PREVIEW_VERSION}`}>
+                      Preview release notes <span>→</span>
+                    </a>
+                  </div>
+                </section>
                 <div className="install-links">
                   <a href="https://github.com/Rightglow/Railmux#quick-start">
                     Read the full guide <span>→</span>
@@ -693,10 +732,6 @@ export default function Home() {
             <a href="https://github.com/Rightglow/Railmux/releases">Releases</a>
             <a href="https://github.com/Rightglow/Railmux/blob/main/LICENSE">MIT License</a>
           </div>
-          <p className="footer-meta">
-            Built for Claude Code, Codex, and the terminals where real work
-            happens.
-          </p>
         </div>
       </footer>
     </div>

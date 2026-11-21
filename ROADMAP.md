@@ -3,6 +3,39 @@
 This is a set of design candidates, not a release commitment. Architecture
 invariants already agreed are recorded in `docs/ARCHITECTURE.md`.
 
+## 0.5 candidates
+
+The common workflow is to find a conversation, know where it runs, and return
+to it without interrupting it. The sidebar should answer those questions even
+when its selected agent differs from the agents currently running.
+
+1. **Find and return to work.** Try a cross-agent Running view and a Quick
+   Open for recent and starred sessions. Each result should show its agent,
+   project, and running state. Keep provider modes as browsing filters. A new
+   conversation can default to the last usable CLI and offer the available
+   choices where it launches.
+2. **Make actions and settings explicit.** Show the Focused and Target panes
+   in the status bar, and label where actions such as Open and Resume land.
+   In Options, show the effective history mode, whose setting it is, and when
+   it takes effect. Over SSH, history policy belongs to the agent host and
+   cache capacity belongs to the display client. Keep one settings format
+   shared by the TUI, `railmux config`, and remote configuration.
+3. **Improve the SSH interaction people can feel.** Measure command-to-first
+   paint, input-to-paint during streaming, first wheel response, mode
+   switches, and reconnect, including slow links and long conversations.
+   Use the existing SSH diagnostics as a base. Check that copying and opening
+   links still work across wrapped lines and history pages, and replay real
+   provider regressions such as rewinds and async question replies.
+4. **Validate the release as an upgrade.** Exercise new and resumed Devin
+   sessions, detach and reconnect, and a machine with just one installed CLI.
+   Keep provider support scoped to the platforms with real validation. Test
+   the previous stable Windows runtime and SSH client/helper transition
+   through a 0.5 release candidate before cutting the final version.
+
+A graphical frontend can be evaluated once these workflows are clear in
+the terminal. An initial desktop prototype could offer host and session
+selection while using the existing workspace and SSH connection.
+
 ## Follow-up candidates
 
 ### Maintainability and diagnostics after 0.3

@@ -1,4 +1,4 @@
-# Railmux — session manager for Claude Code & Codex
+# Railmux — terminal workspace for coding agents
 
 [![Tests](https://github.com/Rightglow/Railmux/actions/workflows/test.yml/badge.svg)](https://github.com/Rightglow/Railmux/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/railmux.svg)](https://pypi.org/project/railmux/)
@@ -8,6 +8,7 @@
 A persistent terminal workspace to navigate, resume, and run
 [Claude Code](https://claude.com/claude-code) and
 [Codex](https://github.com/openai/codex) sessions across all your projects.
+Devin CLI is available in the [development preview](#devin-preview).
 Railmux gives tmux a project-aware sidebar and one or two live agent panes.
 Every agent runs independently, so browsing, switching, detaching, and
 responsive layout changes do not interrupt in-progress work.
@@ -58,8 +59,7 @@ agents without losing their context.
 On macOS, Linux, and WSL, Railmux requires Python 3.9+, `tmux`, `less`, and
 Claude Code or Codex on `PATH`. Native Windows requires Python 3.10+ and a
 Windows-native Claude Code or Codex; Railmux manages its own private
-MSYS2/tmux/Python runtime. The two agent CLIs are independent, so either one is
-enough to start.
+MSYS2/tmux/Python runtime. One supported agent CLI is enough to start.
 
 The supported native-Windows full-screen renderer is Windows Terminal
 1.24.10621 or newer. It is a terminal-host requirement, not a package that
@@ -72,6 +72,8 @@ pip install railmux
 # or: pip3 install railmux
 railmux
 ```
+
+To try Devin, use the pinned [development preview install](https://rightglow.github.io/Railmux/#devin-install).
 
 On native Windows, that same two-command flow is intentional. The first
 `railmux` launch explains and asks once before installing the private runtime,
@@ -288,8 +290,10 @@ can still show Running sessions for a hidden or unavailable CLI.
 
 ### Devin preview
 
-Install and sign in to Devin CLI on the machine where the agent runs.
-Use Devin CLI 3000.14.30821 or newer. In Railmux, choose **More → Mode → Devin**. Use **+ New project** for a new directory, `n` for a
+Install the [Railmux development preview](https://rightglow.github.io/Railmux/#devin-install),
+then install and sign in to Devin CLI on the machine where the agent runs.
+Use Devin CLI 3000.14.30821 or newer. In Railmux, choose **More → Mode → Devin**.
+Use **+ New project** for a new directory, `n` for a
 new conversation, or `Enter` on an existing session to reopen it. Use **Running**
 to return to a live Devin pane, and keep your usual `/model` and permission
 controls inside Devin.
