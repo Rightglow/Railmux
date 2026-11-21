@@ -489,16 +489,16 @@ def test_buttonbar_uses_responsive_labels_without_losing_actions():
     )
 
     expected = {
-        12: ("?", "Q", "D", "+"),
-        20: ("?", "Q", "D", "+"),
-        24: ("?", "Q", "D", "+"),
-        36: ("? Help", "q Quit", "C-b d Detach", "+ More"),
-        44: ("? Help", "q Quit", "C-b d Detach", "+ More"),
+        12: "? Quit Det +",
+        20: "? Quit Det +",
+        24: "Help Quit Detach More",
+        36: "? Help q Quit C-b d Detach + More",
+        44: "? Help q Quit C-b d Detach + More",
     }
-    for width, labels in expected.items():
+    for width, label in expected.items():
         text = "".join(
             line.decode() for line in bar.render((width,), False).text)
-        assert all(label in text for label in labels)
+        assert text.rstrip() == label
         assert len(bar._hit_areas) == 4
 
 
@@ -642,14 +642,28 @@ def test_buttonbar_compact_hit_areas_match_visible_actions():
         on_quit=lambda: calls.append("quit"),
         on_detach=lambda: calls.append("detach"),
         on_mode_toggle=lambda: calls.append("mode"),
+        on_layout=lambda: calls.append("layout"),
+        on_search=lambda: calls.append("search"),
+        on_options=lambda: calls.append("options"),
     )
-    bar.render((24,), False)
+    bar.set_expanded(True)
+    for width, labels in (
+        (30, ("Help Quit Detach Less", "Mode Layout Search Options")),
+        (12, ("? Quit Det -", "CLI ↔ Find ⚙")),
+    ):
+        canvas = bar.render((width,), False)
+        assert tuple(line.decode().rstrip() for line in canvas.text) == labels
+        areas = list(bar._hit_areas)
+        for row, start, end, index, _cb in areas:
+            if index == 3:
+                continue  # Test the collapse action separately.
+            assert end <= width
+            assert bar.mouse_event((width,), "mouse press", 1, (start + end) // 2, row, False)
+        assert calls == ["help", "quit", "detach", "mode", "layout", "search", "options"]
+        calls.clear()
 
-    for row, start, end, _index, _cb in list(bar._hit_areas):
-        bar.mouse_event(
-            (24,), "mouse press", 1, (start + end) // 2, row, False)
-
-    assert calls == ["help", "quit", "detach"]
+    assert bar.mouse_event((30,), "mouse press", 1, "Help Quit Detach Less".index("Less"), 0, False)
+    assert bar.extra_rows == 0
 
 
 def test_buttonbar_pressed_frame_precedes_callback_and_clears():

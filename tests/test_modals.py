@@ -421,6 +421,7 @@ def test_help_explains_bottom_left_workspace_target_indicator():
     assert "◧ / ◨" in text
     assert "⬒ / ⬓" in text
     assert "filled half is the Target pane" in normalized
+    assert "Target 1 / 2" in text
 
 
 def test_help_long_form_content_has_horizontal_breathing_room():
@@ -449,6 +450,7 @@ def test_help_ask_is_explicit_keyboard_mouse_action_and_close_stays_separate():
     text = _rendered_text(modal, size=(64, 28))
     assert "Ask Railmux with Claude Code" in text
     assert "uses provider tokens" in text
+    assert "https://rightglow.github.io/Railmux/" in _rendered_text(modal, size=(40, 14))
 
     assert modal.keypress((64, 28), "A") is None
     assert modal._ask_row.mouse_event(

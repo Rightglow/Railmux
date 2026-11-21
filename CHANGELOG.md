@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0rc3] - 2026-11-21
+
+### Changed
+
+- Refresh idle tips for session search, history preview, the Target pane,
+  and SSH diagnostics.
+- Show `Target 1` or `Target 2` while the sidebar has focus in a split.
+- Keep readable button names in narrow sidebars and link to the usage demos
+  from Help.
+
+### Fixed
+
+- Size Help and Options from the zoomed sidebar when opening from a split.
+
+This candidate is opt-in and uses the same SSH protocol as `0.5.0rc2`.
+
 ## [0.5.0rc2] - 2026-11-21
 
 ### Changed
@@ -3522,7 +3538,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc2...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc3...HEAD
+[0.5.0rc3]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc2...v0.5.0rc3
 [0.5.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc1...v0.5.0rc2
 [0.5.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.2...v0.5.0rc1
 [0.4.2]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2

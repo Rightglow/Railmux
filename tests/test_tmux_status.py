@@ -559,7 +559,7 @@ def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
 
     app._apply_tmux_bar(error=False)
     assert "· Claude Code · ◨" in _style_calls(run, "status-left")[-1]
-    assert "Keys #{?#{==:#{pane_id},#{@railmux_controller_pane}},Sidebar,2} / Open 2" in (
+    assert "#{?#{==:#{pane_id},#{@railmux_controller_pane}}, · Target 2,}" in (
         _style_calls(run, "status-left")[-1]
     )
 
@@ -567,6 +567,14 @@ def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
     app._railmux_has_focus = False
     app._apply_tmux_bar(error=False)
     run.assert_not_called()
+
+    app._workspace.secondary.pane_id = None
+    app._workspace.layout = WorkspaceLayout.SINGLE
+    app._workspace.set_target(AgentWorkspace.PRIMARY)
+    app._apply_tmux_bar(error=False)
+    single_status = _style_calls(run, "status-left")[-1]
+    assert "· Claude Code · ▣" in single_status
+    assert "Target" not in single_status
 
 
 def test_layout_indicator_maps_orientation_and_target():

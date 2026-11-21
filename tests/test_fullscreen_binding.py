@@ -2,9 +2,12 @@
 import threading
 from unittest.mock import MagicMock, call
 
+import urwid
+
 from railmux import tmux_server
 from railmux.config import Config
 from railmux.ui.app import App
+from railmux.ui.modals import HelpModal
 from railmux.ui.workspace import (
     AgentWorkspace,
     WorkspaceLayout,
@@ -913,6 +916,25 @@ def test_full_sidebar_modal_does_not_claim_unknown_zoom_state(monkeypatch):
     assert app._full_sidebar_owned_zoom is False
     assert app._full_sidebar_return_zoom_pane is None
     app._zoom_pane.assert_not_called()
+
+
+def test_full_sidebar_modal_uses_zoomed_size_before_urwid_receives_resize(monkeypatch):
+    app = _bare_app(_railmux_pane_id="%1")
+    app._frame = urwid.SolidFill()
+    app._loop = MagicMock()
+    app._loop.screen.get_cols_rows.return_value = (30, 32)
+    app._window_is_zoomed = lambda: False
+    app._zoom_pane = MagicMock(return_value=True)
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.active_pane_id", lambda _pane: "%1")
+    monkeypatch.setattr("railmux.ui.app.tmux_ctl.pane_size", lambda _pane: (120, 32))
+
+    close = MagicMock()
+    help_dialog = HelpModal(on_close=close, provider_label="Codex", on_ask=None)
+    app._open_full_sidebar_modal(help_dialog, close)
+
+    app._zoom_pane.assert_called_once_with("%1")
+    canvas = app._loop.widget.render((120, 32), focus=True)
+    assert b"https://rightglow.github.io/Railmux/" in b"\n".join(canvas.text)
 
 
 def test_f9_remains_global_while_modal_is_open():

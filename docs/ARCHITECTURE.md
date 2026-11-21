@@ -1005,9 +1005,9 @@ right-hand column so changing counts do not shift or truncate the project name.
 Transient growth of the bottom Button Bar is charged to the Running section
 rather than recomputing every weighted section, so More/​Less cannot move
 Projects or Sessions. The Button Bar renders full actions as neutral filled
-shortcut controls plus labels, collapses to filled single-key controls at
-narrower widths, and keeps its mouse hit regions aligned with the visible
-representation. `+` and `-` expand and collapse the second row without
+shortcut controls plus labels, then drops the shortcuts before abbreviating
+action names as it narrows. Mouse hit regions use the display width of each
+visible label. `+` and `-` expand and collapse the second row without
 requiring a pointer. A one-line filter temporarily removes that charge.
 
 The focused section owns green upper and lower horizontal rules. When the next
@@ -1616,8 +1616,10 @@ routing with focus, selection, or history.
   versions before 3.3. When Railmux regains focus, arrows are removed and all
   agent borders become gray. The status brand's one-cell workspace map remains
   visible across focus changes and its filled half names the Target pane without
-  presenting it as current input focus. A single layout uses `▣` because P1 is
-  the only possible target. While side-by-side Pane 1 has keyboard focus, the
+  presenting it as current input focus. With two visible agent panes, the
+  status line adds `Target 1` or `Target 2` while the sidebar receives input.
+  A single layout uses `▣` because P1 is the only possible target. While
+  side-by-side Pane 1 has keyboard focus, the
   hint bar includes `C-b → Pane 2`; Pane 2 shows `C-b ← Pane 1`. Direct P1/P2
   focus changes refresh that hint with the workspace map and briefly confirm
   `Agent Pane 1 focused` or `Agent Pane 2 focused`. Teardown restores the exact

@@ -371,28 +371,40 @@ class HelpModal(urwid.WidgetWrap):
         ("Navigation", [
             ("↑↓", "Move within the focused pane"),
             ("Tab / Shift-Tab", "Switch between Projects, Sessions, Running panes"),
-            ("Esc", "Clear filter / close popup / move up one pane level"),
+            ("Esc", "Leave filter, close popup, or move up one pane"),
+            ("+ / -", "Expand or collapse the second button row"),
         ]),
         ("Actions", [
             ("↵", "Open or resume the selected session"),
             ("n", "Start a new agent session in the current project"),
-            ("/", "Filter the focused pane"),
+            ("/", "Filter the focused pane. Ctrl-U clears the filter."),
             ("i", "Details of the focused project / session"),
             ("[ / ]", "Resize divider: shrink / expand railmux sidebar"),
             ("r", "Rename the focused session"),
             ("s", "Toggle star (pin to top of session list)"),
             ("k", "Kill the running agent process (keeps session file)"),
-            ("d", "Delete the focused session (prompts for confirmation)"),
-            ("m", "Open the agent Mode picker"),
+            ("d", "Delete a Claude or Codex session after confirmation"),
+            ("m / More → Mode", "Open the agent Mode picker"),
             ("o", "Open persistent Railmux options"),
             ("t", "Open a terminal in the active project"),
-            ("␣", "Preview current history (stopped or running)"),
+            ("␣", "Preview Claude Code or Codex history"),
             ("F8", "Cycle layout: single / side-by-side / stacked"),
             ("F9", "Fullscreen the focused agent / terminal / Vim (toggle)"),
             ("q or Ctrl-C", "Quit railmux (prompts for confirmation)"),
         ]),
+        ("Across agents", [
+            ("g / More → Search", "Find running, recent, and starred sessions across agents"),
+            ("a", "Toggle scope in Running, or click its scope label"),
+        ]),
+        ("Workspace indicator (bottom-left)", [
+            ("▣", "Single agent pane"),
+            ("◧ / ◨", "Side-by-side; filled half is the Target pane"),
+            ("⬒ / ⬓", "Stacked; filled half is the Target pane"),
+            ("Target 1 / 2", "Where sidebar actions open while browsing a split"),
+            ("Green border", "Pane receiving keyboard input"),
+        ]),
         ("Mouse", [
-            ("Left click", "Preview stopped / switch running session"),
+            ("Left click", "Preview a stopped Claude or Codex session, or attach a running session"),
             ("Double-click", "Open session and move focus to it"),
             ("Right-click", "Context menu for the session"),
         ]),
@@ -411,15 +423,6 @@ class HelpModal(urwid.WidgetWrap):
              "Keep this terminal and detach every other attached client"),
             ("q then s",
              "Soft quit closes the shared UI in every attached view; agents survive"),
-        ]),
-        ("Workspace indicator (bottom-left)", [
-            ("▣", "Single agent pane"),
-            ("◧ / ◨", "Side-by-side; filled half is the Target pane"),
-            ("⬒ / ⬓", "Stacked; filled half is the Target pane"),
-        ]),
-        ("Across agents", [
-            ("g", "Search sessions across agents"),
-            ("a", "Toggle scope in Running, or click its scope label"),
         ]),
         ("", [
             ("Each session runs in its own detached tmux session.",
@@ -450,7 +453,11 @@ class HelpModal(urwid.WidgetWrap):
     ) -> None:
         self._on_close = on_close
         self._on_ask = on_ask
-        rows: list = []
+        rows: list = [
+            urwid.Text(("title", "Guide and demos")),
+            urwid.Text("https://rightglow.github.io/Railmux/", wrap="any"),
+            urwid.Divider(),
+        ]
         for section_title, bindings in self.SECTIONS:
             rows.append(urwid.Text(("title", section_title)))
             for key, desc in bindings:
@@ -459,8 +466,8 @@ class HelpModal(urwid.WidgetWrap):
                     if section_title else urwid.Text(key, align="left")
                 )
                 rows.append(urwid.Columns([
-                    ("fixed", 26, key_widget),
-                    urwid.Text(desc, align="left"),
+                    ("weight", 1, key_widget),
+                    ("weight", 2, urwid.Text(desc, align="left")),
                 ], dividechars=1))
             rows.append(urwid.Divider())
         for legend_row in self._legend_rows():

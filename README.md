@@ -247,7 +247,8 @@ shows the current value. Press `Ctrl-U` in the filter editor to clear it, then
 The first Button Bar row keeps Help, Quit, and Detach visible. Select **More**
 to reveal a second row with **Mode**, **Layout**, **Search**, and **Options**.
 Select **Less** to collapse it. The `m`, `F8`, `g`, and `o` shortcuts work while
-the row is hidden. On tmux 3.4 or newer, click the bottom-left agent label
+the row is hidden. Narrow sidebars show action names with fewer shortcut labels.
+On tmux 3.4 or newer, click the bottom-left agent label
 to open the Mode picker, or click the layout symbol to cycle layouts.
 Clicking the message at bottom-right copies its complete text to the local
 clipboard. Expanding the second Button Bar row takes
@@ -334,8 +335,9 @@ at the bottom-left shows the current layout and Target pane:
 | `⬒` / `⬓` | Stacked, targeting top / bottom |
 
 Agent borders turn green around the Focused pane. When focus is in the sidebar,
-the borders return to gray while the status symbol continues to show the Target
-pane. `Ctrl-B Tab` returns directly from either agent pane to the sidebar without
+the borders return to gray. With two visible agent panes, the status bar adds
+**Target 1** or **Target 2** while you browse the sidebar. `Ctrl-B Tab` returns
+directly from either agent pane to the sidebar without
 changing that Target, then toggles back to it. `Ctrl-B` plus an arrow remains
 spatial: left/right moves across a side-by-side split, while up/down moves
 between stacked agent panes.

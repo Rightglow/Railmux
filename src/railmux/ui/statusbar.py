@@ -19,11 +19,12 @@ from railmux.ui import keymap
 TIPS: tuple[str, ...] = (
     "Soft Quit (q, then s) closes shared views; agents keep running",
     "Press / then Ctrl-U to clear a list filter restored at startup",
-    "Single-click a stopped session to preview it without starting it",
+    "Single-click a stopped Claude or Codex session to preview history",
+    "Search finds running, recent, and starred sessions across CLIs",
     "Right-click a Project, Session, or Running row for more actions",
-    "Sidebar actions target the last-focused pane in two-pane layouts",
+    "The filled half of the layout icon shows the Target pane in a split",
     "Returning to one pane leaves the hidden second agent running",
-    "railmux doctor reports the last detected tmux incident",
+    "railmux doctor can show tmux incidents and recent SSH timings",
 )
 
 
@@ -170,8 +171,8 @@ class ButtonBar(urwid.WidgetWrap):
         self._on_detach = on_detach
         callbacks = {
             "help": ("?", self._on_help),
-            "quit": ("Q", self._on_quit),
-            "detach": ("D", self._on_detach),
+            "quit": ("Quit", self._on_quit),
+            "detach": ("Det", self._on_detach),
         }
         self._primary_specs: list[
             tuple[str, str, str, Callable[[], None]]
@@ -195,15 +196,15 @@ class ButtonBar(urwid.WidgetWrap):
         ] = []
         if self._on_mode_toggle is not None:
             self._secondary_specs.append(
-                ("m", "Mode", "M", self._on_mode_toggle))
+                ("m", "Mode", "CLI", self._on_mode_toggle))
         if self._on_layout is not None:
             self._secondary_specs.append(
-                ("F8", "Layout", "L", self._on_layout))
+                ("F8", "Layout", "↔", self._on_layout))
         if on_search is not None:
-            self._secondary_specs.append(("g", "Search", "G", on_search))
+            self._secondary_specs.append(("g", "Search", "Find", on_search))
         if self._on_options is not None:
             self._secondary_specs.append(
-                ("o", "Options", "O", self._on_options))
+                ("o", "Options", "⚙", self._on_options))
         self._hit_areas: list[
             tuple[int, int, int, int, Callable[[], None]]
         ] = []
@@ -224,20 +225,19 @@ class ButtonBar(urwid.WidgetWrap):
         self._loop = loop
 
     @staticmethod
-    def _labels_for_width(
+    def _tier_for_width(
         specs: list[tuple[str, str, str, Callable[[], None]]],
         maxcol: int,
-    ) -> tuple[str, list[str]]:
-        variants = {
-            "full": [f"{spec[0]} {spec[1]}" for spec in specs],
-            "compact": [spec[2] for spec in specs],
-            "tiny": [spec[2] for spec in specs],
-        }
-        for tier in ("full", "compact"):
-            labels = variants[tier]
-            if sum(map(len, labels)) + max(0, len(labels) - 1) <= maxcol:
-                return tier, labels
-        return "tiny", variants["tiny"]
+    ) -> str:
+        variants = (
+            ("full", [f"{key} {name}" for key, name, _, _ in specs]),
+            ("names", [name for _, name, _, _ in specs]),
+        )
+        for tier, labels in variants:
+            width = sum(urwid.calc_width(label, 0, len(label)) for label in labels)
+            if width + max(0, len(labels) - 1) <= maxcol:
+                return tier
+        return "tiny"
 
     def _ensure_width(self, maxcol: int) -> None:
         changed = False
@@ -245,7 +245,7 @@ class ButtonBar(urwid.WidgetWrap):
         if self._expanded:
             rows.append((1, self._secondary_specs))
         for row, specs in rows:
-            tier, _labels = self._labels_for_width(specs, maxcol)
+            tier = self._tier_for_width(specs, maxcol)
             if tier != self._layout_tiers[row]:
                 self._layout_tiers[row] = tier
                 changed = True
@@ -274,7 +274,7 @@ class ButtonBar(urwid.WidgetWrap):
                 tiny = "-" if self._expanded else "+"
             label = {
                 "full": f"{key} {description}",
-                "compact": tiny,
+                "names": description,
                 "tiny": tiny,
             }[tier]
             label_width = urwid.calc_width(label, 0, len(label))
@@ -288,7 +288,7 @@ class ButtonBar(urwid.WidgetWrap):
                     ("btn_label", f" {description}"),
                 ])
             else:
-                markup.append(("btn_key", tiny))
+                markup.append(("btn_label", label))
             col += label_width
         return markup
 

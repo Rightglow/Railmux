@@ -5963,6 +5963,7 @@ class App:
     ) -> None:
         """Zoom the sidebar and present one terminal-sized settings surface."""
         workspace = self._agent_workspace()
+        owner = getattr(self, "_railmux_pane_id", None)
         if workspace.presentation is WorkspacePresentation.COMPACT:
             self._full_sidebar_return_page = workspace.compact_page
             self._full_sidebar_owned_zoom = False
@@ -5970,7 +5971,6 @@ class App:
             self._select_workspace_page(WorkspacePage.SIDEBAR)
         else:
             self._full_sidebar_return_page = None
-            owner = getattr(self, "_railmux_pane_id", None)
             active = tmux_ctl.active_pane_id(owner) if owner else None
             was_zoomed = self._window_is_zoomed()
             self._full_sidebar_return_zoom_pane = (
@@ -5982,13 +5982,17 @@ class App:
         # In wide presentation, zooming the sidebar instead of shrinking the
         # agent prevents transcript reflow and history corruption.
         if (workspace.presentation is WorkspacePresentation.WIDE
-                and self._railmux_pane_id
+                and owner
                 and getattr(self, "_full_sidebar_owned_zoom", False)):
-            self._zoom_pane(self._railmux_pane_id)
+            self._zoom_pane(owner)
+        # The screen can still report the old sidebar size until Urwid
+        # processes the resize event triggered by the zoom or page switch.
+        viewport = tmux_ctl.pane_size(owner) if owner else None
         self._show_overlay(modal, width=60, height=80,
                            click_outside_to_close=True,
                            on_click_outside=on_close,
-                           fixed_width=True, fixed_height=True)
+                           fixed_width=True, fixed_height=True,
+                           viewport=viewport)
 
     def _close_help_modal(self) -> None:
         self._close_full_sidebar_modal()
@@ -8394,14 +8398,16 @@ class App:
                        *, click_outside_to_close: bool = False,
                        fixed_width: bool = False,
                        fixed_height: bool = False,
-                       on_click_outside: Callable[[], None] | None = None) -> None:
+                       on_click_outside: Callable[[], None] | None = None,
+                       viewport: tuple[int, int] | None = None) -> None:
         if self._loop is None:
             return
-        columns, rows = 80, 24
-        try:
-            columns, rows = self._loop.screen.get_cols_rows()
-        except Exception:
-            pass
+        if viewport is None:
+            try:
+                viewport = self._loop.screen.get_cols_rows()
+            except Exception:
+                viewport = (80, 24)
+        columns, rows = viewport
         # When the right pane is open the railmux sidebar is only ~30% of the
         # terminal.  Bump relative dimensions so overlays stay readable.
         # Fixed-pixel overlays (context menus) are left alone.
@@ -12496,13 +12502,16 @@ class App:
                     except (TypeError, ValueError):
                         return content
             route = ""
-            if workspace is not None and workspace.primary.pane_id is not None:
+            if (workspace is not None
+                    and workspace.layout is not WorkspaceLayout.SINGLE
+                    and workspace.primary.is_open and workspace.secondary.is_open):
                 target = 2 if workspace.target_slot_key == AgentWorkspace.SECONDARY else 1
                 # tmux expands this per client as focus changes, without an
                 # extra set-option subprocess for every focus event.
-                focus = "#{?#{==:#{pane_id},#{@railmux_controller_pane}},Sidebar," + str(target) + "}"
-                route = f" · Keys {focus} / Open {target}"
-                left_length = 57
+                route = (
+                    "#{?#{==:#{pane_id},#{@railmux_controller_pane}},"
+                    f" · Target {target},}}"
+                )
             brand = _tmux_status_left(
                 error,
                 self._active_mode().label,
