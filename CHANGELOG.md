@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev18] - 2026-11-21
+
+### Fixed
+
+- Keep Codex's pinned user prompt out of the answer body when stitching
+  Railmux-managed history to the live pane. The question still appears at the
+  top while scrolling.
+
 ## [0.4.2.dev17] - 2026-11-20
 
 ### Fixed
@@ -3454,7 +3462,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev15...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev18...HEAD
+[0.4.2.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev17...v0.4.2.dev18
 [0.4.2.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev13...v0.4.2.dev15
 [0.4.2.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev1...v0.4.2.dev2
 [0.4.2.dev1]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2.dev1

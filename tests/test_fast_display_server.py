@@ -2752,3 +2752,74 @@ def test_codex_history_keeps_the_preceding_prompt_when_hot_capture_starts_mid_an
         pyte, replace(pane, codex_history_policy="native"), 2, 300)
     assert native is not None
     assert native.codex_prompt_context is None and not native.transcript_backed
+
+
+@pytest.mark.parametrize("screen_starts_with_prompt", [False, True])
+def test_codex_local_history_stitches_body_without_a_second_prompt(
+    monkeypatch, tmp_path, screen_starts_with_prompt,
+):
+    from railmux.fast_display_history import LocalHistoryView
+    from railmux.fast_display_input import SgrMouseEvent
+    from railmux.fast_display_protocol import HistoryBatch, decode_history_prefetch
+
+    server = fast_display_server
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    prompt = "› Explain the differences in the two measurement runs."
+    answer = [f"Distinct comparison measurement from run {i:03d}." for i in range(320)]
+    newest = ["The final comparison uses the same input.", "Both runs report a stable result."]
+    messages = [("UserMessage", prompt[2:]), ("AgentMessage", "\n".join(answer))]
+    if screen_starts_with_prompt:
+        # Codex can show a real user row at the top. Even an identical prompt
+        # belongs in the timeline when it starts a separate turn.
+        messages += [("UserMessage", prompt[2:]), ("AgentMessage", "\n".join(newest))]
+        body = ["", f"• {newest[0]}", f"  {newest[1]}"]
+    else:
+        body = [f"  {row}" for row in answer[-5:]]
+    path.write_text("".join(
+        json.dumps({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+            "type": kind, "content": [{"type": "text", "text": message}],
+        }}}) + "\n"
+        for kind, message in messages
+    ))
+    locator = server.tmux_server.encode_transcript_source("codex", session_id, path)
+    assert locator is not None
+    screen = "\n".join([prompt, *body, "", "› ", *([""] * (5 - len(body))), ""])
+    monkeypatch.setattr(
+        subprocess, "check_output", lambda *_a, **_kw: screen.encode(),
+    )
+    pane = server._PaneGeometry(
+        "%8", 31, 0, 64, 8, mouse_forwardable=True, alternate_on=True,
+        transcript_source=locator, transcript_backed=True,
+        transcript_provider="codex", codex_history_policy="local",
+    )
+    pyte = server._extended_pyte(__import__("pyte"))
+    view = LocalHistoryView()
+    request, = InputFrameDecoder().feed(view.begin_prefetch(time.monotonic()))
+    request_id, limit = decode_history_prefetch(request.data)
+    hot = server._capture_pane_history(pyte, pane, request_id, limit)
+    deep = server._capture_pane_history(pyte, pane, 2, 400)
+    assert hot is not None and deep is not None
+
+    def visible(rows):
+        return [server._OVERLAP_STYLE_RE.sub(b"", row).decode().strip() for row in rows]
+
+    assert hot.lines == deep.lines[-limit:]
+    assert hot.timeline_end == deep.timeline_end
+    rows = visible(deep.lines)
+    assert rows.count(prompt) == 1 + screen_starts_with_prompt
+    if screen_starts_with_prompt:
+        assert rows[rows.index(answer[-1]) + 1] == prompt
+        return
+    start = rows.index(answer[-6])
+    assert rows[start:start + 6] == answer[-6:]
+
+    view.accept_prefetch(HistoryBatch(request_id, (hot,)))
+    wheel_up = SgrMouseEvent(b"\x1b[<64;34;3M", 64, 34, 3, True)
+    assert view.wheel(wheel_up).render_history
+    assert view.wheel(wheel_up).render_history
+    overlay = visible(view.overlays()[0][1])
+    assert overlay[0] == prompt and overlay.count(prompt) == 1
+    assert overlay[1:] == answer[-8:-1]
+    selection = view.selection_source(wheel_up, (), focused_pane_id=pane.pane_id)
+    assert selection is not None and selection.rows[0] == b""

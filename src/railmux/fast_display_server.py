@@ -89,6 +89,7 @@ from railmux.fast_display_history import (
     HistoryCaptureJob,
     HistoryCaptureWorker,
     codex_prompt_before,
+    render_codex_prompt,
 )
 from railmux.terminal_screen import (
     HyperlinkTrackingStream,
@@ -1991,6 +1992,23 @@ def _transcript_rows_before_screen(
     return first + keep
 
 
+def _codex_screen_has_pinned_prompt(
+    transcript: Sequence[bytes], screen: Sequence[bytes], kept: int, width: int,
+) -> bool:
+    """Confirm that the first native row repeats a prompt before the seam."""
+    if kept == len(transcript) or len(screen) < 4 or width < 16:
+        return False
+    first = _OVERLAP_STYLE_RE.sub(b"", screen[0]).rstrip()
+    if not first.startswith("› ".encode()):
+        return False
+    label = codex_prompt_before(transcript, kept)
+    if not label or first != _OVERLAP_STYLE_RE.sub(b"", render_codex_prompt(label, width)):
+        return False
+    # A real user row participates in the overlap and moves the seam. The
+    # pinned row precedes the body in the viewport only.
+    return _transcript_rows_before_screen(transcript, screen[1:]) == kept
+
+
 def _capture_pane_history(
     pyte: object,
     pane: _PaneGeometry,
@@ -2125,9 +2143,16 @@ def _capture_pane_history(
     if transcript_used:
         assert transcript_entry is not None
         kept = _transcript_rows_before_screen(transcript_entry.rows, current_raw)
+        if (
+            transcript_provider == "codex" and alternate_on and captured_history_size == 0
+            and _codex_screen_has_pinned_prompt(
+                transcript_entry.rows, current_raw, kept, pane.width,
+            )
+        ):
+            current_raw = current_raw[1:]
         trimmed = len(transcript_entry.rows) - kept
         transcript_lines = transcript_entry.rows[:kept]
-        history_count = max(0, max_lines - pane.height)
+        history_count = max(0, max_lines - len(current_raw))
         source_lines = (
             transcript_lines[-history_count:] if history_count else ()
         ) + current_raw
@@ -2135,7 +2160,7 @@ def _capture_pane_history(
             pane.height,
             (transcript_entry.total_rows or len(transcript_entry.rows))
             - trimmed
-            + pane.height,
+            + len(current_raw),
         )
     else:
         source_lines = rendered_raw
@@ -2193,7 +2218,7 @@ def _capture_pane_history(
             budget_truncated
             or (
                 transcript_entry.more_available
-                or len(transcript_lines) + pane.height > len(lines)
+                or len(transcript_lines) + len(current_raw) > len(lines)
                 if transcript_used and transcript_entry is not None
                 else captured_history_size + captured_height > len(lines)
             )

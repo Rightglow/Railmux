@@ -103,6 +103,15 @@ def test_running_milestone_survives_repaint_chunk_boundaries() -> None:
     assert record_web_demo._running_row_follows_empty_state(output)
 
 
+def test_codex_session_milestone_includes_held_repaint() -> None:
+    marker = b"Explain workspace layout"
+    contains = record_web_demo._output_contains
+    assert not contains(bytearray(b"Explain workspace"), bytearray(), marker)
+    assert contains(bytearray(b"> Explain workspace"), bytearray(b" layout"), marker)
+    assert contains(bytearray(), bytearray(marker), marker)
+    assert contains(bytearray(marker), bytearray(), marker)
+
+
 def test_only_mobile_demo_uses_compact_presentation() -> None:
     for profile in (
         record_web_demo.DESKTOP,

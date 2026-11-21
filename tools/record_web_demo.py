@@ -738,6 +738,12 @@ def _running_row_follows_empty_state(output: bytes | bytearray) -> bool:
     )
 
 
+def _output_contains(output: bytearray, held_tail: bytearray, marker: bytes) -> bool:
+    """Detect a milestone even when its repaint is still held for sanitizing."""
+    boundary = max(0, len(output) - len(marker) + 1)
+    return marker in output or marker in output[boundary:] + held_tail
+
+
 def _record(output: Path, profile: RecordingProfile) -> None:
     if shutil.which("tmux") is None:
         raise RuntimeError("tmux is required to record the Railmux demo")
@@ -1021,7 +1027,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                     if (
                         "switch-codex" in sent
-                        and b"Explain workspace layout" in raw_output
+                        and _output_contains(
+                            raw_output, sanitizer_tail, b"Explain workspace layout",
+                        )
                     ):
                         send_once(
                             "launch-secondary",
@@ -1221,7 +1229,9 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                     if (
                         "switch-codex" in sent
-                        and b"Explain workspace layout" in raw_output
+                        and _output_contains(
+                            raw_output, sanitizer_tail, b"Explain workspace layout",
+                        )
                     ):
                         send_client_keys(
                             "cycle-layout",

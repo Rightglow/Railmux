@@ -680,6 +680,11 @@ rendering is cached by exact file identity because finished segments do not
 change. Web destinations are kept on wrapped links in prose, tables, and
 literal code rows. OSC 8 carries the full URL on each rendered fragment.
 
+Before appending Codex's alternate-screen body to the transcript, capture
+checks whether the first row repeats the prompt preceding the matched seam.
+It omits that row from the history timeline only if the same body aligns
+without it. A real user turn at the seam participates in the alignment.
+
 Protocol v18 lets a Codex local-history snapshot carry the preceding prompt
 when its bounded suffix starts in an answer. The shared history controller
 prefers the prompt preceding its top visible turn and reserves a row for an

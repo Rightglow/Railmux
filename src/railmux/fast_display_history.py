@@ -271,7 +271,7 @@ def codex_prompt_before(rows: Sequence[bytes], start: int, fallback: str = "") -
     return fallback
 
 
-def _render_codex_prompt(label: str, width: int) -> bytes:
+def render_codex_prompt(label: str, width: int) -> bytes:
     text = "".join(char for char in label if char.isprintable())
     remaining = width - 3  # two cells for the marker and one for the right edge
     parts: list[str] = []
@@ -323,7 +323,7 @@ class _HistoryViewport:
                 return b""
         else:
             label = snapshot.codex_prompt_context
-        return _render_codex_prompt(label, snapshot.width) if label else b""
+        return render_codex_prompt(label, snapshot.width) if label else b""
 
 
 @dataclass(frozen=True)
