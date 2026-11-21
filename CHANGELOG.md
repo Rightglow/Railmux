@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2.dev19] - 2026-11-21
+
+### Fixed
+
+- Keep Codex desktop question replies in their original turn when scrolling
+  local history. Use the quoted question and reply to recognize the native
+  pinned header, and clip the header correctly for double-width characters.
+
 ## [0.4.2.dev18] - 2026-11-21
 
 ### Fixed
@@ -3462,7 +3470,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev18...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev19...HEAD
+[0.4.2.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev18...v0.4.2.dev19
 [0.4.2.dev18]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev17...v0.4.2.dev18
 [0.4.2.dev15]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev13...v0.4.2.dev15
 [0.4.2.dev2]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev1...v0.4.2.dev2

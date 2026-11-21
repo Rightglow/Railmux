@@ -671,9 +671,12 @@ source while a provider starts up or switches screens.
 The projection (`codex_transcript.render_codex_native`) draws Codex 0.16x
 `event_msg`/`item_completed` records with Codex's markers, honours
 `thread_rolled_back`, and falls back to `response_item` messages for rollouts
-without those records. Codex continues a long thread in
-`rollout-<time>-<thread>_<segment>.jsonl` files that each hold only their own
-turns; transcript locators accept those names, and the helper prepends the
+without those records. Valid desktop async-question replies render as the
+quoted questions and corresponding answers that Codex uses in its prompt
+header. Indented blank lines belong to the prompt, so the header can
+summarize the reply across paragraph breaks. Codex continues a long thread
+in `rollout-<time>-<thread>_<segment>.jsonl` files that each hold only their
+own turns; transcript locators accept those names, and the helper prepends the
 same thread's earlier segments under the same sessions root, opened with the
 same owned-regular-file rule, within the shared transcript byte budget. Their
 rendering is cached by exact file identity because finished segments do not

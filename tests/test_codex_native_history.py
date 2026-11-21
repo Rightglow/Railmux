@@ -76,6 +76,32 @@ def test_codex_rollback_drops_rewound_turns() -> None:
     assert "› again" in rows and "• three" in rows
 
 
+def test_codex_desktop_question_replies_show_the_quoted_questions_and_answers() -> None:
+    first = {"questionItemId": "one", "question": "Use staging?", "answer": "Yes."}
+    second = {"questionItemId": "two", "question": "With tracing?", "answer": "Enable it."}
+    single = (
+        "<send_user_message_question_reply>\n"
+        + json.dumps(first)
+        + "\n</send_user_message_question_reply>"
+    )
+    batch = (
+        "# Context from my IDE setup:\nIgnored context\n## My request for Codex:\n"
+        "<send_user_message_question_reply>" + json.dumps([first, second])
+        + "</send_user_message_question_reply>"
+    )
+    broken = single.replace('"answer": "Yes."', '"answer": null')
+
+    assert _render([_user(single)], None) == ["", "› > Use staging?", "  ", "  Yes."]
+    assert _render([_user(batch)], None) == [
+        "", "› > Use staging?", "  ", "  Yes.", "  ", "  > With tracing?",
+        "  ", "  Enable it.",
+    ]
+    assert "\n".join(row.strip() for row in _render([_user(broken)], None)) == "\n› " + broken
+    assert "› Quoted: <send_user_message_question_reply>" in _render([
+        _user("Quoted: " + single),
+    ], None)
+
+
 def test_codex_links_stay_visible_and_clickable_when_wrapped() -> None:
     url = "https://example.com/" + "x" * 70
     lines = [json.dumps(_agent(f"打开网页 ([页面]({url}))。")) + "\n"]

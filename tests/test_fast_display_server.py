@@ -2754,9 +2754,9 @@ def test_codex_history_keeps_the_preceding_prompt_when_hot_capture_starts_mid_an
     assert native.codex_prompt_context is None and not native.transcript_backed
 
 
-@pytest.mark.parametrize("screen_starts_with_prompt", [False, True])
+@pytest.mark.parametrize("prompt_kind", ["pinned", "actual", "reply", "clipped_reply"])
 def test_codex_local_history_stitches_body_without_a_second_prompt(
-    monkeypatch, tmp_path, screen_starts_with_prompt,
+    monkeypatch, tmp_path, prompt_kind,
 ):
     from railmux.fast_display_history import LocalHistoryView
     from railmux.fast_display_input import SgrMouseEvent
@@ -2766,10 +2766,26 @@ def test_codex_local_history_stitches_body_without_a_second_prompt(
     session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
     path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
     prompt = "› Explain the differences in the two measurement runs."
+    user_message = prompt[2:]
+    width = 64
+    if prompt_kind in ("reply", "clipped_reply"):
+        question = "Which measurements?"
+        response = "Use the same input."
+        prompt = f"› > {question} {response}"
+        if prompt_kind == "clipped_reply":
+            prefix = "请核对这两次运行的结果并检查每一项测量是否一致"
+            width = 52
+            question = prefix + "并把结果记录下来。"
+            prompt = f"› > {prefix}…"
+        user_message = (
+            "<send_user_message_question_reply>\n"
+            + json.dumps([{"questionItemId": "item", "question": question, "answer": response}])
+            + "\n</send_user_message_question_reply>"
+        )
     answer = [f"Distinct comparison measurement from run {i:03d}." for i in range(320)]
     newest = ["The final comparison uses the same input.", "Both runs report a stable result."]
-    messages = [("UserMessage", prompt[2:]), ("AgentMessage", "\n".join(answer))]
-    if screen_starts_with_prompt:
+    messages = [("UserMessage", user_message), ("AgentMessage", "\n".join(answer))]
+    if prompt_kind == "actual":
         # Codex can show a real user row at the top. Even an identical prompt
         # belongs in the timeline when it starts a separate turn.
         messages += [("UserMessage", prompt[2:]), ("AgentMessage", "\n".join(newest))]
@@ -2789,7 +2805,7 @@ def test_codex_local_history_stitches_body_without_a_second_prompt(
         subprocess, "check_output", lambda *_a, **_kw: screen.encode(),
     )
     pane = server._PaneGeometry(
-        "%8", 31, 0, 64, 8, mouse_forwardable=True, alternate_on=True,
+        "%8", 31, 0, width, 8, mouse_forwardable=True, alternate_on=True,
         transcript_source=locator, transcript_backed=True,
         transcript_provider="codex", codex_history_policy="local",
     )
@@ -2807,8 +2823,8 @@ def test_codex_local_history_stitches_body_without_a_second_prompt(
     assert hot.lines == deep.lines[-limit:]
     assert hot.timeline_end == deep.timeline_end
     rows = visible(deep.lines)
-    assert rows.count(prompt) == 1 + screen_starts_with_prompt
-    if screen_starts_with_prompt:
+    assert sum(row.startswith("› ") for row in rows) == (2 if prompt_kind == "actual" else 1)
+    if prompt_kind == "actual":
         assert rows[rows.index(answer[-1]) + 1] == prompt
         return
     start = rows.index(answer[-6])

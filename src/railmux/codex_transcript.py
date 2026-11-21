@@ -79,6 +79,35 @@ _LINK_RE = re.compile(
     re.IGNORECASE,
 )
 _STYLE_RE = re.compile(r"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
+_QUESTION_REPLY_START = "<send_user_message_question_reply>"
+_QUESTION_REPLY_END = "</send_user_message_question_reply>"
+
+
+def _async_question_reply_text(text: str) -> str | None:
+    """Project a complete Codex desktop reply as its quoted question and answer."""
+    text = text.strip()
+    if text.startswith("# Context from my IDE setup:\n"):
+        text = text.rpartition("\n## My request for Codex:\n")[2].strip()
+    if not (text.startswith(_QUESTION_REPLY_START) and text.endswith(_QUESTION_REPLY_END)):
+        return None
+    try:
+        payload = json.loads(text[len(_QUESTION_REPLY_START):-len(_QUESTION_REPLY_END)])
+    except (ValueError, RecursionError):
+        return None
+    replies = payload if isinstance(payload, list) else [payload]
+    if not replies or not all(
+        isinstance(reply, dict)
+        and all(isinstance(reply.get(key), str) for key in ("questionItemId", "question", "answer"))
+        for reply in replies
+    ):
+        return None
+    message = "\n\n".join(f"> {reply['question']}\n\n{reply['answer']}" for reply in replies)
+    # Reject unpaired surrogate escapes in the nested JSON before drawing.
+    try:
+        message.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return message
 
 
 def _web_url(url: str) -> str:
@@ -308,7 +337,7 @@ class _Renderer:
         self._emit(rows)
 
     def user(self, text: str) -> None:
-        text = _sanitize_text(text).strip()
+        text = _sanitize_text(_async_question_reply_text(text) or text).strip()
         if not text or text.lstrip().startswith(_CODEX_SYNTHETIC_PREFIXES):
             return
         self.start_turn()

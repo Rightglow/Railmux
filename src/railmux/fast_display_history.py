@@ -253,9 +253,11 @@ def _codex_prompt(rows: Sequence[bytes], index: int) -> tuple[int, str] | None:
     end = index + 1
     while end < len(rows):
         continuation = _history_text(rows[end])
-        if not continuation.startswith("  ") or not continuation.strip():
+        # The transcript indents even blank lines within a user message.
+        # The unindented blank before the next block still ends the prompt.
+        if not continuation.startswith("  "):
             break
-        if len(label) < 512:
+        if len(label) < 512 and continuation.strip():
             label = f"{label} {' '.join(continuation[:512].split())}"[:512]
         end += 1
     return end, label
@@ -276,13 +278,14 @@ def render_codex_prompt(label: str, width: int) -> bytes:
     remaining = width - 3  # two cells for the marker and one for the right edge
     parts: list[str] = []
     for char in text:
-        remaining -= _display_width(char)
-        if remaining < 0:
-            while remaining < 0 and parts:
+        cells = _display_width(char)
+        if cells > remaining:
+            while remaining < 1 and parts:
                 remaining += _display_width(parts.pop())
             parts.append("…")
             break
         parts.append(char)
+        remaining -= cells
     return ("\033[1;2m›\033[22m " + "".join(parts) + "\033[0m").encode()
 
 
