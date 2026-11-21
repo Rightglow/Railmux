@@ -72,6 +72,9 @@ credential and publishes only after its build and test job succeeds.
 
    A missing or empty release section is an error, so the tagged release
    cannot silently publish an empty set of notes.
+   For a new version base, curate short user-facing highlights in
+   `src/railmux/launch_notes.py`. The startup dialog uses the newest two
+   product versions and shares each version's highlights across its RC builds.
 2. Run the full test suite and smoke-test the TUI on supported platforms:
 
    ```bash

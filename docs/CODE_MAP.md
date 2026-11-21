@@ -10,6 +10,7 @@ moves, but do not copy invariants, defaults, timeouts, or release evidence here.
 | Symptom or task | First production entry points | Focused tests | Authority |
 | --- | --- | --- | --- |
 | Launch, detach, hard/soft quit | `entrypoint.main`, `cli.main`, `tmux_server`, `tmux_health` | `test_cli.py`, `test_tmux_server.py`, `test_app_quit.py`, focused real-tmux cases | Architecture: dedicated server, restart state |
+| First launch after upgrading | `launch_notes.maybe_show_launch_notes`, `cli.main`, `fast_display_client.main`, `ui/modals.LaunchNotesModal` | `test_launch_notes.py` | Architecture: upgrade highlights |
 | Projects/Sessions/Running rows | `ui/app.py`, `ui/projects_pane.py`, `ui/sessions_pane.py`, `ui/running_pane.py` | matching pane test plus `test_running_sort.py` | Architecture: disposable sidebar rows |
 | Cross-provider session search | `ui/quick_open.py`, `ui/app.App._open_quick_open` | `test_quick_open.py`, `test_statusbar.py` | Architecture: agent workspace and sidebar mode |
 | Provider discovery or history identity | Claude: `discovery.py`, `session_cache.py`; Codex: `background_index.py`, `codex_index.py`; Devin: `devin_index.py` | matching discovery/index test, then lineage/orphan tests when identity changes | Architecture: provider modes and immutable index generations |

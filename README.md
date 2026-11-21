@@ -623,6 +623,11 @@ checks. Update checks time out quickly and never prevent offline startup;
 failed installs continue with the installed version and print a manual
 command. Editable source installations are reported but never overwritten.
 
+The first interactive launch after an upgrade shows a short **What’s new**
+summary for the two latest product versions. Press **Enter** or **Esc** to
+continue. For `railmux ssh`, the local launcher shows the summary before
+connecting.
+
 On Windows, upgrade the package from PowerShell with
 `py -m pip install --upgrade railmux` (or the Python executable used for the
 original installation). The next `railmux` launch prepares the matching app

@@ -1903,6 +1903,22 @@ reminders, marketing copy, and facts already exposed by the UI do not belong in
 the rotating pool. Persistent but otherwise hidden state, recovery paths, and
 cross-pane consequences are appropriate tip material.
 
+### Upgrade highlights
+
+The interactive launcher shows bundled English highlights for the latest two
+product versions before attaching to the workspace. POSIX and managed Windows
+use the same launcher. The SSH client shows the same local summary before
+connecting, outside the display and reconnect timers. Headless helpers, Help,
+and version commands never consume this acknowledgement.
+
+The local `launch-version` file stores the highest version reached or
+acknowledged. A new installation records its version and opens directly.
+Older installations without a version marker can be recognized through an
+existing workspace, persisted sidebar state, or an older SSH client diagnostic.
+An upgrade records its version on Enter or Esc. A non-blocking lock prevents
+two simultaneous launchers from presenting the same update. Failed state or
+terminal access leaves the workspace available.
+
 Detached agent sessions commonly begin at 80x24. Before attaching a nested
 tmux client, create/identify the outer display pane, read its exact dimensions,
 and best-effort resize the inner session window to match. This ordering avoids

@@ -756,6 +756,11 @@ def main(argv: list[str] | None = None) -> int:
             tmux_server.target_session_id(dedicated_target, "railmux")
             if dedicated_target is not None else None
         )
+        from railmux.launch_notes import maybe_show_launch_notes
+        try:
+            maybe_show_launch_notes(existing_workspace=dedicated_session_id is not None)
+        except KeyboardInterrupt:
+            return 130
         created_detached_session = False
         if dedicated_target is not None and dedicated_session_id is None:
             if managed_windows:

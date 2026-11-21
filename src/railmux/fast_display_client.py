@@ -3859,7 +3859,14 @@ def run(args: argparse.Namespace) -> int:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
-        return run(parse_args(argv))
+        args = parse_args(argv)
+        from railmux.launch_notes import maybe_show_launch_notes
+
+        try:
+            maybe_show_launch_notes()
+        except KeyboardInterrupt:
+            return 130
+        return run(args)
     except ProbeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

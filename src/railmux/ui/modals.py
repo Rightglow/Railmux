@@ -92,12 +92,13 @@ class _ReadOnlyInfoModal(urwid.WidgetWrap):
     _NAV_KEYS = {"up", "down", "page up", "page down", "home", "end"}
 
     def __init__(self, rows: list, *, title: str,
-                 on_close: Callable[[], None]) -> None:
+                 on_close: Callable[[], None],
+                 footer_actions: tuple[tuple[str, str], ...] = (("↵ / Esc", "close"),)) -> None:
         self._on_close = on_close
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
         footer = urwid.Pile([
             urwid.Divider(),
-            _action_legend([("↵ / Esc", "close")]),
+            _action_legend(list(footer_actions), separator=" · ", wrap="space"),
         ])
         self._footer = footer
         frame = urwid.Frame(
@@ -121,6 +122,30 @@ class _ReadOnlyInfoModal(urwid.WidgetWrap):
             self._listbox.keypress((inner_cols, inner_rows), key)
             return None
         return key
+
+
+class LaunchNotesModal(_ReadOnlyInfoModal):
+    """Short release highlights with a persistent continue instruction."""
+
+    def __init__(
+        self,
+        version: str,
+        sections: tuple[tuple[str, tuple[str, ...]], ...],
+        *,
+        on_continue: Callable[[], None],
+    ) -> None:
+        rows: list[urwid.Widget] = []
+        for release, highlights in sections:
+            if rows:
+                rows.append(urwid.Divider())
+            rows.append(urwid.Text(("title", release)))
+            rows.extend(
+                urwid.Padding(urwid.Text(f"• {highlight}"), left=1, right=1)
+                for highlight in highlights
+            )
+        super().__init__(rows, title=f"What’s new in Railmux {version}",
+                         on_close=on_continue,
+                         footer_actions=(("↑↓", "scroll"), ("Enter / Esc", "continue")))
 
 
 class ProjectInfoModal(_ReadOnlyInfoModal):

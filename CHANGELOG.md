@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0rc3] - 2026-11-21
 
+### Added
+
+- Show a short offline summary of the two latest product releases after an
+  upgrade. Press Enter or Esc to continue opening the workspace.
+
 ### Changed
 
 - Refresh idle tips for session search, history preview, the Target pane,
