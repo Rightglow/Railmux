@@ -319,11 +319,10 @@ export default function Home() {
                 </div>
                 <h3>Pick an agent.</h3>
                 <p>
-                  Press <kbd>m</kbd> to cycle the installed, visible
-                  CLIs. Pick one directly through <strong>More → Mode</strong>
-                  {" "}or <strong>Options → Agent mode</strong>. Each mode
-                  remembers its sidebar position and filters. Sessions in
-                  other modes keep running.
+                  Press <kbd>m</kbd> or click <strong>More → Mode</strong> to
+                  open the same provider picker. Each mode remembers its
+                  sidebar position and filters. Sessions in other modes
+                  keep running.
                 </p>
                 <small className="status-click-note">
                   On tmux 3.4+, click the agent label in the lower-left
@@ -458,8 +457,9 @@ export default function Home() {
                 <h3>A sidebar that knows your work.</h3>
                 <p>
                   New Project and New Session stay pinned at the top. Start or
-                  resume there, browse history, and press <kbd>m</kbd>—or click
-                  Mode—to switch the whole sidebar between providers.
+                  resume there and browse history. Press <kbd>g</kbd> or click
+                  {" "}<strong>More → Search</strong> to find running, recent,
+                  and starred sessions across providers.
                 </p>
               </div>
             </article>

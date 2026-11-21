@@ -2,6 +2,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from railmux.config import Config
 from railmux.modes import (
     CLAUDE_MODE,
     CODEX_MODE,
@@ -31,16 +32,20 @@ def test_registry_cycles_three_modes_in_declared_order():
     assert registry.for_tmux_name("rv-session") is REVIEW_MODE
 
 
-def test_app_mode_action_uses_registry_instead_of_boolean_toggle():
+def test_mode_picker_offers_registered_modes():
     registry = ModeRegistry(
         (CLAUDE_MODE, CODEX_MODE, REVIEW_MODE), default_key="claude")
     app = App.__new__(App)
     app._mode_registry = registry
-    app._mode_availability = frozenset(mode.key for mode in registry.modes)
+    app._config = Config()
+    app._running = {}
+    app._probe_mode_availability = lambda: frozenset(mode.key for mode in registry.modes)
     app._active_mode_key = "codex"
     app._switch_mode = MagicMock()
 
-    app._cycle_mode()
+    *_, (label, select_review) = app._mode_menu_entries()
+    assert label.strip() == "Review Agent"
+    select_review()
 
     app._switch_mode.assert_called_once_with("review")
 

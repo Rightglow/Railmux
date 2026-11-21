@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0rc2] - 2026-11-21
+
+### Changed
+
+- Open the same Mode picker with `m` or the Mode button.
+- Add Search to the Button Bar. `g` opens the same session search.
+- Click the scope in the Running title to toggle between the current CLI and
+  all agents.
+
+### Fixed
+
+- Highlight the selected session while the search field keeps focus.
+- Mark agent mode and history settings as submenu entries in Options.
+
+This candidate is opt-in and uses the same SSH protocol as `0.5.0rc1`.
+
 ## [0.5.0rc1] - 2026-11-21
 
 ### Added
@@ -3506,7 +3522,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc1...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc2...HEAD
+[0.5.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc1...v0.5.0rc2
 [0.5.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.2...v0.5.0rc1
 [0.4.2]: https://github.com/Rightglow/Railmux/compare/v0.4.1...v0.4.2
 [0.4.2.dev19]: https://github.com/Rightglow/Railmux/compare/v0.4.2.dev18...v0.4.2.dev19

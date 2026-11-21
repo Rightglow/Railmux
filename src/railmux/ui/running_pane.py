@@ -119,9 +119,12 @@ class RunningSessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
 
     @property
     def sidebar_title(self) -> str:
-        """Stable unified-sidebar title; its count owns a separate column."""
-        title = "Running · All" if self._all_agents else "Running"
-        return f"{title} [filtered]" if self._filter else title
+        """Stable unified-sidebar title with a separate scope and count."""
+        return "Running [filtered]" if self._filter else "Running"
+
+    @property
+    def sidebar_scope(self) -> str:
+        return "All" if self._all_agents else self._provider_label
 
     @property
     def section_count(self) -> str:

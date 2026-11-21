@@ -506,14 +506,12 @@ def test_internal_status_actions_are_modal_safe():
     app._loop = MagicMock(widget=object())
     app._show_tmux_feedback = MagicMock()
     app._open_mode_menu = MagicMock()
-    app._cycle_mode = MagicMock()
     app._rotate_split = MagicMock()
 
     app._on_input("f5")
     app._on_input("f7")
 
     app._open_mode_menu.assert_not_called()
-    app._cycle_mode.assert_not_called()
     app._rotate_split.assert_not_called()
     assert app._show_tmux_feedback.call_count == 2
     assert "Close the dialog" in app._show_tmux_feedback.call_args.args[0]
@@ -525,14 +523,12 @@ def test_internal_status_actions_dispatch_without_modal():
     app._loop = MagicMock()
     app._loop.widget = app._frame
     app._open_mode_menu = MagicMock()
-    app._cycle_mode = MagicMock()
     app._rotate_split = MagicMock()
 
     app._on_input("f5")
     app._on_input("f7")
 
     app._open_mode_menu.assert_called_once_with()
-    app._cycle_mode.assert_not_called()
     app._rotate_split.assert_called_once_with()
 
 

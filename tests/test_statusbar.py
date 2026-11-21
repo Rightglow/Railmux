@@ -502,7 +502,7 @@ def test_buttonbar_uses_responsive_labels_without_losing_actions():
         assert len(bar._hit_areas) == 4
 
 
-def test_buttonbar_more_expands_mode_and_layout_then_less_collapses():
+def test_buttonbar_more_expands_actions_then_less_collapses():
     calls = []
     expansion = []
     bar = ButtonBar(
@@ -511,6 +511,7 @@ def test_buttonbar_more_expands_mode_and_layout_then_less_collapses():
         on_detach=lambda: None,
         on_mode_toggle=lambda: calls.append("mode"),
         on_layout=lambda: calls.append("layout"),
+        on_search=lambda: calls.append("search"),
         on_options=lambda: calls.append("options"),
         on_expanded_change=expansion.append,
     )
@@ -522,9 +523,7 @@ def test_buttonbar_more_expands_mode_and_layout_then_less_collapses():
     text = "\n".join(
         line.decode() for line in bar.render((60,), False).text)
     assert "Less" in text
-    assert "m Mode" in text
-    assert "F8 Layout" in text
-    assert "o Options" in text
+    assert "m Mode F8 Layout g Search o Options" in text
     assert bar.rows((60,)) == 2
     assert bar.extra_rows == 1
     assert expansion == [True]
@@ -534,7 +533,7 @@ def test_buttonbar_more_expands_mode_and_layout_then_less_collapses():
         bar.mouse_event(
             (60,), "mouse press", 1,
             (hit_start + hit_end) // 2, hit_row, False)
-    assert calls == ["mode", "layout", "options"]
+    assert calls == ["mode", "layout", "search", "options"]
 
     row, start, end, _index, _callback = next(
         area for area in bar._hit_areas if area[0] == 0 and area[3] == 3)
@@ -542,6 +541,33 @@ def test_buttonbar_more_expands_mode_and_layout_then_less_collapses():
     assert bar.rows((60,)) == 1
     assert bar.extra_rows == 0
     assert expansion == [True, False]
+
+
+@pytest.mark.parametrize(("key", "label", "title"), [
+    ("m", "m Mode", b"Mode"),
+    ("g", "g Search", b"Search sessions"),
+])
+def test_sidebar_shortcut_and_button_open_the_same_picker(app, key, label, title):
+    app._railmux_pane_id = None
+    app._loop = MagicMock(widget=app._frame)
+    app._show_overlay = MagicMock()
+    app._probe_mode_availability = lambda: frozenset({"claude"})
+    app._mode_availability = app._probe_mode_availability()
+    app._project_snapshot = []
+    app._switch_mode = MagicMock()
+
+    app._on_input(key)
+    keyboard_picker, = app._show_overlay.call_args.args
+    assert title in keyboard_picker.render((60, 12)).text[0]
+
+    bar = app._button_bar
+    bar.set_expanded(True)
+    button_line = bar.render((40,)).text[1].decode()
+    assert bar.mouse_event((40,), "mouse press", 1, button_line.index(label), 1, False)
+    mouse_picker, = app._show_overlay.call_args.args
+    assert app._show_overlay.call_count == 2
+    assert mouse_picker.render((60, 12)).text == keyboard_picker.render((60, 12)).text
+    app._switch_mode.assert_not_called()
 
 
 def test_plus_and_minus_expand_and_collapse_the_app_button_bar(app):
@@ -557,6 +583,56 @@ def test_plus_and_minus_expand_and_collapse_the_app_button_bar(app):
     app._on_input("-")
     assert app._button_bar.extra_rows == 0
     assert app._sidebar._bottom_row_debt == 0
+
+
+def test_running_title_scope_and_keyboard_toggle_share_the_running_projection(app):
+    app._active_mode_key = "codex"
+    app._set_mode_pane_context(app._active_mode())
+    app._railmux_has_focus = True
+    app._sidebar.focus_position = 0
+    app._running = {
+        "own": app_mod._Running("own", "cx-own", "project/Codex task", None,
+                                session_type="codex"),
+        "other": app_mod._Running("other", "dv-other", "project/Devin task", None,
+                                  session_type="devin"),
+    }
+    app._running_pane.set_filter("project")
+    app._render_running_pane()
+    size = (40, 26)
+
+    def render_sidebar():
+        canvas = app._sidebar_body.render(size, focus=True)
+        lines = [line.decode() for line in canvas.text]
+        header_row = next(i for i, line in enumerate(lines) if line.startswith("─ RUNNING "))
+        return lines, header_row
+
+    lines, row = render_sidebar()
+    assert "RUNNING [Codex] [filtered]" in lines[row]
+    assert "1/1" in lines[row]
+    assert not any("Devin task" in line for line in lines)
+    scope_col = lines[row].index("[Codex]")
+
+    scroll = MagicMock(return_value=None)
+    app._running_pane._listbox.keypress = scroll
+    assert app._sidebar_body.mouse_event(size, "mouse press", 5, scope_col, row, True)
+    assert scroll.call_args.args[1] == "down"
+    assert app._sidebar.focus_position == 0
+    assert app._running_pane.sidebar_scope == "Codex"
+
+    app._sidebar_body.mouse_event(size, "mouse press", 1, scope_col - 1, row, True)
+    assert app._running_pane.sidebar_scope == "Codex"
+    assert app._sidebar_body.mouse_event(size, "mouse press", 1, scope_col, row, True)
+    lines, row = render_sidebar()
+    assert "RUNNING [All] [filtered]" in lines[row]
+    assert "2/2" in lines[row]
+    assert any("Devin task" in line for line in lines)
+    assert app._current_mode_key() == "codex"
+
+    app._on_input("a")
+    lines, row = render_sidebar()
+    assert "RUNNING [Codex] [filtered]" in lines[row]
+    assert "1/1" in lines[row]
+    assert not any("Devin task" in line for line in lines)
 
 
 def test_buttonbar_compact_hit_areas_match_visible_actions():

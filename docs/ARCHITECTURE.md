@@ -1303,14 +1303,20 @@ An empty Projects or Sessions view must name the currently browsed provider and
 offer its relevant new-project/session action; it must never retain content from
 the previously browsed provider.
 
-`g` opens Quick Open across the agents. Running choices carry the exact
-in-memory binding from the registry. Saved choices use the normal
-provider-specific resume path and its session lease checks. Codex and Devin
-use their published index snapshots. Claude reads its recent projects and
-starred sessions in a worker with a private cache. The picker filters those
-results in memory. `a` toggles a cross-agent Running projection for this
-invocation. Opening a foreign Running entry leaves the browsing mode intact,
-and running actions resolve provider information from the selected entry.
+`m` and the Mode button open the same registry-backed picker. It selects a
+provider explicitly and starts with the current mode selected when available.
+
+`g` and the Search button open the same cross-agent session picker. Running
+choices carry the exact in-memory binding from the registry. Saved choices
+use the normal provider-specific resume path and its session lease checks.
+Codex and Devin use their published index snapshots. Claude reads its recent
+projects and starred sessions in a worker with a private cache. The picker
+filters those results in memory. The Running title shows the current CLI or
+All as a scope button. Clicking it or pressing `a` while Running has focus
+toggles the same invocation-local projection. Wheel input over the button
+still scrolls Running. Opening a foreign Running entry leaves the browsing
+mode intact, and running actions resolve provider information from the
+selected entry.
 
 Exact-owner local restart state serializes the layout, both slot contents,
 Target pane, keyboard focus, preview rollback target, and any live collapsed

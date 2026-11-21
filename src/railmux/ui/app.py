@@ -1075,7 +1075,7 @@ class App:
         self._mode_availability = self._probe_mode_availability()
         self._last_mode_availability_check = time.monotonic()
         self._active_mode_key = next(
-            iter(self._cycle_mode_keys()), self._mode_registry.default_key)
+            iter(self._launchable_mode_keys()), self._mode_registry.default_key)
         self._last_available_mode_key = self._active_mode_key
         self._codex_index = BackgroundCodexIndex(
             self._codex_home_path(), self._renames)
@@ -1165,6 +1165,8 @@ class App:
                 self._running_pane,
                 lambda: self._running_pane.sidebar_title,
                 lambda: self._running_pane.section_count,
+                scope_toggle=(lambda: self._running_pane.sidebar_scope,
+                              self._toggle_running_scope),
             )),
         ])
         sidebar_frame = UnifiedSidebarFrame(
@@ -1182,6 +1184,7 @@ class App:
             on_detach=self._on_detach,
             on_mode_toggle=self._open_mode_menu,
             on_layout=self._rotate_split,
+            on_search=self._open_quick_open,
             on_options=self._open_options_modal,
             on_expanded_change=self._on_button_bar_expanded,
         )
@@ -1226,7 +1229,7 @@ class App:
         # migration path for state files written by Railmux <= 0.1.1.
         restored_mode = self._mode_key_from_state(state)
         self._enter_mode_on_restore(restored_mode)
-        if not self._cycle_mode_keys():
+        if not self._launchable_mode_keys():
             self._set_status(
                 "No enabled agent CLI found. Run railmux config → Program paths.",
                 "warn",
@@ -6530,7 +6533,7 @@ class App:
     def _view_state_data(self) -> dict:
         current_mode = self._current_mode_key()
         last_mode = getattr(self, "_last_available_mode_key", current_mode)
-        if current_mode != last_mode and current_mode not in self._cycle_mode_keys():
+        if current_mode != last_mode and current_mode not in self._launchable_mode_keys():
             previous = self._mode_view_states.get(last_mode, _ModeViewState())
             return {
                 "mode": last_mode,
@@ -6809,7 +6812,7 @@ class App:
 
     def _mode_key_from_state(self, state: dict | None) -> str:
         saved = self._saved_mode(state).key
-        usable = self._cycle_mode_keys()
+        usable = self._launchable_mode_keys()
         if saved in usable or not usable:
             return saved
         return usable[0]
@@ -8752,7 +8755,7 @@ class App:
             and shutil.which(self._configured_mode_binary(mode)) is not None
         )
 
-    def _cycle_mode_keys(self) -> tuple[str, ...]:
+    def _launchable_mode_keys(self) -> tuple[str, ...]:
         installed = getattr(self, "_mode_availability", None)
         if installed is None:
             installed = self._probe_mode_availability()
@@ -8762,19 +8765,10 @@ class App:
             if mode.key in installed and mode.key not in hidden
         )
 
-    def _cycle_mode(self) -> None:
-        """Cycle launchable, visible agents on this execution host."""
-        keys = self._cycle_mode_keys()
-        if not keys:
-            return
-        current = self._current_mode_key()
-        index = (keys.index(current) + 1) % len(keys) if current in keys else 0
-        self._switch_mode(keys[index])
-
     def _mode_menu_entries(self) -> list[tuple[str, Callable[[], None] | None]]:
         self._mode_availability = self._probe_mode_availability()
         self._last_mode_availability_check = time.monotonic()
-        usable = self._cycle_mode_keys()
+        usable = self._launchable_mode_keys()
         live = {
             mode.key
             for running in self._running.values()
@@ -8919,7 +8913,7 @@ class App:
         outgoing_project = self._selected_project
         self._remember_mode_view()
         self._active_mode_key = target.key
-        usable = self._cycle_mode_keys()
+        usable = self._launchable_mode_keys()
         if target.key in usable:
             self._last_available_mode_key = target.key
 
@@ -10314,7 +10308,7 @@ class App:
 
     def _quick_open_choices(self, claude: tuple[SessionMeta, ...]) -> list[SessionChoice]:
         starred = self._favorite_ids_for_view()
-        usable = self._cycle_mode_keys()
+        usable = self._launchable_mode_keys()
         choices = []
         live_ids = set()
         for running in self._running.values():
@@ -10366,7 +10360,7 @@ class App:
 
     def _open_quick_running(self, entry: RunningEntry, expected: _Running) -> None:
         if self._by_tmux(entry.tmux_name) is not expected:
-            self._set_status("The running session changed. Open Quick Open again.", "warn")
+            self._set_status("The running session changed. Search sessions again.", "warn")
             return
         self._on_running_select(entry)
 
@@ -10383,7 +10377,7 @@ class App:
         """Open instantly from indexes. Load Claude history outside Urwid."""
         if self._loop is None:
             return
-        usable = self._cycle_mode_keys()
+        usable = self._launchable_mode_keys()
         devin = self._devin_index if "devin" in usable else None
         if devin is not None:
             devin.refresh()

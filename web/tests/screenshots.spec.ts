@@ -173,7 +173,13 @@ test("reserve compact projection for the mobile recording", async () => {
     .toBe(true);
   expect(headers[5].cast).toContain("Soft quit — keep agents running");
   expect(headers[5].cast).toContain(
-    "keymouse|+|30|37|Show Mode, Layout, and Options",
+    "keymouse|+|30|37|Show Mode, Layout, Search, and Options",
+  );
+  expect(headers[5].cast).toContain(
+    "keymouse|M|4|37|Open Mode picker",
+  );
+  expect(headers[5].cast).toContain(
+    "key|↓ Enter|Select Codex",
   );
   expect(headers[5].cast).toContain(
     "key|S|Soft quit — keep agents running",
@@ -498,16 +504,17 @@ test("show real mode, layout, and quit controls", async ({ page }) => {
   });
   await expect(pointer).toBeVisible();
   await expect(mouseTarget).toContainText("Click the sidebar");
-  await expect(hud).toContainText("Show Mode, Layout, and Options", {
+  await expect(hud).toContainText("Show Mode, Layout, Search, and Options", {
     timeout: 5_000,
   });
   await expect(pointer).toBeVisible();
   await expect(mouseTarget).toContainText("Click More");
-  await expect(hud).toContainText("Switch sidebar to Codex", {
+  await expect(hud).toContainText("Open Mode picker", {
     timeout: 5_000,
   });
   await expect(pointer).toBeVisible();
   await expect(mouseTarget).toContainText("Click Mode");
+  await expect(hud).toContainText("Select Codex", { timeout: 5_000 });
   await expect(player.locator(".ap-term")).toContainText("Codex");
   await expect(hud).toContainText("Cycle workspace layout", {
     timeout: 5_000,

@@ -227,15 +227,7 @@ def test_foreign_pane_focus_only_selects_a_visible_project(monkeypatch):
     assert app._selected_project is shared
 
 
-def test_sidebar_mode_key_cycles_all_bundled_providers(monkeypatch):
-    app = _mode_app(monkeypatch, [], [])
-    app._loop = None
-    for expected in ("codex", "devin", "claude"):
-        app._on_input("m")
-        assert app._current_mode_key() == expected
-
-
-def test_cycle_and_restore_use_configured_cli_availability(monkeypatch):
+def test_picker_and_restore_use_configured_cli_availability(monkeypatch):
     app = _mode_app(monkeypatch, [], [])
     app._config = Config(
         claude_binary="/missing/claude", codex_binary="/custom/codex")
@@ -247,22 +239,28 @@ def test_cycle_and_restore_use_configured_cli_availability(monkeypatch):
     assert app._right_mode_from_state({"mode": "claude"}) == CLAUDE_MODE
 
     app._active_mode_key = "codex"
-    app._cycle_mode()
-    assert app._current_mode_key() == "codex"
+    assert [label for label, choose in app._mode_menu_entries() if choose] == ["● Codex"]
 
     available.add("devin")
     app._mode_availability = app._probe_mode_availability()
     assert app._mode_key_from_state({"mode": "devin"}) == "devin"
-    for expected in ("devin", "codex", "devin", "codex"):
-        app._cycle_mode()
-        assert app._current_mode_key() == expected
+    app._loop = None
+    app._close_modal = MagicMock()
+    app._show_overlay = MagicMock()
+    app._on_input("m")
+    assert app._current_mode_key() == "codex"
+    menu = app._show_overlay.call_args.args[0]
+    menu.keypress((39, 5), "down")
+    menu.keypress((39, 5), "enter")
+    assert app._current_mode_key() == "devin"
 
     app._config = Config(
         claude_binary="/missing/claude", codex_binary="/custom/codex",
         hidden_modes=("devin",))
     assert app._mode_key_from_state({"mode": "devin"}) == "codex"
-    app._cycle_mode()
-    assert app._current_mode_key() == "codex"
+    menu = app._mode_menu_entries()
+    assert menu[-1] == ("● Devin · Hidden", None)
+    assert [label.strip() for label, choose in menu if choose] == ["Codex"]
 
 
 def test_mode_menu_can_reopen_a_hidden_provider_with_running_sessions(monkeypatch):

@@ -27,10 +27,14 @@ class SidebarSection(urwid.WidgetWrap):
         pane: ScrollableSidebarPane,
         title: Callable[[], str],
         count: Callable[[], str] | None = None,
+        *,
+        scope_toggle: tuple[Callable[[], str], Callable[[], None]] | None = None,
     ) -> None:
         self.pane = pane
         self._title = title
         self._count = count
+        self._scope_toggle = scope_toggle
+        self._scope_hit: tuple[int, int, int] | None = None
         self._previous_section_focused = False
         self._header = urwid.Text("")
         self._pile = urwid.Pile([
@@ -51,7 +55,7 @@ class SidebarSection(urwid.WidgetWrap):
         maxcol = size[0]
         raw_title = self._title()
         stable, separator, detail = raw_title.partition(" ")
-        display_title = stable.upper() + separator + detail
+        stable = stable.upper()
         count = self._count() if self._count is not None else ""
         count = str(count).strip()
 
@@ -60,33 +64,43 @@ class SidebarSection(urwid.WidgetWrap):
         end = "─"
         fixed = prefix + " " + count_segment + end
         fixed_width = urwid.calc_width(fixed, 0, len(fixed))
-        title = _truncate_title(
-            display_title, max(1, maxcol - fixed_width))
-        base = prefix + title + " " + count_segment + end
-        used = urwid.calc_width(base, 0, len(base))
-        middle = " " + "─" * max(0, maxcol - used)
-        header = prefix + title + middle + count_segment + end
+        title_width = maxcol - fixed_width
+        title_attr = "pane_focus" if focus else "pane"
+        rule_attr = "pane_focus" if focus or self._previous_section_focused else "pane"
+        title = [(title_attr, _truncate_title(stable + separator + detail, title_width))]
 
-        if focus:
-            self._header.set_text(("pane_focus", header))
-        elif self._previous_section_focused:
-            # This row closes the selected section while introducing the next:
-            # keep the boundary green without colouring the next title as if it
-            # also owned keyboard focus.
-            markup: list = [
-                ("pane_focus", prefix),
-                ("pane", title),
-                ("pane_focus", middle),
-            ]
-            if count_segment:
-                markup.append(("pane", count_segment))
-            markup.append(("pane_focus", end))
-            self._header.set_text(markup)
-        else:
-            # At rest, title and rule share one neutral tone so the three
-            # section boundaries read as one consistent hierarchy.
-            self._header.set_text(("pane", header))
+        self._scope_hit = None
+        if self._scope_toggle is not None:
+            label = f"[{self._scope_toggle[0]()}]"
+            leading = stable + " "
+            leading_width = urwid.calc_width(leading, 0, len(leading))
+            label_width = urwid.calc_width(label, 0, len(label))
+            # Keep the clickable label whole when trimming the filter marker.
+            remaining = title_width - leading_width - label_width
+            if remaining >= 0:
+                title = [(title_attr, leading), ("btn_label", label)]
+                if detail and remaining > 1:
+                    title.append((title_attr, " " + _truncate_title(detail, remaining - 1)))
+                start = urwid.calc_width(prefix, 0, len(prefix)) + leading_width
+                self._scope_hit = (maxcol, start, start + label_width)
+
+        used = fixed_width + sum(urwid.calc_width(text, 0, len(text)) for _, text in title)
+        middle = " " + "─" * max(0, maxcol - used)
+        self._header.set_text([
+            (rule_attr, prefix), *title, (rule_attr, middle),
+            (title_attr, count_segment), (rule_attr, end),
+        ])
         return super().render(size, focus)
+
+    def mouse_event(self, size, event, button, col, row, focus):
+        if (self._scope_toggle is not None and self._scope_hit is not None
+                and row == 0 and event == "mouse press" and button == 1):
+            width, start, end = self._scope_hit
+            if size[0] == width and start <= col < end:
+                self._scope_toggle[1]()
+                self._invalidate()
+                return True
+        return super().mouse_event(size, event, button, col, row, focus)
 
 
 class StableWeightedPile(urwid.Pile):

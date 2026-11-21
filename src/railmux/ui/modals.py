@@ -383,7 +383,7 @@ class HelpModal(urwid.WidgetWrap):
             ("s", "Toggle star (pin to top of session list)"),
             ("k", "Kill the running agent process (keeps session file)"),
             ("d", "Delete the focused session (prompts for confirmation)"),
-            ("m", "Cycle through available agent modes"),
+            ("m", "Open the agent Mode picker"),
             ("o", "Open persistent Railmux options"),
             ("t", "Open a terminal in the active project"),
             ("␣", "Preview current history (stopped or running)"),
@@ -418,8 +418,8 @@ class HelpModal(urwid.WidgetWrap):
             ("⬒ / ⬓", "Stacked; filled half is the Target pane"),
         ]),
         ("Across agents", [
-            ("g", "Quick Open across agents"),
-            ("a", "Toggle all agents while Running has focus"),
+            ("g", "Search sessions across agents"),
+            ("a", "Toggle scope in Running, or click its scope label"),
         ]),
         ("", [
             ("Each session runs in its own detached tmux session.",
@@ -805,6 +805,14 @@ class _OptionRow(urwid.WidgetWrap):
         return super().mouse_event(size, event, button, col, row, focus)
 
 
+class _SubmenuButton(urwid.Button):
+    button_left = urwid.Text("")
+    button_right = urwid.Text("›")
+
+    def __init__(self, label: str, on_open: Callable[[], None]) -> None:
+        super().__init__(label, on_press=lambda _button: on_open())
+
+
 class OptionsModal(urwid.WidgetWrap):
     """Full-sidebar product settings with explicit application timing."""
 
@@ -893,15 +901,14 @@ class OptionsModal(urwid.WidgetWrap):
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
         self._history_links: dict[str, urwid.Button] = {}
-        rows: list[urwid.Widget] = [
-            self._link(f"Agent mode · {agent_label}", self._open_mode_page),
-        ]
+        mode_link = _SubmenuButton(f"Agent mode · {agent_label}", self._open_mode_page)
+        rows: list[urwid.Widget] = [urwid.AttrMap(mode_link, "body", "focus")]
         for group, details in self._HISTORY_DETAILS.items():
             labels = tuple((value, self._HISTORY_LABELS[value]) for value in details)
             self._build_group(group, details, labels=labels)
-            link = urwid.Button(
+            link = _SubmenuButton(
                 self._history_link_label(group),
-                on_press=lambda _button, group=group: self._open_history_page(group),
+                partial(self._open_history_page, group),
             )
             self._history_links[group] = link
             rows.append(urwid.AttrMap(link, "body", "focus"))

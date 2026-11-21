@@ -176,10 +176,12 @@ def test_history_options_show_on_small_first_screen_and_save_independently(
     modal = app._open_full_sidebar_modal.call_args.args[0]
     size = (38, 13)
     text = _option_text(modal, size)
-    assert all(label in text for label in (
+    for label in (
         "Agent mode · Devin", "Claude history · Ask on scroll",
         "Codex history · Native", "Devin history · Local",
-    ))
+    ):
+        line = next(line for line in text.splitlines() if label in line)
+        assert "›" in line and "<" not in line and ">" not in line
 
     _click_option(modal, size, "Devin history ·")
     assert "Applies in railmux ssh." in _option_text(modal, size)
@@ -213,6 +215,11 @@ def test_agent_mode_option_opens_shared_picker_and_switches_with_keyboard(
     app._open_options_modal()
     modal = app._open_full_sidebar_modal.call_args.args[0]
     size = (38, 13)
+
+    modal.keypress(size, "left")
+    modal.keypress(size, "right")
+    assert "Agent mode · Devin" in _option_text(modal, size)
+    assert actions == []
 
     modal.keypress(size, "enter")
     text = _option_text(modal, size)

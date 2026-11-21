@@ -190,7 +190,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 |-----|--------|
 | `Enter` | Resume or start the selected session |
 | `n` | Start a fresh session in the current project |
-| `g` | Quick Open across agents |
+| `g` | Search sessions across agents |
 | `a` | Toggle all agents while Running has focus |
 | `i` | Popup with session details |
 | `r` | Rename the focused session |
@@ -199,7 +199,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `d` | Delete the focused session (confirms, then finishes in background) |
 | `t` | Open or return to the managed terminal below the Target agent |
 | `T` | Return to that agent's managed Vim viewer, when open |
-| `m` | Cycle installed, visible agent modes |
+| `m` | Open the agent Mode picker |
 | `o` | Open persistent Railmux options |
 | `␣` | Preview canonical history for the selected stopped or running session |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
@@ -245,8 +245,8 @@ shows the current value. Press `Ctrl-U` in the filter editor to clear it, then
 `Enter` to return to the sidebar.
 
 The first Button Bar row keeps Help, Quit, and Detach visible. Select **More**
-to reveal a second row with **Mode**, **Layout**, and **Options**; **Less**
-collapses it. The `m`, `F8`, and `o` keyboard shortcuts remain available while
+to reveal a second row with **Mode**, **Layout**, **Search**, and **Options**.
+Select **Less** to collapse it. The `m`, `F8`, `g`, and `o` shortcuts work while
 the row is hidden. On tmux 3.4 or newer, click the bottom-left agent label
 to open the Mode picker, or click the layout symbol to cycle layouts.
 Clicking the message at bottom-right copies its complete text to the local
@@ -280,18 +280,18 @@ exit. Codex auto-run applies to future launches.
 
 ### Switching agent modes
 
-Press `m` to cycle the installed, visible agent CLIs on the machine running
-Railmux. A single installed CLI opens directly and `m` stays in that mode.
-With Codex and Devin, `m` switches between the two. Pick a provider directly
-from the bottom-left agent label, **More → Mode**, or **Options → Agent mode**.
-Railmux starts in your last mode if it is still available.
+Press `m` or select **More → Mode** to open the same agent picker. Use the
+arrow keys and Enter or click a provider to switch. The bottom-left agent
+label and **Options → Agent mode** also offer direct selection. Railmux starts
+in your last mode if it is still available.
 
 Each mode remembers its project, filters, sidebar cursor, and scroll position
-when you switch. Press `g` in the sidebar to search running, recent, and starred
-sessions across agents. Use Tab or the view button in the picker to select
-All, Running, or Starred. Press `a` while Running has focus to toggle its
-all-agents view. Other agents keep running. Set agent visibility in
-`railmux config` under **Program paths → Agent visibility**. The Mode menu
+when you switch. Press `g` in the sidebar or select **More → Search** to find
+running, recent, and starred sessions across agents. Use Tab or the view
+button to select All, Running, or Starred. Click the scope beside **Running**
+or press `a` while Running has focus to toggle between the current CLI and
+all running agents. Set agent visibility in `railmux config` under
+**Program paths → Agent visibility**. The Mode menu
 can still show Running sessions for a hidden or unavailable CLI.
 
 ### Devin preview

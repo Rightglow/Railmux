@@ -30,6 +30,37 @@ def test_quick_open_search_and_views_use_the_selected_exact_action():
     open_claude.assert_not_called()
 
 
+def test_quick_open_marks_keyboard_and_wheel_selection_while_search_has_focus():
+    open_first, open_second = Mock(), Mock()
+    modal = QuickOpen([
+        SessionChoice(("saved", "codex", "first"), "First", "Codex",
+                      "Railmux", "Saved", open_first),
+        SessionChoice(("saved", "codex", "second"), "Second", "Codex",
+                      "Railmux", "Saved", open_second),
+    ], Mock(), "Pane 1")
+    size = (55, 12)
+
+    def marked_result():
+        canvas = modal.render(size, focus=True)
+        assert canvas.cursor is not None and canvas.cursor[1] == 2
+        rows = [row.decode() for row in canvas.text]
+        marked, = (line for line in rows if "› [Codex · Saved]" in line)
+        return marked, next(index for index, line in enumerate(rows) if line == marked)
+
+    assert "First" in marked_result()[0]
+    modal.keypress(size, "down")
+    assert "Second" in marked_result()[0]
+    modal.keypress(size, "up")
+    line, index = marked_result()
+    assert "First" in line
+    assert modal.mouse_event(size, "mouse press", 5, 10, index, True)
+    assert "Second" in marked_result()[0]
+
+    modal.keypress(size, "enter")
+    open_first.assert_not_called()
+    open_second.assert_called_once_with()
+
+
 def test_running_scope_and_quick_open_keep_foreign_and_unavailable_live_agents():
     app = App.__new__(App)
     app._active_mode_key = "codex"
@@ -38,7 +69,7 @@ def test_running_scope_and_quick_open_keep_foreign_and_unavailable_live_agents()
     app._on_running_select = Mock()
     app._on_session_select = Mock()
     app._favorite_ids_for_view = lambda: {"starred"}
-    app._cycle_mode_keys = lambda: ("claude",)
+    app._launchable_mode_keys = lambda: ("claude",)
     app._renames = Mock()
     app._renames.get.return_value = None
     app._codex_lineage_ids = lambda key: {key}
@@ -51,7 +82,7 @@ def test_running_scope_and_quick_open_keep_foreign_and_unavailable_live_agents()
     app._render_running_pane()
     assert app._running_pane.section_count == "1"
     app._toggle_running_scope()
-    assert app._running_pane.sidebar_title == "Running · All"
+    assert app._running_pane.sidebar_scope == "All"
     assert app._running_pane.section_count == "2"
 
     choices = app._quick_open_choices((star,))

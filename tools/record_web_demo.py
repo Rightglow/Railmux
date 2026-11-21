@@ -914,6 +914,15 @@ def _record(output: Path, profile: RecordingProfile) -> None:
             record_input(cue)
             sent.add(name)
 
+        def select_codex_mode(at: float) -> None:
+            if "open-mode" not in sent or "switch-codex" in sent:
+                return
+            if _output_contains(raw_output, sanitizer_tail, "● Claude Code".encode()):
+                send_once(
+                    "switch-codex", at, b"\x1b[B\r",
+                    "key|↓ Enter|Select Codex",
+                )
+
         required_actions = {
             DESKTOP.name: {
                 "startup-surface",
@@ -925,6 +934,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "split",
                 "target-secondary",
                 "return-sidebar",
+                "open-mode",
                 "switch-codex",
                 "launch-secondary",
                 "secondary-running",
@@ -954,6 +964,7 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                 "launch-primary",
                 "return-sidebar",
                 "expand-more",
+                "open-mode",
                 "switch-codex",
                 "cycle-layout",
                 "open-quit",
@@ -1020,11 +1031,12 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                         )
                     if "return-sidebar" in sent and running_sidebar_visible:
                         send_once(
-                            "switch-codex",
+                            "open-mode",
                             5.3,
                             b"m",
-                            "key|M|Switch to Codex mode",
+                            "key|M|Open Mode picker",
                         )
+                    select_codex_mode(5.8)
                     if (
                         "switch-codex" in sent
                         and _output_contains(
@@ -1213,20 +1225,21 @@ def _record(output: Path, profile: RecordingProfile) -> None:
                             6.2,
                             b"+",
                             (
-                                "keymouse|+|30|37|Show Mode, Layout, and Options"
+                                "keymouse|+|30|37|Show Mode, Layout, Search, and Options"
                                 "|mouse|Click More"
                             ),
                         )
                     if "expand-more" in sent:
                         send_once(
-                            "switch-codex",
+                            "open-mode",
                             8.5,
                             b"m",
                             (
-                                "keymouse|M|4|37|Switch sidebar to Codex"
+                                "keymouse|M|4|37|Open Mode picker"
                                 "|mouse|Click Mode"
                             ),
                         )
+                    select_codex_mode(9.8)
                     if (
                         "switch-codex" in sent
                         and _output_contains(

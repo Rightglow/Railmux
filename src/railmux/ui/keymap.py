@@ -55,7 +55,7 @@ BINDINGS: list[Binding] = [
     # All sidebar lists support in-pane filtering.
     Binding(("/",), "/", "filter",
             contexts=_ALL_CTX),
-    Binding(("g", "G"), "g", "Quick Open", "_open_quick_open",
+    Binding(("g", "G"), "g", "Search", "_open_quick_open",
             contexts=_ALL_CTX),
     Binding(("a", "A"), "a", "agents", "_toggle_running_scope",
             contexts=(CTX_RUNNING,)),
@@ -74,8 +74,7 @@ BINDINGS: list[Binding] = [
     # Sessions only — delete removes the session JSONL.
     Binding(("d", "D"), "d", "del", "_on_delete_session",
             contexts=(CTX_SESSIONS, CTX_RUNNING)),
-    # All three — cycle through the ordered agent-mode registry.
-    Binding(("m", "M"), "m", "Mode", "_cycle_mode",
+    Binding(("m", "M"), "m", "Mode", "_open_mode_menu",
             contexts=_ALL_CTX, show_in_hint=False),
     Binding(("o", "O"), "o", "Options", "_open_options_modal",
             contexts=_ALL_CTX, show_in_hint=False),

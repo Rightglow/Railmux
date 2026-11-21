@@ -158,6 +158,8 @@ class ButtonBar(urwid.WidgetWrap):
                  on_layout: Callable[[], None] | None = None,
                  on_options: Callable[[], None] | None = None,
                  on_expanded_change: Callable[[bool], None] | None = None,
+                 *,
+                 on_search: Callable[[], None] | None = None,
                  ) -> None:
         self._on_mode_toggle = on_mode_toggle
         self._on_layout = on_layout
@@ -197,6 +199,8 @@ class ButtonBar(urwid.WidgetWrap):
         if self._on_layout is not None:
             self._secondary_specs.append(
                 ("F8", "Layout", "L", self._on_layout))
+        if on_search is not None:
+            self._secondary_specs.append(("g", "Search", "G", on_search))
         if self._on_options is not None:
             self._secondary_specs.append(
                 ("o", "Options", "O", self._on_options))
