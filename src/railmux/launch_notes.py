@@ -14,6 +14,11 @@ from railmux.config import default_config_path
 
 
 _HIGHLIGHTS = {
+    "0.5.1": (
+        "Delete Devin sessions from Sessions or Running with d or right-click Delete.",
+        "Running Devin sessions show live busy, blocked, and idle status dots in the sidebar.",
+        "Devin local scrollback on managed displays strips leaked prompt boxes and duplicated streaming frames.",
+    ),
     "0.5.0": (
         "Press a in Running or click its scope label to see all running agents.",
         "Press g or choose More → Search to find sessions across CLIs.",

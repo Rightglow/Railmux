@@ -365,6 +365,27 @@ def process_has_child(pid: int) -> bool | None:
     return None
 
 
+def capture_pane_visible(target: str) -> list[str] | None:
+    """Capture only the current visible viewport of one tmux pane or session."""
+    if not target:
+        return None
+    try:
+        result = subprocess.run(
+            ["tmux", "capture-pane", "-p", "-t", target],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=0.5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.splitlines()
+
+
 def session_has_child(session_name: str) -> bool | None:
     """Whether the Claude process has live child processes.
 

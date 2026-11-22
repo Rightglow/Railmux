@@ -2905,3 +2905,136 @@ def test_codex_local_history_stitches_rewrapped_table_links(monkeypatch, tmp_pat
     assert hot is not None
     assert hot.timeline_end == snapshot.timeline_end
     assert hot.lines == snapshot.lines[-len(hot.lines):]
+
+
+def test_devin_local_history_strips_leaked_input_boxes_and_preserves_committed_content(
+    monkeypatch,
+):
+    server = fast_display_server
+    width, height = 80, 12
+    rule = "─" * width
+    titled_rule = "─" * 58 + " Session Title ─"
+    md_divider = " " + "─" * (width - 1)
+    raw_rows = [
+        # Duplicate startup splash + Starting session input box (should be stripped).
+        "  Devin CLI",
+        "  v3000.14.30821",
+        rule,
+        "❭ first question",
+        rule,
+        "Gemini 4 Neon High                                    Starting session…",
+        "",
+        # Real committed splash + first committed prompt (must be kept).
+        "  Devin CLI",
+        "  v3000.14.30821",
+        "",
+        "❭ first question",
+        "",
+        " Here is section 1.",
+        md_divider,
+        # Leaked truncated streaming preview + mid-turn guidance + leaked footer.
+        "[... 11 lines truncated (ctrl+o to expand) ...]",
+        " ✓ Read ./notes/README.md · 39 lines",
+        "❭ mid-turn guidance",
+        "",
+        "⠐⠒ Thinking · 1m 20s (esc twice to interrupt)",
+        titled_rule,
+        "❭ Guide Devin while it works",
+        rule,
+        "Gemini 4 Neon High · bypass               Context: 120k / 1.0M tokens",
+        # Committed block repeating the tool call and mid-turn prompt (must be kept).
+        " ✓ Read ./notes/README.md · 39 lines",
+        "",
+        "❭ mid-turn guidance",
+        "",
+        " Here is the real answer.",
+        # Standalone leaked footer without truncation marker (should be stripped).
+        "⠦⠀ Typing · 2m 01s (esc twice to interrupt)",
+        titled_rule,
+        "❭ draft text",
+        rule,
+        "Gemini 4 Neon High · bypass               ctrl+o details · alt+t thinking",
+        " Final committed paragraph.",
+        # Live viewport (last 12 rows): MUST remain untouched including live footer.
+        " ✓ Running verification",
+        "",
+        " Live line 1",
+        " Live line 2",
+        " Live line 3",
+        " Live line 4",
+        " Live line 5",
+        "⠀⠸ Running tools · 10s (esc twice to interrupt)",
+        titled_rule,
+        "❭ Guide Devin while it works",
+        rule,
+        "Gemini 4 Neon High · bypass               Context: 140k / 1.0M tokens",
+    ]
+    history_size = len(raw_rows) - height
+
+    def fake_capture(argv, **_kwargs):
+        nonce = argv[-1].split()[0]
+        encoded = [row.encode("utf-8") for row in raw_rows]
+        return b"\n".join((*encoded, f"{nonce} {history_size} {height} 0".encode(), b""))
+
+    monkeypatch.setattr(subprocess, "check_output", fake_capture)
+    pyte = server._extended_pyte(__import__("pyte"))
+
+    # Positive case: Devin pane strips leaked scrollback frames while keeping live viewport.
+    devin_pane = server._PaneGeometry(
+        "%9", 31, 0, width, height, history_size=history_size, devin_pane=True,
+    )
+    snap = server._capture_pane_history(pyte, devin_pane, 1, 2000)
+    assert snap is not None
+    plain_all = [server._devin_plain_row(row) for row in snap.lines]
+    plain_scrollback = plain_all[:-height]
+    plain_live = plain_all[-height:]
+    assert plain_scrollback.count("  Devin CLI") == 1
+    assert plain_scrollback.count("❭ first question") == 1
+    assert plain_scrollback.count("❭ mid-turn guidance") == 1
+    assert md_divider in plain_scrollback
+    assert " Final committed paragraph." in plain_scrollback
+    assert not any("Starting session" in r for r in plain_scrollback)
+    assert not any("Guide Devin while it works" in r for r in plain_scrollback)
+    assert not any("truncated (ctrl+o to expand)" in r for r in plain_scrollback)
+    assert not any("draft text" in r for r in plain_scrollback)
+    assert not any("Context:" in r for r in plain_scrollback)
+    # Live viewport still contains the active input box untouched.
+    assert any("Guide Devin while it works" in r for r in plain_live)
+    assert snap.timeline_start == 0 and snap.timeline_end == 0
+    assert snap.more_available is False
+
+    # Negative preservation: non-Devin pane keeps raw scrollback unchanged.
+    plain_pane = server._PaneGeometry(
+        "%8", 31, 0, width, height, history_size=history_size, devin_pane=False,
+    )
+    raw_snap = server._capture_pane_history(pyte, plain_pane, 2, 2000)
+    assert raw_snap is not None
+    assert len(raw_snap.lines) == len(raw_rows)
+    assert raw_snap.timeline_start == 0 and raw_snap.timeline_end == len(raw_rows)
+
+
+def test_devin_sanitizer_never_drops_unique_user_prompt():
+    server = fast_display_server
+    width = 80
+    rule = "─" * width
+    rows = [
+        row.encode("utf-8")
+        for row in (
+            "[... 5 lines truncated (ctrl+o to expand) ...]",
+            " partial line",
+            "❭ unique user prompt that never repeats below",
+            "⠐⠒ Thinking · 10s (esc twice to interrupt)",
+            rule,
+            "❭ Guide Devin while it works",
+            rule,
+            "Gemini 4 Neon High · bypass               Context: 50k / 1.0M tokens",
+            " some unrelated output after",
+        )
+    ]
+    cleaned = [
+        server._devin_plain_row(r)
+        for r in server._sanitize_devin_scrollback(rows, 20)
+    ]
+    # The unique user prompt MUST survive; only the leaked spinner/footer box is stripped.
+    assert "❭ unique user prompt that never repeats below" in cleaned
+    assert not any("Guide Devin while it works" in r for r in cleaned)

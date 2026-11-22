@@ -260,6 +260,7 @@ class _PaneGeometry:
     canonical_history: bool = False
     native_history: bool = False
     codex_pane: bool = False
+    devin_pane: bool = False
 
 
 @dataclass
@@ -999,6 +1000,7 @@ def _list_agent_panes(
                     canonical_history=canonical_history,
                     native_history=native_history,
                     codex_pane=codex_pane,
+                    devin_pane=devin_pane,
                 ),
             )
         )
@@ -2072,6 +2074,172 @@ def _codex_screen_has_pinned_prompt(
     return _transcript_screen_seam(transcript, screen[1:]).transcript_rows == kept
 
 
+_DEVIN_RULE_TOP_RE = re.compile(r"^─{10,}(?: .+ ─)?$")
+_DEVIN_RULE_BOTTOM_RE = re.compile(r"^─{10,}$")
+_DEVIN_TRUNCATED_RE = re.compile(
+    r"^\[\.\.\. \d+ lines? truncated \(ctrl\+o to expand\) \.\.\.\]$"
+)
+_DEVIN_SPINNER_RE = re.compile(r"^[\u2800-\u28ff]+\s+(.+)$")
+_DEVIN_SPINNER_VERBS = (
+    "Thinking",
+    "Typing",
+    "Running tools",
+    "Working",
+    "Compacting",
+    "Retrying connection",
+    "Subagents running",
+    "Answering a side question",
+)
+_DEVIN_STATUS_MARKERS = (
+    "Context:",
+    "Starting session…",
+    "Starting session...",
+    "ctrl+o details",
+    "alt+t thinking",
+    " · bypass",
+    " · normal",
+    " · accept-edits",
+    " · smart",
+    " · plan",
+    " · ask",
+    " · autonomous",
+    " · dangerous",
+    " · auto",
+)
+
+
+def _devin_plain_row(row: bytes) -> str:
+    return _OVERLAP_STYLE_RE.sub(b"", row).decode("utf-8", errors="replace").rstrip()
+
+
+def _is_devin_spinner_row(text: str) -> bool:
+    stripped = text.strip()
+    match = _DEVIN_SPINNER_RE.match(stripped)
+    if match is None:
+        return False
+    detail = match.group(1)
+    return (
+        "(esc twice to interrupt)" in detail
+        or any(detail.startswith(verb) for verb in _DEVIN_SPINNER_VERBS)
+    )
+
+
+def _is_devin_status_row(text: str) -> bool:
+    return any(marker in text for marker in _DEVIN_STATUS_MARKERS)
+
+
+def _sanitize_devin_scrollback(
+    scrollback: Sequence[bytes],
+    height: int,
+) -> tuple[bytes, ...]:
+    """Remove transient Devin live-viewport frames that leaked into scrollback.
+
+    Devin CLI draws an inline prompt box, spinner, and status bar on the
+    primary screen. When a streaming block exceeds the pane height or redraws
+    on commit, tmux pushes that live viewport (including ``[... N lines
+    truncated (ctrl+o to expand) ...]`` and the boxed prompt/status footer)
+    into scrollback right before Devin prints the full committed block.
+    Real committed prompts (``❭ ...`` without surrounding full-width rules
+    and a Devin status line) and ordinary horizontal rules are preserved.
+    """
+    total = len(scrollback)
+    if total < 4:
+        return tuple(scrollback)
+    plain = [_devin_plain_row(row) for row in scrollback]
+    drop: list[bool] = [False] * total
+    scan_limit = max(height, 24)
+    index = 0
+    while index < total:
+        if not _DEVIN_RULE_TOP_RE.match(plain[index]):
+            index += 1
+            continue
+        # Require a prompt line starting with ❭ inside the box and a full-width
+        # bottom rule within a bounded prompt height.
+        if index + 3 >= total or not plain[index + 1].startswith("❭"):
+            index += 1
+            continue
+        bottom = None
+        for candidate in range(index + 2, min(total - 1, index + 12)):
+            if _DEVIN_RULE_BOTTOM_RE.match(plain[candidate]):
+                bottom = candidate
+                break
+        if bottom is None:
+            index += 1
+            continue
+        status_idx = bottom + 1
+        status_text = plain[status_idx]
+        if not _is_devin_status_row(status_text):
+            index += 1
+            continue
+
+        block_start = index
+        # Include the optional live spinner row directly above the top rule.
+        probe = block_start - 1
+        while probe >= 0 and not drop[probe] and not plain[probe].strip():
+            probe -= 1
+        if probe >= 0 and not drop[probe] and _is_devin_spinner_row(plain[probe]):
+            block_start = probe
+
+        # Case 1: Leaked truncated streaming preview right before a commit.
+        # A mid-turn user guidance prompt can appear inside the leaked live
+        # viewport before the whole turn commits; drop across it only when
+        # the exact same prompt line reappears in the committed block below.
+        trunc_start = max(0, block_start - scan_limit)
+        trunc_idx = None
+        prompts_in_preview: list[str] = []
+        for back in range(block_start - 1, trunc_start - 1, -1):
+            if drop[back]:
+                break
+            text = plain[back]
+            if _DEVIN_TRUNCATED_RE.match(text.strip()):
+                trunc_idx = back
+                break
+            if text.startswith("❭ "):
+                prompts_in_preview.append(text)
+        if trunc_idx is not None:
+            if not prompts_in_preview:
+                block_start = trunc_idx
+            else:
+                after_slice = plain[status_idx + 1 : min(total, status_idx + 1 + max(height * 4, 160))]
+                if all(prompt in after_slice for prompt in prompts_in_preview):
+                    block_start = trunc_idx
+        elif "Starting session…" in status_text or "Starting session..." in status_text:
+            # Case 2: Duplicate startup splash before the real splash commits.
+            before_start = max(0, block_start - max(height, 20))
+            after_end = min(total, status_idx + 12)
+            has_banner_before = any(
+                "Devin CLI" in plain[k] for k in range(before_start, block_start)
+            )
+            has_banner_after = any(
+                "Devin CLI" in plain[k] for k in range(status_idx + 1, after_end)
+            )
+            if has_banner_before and has_banner_after:
+                block_start = before_start
+
+        for k in range(block_start, status_idx + 1):
+            drop[k] = True
+        index = status_idx + 1
+
+    if not any(drop):
+        return tuple(scrollback)
+
+    result: list[bytes] = []
+    for k, row in enumerate(scrollback):
+        if drop[k]:
+            continue
+        # Avoid leaving stacked blank rows where a leaked block was removed.
+        if (
+            not plain[k].strip()
+            and result
+            and not _devin_plain_row(result[-1]).strip()
+            and k > 0
+            and drop[k - 1]
+        ):
+            continue
+        result.append(row)
+    return tuple(result)
+
+
 def _capture_pane_history(
     pyte: object,
     pane: _PaneGeometry,
@@ -2237,7 +2405,17 @@ def _capture_pane_history(
             + len(current_raw),
         )
     else:
-        source_lines = rendered_raw
+        devin_sanitized = False
+        if pane.devin_pane and len(rendered_raw) > pane.height:
+            scrollback = rendered_raw[:-pane.height]
+            clean_scrollback = _sanitize_devin_scrollback(scrollback, pane.height)
+            if len(clean_scrollback) != len(scrollback):
+                source_lines = clean_scrollback + current_raw
+                devin_sanitized = True
+            else:
+                source_lines = rendered_raw
+        else:
+            source_lines = rendered_raw
         timeline_end = max(
             pane.height,
             captured_history_size + captured_height,
@@ -2257,9 +2435,12 @@ def _capture_pane_history(
         blank = _render_history_line(pyte, b"", pane.width)
         lines += (blank,) * (pane.height - len(lines))
     if (
-        transcript_used
-        and transcript_entry is not None
-        and not transcript_entry.timeline_stable
+        (
+            transcript_used
+            and transcript_entry is not None
+            and not transcript_entry.timeline_stable
+        )
+        or (not transcript_used and devin_sanitized)
     ):
         timeline_start = timeline_end = 0
     else:
@@ -2294,7 +2475,10 @@ def _capture_pane_history(
                 transcript_entry.more_available
                 or len(transcript_lines) + len(current_raw) > len(lines)
                 if transcript_used and transcript_entry is not None
-                else captured_history_size + captured_height > len(lines)
+                else (
+                    len(source_lines) > len(lines)
+                    or captured_history_size + captured_height > len(rendered_raw)
+                )
             )
         ),
         generation=pane.history_generation,

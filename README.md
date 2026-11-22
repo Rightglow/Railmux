@@ -306,10 +306,10 @@ to return to a live Devin pane, and keep your usual `/model` and permission
 controls inside Devin.
 
 Railmux owns the live pane through tmux, so ordinary detach and SSH reconnect
-preserve it. Devin sessions appear in **Sessions** after the first prompt.
-Use Devin to inspect or delete saved history. Railmux saved-history Preview,
-history deletion, and Ask Railmux are unavailable in this mode. The preview
-runs on POSIX and WSL. Native Windows Devin is unavailable.
+preserve it. Devin sessions appear in **Sessions** after the first prompt, with
+live busy/blocked/idle status dots and `d` / right-click **Delete** support via
+`devin rm`. Railmux saved-history Preview and Ask Railmux are unavailable in
+this mode. The preview runs on POSIX and WSL. Native Windows Devin is unavailable.
 
 ### Dual-agent layouts
 

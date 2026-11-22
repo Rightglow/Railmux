@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1.dev1] - 2026-11-22
+
+### Added
+
+- Delete Devin sessions from the **Sessions** and **Running** context menus or
+  with `d`, stopping any local Railmux pane first and removing the session via
+  `devin rm --force --process-model in-process`.
+- Show live `busy` (yellow), `blocked` (red), and `idle` (green) status dots
+  for running Devin sessions in both **Sessions** and **Running**.
+
+### Fixed
+
+- Remove leaked transient Devin prompt boxes, spinners, status footers, and
+  duplicated truncated streaming previews from managed Devin local scrollback
+  while preserving committed prompts, colors, links, and the live viewport.
+- Clear Railmux's cached Devin lock state when stopping a local Devin pane so
+  reopening the session immediately succeeds.
+
 ## [0.5.0] - 2026-11-22
 
 ### Added

@@ -137,6 +137,7 @@ _STATUS_YELLOW = "#ffd700"
 _STATUS_RED = "#ff5f5f"
 _TERMINAL_COLORS = 2**24
 _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
+_DEVIN_STATUS_PROBE_TTL_S = 1.0
 _SESSION_LEASE_PROBE_TTL_S = 2.0
 _LeaseProbeKey = tuple[Path, str, tuple[str, ...]]
 _LeaseProbeResults = dict[_LeaseProbeKey, tuple[float, Optional[session_lease.LeaseOwner]]]
@@ -549,6 +550,8 @@ class _DeleteResult:
     claude_path_changed: bool = False
     invalidate_codex: bool = False
     deleted_codex_ids: frozenset[str] = frozenset()
+    invalidate_devin: bool = False
+    deleted_devin_ids: frozenset[str] = frozenset()
 
 
 class _CloseOnClickOverlay(urwid.Overlay):
@@ -5533,7 +5536,7 @@ class App:
                 return False
             record = self._devin_index.get(session_meta.session_id)
             if record is not None and record.locked:
-                self._devin_index.refresh()
+                self._devin_index.refresh(force=True)
                 self._set_status("Devin reports this session is already open.", "warn")
                 return False
             try:
@@ -9641,6 +9644,10 @@ class App:
             if "blocked" in statuses:
                 return "blocked"
 
+        if (meta.session_type == "devin"
+                and r is not None and not r.is_placeholder):
+            return self._devin_live_status(r, server)
+
         if meta.pending_tool and meta.session_type != "codex":
             if r is not None and not r.is_placeholder:
                 if child_probes is not None and r.tmux_name in child_probes:
@@ -9707,6 +9714,42 @@ class App:
             and now - value[0] < _CODEX_ROLLOUT_PROBE_TTL_S
         }
         return rollout_ids
+
+    def _devin_live_status(
+        self,
+        running: _Running,
+        server: tmux_ctl.ServerSnapshot | None = None,
+    ) -> str:
+        """Probe one live Devin pane's visible footer with a short per-pane TTL."""
+        del server  # Reserved for parity with _codex_rollout_ids.
+        transport = getattr(self, "_transport", None)
+        real_pane = (
+            transport.displayed_real_pane(running.tmux_name)
+            if transport is not None else None
+        )
+        if not isinstance(real_pane, str) or not real_pane:
+            real_pane = None
+        target = real_pane or running.tmux_name
+        key = (running.tmux_name, target)
+        now = time.monotonic()
+        cache = getattr(self, "_devin_status_probe_cache", {})
+        cached = cache.get(key)
+        if cached is not None and now - cached[0] < _DEVIN_STATUS_PROBE_TTL_S:
+            return cached[1]
+        lines = tmux_ctl.capture_pane_visible(target)
+        status = (
+            devin_index.classify_pane_status(lines)
+            if lines is not None else "idle"
+        )
+        cache[key] = (now, status)
+        live_names = {item.tmux_name for item in self._running.values()}
+        self._devin_status_probe_cache = {
+            cache_key: value
+            for cache_key, value in cache.items()
+            if cache_key[0] in live_names
+            and now - value[0] < _DEVIN_STATUS_PROBE_TTL_S
+        }
+        return status
 
     def _refine_status(
         self,
@@ -10033,6 +10076,8 @@ class App:
         """Sync labels/status and repopulate the Running pane."""
         for r in self._running.values():
             if r.is_placeholder or r.project is None:
+                if r.session_type == "devin" and not r.is_legacy:
+                    r.status = self._devin_live_status(r, server)
                 continue
             registered_mode = self._modes().for_tmux_name(r.tmux_name)
             session_type = (
@@ -10046,6 +10091,10 @@ class App:
             else:
                 meta = self._session_cache.get(
                     r.project, r.logical_session_id or r.key)
+            if meta is None:
+                if session_type == "devin" and not r.is_legacy:
+                    r.status = self._devin_live_status(r, server)
+                continue
             if meta is not None:
                 self._record_session_lease_result(
                     r, self._ensure_running_session_lease(r, meta))
@@ -10916,28 +10965,32 @@ class App:
     def _on_delete_session(self) -> None:
         """Delete the focused session from the current pane (with confirmation)."""
         pos = self._sidebar.focus_position
-        if pos != 2 and self._active_mode().project_source == ProjectSource.DEVIN:
-            self._set_status("Use devin rm to delete Devin history, or k to stop a pane.", "tip")
-            return
 
         if pos == 1:
-            # Sessions pane — delete the focused session (JSONL + tmux).
+            # Sessions pane — delete the focused session (store + tmux).
             session = self._currently_focused_session_meta()
             if session is None:
                 self._set_status("No session selected to delete.")
                 return
             title = session.display_title
             lineage_count = len(self._session_identity_ids(session))
-            detail = (
-                "The logical session and its "
-                f"{lineage_count} rewind records will be permanently "
-                "removed from disk.\n"
-                "Its background tmux session will also be killed."
-                if session.session_type == "codex" and lineage_count > 1
-                else
-                "The session file will be permanently removed from disk.\n"
-                "Its background tmux session will also be killed."
-            )
+            if session.session_type == "devin":
+                detail = (
+                    "The Devin session will be permanently deleted.\n"
+                    "Its background tmux session will also be killed."
+                )
+            elif session.session_type == "codex" and lineage_count > 1:
+                detail = (
+                    "The logical session and its "
+                    f"{lineage_count} rewind records will be permanently "
+                    "removed from disk.\n"
+                    "Its background tmux session will also be killed."
+                )
+            else:
+                detail = (
+                    "The session file will be permanently removed from disk.\n"
+                    "Its background tmux session will also be killed."
+                )
             modal = DeleteConfirmModal(
                 action="Delete session",
                 session_name=title,
@@ -10960,12 +11013,9 @@ class App:
                 return
             entry = focus_w.entry
             r = self._by_tmux(entry.tmux_name)
-            if r is not None and r.session_type == "devin":
-                self._set_status("Use devin rm to delete Devin history, or k to stop a pane.", "tip")
-                return
             label = r.label if r else entry.tmux_name
             # Real session_id (and project) only exist once resolved — needed
-            # to also delete the JSONL.
+            # to also delete the backing store.
             session_id = (
                 r.logical_session_id
                 if r is not None and not r.is_legacy else None
@@ -10976,14 +11026,22 @@ class App:
                     len(self._codex_lineage_ids(session_id))
                     if r is not None and r.session_type == "codex" else 1
                 )
-                detail = (
-                    "The detached tmux session will be killed.\n"
-                    f"All {lineage_count} rewind records will also be "
-                    "permanently deleted from disk."
-                    if lineage_count > 1 else
-                    "The detached tmux session will be killed.\n"
-                    "The session file will also be permanently deleted from disk."
-                )
+                if r is not None and r.session_type == "devin":
+                    detail = (
+                        "The detached tmux session will be killed.\n"
+                        "The Devin session will also be permanently deleted."
+                    )
+                elif lineage_count > 1:
+                    detail = (
+                        "The detached tmux session will be killed.\n"
+                        f"All {lineage_count} rewind records will also be "
+                        "permanently deleted from disk."
+                    )
+                else:
+                    detail = (
+                        "The detached tmux session will be killed.\n"
+                        "The session file will also be permanently deleted from disk."
+                    )
             else:
                 detail = "The detached tmux session will be killed."
             modal = DeleteConfirmModal(
@@ -11001,11 +11059,11 @@ class App:
             self._set_status("Use d on a session row or running-entry row to delete.")
 
     def _do_delete_session(self, session: SessionMeta) -> None:
-        """Delete a session completely, provider-aware: kill tmux, then either
-        remove the Claude JSONL + session-env or ``codex delete`` the rollout,
-        and refresh the UI so pane rows stay aligned."""
+        """Delete a session completely, provider-aware: kill tmux, then remove
+        the Claude JSONL + session-env, run ``codex delete``, or run
+        ``devin rm``, and refresh the UI so pane rows stay aligned."""
         self._close_modal()
-        if session.session_type == "devin":
+        if session.session_type == "devin" and self._warn_missing_mode_binary(DEVIN_MODE):
             return
         self._cleanup_session(
             session_id=session.session_id,
@@ -11019,18 +11077,22 @@ class App:
                          identity_token: str | None = None) -> None:
         """Kill a detached tmux session; delete its backing store if known.
 
-        The provider comes from the registry entry (``cx-*`` vs ``cc-*``), never
-        assumed to be Claude: a Codex session's rollout lives under CODEX_HOME,
-        not ``project.claude_dir`` (which is empty for a synthetic Codex
-        project), so building a ``claude_dir/<id>.jsonl`` path for it would be a
-        relative path that deletes nothing real — or, worse, an unrelated
-        same-named file in railmux's cwd (#1)."""
+        The provider comes from the registry entry (``cx-*`` / ``dv-*`` vs
+        ``cc-*``), never assumed to be Claude: a Codex session's rollout lives
+        under CODEX_HOME, not ``project.claude_dir`` (which is empty for a
+        synthetic Codex project), so building a ``claude_dir/<id>.jsonl`` path
+        for it would be a relative path that deletes nothing real — or, worse,
+        an unrelated same-named file in railmux's cwd (#1)."""
         self._close_modal()
         r = self._by_tmux(tmux_name)
-        if r is not None and (r.is_legacy or r.session_type == "devin"):
+        if r is not None and r.is_legacy:
             self._kill_tmux_session(tmux_name, r.label, identity_token)
             return
         session_type = r.session_type if r else "claude"
+        if (session_type == "devin" and session_id
+                and not session_id.startswith("__new__-")
+                and self._warn_missing_mode_binary(DEVIN_MODE)):
+            return
         jsonl_path: Path | None = None
         if (session_type == "claude" and session_id
                 and not session_id.startswith("__new__-") and project):
@@ -11063,8 +11125,6 @@ class App:
         Urwid thread. The worker receives only frozen values and never mutates
         widgets, the Running registry, or provider indexes directly.
         """
-        if session_type == "devin":
-            return
         if self._delete_pending():
             self._set_status("A session deletion is already in progress.", "warn")
             return
@@ -11123,6 +11183,19 @@ class App:
                 )
                 return
         is_real = bool(session_id) and not session_id.startswith("__new__-")
+        if (session_type == "devin" and is_real and session_id is not None
+                and exact_pane is None):
+            devin_idx = getattr(self, "_devin_index", None)
+            record = devin_idx.get(session_id) if devin_idx is not None else None
+            if record is not None and record.locked:
+                devin_idx.refresh(force=True)
+                self._delete_progress_text = None
+                self._set_status(
+                    "Delete refused: Devin reports this session is already open.",
+                    "error",
+                    force=True,
+                )
+                return
         lineage_ids = frozenset(
             self._codex_lineage_ids(session_id)
             if session_type == "codex" and is_real
@@ -11292,7 +11365,34 @@ class App:
 
         if task.session_type == "codex":
             return self._execute_codex_delete(task)
+        if task.session_type == "devin":
+            return self._execute_devin_delete(task)
         return self._execute_claude_delete(task)
+
+    def _execute_devin_delete(self, task: _DeleteTask) -> _DeleteResult:
+        """Delete one Devin session via ``devin rm`` in the worker."""
+        session_id = task.session_id
+        is_real = bool(session_id) and not session_id.startswith("__new__-")
+        deleted_ids: set[str] = set()
+        if is_real and session_id is not None:
+            if not self._devin_delete(session_id):
+                return _DeleteResult(
+                    task=task,
+                    status_text=f"devin rm failed: {task.label}",
+                    status_level="error",
+                    remove_running=task.pane_identity is not None,
+                    views_changed=task.pane_identity is not None,
+                    invalidate_devin=task.pane_identity is not None,
+                )
+            deleted_ids.add(session_id)
+        return _DeleteResult(
+            task=task,
+            status_text=f"{'Deleted' if is_real else 'Killed'}: {task.label}",
+            remove_running=True,
+            views_changed=True,
+            invalidate_devin=True,
+            deleted_devin_ids=frozenset(deleted_ids),
+        )
 
     def _execute_codex_delete(self, task: _DeleteTask) -> _DeleteResult:
         """Delete one immutable Codex rewind lineage in the worker."""
@@ -11446,11 +11546,39 @@ class App:
                     tombstones=set(result.deleted_codex_ids))
             else:
                 self._codex_index.invalidate()
+        if result.invalidate_devin:
+            devin_idx = getattr(self, "_devin_index", None)
+            if devin_idx is not None:
+                devin_idx.invalidate(deleted_ids=result.deleted_devin_ids)
+                devin_idx.refresh(force=True)
         if result.views_changed:
             self._session_cache.invalidate()
             self._invalidate_project_snapshot()
         self._set_status(result.status_text, result.status_level, force=True)
         return True
+
+    def _devin_delete(self, session_id: str) -> bool:
+        """Run ``devin rm --force --process-model in-process <ID>``.
+
+        Returns True only on a clean zero exit. Any failure (invalid ID,
+        missing binary, non-zero exit, timeout) returns False so the caller
+        reports the error rather than a false success."""
+        import subprocess as _sp
+        if not session_id or session_id.startswith("__new__-"):
+            return False
+        binary = self._configured_mode_binary(DEVIN_MODE)
+        try:
+            argv = devin_index.delete_command(binary, session_id)
+            result = _sp.run(
+                argv,
+                cwd=Path.home(),
+                stdout=_sp.DEVNULL,
+                stderr=_sp.DEVNULL,
+                timeout=30,
+            )
+        except (OSError, ValueError, _sp.TimeoutExpired):
+            return False
+        return result.returncode == 0
 
     def _codex_delete(self, uuid: str) -> bool:
         """Run ``codex delete --force <UUID>`` against the resolved CODEX_HOME.
@@ -11764,7 +11892,7 @@ class App:
              lambda s=session: self._do_context_delete(s)),
         ]
         if session.session_type == "devin":
-            unavailable = {_context_menu_label("Preview", "␣"), _context_menu_label("Delete", "d")}
+            unavailable = {_context_menu_label("Preview", "␣")}
             items = [item for item in items if item[0] not in unavailable]
         menu = ContextMenu(items, on_close=self._close_modal)
         self._show_overlay(menu, width=36, height=16,
@@ -11963,8 +12091,19 @@ class App:
                 "Kill failed: exact tmux session is still live", "error")
             return
         # Remove any _running entry keyed by this tmux name.
+        killed_devin_ids: list[str] = []
         for key in [k for k, r in self._running.items() if r.tmux_name == tmux_name]:
+            entry = self._running[key]
+            if entry.session_type == "devin" and entry.logical_session_id:
+                killed_devin_ids.append(entry.logical_session_id)
             del self._running[key]
+        if (killed_devin_ids
+                or (running is not None and running.session_type == "devin")):
+            devin_idx = getattr(self, "_devin_index", None)
+            if devin_idx is not None:
+                for sid in killed_devin_ids:
+                    devin_idx.mark_unlocked(sid)
+                devin_idx.refresh(force=True)
         self._refresh()
         self._set_status(f"Killed: {label}  (file kept)")
 
@@ -11980,16 +12119,20 @@ class App:
         self._open_managed_terminal(session.project.real_path)
 
     def _do_context_delete(self, session: SessionMeta) -> None:
-        if session.session_type == "devin":
-            return
         title = session.display_title
+        detail = (
+            "The Devin session will be permanently deleted.\n"
+            "Its background tmux session will also be killed."
+            if session.session_type == "devin"
+            else (
+                "The session file will be permanently removed from disk.\n"
+                "Its background tmux session will also be killed."
+            )
+        )
         modal = DeleteConfirmModal(
             action="Delete session",
             session_name=title,
-            detail=(
-                "The session file will be permanently removed from disk.\n"
-                "Its background tmux session will also be killed."
-            ),
+            detail=detail,
             on_confirm=lambda s=session: self._do_delete_session(s),
             on_cancel=self._close_modal,
         )
