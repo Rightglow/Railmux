@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-22
+
+### Added
+
+- Search running, recent, and starred sessions across agent CLIs with `g` or
+  **More → Search**. Press Tab to change the search scope.
+- Show all running agents by pressing `a` in **Running** or clicking its
+  scope label. Select a CLI with `m` or by clicking the agent name.
+- Read highlights from the last two product releases on first launch after
+  an upgrade. Press Enter or Esc to continue.
+- Inspect first local-history paint and reconnect-to-first-frame timings in
+  `railmux doctor` after an SSH connection ends.
+
+### Changed
+
+- Use one layout icon to show the split and the sidebar's target. The filled
+  half marks the target pane. Narrow sidebars keep readable button labels.
+- Explain where history preferences are saved and when changes apply.
+
+### Fixed
+
+- Keep the selected search result visible while the search field has focus.
+- Size Help and Options correctly when opening them from a split.
+- Keep wrapped Codex links clickable without repeating table text where local
+  history meets the live screen on managed displays.
+
+Devin CLI remains available in preview on POSIX and WSL. This release uses
+SSH display protocol v18, compatible with Railmux 0.4.2.
+
 ## [0.5.0rc4] - 2026-11-22
 
 ### Changed
@@ -3557,7 +3586,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc4...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Rightglow/Railmux/compare/v0.4.2...v0.5.0
 [0.5.0rc4]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc3...v0.5.0rc4
 [0.5.0rc3]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc2...v0.5.0rc3
 [0.5.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc1...v0.5.0rc2
