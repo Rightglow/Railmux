@@ -690,6 +690,11 @@ Before appending Codex's alternate-screen body to the transcript, capture
 checks whether the first row repeats the prompt preceding the matched seam.
 It omits that row from the history timeline only if the same body aligns
 without it. A real user turn at the seam participates in the alignment.
+When the first two visible body rows uniquely identify a continuation in
+the middle of a projected row, capture keeps the matching text in its styled
+transcript rows. It switches to the native rows at a shared wrap boundary or
+just before the first unmatched native row. This preserves the hyperlink
+targets and avoids showing part of the same table entry twice.
 
 Protocol v18 lets a Codex local-history snapshot carry the preceding prompt
 when its bounded suffix starts in an answer. The shared history controller
@@ -1615,9 +1620,7 @@ routing with focus, selection, or history.
   shared Pane 1 / Pane 2 edge identifies its owner; arrows are omitted on tmux
   versions before 3.3. When Railmux regains focus, arrows are removed and all
   agent borders become gray. The status brand's one-cell workspace map remains
-  visible across focus changes and its filled half names the Target pane without
-  presenting it as current input focus. With two visible agent panes, the
-  status line adds `Target 1` or `Target 2` while the sidebar receives input.
+  visible across focus changes. Its filled half shows where sidebar actions open.
   A single layout uses `▣` because P1 is the only possible target. While
   side-by-side Pane 1 has keyboard focus, the
   hint bar includes `C-b → Pane 2`; Pane 2 shows `C-b ← Pane 1`. Direct P1/P2

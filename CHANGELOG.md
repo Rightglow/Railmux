@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0rc4] - 2026-11-22
+
+### Changed
+
+- Show the layout and sidebar target in one icon. The filled half marks the
+  target in a split.
+
+### Fixed
+
+- Preserve links without duplicating table text where Codex local history
+  meets the live screen on managed displays.
+
+This candidate is opt-in and uses the same SSH protocol as `0.5.0rc3`.
+
 ## [0.5.0rc3] - 2026-11-21
 
 ### Added
@@ -3543,7 +3557,8 @@ made after 0.2.21.
 
 - Initial PyPI release under the Railmux name.
 
-[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc3...HEAD
+[Unreleased]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc4...HEAD
+[0.5.0rc4]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc3...v0.5.0rc4
 [0.5.0rc3]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc2...v0.5.0rc3
 [0.5.0rc2]: https://github.com/Rightglow/Railmux/compare/v0.5.0rc1...v0.5.0rc2
 [0.5.0rc1]: https://github.com/Rightglow/Railmux/compare/v0.4.2...v0.5.0rc1

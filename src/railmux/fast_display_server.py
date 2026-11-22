@@ -33,6 +33,7 @@ import sys
 import termios
 import threading
 import time
+from bisect import bisect_left
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 from functools import lru_cache
@@ -1899,6 +1900,7 @@ _LINK_END = b"\033]8;;\033\\"
 _OVERLAP_STYLE_RE = re.compile(
     rb"\x1b\[[0-9;]*m|\x1b\]8;;[^\x1b]*\x1b\\")
 _OVERLAP_SPACE_RE = re.compile(r"\s+")
+_OVERLAP_ROW_TOKEN_RE = re.compile(_OVERLAP_STYLE_RE.pattern.decode("ascii") + r"|\s+|.")
 _OVERLAP_ANCHOR_CHARS = 12
 _OVERLAP_SINGLE_ANCHOR_CHARS = 24
 _OVERLAP_SEARCH_SCREENS = 4
@@ -1915,11 +1917,68 @@ def _overlap_text(row: bytes) -> str:
     return _OVERLAP_SPACE_RE.sub("", text)
 
 
-def _transcript_rows_before_screen(
+@dataclass(frozen=True)
+class _TranscriptSeam:
+    transcript_rows: int
+    screen_rows: int = 0
+    last_row_chars: int = 0
+
+
+def _clip_overlap_row(row: bytes, count: int) -> bytes:
+    """Keep the first count comparable characters and their terminal styles."""
+    styled = row.decode("utf-8", errors="replace")
+    for match in _OVERLAP_ROW_TOKEN_RE.finditer(styled):
+        token = match[0]
+        if token.startswith("\x1b") or token.isspace():
+            continue
+        count -= 1
+        if count == 0:
+            return styled[:match.end()].encode() + _LINK_END + b"\033[0m"
+    return row
+
+
+def _codex_wrapped_seam(
+    haystack: str, row_starts: list[int], screen_texts: list[str], first: int,
+) -> _TranscriptSeam | None:
+    """Use projected rows for a verified mid-row overlap at the viewport top."""
+    head = next((index for index, row in enumerate(screen_texts) if row), len(screen_texts))
+    leading_rows = screen_texts[head:head + 2]
+    evidence = "".join(leading_rows)
+    if len(leading_rows) != 2 or not all(leading_rows) or len(evidence) < _OVERLAP_SINGLE_ANCHOR_CHARS:
+        return None
+    position = haystack.find(evidence)
+    if position < 0 or haystack.find(evidence, position + 1) >= 0:
+        return None
+    boundary = bisect_left(row_starts, position)
+    if boundary < len(row_starts) and row_starts[boundary] == position:
+        return None
+    # Prefer a whole projected row so wrapped links keep their destinations.
+    # If the layouts never share a row boundary, keep only the exact prefix
+    # of the final projected row. The first unmatched native row stays intact.
+    last = None
+    for index in range(head, len(screen_texts)):
+        text = screen_texts[index]
+        if not text:
+            continue
+        if not haystack.startswith(text, position):
+            break
+        position += len(text)
+        boundary = bisect_left(row_starts, position)
+        if position == len(haystack) or (
+            boundary < len(row_starts) and row_starts[boundary] == position
+        ):
+            return _TranscriptSeam(first + boundary, index + 1)
+        last = _TranscriptSeam(first + boundary, index + 1, position - row_starts[boundary - 1])
+    return last
+
+
+def _transcript_screen_seam(
     transcript_rows: Sequence[bytes],
     screen_rows: Sequence[bytes],
-) -> int:
-    """Return how many transcript rows precede the live screen's content.
+    *,
+    codex_wrapping: bool = False,
+) -> _TranscriptSeam:
+    """Find where the transcript gives way to the live screen's content.
 
     Transcript-backed history appends the live viewport after the transcript,
     whose tail usually holds the same newest message. Locate the screen's
@@ -1944,6 +2003,10 @@ def _transcript_rows_before_screen(
         offset += len(text)
     haystack = "".join(parts)
     screen_texts = [_overlap_text(row) for row in screen_rows]
+    if codex_wrapping:
+        wrapped = _codex_wrapped_seam(haystack, row_starts, screen_texts, first)
+        if wrapped is not None:
+            return wrapped
     screen_offset = 0
     # (screen row, transcript position, anchor length, implied screen start)
     anchors: list[tuple[int, int, int, int]] = []
@@ -1954,7 +2017,7 @@ def _transcript_rows_before_screen(
                 (index, position, len(text), position - screen_offset))
         screen_offset += len(text)
     if not anchors:
-        return total
+        return _TranscriptSeam(total)
 
     def agreeing(anchor: tuple[int, int, int, int]) -> list:
         # Allow small rendering differences (list numbering, bullets).
@@ -1971,7 +2034,7 @@ def _transcript_rows_before_screen(
     if len(group) == 1 and (
         len(anchors) > 1 or group[0][2] < _OVERLAP_SINGLE_ANCHOR_CHARS
     ):
-        return total
+        return _TranscriptSeam(total)
     index, start, _length, _implied = min(group)
     for text in reversed(screen_texts[:index]):
         if not text:
@@ -1979,8 +2042,8 @@ def _transcript_rows_before_screen(
         if start < len(text) or haystack[start - len(text):start] != text:
             break
         start -= len(text)
-    # Keep a row that begins before the screen: it may carry text the screen
-    # no longer shows, and a partial duplicate is better than a loss.
+    # Keep a whole row that starts before the screen unless the exact overlap
+    # above established which characters are safe to deduplicate.
     keep = len(row_starts)
     for index, row_start in enumerate(row_starts):
         if row_start >= start:
@@ -1989,7 +2052,7 @@ def _transcript_rows_before_screen(
     # Drop trailing blank rows so the screen is not preceded by a gap.
     while keep and not parts[keep - 1]:
         keep -= 1
-    return first + keep
+    return _TranscriptSeam(first + keep)
 
 
 def _codex_screen_has_pinned_prompt(
@@ -2006,7 +2069,7 @@ def _codex_screen_has_pinned_prompt(
         return False
     # A real user row participates in the overlap and moves the seam. The
     # pinned row precedes the body in the viewport only.
-    return _transcript_rows_before_screen(transcript, screen[1:]) == kept
+    return _transcript_screen_seam(transcript, screen[1:]).transcript_rows == kept
 
 
 def _capture_pane_history(
@@ -2142,16 +2205,27 @@ def _capture_pane_history(
     transcript_used = transcript_entry is not None and bool(transcript_entry.rows)
     if transcript_used:
         assert transcript_entry is not None
-        kept = _transcript_rows_before_screen(transcript_entry.rows, current_raw)
+        codex_alternate = transcript_provider == "codex" and alternate_on and captured_history_size == 0
+        codex_wrapping = (
+            codex_alternate and pane.codex_history_policy == "local" and not pane.canonical_history
+        )
+        seam = _transcript_screen_seam(transcript_entry.rows, current_raw, codex_wrapping=codex_wrapping)
         if (
-            transcript_provider == "codex" and alternate_on and captured_history_size == 0
+            codex_alternate
             and _codex_screen_has_pinned_prompt(
-                transcript_entry.rows, current_raw, kept, pane.width,
+                transcript_entry.rows, current_raw, seam.transcript_rows, pane.width,
             )
         ):
             current_raw = current_raw[1:]
-        trimmed = len(transcript_entry.rows) - kept
-        transcript_lines = transcript_entry.rows[:kept]
+            if codex_wrapping:
+                seam = _transcript_screen_seam(transcript_entry.rows, current_raw, codex_wrapping=True)
+        current_raw = current_raw[seam.screen_rows:]
+        trimmed = len(transcript_entry.rows) - seam.transcript_rows
+        transcript_lines = transcript_entry.rows[:seam.transcript_rows]
+        if seam.last_row_chars:
+            transcript_lines = transcript_lines[:-1] + (
+                _clip_overlap_row(transcript_lines[-1], seam.last_row_chars),
+            )
         history_count = max(0, max_lines - len(current_raw))
         source_lines = (
             transcript_lines[-history_count:] if history_count else ()

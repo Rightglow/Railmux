@@ -287,7 +287,6 @@ def _tmux_status_left(
     mode_label: str | bool,
     layout_indicator: str | None = None,
     range_wrapper: Callable[[str, str], str] | None = None,
-    route: str = "",
 ) -> str:
     """The tmux status-left segment: the ``railmux`` brand plus a current-mode
     indicator (``· Claude Code`` / ``· Codex``) and a compact workspace-layout
@@ -309,7 +308,7 @@ def _tmux_status_left(
             indicator = range_wrapper(
                 tmux_ctl.STATUS_ACTION_LAYOUT, indicator)
         layout = f" · {indicator}"
-    return f"{brand}#[fg={fg}]· {mode}{layout}{route} #[default]"
+    return f"{brand}#[fg={fg}]· {mode}{layout} #[default]"
 
 
 def _compact_tmux_status_left(
@@ -12501,23 +12500,11 @@ class App:
                         return range_helper(action, content)
                     except (TypeError, ValueError):
                         return content
-            route = ""
-            if (workspace is not None
-                    and workspace.layout is not WorkspaceLayout.SINGLE
-                    and workspace.primary.is_open and workspace.secondary.is_open):
-                target = 2 if workspace.target_slot_key == AgentWorkspace.SECONDARY else 1
-                # tmux expands this per client as focus changes, without an
-                # extra set-option subprocess for every focus event.
-                route = (
-                    "#{?#{==:#{pane_id},#{@railmux_controller_pane}},"
-                    f" · Target {target},}}"
-                )
             brand = _tmux_status_left(
                 error,
                 self._active_mode().label,
                 self._status_layout_indicator(),
                 wrap_action,
-                route,
             )
         state = (
             self._tmux_status_session,

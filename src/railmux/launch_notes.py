@@ -17,7 +17,7 @@ _HIGHLIGHTS = {
     "0.5.0": (
         "Press a in Running or click its scope label to see all running agents.",
         "Press g or choose More → Search to find sessions across CLIs.",
-        "In a split, Target 1 or Target 2 tells you where sidebar actions open.",
+        "In a split, the filled half of the layout icon shows where sidebar actions open.",
     ),
     "0.4.2": (
         "Devin is available in preview on POSIX and WSL. Sign in to its CLI "

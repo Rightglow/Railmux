@@ -423,9 +423,8 @@ class HelpModal(urwid.WidgetWrap):
         ]),
         ("Workspace indicator (bottom-left)", [
             ("▣", "Single agent pane"),
-            ("◧ / ◨", "Side-by-side; filled half is the Target pane"),
-            ("⬒ / ⬓", "Stacked; filled half is the Target pane"),
-            ("Target 1 / 2", "Where sidebar actions open while browsing a split"),
+            ("◧ / ◨", "Side-by-side. The filled half shows where sidebar actions open."),
+            ("⬒ / ⬓", "Stacked. The filled half shows where sidebar actions open."),
             ("Green border", "Pane receiving keyboard input"),
         ]),
         ("Mouse", [

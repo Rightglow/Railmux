@@ -1648,7 +1648,8 @@ def test_server_claude_history_drops_transcript_tail_shown_on_screen(monkeypatch
     assert snapshot.timeline_end == 1 + pane.height
 
 
-def test_transcript_overlap_keeps_rows_without_credible_screen_match():
+@pytest.mark.parametrize("codex_wrapping", [False, True])
+def test_transcript_overlap_keeps_rows_without_credible_screen_match(codex_wrapping):
     rows = tuple(
         f"repeated status line number {index % 2}".encode() for index in range(8)
     )
@@ -1656,11 +1657,10 @@ def test_transcript_overlap_keeps_rows_without_credible_screen_match():
     repeated = (b"repeated status line number 0", b"repeated status line number 1")
     short = (b"tiny", b"")
 
-    keep = fast_display_server._transcript_rows_before_screen
-    assert keep(rows, unrelated) == len(rows)
-    assert keep(rows, repeated) == len(rows)
-    assert keep(rows, short) == len(rows)
-    assert keep((), unrelated) == 0
+    seam = fast_display_server._transcript_screen_seam
+    for screen in (unrelated, repeated, short):
+        assert seam(rows, screen, codex_wrapping=codex_wrapping).transcript_rows == len(rows)
+    assert seam((), unrelated, codex_wrapping=codex_wrapping).transcript_rows == 0
 
 
 def test_transcript_overlap_rejects_disagreeing_anchors():
@@ -1671,7 +1671,7 @@ def test_transcript_overlap_rejects_disagreeing_anchors():
     )
     screen = (b"second distinctive anchor row", b"first distinctive anchor row")
 
-    assert fast_display_server._transcript_rows_before_screen(rows, screen) == 3
+    assert fast_display_server._transcript_screen_seam(rows, screen).transcript_rows == 3
 
 
 def test_transcript_overlap_ignores_screen_regions_rendered_differently():
@@ -1693,7 +1693,7 @@ def test_transcript_overlap_ignores_screen_regions_rendered_differently():
         b"newest message second distinctive row",
     )
 
-    assert fast_display_server._transcript_rows_before_screen(rows, screen) == 3
+    assert fast_display_server._transcript_screen_seam(rows, screen).transcript_rows == 3
 
 
 @pytest.mark.parametrize(
@@ -2839,3 +2839,69 @@ def test_codex_local_history_stitches_body_without_a_second_prompt(
     assert overlay[1:] == answer[-8:-1]
     selection = view.selection_source(wheel_up, (), focused_pane_id=pane.pane_id)
     assert selection is not None and selection.rows[0] == b""
+
+
+@pytest.mark.parametrize("layout", ["shared_boundary", "shifted_boundary", "native"])
+def test_codex_local_history_stitches_rewrapped_table_links(monkeypatch, tmp_path, layout):
+    server = fast_display_server
+    session_id = "019fc7c1-a27c-7ae0-9937-7570552a112a"
+    path = tmp_path / f"rollout-2026-08-04T02-49-33-{session_id}.jsonl"
+    base = "https://example.test/validation/round-one/reviews/"
+    summary = "请复核边界输入并查看当前测试记录，然后对比结果是否完全一致。这里还有一条要在发布前核查。"
+    answer = (
+        "Please check the following.\n"
+        "| Item | Summary |\n"
+        "| --- | --- |\n"
+        f"| **Pending review in the original environment** | {summary} "
+        f"[#123]({base}123) · [#456]({base}456) |\n"
+        "| Follow-up | Separate validation uses a different configuration and still reproduces the issue. |"
+    )
+    path.write_text(json.dumps({"type": "event_msg", "payload": {"type": "item_completed", "item": {
+        "type": "AgentMessage", "content": [{"type": "text", "text": answer}],
+    }}}) + "\n")
+    locator = server.tmux_server.encode_transcript_source("codex", session_id, path)
+    assert locator is not None
+    # The visible native table starts mid-link and uses a different indent,
+    # separator and column wrapping than the transcript. There may be no
+    # common row boundary in the matching portion of the viewport.
+    indent = " " * 39
+    matching_end = ")" if layout != "shifted_boundary" else ""
+    live_end = "  ─────────────────────  ──────────────────────────────────"
+    if not matching_end:
+        live_end = ")" + live_end
+    live = tuple(row.encode() for row in (
+        f"{indent}{base.removeprefix('https://')}123) · #456 (https://",
+        f"{indent}{base.removeprefix('https://')}456{matching_end}",
+        live_end,
+        "  Follow-up    Separate validation uses a different configuration",
+        "               and still reproduces the issue.",
+        "› ",
+    ))
+    monkeypatch.setattr(subprocess, "check_output", lambda *_a, **_kw: b"\n".join(live) + b"\n")
+    pane = server._PaneGeometry(
+        "%8", 31, 0, 96, len(live), mouse_forwardable=True, alternate_on=True,
+        transcript_source=locator, transcript_backed=True, transcript_provider="codex",
+        codex_history_policy="native" if layout == "native" else "local",
+    )
+    pyte = server._extended_pyte(__import__("pyte"))
+    snapshot = server._capture_pane_history(pyte, pane, 1, 300)
+    assert snapshot is not None
+    rendered_live = server._render_history_lines(pyte, live, pane.width)
+    if layout == "native":
+        assert not snapshot.transcript_backed
+        assert snapshot.lines == rendered_live
+        return
+
+    assert snapshot.transcript_backed
+    visible = "".join(map(server._overlap_text, snapshot.lines))
+    assert summary in visible
+    assert visible.count(f"#123({base}123)·#456({base}456)") == 1
+    assert visible.count("example.test/validation/round-one/reviews/") == 2
+    for target in (123, 456):
+        assert f"\x1b]8;;{base}{target}\x1b\\".encode() in b"".join(snapshot.lines)
+    assert snapshot.lines[-4:] == rendered_live[-4:]
+
+    hot = server._capture_pane_history(pyte, pane, 2, len(live) + 1)
+    assert hot is not None
+    assert hot.timeline_end == snapshot.timeline_end
+    assert hot.lines == snapshot.lines[-len(hot.lines):]

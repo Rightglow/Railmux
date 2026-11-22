@@ -420,8 +420,7 @@ def test_help_explains_bottom_left_workspace_target_indicator():
     assert "▣" in text
     assert "◧ / ◨" in text
     assert "⬒ / ⬓" in text
-    assert "filled half is the Target pane" in normalized
-    assert "Target 1 / 2" in text
+    assert "The filled half shows where sidebar actions open." in normalized
 
 
 def test_help_long_form_content_has_horizontal_breathing_room():
