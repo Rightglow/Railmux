@@ -395,8 +395,9 @@ class HelpModal(urwid.WidgetWrap):
     SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Navigation", [
             ("↑↓", "Move within the focused pane"),
-            ("Tab / Shift-Tab", "Switch between Projects, Sessions, Running panes"),
-            ("Esc", "Leave filter, close popup, or move up one pane"),
+            ("Tab / Shift-Tab", "Switch between expanded Projects, Sessions, Running panes"),
+            ("Esc", "Leave filter, close popup, or move up one expanded pane"),
+            ("z", "Zoom focused sidebar pane (toggle other panes collapsed)"),
             ("+ / -", "Expand or collapse the second button row"),
         ]),
         ("Actions", [
@@ -408,18 +409,18 @@ class HelpModal(urwid.WidgetWrap):
             ("r", "Rename the focused session"),
             ("s", "Toggle star (pin to top of session list)"),
             ("k", "Kill the running agent process (keeps session file)"),
-            ("d", "Delete a Claude or Codex session after confirmation"),
+            ("d", "Delete the focused session after confirmation"),
             ("m / More → Mode", "Open the agent Mode picker"),
             ("o", "Open persistent Railmux options"),
             ("t", "Open a terminal in the active project"),
-            ("␣", "Preview Claude Code or Codex history"),
+            ("␣", "Preview saved session history"),
             ("F8", "Cycle layout: single / side-by-side / stacked"),
             ("F9", "Fullscreen the focused agent / terminal / Vim (toggle)"),
             ("q or Ctrl-C", "Quit railmux (prompts for confirmation)"),
         ]),
         ("Across agents", [
             ("g / More → Search", "Find running, recent, and starred sessions across agents"),
-            ("a", "Toggle scope in Running, or click its scope label"),
+            ("a", "Toggle [All] scope in Sessions or Running, or click its scope button"),
         ]),
         ("Workspace indicator (bottom-left)", [
             ("▣", "Single agent pane"),
@@ -428,7 +429,8 @@ class HelpModal(urwid.WidgetWrap):
             ("Green border", "Pane receiving keyboard input"),
         ]),
         ("Mouse", [
-            ("Left click", "Preview a stopped Claude or Codex session, or attach a running session"),
+            ("Left click", "Preview a stopped session, or attach a running session"),
+            ("Click ▾ / ▸", "Collapse or expand a sidebar section"),
             ("Double-click", "Open session and move focus to it"),
             ("Right-click", "Context menu for the session"),
         ]),
@@ -463,7 +465,8 @@ class HelpModal(urwid.WidgetWrap):
             urwid.Text([
                 ("status_idle", "•"), " idle · ",
                 ("status_busy", "•"), " busy · ",
-                ("status_blocked", "•"), " blocked (waiting for input)",
+                ("status_done", "•"), " done (unread) · ",
+                ("status_blocked", "•"), " blocked",
             ]),
             urwid.Text("★ = starred (pinned to top of session list)"),
         ]

@@ -19,8 +19,10 @@ from railmux.ui import keymap
 TIPS: tuple[str, ...] = (
     "Soft Quit (q, then s) closes shared views; agents keep running",
     "Press / then Ctrl-U to clear a list filter restored at startup",
-    "Single-click a stopped Claude or Codex session to preview history",
+    "Single-click a stopped session to preview its saved history",
     "Search finds running, recent, and starred sessions across CLIs",
+    "Click ▾/▸ on a pane title to collapse it, or press z to zoom",
+    "A cyan dot marks a background session that finished unread",
     "Right-click a Project, Session, or Running row for more actions",
     "The filled half of the layout icon shows the Target pane in a split",
     "Returning to one pane leaves the hidden second agent running",
