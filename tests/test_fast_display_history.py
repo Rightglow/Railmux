@@ -2389,6 +2389,42 @@ def test_v16_timeline_gap_or_rewind_is_never_spliced():
     assert view._merge_content(previous, rewind) == rewind
 
 
+def test_uncoordinated_devin_revert_drops_reverted_turns_instead_of_resurrecting_them():
+    view = LocalHistoryView(history_limit=2000)
+    pre_revert_lines = tuple(
+        f"turn-{index}".encode() for index in range(120)
+    )
+    previous = HistorySnapshot(
+        1, "%8", 30, 0, 80, 10, pre_revert_lines,
+        more_available=False, timeline_start=0, timeline_end=0,
+    )
+    # After Devin /revert back to turn-49, live pane redraws turns 0..49 + new prompt.
+    post_revert_lines = (
+        *(f"turn-{index}".encode() for index in range(50)),
+        b"Reverted to step 2",
+        b"live-prompt-after-revert",
+    )
+    incoming_complete = HistorySnapshot(
+        2, "%8", 30, 0, 80, 10, post_revert_lines,
+        more_available=False, timeline_start=0, timeline_end=0,
+    )
+    merged = view._merge_content(previous, incoming_complete)
+    assert merged.lines == post_revert_lines
+    assert b"turn-80" not in merged.lines
+
+    # When post-revert history still exceeds the prefetch window (more_available=True),
+    # retain the older prefix before delta while still dropping reverted turns past incoming_end.
+    incoming_partial = HistorySnapshot(
+        3, "%8", 30, 0, 80, 10,
+        (*(f"turn-{index}".encode() for index in range(20, 60)), b"after-revert-live"),
+        more_available=True, timeline_start=0, timeline_end=0,
+    )
+    merged_partial = view._merge_content(previous, incoming_partial)
+    assert merged_partial.lines[:20] == pre_revert_lines[:20]
+    assert merged_partial.lines[-1] == b"after-revert-live"
+    assert b"turn-80" not in merged_partial.lines
+
+
 def test_codex_history_pins_the_prompt_for_the_visible_turn_without_shifting_links():
     from railmux.fast_display_input import _pane_rows, _target_in_rows
     from railmux.fast_display_protocol import ServerMessageDecoder, encode_history_batch

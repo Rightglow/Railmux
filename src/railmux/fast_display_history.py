@@ -611,17 +611,12 @@ class LocalHistoryView:
             start = min(0, delta)
             incoming_end = delta + len(incoming.lines)
             end = max(len(previous.lines), incoming_end)
-            if (
-                not coordinated
-                and 0 <= incoming_end < len(previous.lines)
-                and all(
-                    self._line_is_blank(line) for line in previous.lines[incoming_end:]
-                )
-            ):
-                # A temporary full-screen view such as Codex /btw can append
-                # an almost-empty live viewport. Once a newer capture anchors
-                # before that suffix, the old blank tail is no longer a valid
-                # future point on the session timeline.
+            if not coordinated and 0 <= incoming_end < len(previous.lines):
+                # Every server capture ends at the pane's current live bottom.
+                # When an uncoordinated newer capture anchors earlier than the
+                # previous tail (for example after a Devin /revert or closing a
+                # temporary full-screen view), everything past incoming_end is
+                # obsolete and must not be resurrected below the live viewport.
                 end = incoming_end
             merged = [b""] * (end - start)
             old_start = -start
