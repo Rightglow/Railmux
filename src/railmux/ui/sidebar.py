@@ -125,14 +125,19 @@ class SidebarSection(urwid.WidgetWrap):
                     remaining = title_width - leading_width - cand_w
                     break
             if chosen_label is None:
-                count_segment = ""
-                collapse_segment = f"{collapse_button} " if collapse_button else ""
-                fixed = prefix + " " + collapse_segment + end
-                fixed_width = urwid.calc_width(fixed, 0, len(fixed))
-                title_width = maxcol - fixed_width
+                compact_collapse = f"{collapse_button} " if collapse_button else ""
+                compact_fixed = prefix + " " + compact_collapse + end
+                compact_fixed_width = urwid.calc_width(
+                    compact_fixed, 0, len(compact_fixed))
+                compact_title_width = maxcol - compact_fixed_width
                 cand_label = f"[{short_scope}]"
                 cand_w = urwid.calc_width(cand_label, 0, len(cand_label))
-                if title_width - leading_width - cand_w >= 0:
+                if compact_title_width - leading_width - cand_w >= 0:
+                    count_segment = ""
+                    collapse_segment = compact_collapse
+                    fixed = compact_fixed
+                    fixed_width = compact_fixed_width
+                    title_width = compact_title_width
                     chosen_label = cand_label
                     remaining = title_width - leading_width - cand_w
             if chosen_label is not None:

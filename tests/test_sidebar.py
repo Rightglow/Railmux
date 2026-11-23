@@ -452,3 +452,7 @@ def test_narrow_23col_sidebar_keeps_claude_scope_and_collapse_clickable():
     assert section.mouse_event(size, "mouse press", 1, header.index("[Claude]"), 0, True)
     assert section.mouse_event(size, "mouse press", 1, header.index("▾"), 0, True)
     assert toggled == ["scope", "collapse"]
+
+    # At 22 columns [Claude] cannot fit; keep the session count intact.
+    header_22 = _row_text(section.render((22, 6), focus=True), 0)
+    assert " 1 ▾ ─" in header_22

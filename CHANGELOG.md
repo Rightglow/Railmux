@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1.dev2] - 2026-11-23
+
+### Added
+
+- Add optional Devin bypass mode (`[devin] auto_run = "never" | "ask" | "always"`)
+  for newly created Devin conversations in Options, `railmux config`, and
+  `config.toml`, keeping resumed conversations on their saved mode.
+- Collapse and expand sidebar sections via the clickable `▾` / `▸` button on
+  each section title bar or zoom the focused sidebar pane with `z`.
+- Toggle cross-CLI **Sessions** view (`[All]` vs active CLI) via the clickable
+  Sessions title-bar scope button or `a`, displaying provider labels on the
+  metadata line so session titles keep full width.
+- Add read-only Devin saved-history Preview (`Space`, context menu, and stopped
+  row click) backed by local transcript JSON with a read-only `sessions.db`
+  fallback.
+- Add a fourth live status state — bright cyan `done` dot — when a running
+  session finishes (`busy` / `blocked` → `idle`) while not actively viewed,
+  sorting above ordinary idle sessions until opened or focused.
+
+### Changed
+
+- Consolidate Claude, Codex, and Devin launch, preview, lease, auto-run, and
+  delete dispatch into `railmux.provider_adapter`, and remove unused helpers
+  and duplicate config/settings boilerplate.
+
 ## [0.5.1.dev1] - 2026-11-22
 
 ### Added

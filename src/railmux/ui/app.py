@@ -1834,8 +1834,9 @@ class App:
                 self._set_divider_active(True)
             return True
         self._sync_target_slot_from_tmux()
-        if slot.agent_tmux_name:
-            self._mark_running_seen(slot.agent_tmux_name)
+        target_agent = self._agent_workspace().target.agent_tmux_name
+        if target_agent:
+            self._mark_running_seen(target_agent)
         if getattr(self, "_railmux_has_focus", True):
             self._set_railmux_focus(False, force_border=True)
         return True

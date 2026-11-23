@@ -871,9 +871,12 @@ required to associate the persisted conversation. Directory and timestamp
 matches alone confer no authority. For a resumed session, launch already knows
 the exact provider ID and stamps it on the exact tmux marker. Both paths use
 the provider session lease once the conversation ID is known. A matching
-marker restores live ownership even while the inventory is cold. Devin-owned
-saved history has no Railmux Preview or Delete adapter in this release.
-Managed transports use styled tmux capture for Devin live history.
+marker restores live ownership even while the inventory is cold. Devin saved
+history supports read-only Railmux Preview (from local transcript JSON or
+read-only `sessions.db`) and confirmed Delete via `devin rm`; new Devin
+conversations optionally support bypass mode via `[devin] auto_run`. Managed
+transports use styled tmux capture with leaked prompt-box cleanup for Devin
+live history.
 
 ## Sidebar rows are disposable views
 
