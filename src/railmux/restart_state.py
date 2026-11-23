@@ -458,6 +458,29 @@ def validate_view(raw: object) -> dict | None:
         value = _bounded_string(filters.get(source), 512)
         if value is not None:
             view[output] = value
+    scopes = active.get("scopes")
+    if scopes is not None:
+        if not isinstance(scopes, dict) or len(scopes) > 8:
+            return None
+        for source, output in (
+            ("sessions", "sessions_all_agents"),
+            ("running", "running_all_agents"),
+        ):
+            scope_val = scopes.get(source)
+            if scope_val is not None:
+                if scope_val not in {"all", "active"}:
+                    return None
+                view[output] = scope_val == "all"
+    raw_collapsed = active.get("collapsed")
+    if raw_collapsed is not None:
+        if (
+            not isinstance(raw_collapsed, list)
+            or len(raw_collapsed) > 3
+            or not all(isinstance(flag, bool) for flag in raw_collapsed)
+        ):
+            return None
+        if len(raw_collapsed) == 3 and not all(raw_collapsed):
+            view["sidebar_collapsed"] = list(raw_collapsed)
     display = active.get("display")
     if display is not None:
         if not isinstance(display, dict) or len(display) > 8:
@@ -497,6 +520,22 @@ def build_view(flat: dict) -> dict:
             filters[target] = value
     if filters:
         active["filters"] = filters
+    scopes: dict[str, str] = {}
+    if flat.get("sessions_all_agents") is True:
+        scopes["sessions"] = "all"
+    if flat.get("running_all_agents") is True:
+        scopes["running"] = "all"
+    if scopes:
+        active["scopes"] = scopes
+    collapsed = flat.get("sidebar_collapsed")
+    if (
+        isinstance(collapsed, list)
+        and len(collapsed) == 3
+        and all(isinstance(flag, bool) for flag in collapsed)
+        and any(collapsed)
+        and not all(collapsed)
+    ):
+        active["collapsed"] = list(collapsed)
     kind = flat.get("right_kind")
     display_mode = flat.get("right_mode")
     session = flat.get("right_session")

@@ -1276,6 +1276,22 @@ class App:
                 "No enabled agent CLI found. Run railmux config → Program paths.",
                 "warn",
             )
+        if state:
+            if "sessions_all_agents" in state:
+                self._sessions_all_agents = bool(state["sessions_all_agents"])
+                self._sessions_pane.set_all_agents(self._sessions_all_agents)
+            if "running_all_agents" in state:
+                self._running_all_agents = bool(state["running_all_agents"])
+                self._running_pane.set_all_agents(self._running_all_agents)
+            saved_collapsed = state.get("sidebar_collapsed")
+            if (
+                isinstance(saved_collapsed, list)
+                and len(saved_collapsed) == len(self._sidebar_sections)
+                and all(isinstance(flag, bool) for flag in saved_collapsed)
+                and not all(saved_collapsed)
+            ):
+                self._sidebar_collapsed = list(saved_collapsed)
+                self._apply_sidebar_collapse_state()
         matching_state = state if restored_mode == self._saved_mode(state).key else None
         if matching_state:
             self._current_mode_view_state().selected_project_key = matching_state.get("project")
@@ -6631,8 +6647,11 @@ class App:
                 "project_filter": previous.project_filter,
                 "session_filter": previous.session_filter,
                 "running_filter": previous.running_filter,
+                "sessions_all_agents": bool(getattr(self, "_sessions_all_agents", False)),
+                "running_all_agents": bool(getattr(self, "_running_all_agents", False)),
+                "sidebar_collapsed": list(getattr(self, "_sidebar_collapsed", [False, False, False])),
             }
-        data = {"mode": current_mode}
+        data: dict = {"mode": current_mode}
         if self._selected_project is not None:
             data["project"] = self._selected_project.encoded_name
         else:
@@ -6653,6 +6672,13 @@ class App:
         running_pane = getattr(self, "_running_pane", None)
         if running_pane is not None and running_pane.filter_text:
             data["running_filter"] = running_pane.filter_text
+        if getattr(self, "_sessions_all_agents", False):
+            data["sessions_all_agents"] = True
+        if getattr(self, "_running_all_agents", False):
+            data["running_all_agents"] = True
+        collapsed = getattr(self, "_sidebar_collapsed", None)
+        if isinstance(collapsed, list) and any(collapsed):
+            data["sidebar_collapsed"] = list(collapsed)
         return data
 
     def _portable_right_state_data(self) -> dict:

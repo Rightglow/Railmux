@@ -517,3 +517,34 @@ def test_cleanup_preserves_corrupt_and_newer_live_unknown_state(
 
     assert restart_state.cleanup_stale_instances(current, now=10**9) == 0
     assert corrupt.exists() and newer.exists()
+
+
+def test_view_scopes_and_sidebar_collapse_round_trip_and_reject_invalid():
+    encoded = restart_state.build_view({
+        "mode": "devin",
+        "sessions_all_agents": True,
+        "running_all_agents": True,
+        "sidebar_collapsed": [True, False, False],
+    })
+    decoded = restart_state.validate_view(encoded)
+    assert decoded is not None
+    assert decoded["sessions_all_agents"] is True
+    assert decoded["running_all_agents"] is True
+    assert decoded["sidebar_collapsed"] == [True, False, False]
+
+    # Single-CLI default omits optional scope/collapsed keys cleanly.
+    plain = restart_state.build_view({"mode": "devin"})
+    assert "scopes" not in plain["modes"]["devin"]
+    assert "collapsed" not in plain["modes"]["devin"]
+    assert restart_state.validate_view(plain) == {"mode": "devin"}
+
+    # Invalid scope values fail validation closed; all-3-collapsed is ignored.
+    bad_scope = restart_state.build_view({"mode": "devin"})
+    bad_scope["modes"]["devin"]["scopes"] = {"sessions": "bogus"}
+    assert restart_state.validate_view(bad_scope) is None
+
+    all_collapsed = restart_state.build_view({
+        "mode": "devin",
+        "sidebar_collapsed": [True, True, True],
+    })
+    assert "collapsed" not in all_collapsed["modes"]["devin"]
