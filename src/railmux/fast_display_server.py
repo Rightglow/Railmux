@@ -1730,6 +1730,37 @@ _CODEX_SEGMENT_CACHE: OrderedDict[
 _CODEX_SEGMENT_CACHE_LIMIT = 8
 
 
+def _codex_earlier_raw_segments(
+    path: Path, budget: int,
+) -> tuple[list[str], bool]:
+    """Read earlier Codex rollout segments within *budget*, oldest first."""
+    paths = tmux_server.codex_earlier_segments(path)
+    opened: list[tuple[int, int]] = []
+    try:
+        for segment in paths:
+            fd = tmux_server.open_owned_transcript_file(segment)
+            if fd is None:
+                continue
+            opened.append((fd, os.fstat(fd).st_size))
+        chunks: list[str] = []
+        truncated = False
+        remaining = budget
+        for fd, size in reversed(opened):
+            if size > remaining:
+                truncated = True
+                break
+            remaining -= size
+            raw, _cut = _read_transcript_tail(fd)
+            chunks.append(raw)
+        chunks.reverse()
+        return chunks, truncated
+    except OSError:
+        return [], True
+    finally:
+        for fd, _size in opened:
+            os.close(fd)
+
+
 def _codex_earlier_history(
     path: Path, width: int, budget: int,
 ) -> tuple[str, bool]:
@@ -1755,7 +1786,7 @@ def _codex_earlier_history(
         if cached is not None and cached[0] == signature:
             _CODEX_SEGMENT_CACHE.move_to_end(key)
             return cached[1], cached[2]
-        chunks: list[str] = []
+        raw_segments: list[tuple[int, str]] = []
         truncated = False
         remaining = budget
         for index in range(len(opened) - 1, -1, -1):
@@ -1765,10 +1796,25 @@ def _codex_earlier_history(
                 break
             remaining -= identity[3]
             raw, _cut = _read_transcript_tail(fd)
-            chunks.append("".join(
-                render_codex_native(io.StringIO(raw), width, header=index == 0)
-            ))
-        text = "".join(reversed(chunks))
+            raw_segments.append((index, raw))
+        raw_segments.reverse()
+        has_later_rollback = any(
+            '"thread_rolled_back"' in seg_raw for _idx, seg_raw in raw_segments[1:]
+        )
+        if has_later_rollback:
+            combined = "".join(seg_raw for _idx, seg_raw in raw_segments)
+            text = "".join(
+                render_codex_native(
+                    io.StringIO(combined),
+                    width,
+                    header=bool(raw_segments) and raw_segments[0][0] == 0,
+                )
+            )
+        else:
+            text = "".join(
+                "".join(render_codex_native(io.StringIO(seg_raw), width, header=idx == 0))
+                for idx, seg_raw in raw_segments
+            )
         _CODEX_SEGMENT_CACHE[key] = (signature, text, truncated)
         _CODEX_SEGMENT_CACHE.move_to_end(key)
         while len(_CODEX_SEGMENT_CACHE) > _CODEX_SEGMENT_CACHE_LIMIT:
@@ -1822,16 +1868,31 @@ def _transcript_rows(
             except OSError:
                 return None
             if source.provider == "codex":
-                earlier, earlier_truncated = _codex_earlier_history(
-                    source.path,
-                    format_width,
-                    max(0, _TRANSCRIPT_MAX_BYTES - len(raw)),
-                )
-                truncated = truncated or earlier_truncated
-                formatted = earlier + "".join(
-                    render_codex_native(
-                        io.StringIO(raw), format_width, header=not earlier)
-                )
+                budget = max(0, _TRANSCRIPT_MAX_BYTES - len(raw))
+                if '"thread_rolled_back"' in raw:
+                    earlier_raw, earlier_truncated = _codex_earlier_raw_segments(
+                        source.path, budget,
+                    )
+                    truncated = truncated or earlier_truncated
+                    combined = "".join(earlier_raw) + raw
+                    formatted = "".join(
+                        render_codex_native(
+                            io.StringIO(combined),
+                            format_width,
+                            header=not earlier_truncated,
+                        )
+                    )
+                else:
+                    earlier, earlier_truncated = _codex_earlier_history(
+                        source.path,
+                        format_width,
+                        budget,
+                    )
+                    truncated = truncated or earlier_truncated
+                    formatted = earlier + "".join(
+                        render_codex_native(
+                            io.StringIO(raw), format_width, header=not earlier)
+                    )
             else:
                 formatted = "".join(
                     transcript_renderer.format_transcript(

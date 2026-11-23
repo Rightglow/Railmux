@@ -3092,3 +3092,56 @@ def test_devin_sanitizer_strips_repeated_btw_side_panels_while_keeping_main_chat
         for r in server._sanitize_devin_scrollback(truncated_prefix, 38)
     ]
     assert cleaned_prefix == [" Real main conversation resumes cleanly."]
+
+
+def test_codex_cross_segment_rollback_pops_turns_from_earlier_segment(
+    tmp_path, monkeypatch,
+):
+    server = fast_display_server
+    codex_home = tmp_path / ".codex"
+    sessions_dir = codex_home / "sessions" / "2026" / "11" / "23"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    server._TRANSCRIPT_CACHE.clear()
+    server._TRANSCRIPT_FORMAT_CACHE.clear()
+    server._CODEX_SEGMENT_CACHE.clear()
+
+    thread_id = "019d0000-0000-7000-8000-000000000123"
+    seg0 = sessions_dir / f"rollout-2026-11-23T01-00-00-{thread_id}.jsonl"
+    seg1 = sessions_dir / f"rollout-2026-11-23T02-00-00-{thread_id}_019d0000-0000-7000-8000-000000000456.jsonl"
+
+    def _turn(user_text: str, agent_text: str) -> str:
+        return "\n".join((
+            json.dumps({"type": "event_msg", "payload": {
+                "type": "item_completed",
+                "item": {"type": "UserMessage", "content": [{"type": "text", "text": user_text}]},
+            }}),
+            json.dumps({"type": "event_msg", "payload": {
+                "type": "item_completed",
+                "item": {"type": "AgentMessage", "content": [{"type": "text", "text": agent_text}]},
+            }}),
+        )) + "\n"
+
+    seg0.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": thread_id, "cwd": "/tmp"}}) + "\n"
+        + _turn("Turn 1 kept", "Answer 1 kept")
+        + _turn("Turn 2 rolled back across boundary", "Answer 2 rolled back"),
+        encoding="utf-8",
+    )
+    seg1.write_text(
+        _turn("Turn 3 rolled back in seg1", "Answer 3 rolled back")
+        + json.dumps({"type": "event_msg", "payload": {"type": "thread_rolled_back", "num_turns": 2}}) + "\n"
+        + _turn("Turn 4 new branch", "Answer 4 new branch"),
+        encoding="utf-8",
+    )
+
+    locator = server.tmux_server.encode_transcript_source("codex", thread_id, seg1)
+    assert locator is not None
+    pyte = server._extended_pyte(__import__("pyte"))
+    entry = server._transcript_rows(pyte, locator, 80, allow_stale=False)
+    assert entry is not None
+    plain = "\n".join(server._devin_plain_row(row) for row in entry.rows)
+    assert "Turn 1 kept" in plain
+    assert "Turn 4 new branch" in plain
+    assert "Turn 2 rolled back across boundary" not in plain
+    assert "Turn 3 rolled back in seg1" not in plain
