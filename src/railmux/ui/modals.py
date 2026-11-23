@@ -14,14 +14,39 @@ from railmux.ui._widgets import ClickableRow
 _READING_MODAL_HORIZONTAL_PADDING = 1
 
 
-def _reading_modal_box(widget, *, title: str) -> urwid.LineBox:
-    """Give long-form modal content one cell of breathing room per side."""
-    padded = urwid.Padding(
-        widget,
-        left=_READING_MODAL_HORIZONTAL_PADDING,
-        right=_READING_MODAL_HORIZONTAL_PADDING,
+def _modal_box(
+    widget,
+    *,
+    title: str,
+    border_attr: str | None = None,
+    pad_x: int = 1,
+) -> urwid.Widget:
+    """Wrap dialog content in a modern rounded border with horizontal breathing room."""
+    inner = (
+        urwid.Padding(widget, left=pad_x, right=pad_x)
+        if pad_x > 0 else widget
     )
-    return urwid.LineBox(padded, title=title)
+    box = urwid.LineBox(
+        inner,
+        title=title,
+        title_attr=border_attr or "title",
+        tlcorner="╭",
+        tline="─",
+        lline="│",
+        trcorner="╮",
+        blcorner="╰",
+        rline="│",
+        bline="─",
+        brcorner="╯",
+    )
+    if border_attr is not None:
+        return urwid.AttrMap(box, border_attr)
+    return box
+
+
+def _reading_modal_box(widget, *, title: str) -> urwid.Widget:
+    """Give long-form modal content one cell of breathing room per side."""
+    return _modal_box(widget, title=title, pad_x=_READING_MODAL_HORIZONTAL_PADDING)
 
 
 def _reading_modal_inner_cols(maxcol: int) -> int:
@@ -36,12 +61,12 @@ def _action_legend(
     separator: str = "\n",
     wrap: str = "clip",
 ) -> urwid.Text:
-    """Render modal actions with keys visually distinct from descriptions."""
+    """Render modal actions with Option C1 split-tone keycaps."""
     markup: list = []
     for index, (keys, description) in enumerate(actions):
         if index:
             markup.append(separator)
-        markup.extend([("modal_key", keys), f" = {description}"])
+        markup.extend([("btn_key", f" {keys} "), ("body", f" {description}")])
     return urwid.Text(markup, align=align, wrap=wrap)
 
 
@@ -52,11 +77,11 @@ def _action_button(
     on_click: Callable[[], None],
     click_key: str,
 ) -> ClickableRow:
-    """Render a terminal-safe filled action button with a mouse target."""
+    """Render a terminal-safe split-tone keycap action row with a mouse target."""
     label = urwid.Text(
         [
-            ("btn_key", keys),
-            ("btn_label", f" = {description}"),
+            ("btn_key", f" {keys} "),
+            ("btn_label", f" {description} "),
         ],
         align="center",
         wrap="space",
@@ -101,12 +126,12 @@ class _ReadOnlyInfoModal(urwid.WidgetWrap):
             _action_legend(list(footer_actions), separator=" · ", wrap="space"),
         ])
         self._footer = footer
-        frame = urwid.Frame(
+        frame = urwid.AttrMap(urwid.Frame(
             body=self._listbox,
             footer=footer,
             focus_part="body",
-        )
-        super().__init__(urwid.LineBox(frame, title=title))
+        ), "body")
+        super().__init__(_modal_box(frame, title=title, pad_x=0))
 
     def selectable(self) -> bool:
         return True
@@ -221,7 +246,7 @@ class QuitConfirmModal(urwid.WidgetWrap):
                 align="center",
                 wrap="space",
             ))
-        self._title = urwid.Text("Quit railmux?", align="center")
+        self._title = urwid.Text(("title", "Quit railmux?"), align="center")
         self._summary = urwid.Text(("live", summary), align="center")
         self._shared_notice = (
             urwid.Text(
@@ -239,23 +264,31 @@ class QuitConfirmModal(urwid.WidgetWrap):
         ]
         if self._shared_notice is not None:
             body_widgets.extend([urwid.Divider(), self._shared_notice])
-        body_widgets.extend([urwid.Divider(), self._actions])
-        body = urwid.Pile(body_widgets)
-        super().__init__(urwid.LineBox(urwid.Filler(body, valign="middle"), title="Confirm quit"))
+        body_widgets.extend([
+            urwid.Divider(),
+            urwid.AttrMap(urwid.Divider("─"), "pane"),
+            urwid.Divider(),
+            self._actions,
+        ])
+        body = urwid.AttrMap(urwid.Pile(body_widgets), "body")
+        super().__init__(_modal_box(
+            urwid.Filler(body, valign="middle"),
+            title="Confirm quit",
+        ))
 
     def preferred_height(self, maxcol: int) -> int:
         """Fit every wrapped choice while keeping the confirmation compact."""
-        inner = max(1, maxcol - 2)  # LineBox left/right border
+        inner = _reading_modal_inner_cols(maxcol)
         body_rows = (
             self._title.rows((inner,))
             + 1
             + self._summary.rows((inner,))
-            + 1
+            + 3
             + self._actions.rows((inner,))
         )
         if self._shared_notice is not None:
             body_rows += 1 + self._shared_notice.rows((inner,))
-        return max(8, body_rows + 2)  # LineBox top/bottom borders
+        return max(10, body_rows + 4)  # LineBox borders + vertical breathing room
 
     def selectable(self) -> bool:
         return True
@@ -293,12 +326,11 @@ class HardQuitConfirmModal(urwid.WidgetWrap):
         else:
             consequence = "No agent sessions are currently running."
         self._title = urwid.Text(
-            ("warn", "Confirm hard quit"), align="center"
+            ("status_blocked", "Confirm hard quit"), align="center"
         )
-        self._consequence = urwid.Text(consequence, align="center")
+        self._consequence = urwid.Text(("title", consequence), align="center")
         self._history_notice = urwid.Text(
-            "Saved conversation history remains, but live agent processes "
-            "will exit.",
+            ("dim", "Saved conversation history remains, but live agent processes will exit."),
             align="center",
         )
         hard_action = _action_legend(
@@ -315,32 +347,35 @@ class HardQuitConfirmModal(urwid.WidgetWrap):
             on_click=on_cancel,
             click_key="quit:hard-back",
         )
-        self._actions = urwid.Pile([hard_action, back_action])
-        body = urwid.Pile([
+        self._actions = urwid.Pile([hard_action, urwid.Divider(), back_action])
+        body = urwid.AttrMap(urwid.Pile([
             self._title,
             urwid.Divider(),
             self._consequence,
             self._history_notice,
             urwid.Divider(),
+            urwid.AttrMap(urwid.Divider("─"), "pane"),
+            urwid.Divider(),
             self._actions,
-        ])
-        super().__init__(urwid.LineBox(
+        ]), "body")
+        super().__init__(_modal_box(
             urwid.Filler(body, valign="middle"),
             title="Final confirmation",
+            border_attr="status_blocked",
         ))
 
     def preferred_height(self, maxcol: int) -> int:
         """Fit the warning and both actions at narrow sidebar widths."""
-        inner = max(1, maxcol - 2)
+        inner = _reading_modal_inner_cols(maxcol)
         body_rows = (
             self._title.rows((inner,))
             + 1
             + self._consequence.rows((inner,))
             + self._history_notice.rows((inner,))
-            + 1
+            + 3
             + self._actions.rows((inner,))
         )
-        return max(9, body_rows + 2)
+        return max(11, body_rows + 4)
 
     def selectable(self) -> bool:
         return True
@@ -369,12 +404,12 @@ class ExitProgressModal(urwid.WidgetWrap):
                 f"Stopping {running_count} agent session"
                 f"{'s' if running_count != 1 else ''}."
             )
-        body = urwid.Filler(urwid.Pile([
+        body = urwid.AttrMap(urwid.Filler(urwid.Pile([
             urwid.Text(("title", "Exiting…"), align="center"),
             urwid.Divider(),
             urwid.Text(("dim", detail), align="center"),
-        ]), valign="middle")
-        super().__init__(urwid.LineBox(body, title="Railmux"))
+        ]), valign="middle"), "body")
+        super().__init__(_modal_box(body, title="Railmux"))
 
 
 class _Selectable(urwid.WidgetWrap):
@@ -661,30 +696,34 @@ class DeleteConfirmModal(urwid.WidgetWrap):
         self._session_name = session_name
         self._detail = detail
         rows = [
-            _Selectable(urwid.Text(("title", f"{action}?"), align="center")),
+            _Selectable(urwid.Text(("status_blocked", f"{action}?"), align="center")),
             _Selectable(urwid.Divider()),
-            _Selectable(urwid.Text(session_name, align="center")),
+            _Selectable(urwid.Text(("title", session_name), align="center")),
             _Selectable(urwid.Divider()),
-            _Selectable(urwid.Text(detail, align="center")),
+            _Selectable(urwid.Text(("dim", detail), align="center")),
         ]
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
         footer = urwid.Pile([
-            urwid.Divider(),
+            urwid.AttrMap(urwid.Divider("─"), "pane"),
             _action_legend([
                 ("y / ↵", "confirm"),
                 ("n / Esc", "cancel"),
-            ], align="center"),
+            ], align="center", separator="   ", wrap="space"),
         ])
-        self._frame = urwid.Frame(
+        self._frame = urwid.AttrMap(urwid.Frame(
             body=self._listbox,
             footer=footer,
             focus_part="body",
-        )
-        super().__init__(urwid.LineBox(self._frame, title="Confirm action"))
+        ), "body")
+        super().__init__(_modal_box(
+            self._frame,
+            title="Confirm delete",
+            border_attr="status_blocked",
+        ))
 
     def preferred_height(self, maxcol: int) -> int:
         """Return a compact height while leaving long content scrollable."""
-        inner = max(1, maxcol - 2)  # LineBox left/right border
+        inner = _reading_modal_inner_cols(maxcol)
         body_rows = (
             urwid.Text(f"{self._action}?").rows((inner,))
             + 1
@@ -692,10 +731,7 @@ class DeleteConfirmModal(urwid.WidgetWrap):
             + 1
             + urwid.Text(self._detail).rows((inner,))
         )
-        # LineBox borders (2) + footer divider/action rows (3). Cap the body so
-        # pathological titles use the existing ListBox instead of growing into
-        # a nearly full-height confirmation window.
-        return min(16, max(8, body_rows + 5))
+        return min(16, max(8, body_rows + 4))
 
     def selectable(self) -> bool:
         return True
@@ -1219,8 +1255,11 @@ class YoloConfirmModal(urwid.WidgetWrap):
         ])
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
         self._footer = footer
-        frame = urwid.Frame(body=self._listbox, footer=footer, focus_part="body")
-        super().__init__(urwid.LineBox(frame, title=title))
+        frame = urwid.AttrMap(
+            urwid.Frame(body=self._listbox, footer=footer, focus_part="body"),
+            "body",
+        )
+        super().__init__(_modal_box(frame, title=title, border_attr="modal_key"))
 
     def selectable(self) -> bool:
         return True
@@ -1279,7 +1318,7 @@ class RenameModal(urwid.WidgetWrap):
             footer=footer,
             focus_part="body",
         )
-        super().__init__(urwid.LineBox(body, title="Rename"))
+        super().__init__(_modal_box(body, title="Rename"))
 
     def preferred_height(self, maxcol: int) -> int:
         """Grow for wrapped titles, then scroll while keeping actions visible."""

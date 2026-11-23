@@ -108,7 +108,11 @@ def test_ssh_launcher_shows_notes_before_connecting(monkeypatch):
     from railmux import fast_display_client
 
     events = []
-    monkeypatch.setattr(launch_notes, "maybe_show_launch_notes", lambda: events.append("notes"))
+    monkeypatch.setattr(
+        launch_notes,
+        "maybe_show_launch_notes",
+        lambda **kwargs: events.append(("notes", kwargs.get("keep_alternate_screen"))) or False,
+    )
     monkeypatch.setattr(fast_display_client, "run", lambda args: events.append(args.destination) or 0)
     assert fast_display_client.main(["test-server"]) == 0
-    assert events == ["notes", "test-server"]
+    assert events == [("notes", True), "test-server"]

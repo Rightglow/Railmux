@@ -27,9 +27,17 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
-from typing import BinaryIO, Optional, Sequence
+from typing import BinaryIO, Optional, Sequence, TextIO
 
 from railmux import __version__, image_paste, local_clipboard, local_open
+from railmux.terminal_status import (
+    STYLE_ACCENT,
+    STYLE_HEADING,
+    STYLE_MUTED,
+    STYLE_PROMPT,
+    stream_is_tty,
+    styled,
+)
 from railmux.config import (
     ConfigError,
     load_config,
@@ -1704,9 +1712,65 @@ def remote_config_help(destination: str, *, tmux: bool = False) -> str:
     )
 
 
+def _render_setup_card(
+    title: str,
+    rows: Sequence[tuple[str, str]],
+    detail: str,
+    *,
+    stream: TextIO = sys.stderr,
+) -> None:
+    """Print a clean rounded setup/update card on interactive terminals."""
+    if not stream_is_tty(stream):
+        return
+    import textwrap
+
+    try:
+        cols = os.get_terminal_size(stream.fileno()).columns
+    except (AttributeError, OSError, ValueError):
+        cols = 72
+    width = max(40, min(68, cols - 4))
+    inner = width - 4  # "│ " + " │"
+    bar = "─" * max(1, width - len(title) - 5)
+    top = f"╭─ {styled(title, STYLE_ACCENT, stream=stream)} {styled(bar + '╮', STYLE_MUTED, stream=stream)}"
+    bottom = styled("╰" + "─" * (width - 2) + "╯", STYLE_MUTED, stream=stream)
+    border_l = styled("│ ", STYLE_MUTED, stream=stream)
+    border_r = styled(" │", STYLE_MUTED, stream=stream)
+
+    def _line(plain_len: int, formatted: str) -> str:
+        pad = " " * max(0, inner - plain_len)
+        return f"  {border_l}{formatted}{pad}{border_r}"
+
+    print(file=stream)
+    print(f"  {top}", file=stream)
+    print(_line(0, ""), file=stream)
+    for label, value in rows:
+        lbl = f"{label:<9}"
+        val = value[: max(1, inner - len(lbl) - 1)]
+        formatted = (
+            f"{styled(lbl, STYLE_MUTED, stream=stream)} "
+            f"{styled(val, STYLE_HEADING, stream=stream)}"
+        )
+        print(_line(len(lbl) + 1 + len(val), formatted), file=stream)
+    if detail.strip():
+        print(_line(0, ""), file=stream)
+        for wrapped in textwrap.wrap(detail.strip(), width=inner) or [""]:
+            print(_line(len(wrapped), wrapped), file=stream)
+    print(_line(0, ""), file=stream)
+    print(f"  {bottom}", file=stream)
+    print(file=stream)
+    stream.flush()
+
+
 def _confirm(question: str) -> bool:
     try:
-        answer = input(f"{question} [y/N] ")
+        if stream_is_tty(sys.stdout):
+            prompt = (
+                f"  {styled('▸', STYLE_ACCENT, stream=sys.stdout)} "
+                f"{question} {styled('[y/N]', STYLE_PROMPT, stream=sys.stdout)} "
+            )
+        else:
+            prompt = f"{question} [y/N] "
+        answer = input(prompt)
     except (EOFError, KeyboardInterrupt):
         print(file=sys.stderr)
         return False
@@ -1733,12 +1797,20 @@ def _install_remote_and_start(
     current_size: os.terminal_size,
     version: str,
 ) -> tuple[subprocess.Popen, RemoteStartup]:
-    print(
-        f"Installing Railmux {version} in the remote user environment "
-        f"(up to {int(_REMOTE_INSTALL_TIMEOUT)} seconds for installation and "
-        "the compatibility handshake)...",
-        file=sys.stderr,
+    status_line = (
+        f"Installing Railmux {version} in the remote user environment on "
+        f"{args.destination} (up to {int(_REMOTE_INSTALL_TIMEOUT)} seconds "
+        "for installation and the compatibility handshake)…"
     )
+    if stream_is_tty(sys.stderr):
+        print(
+            f"\n  {styled('●', STYLE_ACCENT, stream=sys.stderr)} "
+            f"{styled(status_line, STYLE_HEADING, stream=sys.stderr)}\n",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        print(status_line, file=sys.stderr)
     install_argv = build_ssh_install_argv(
         args.destination,
         version=version,
@@ -1758,12 +1830,21 @@ def _install_remote_private_venv_and_start(
     current_size: os.terminal_size,
     version: str,
 ) -> tuple[subprocess.Popen, RemoteStartup]:
-    print(
+    status_line = (
         f"Installing Railmux {version} in the isolated remote environment "
-        f"~/{_REMOTE_VENV} (up to {int(_REMOTE_INSTALL_TIMEOUT)} seconds for "
-        "installation and the compatibility handshake)...",
-        file=sys.stderr,
+        f"~/{_REMOTE_VENV} on {args.destination} "
+        f"(up to {int(_REMOTE_INSTALL_TIMEOUT)} seconds for installation and "
+        "the compatibility handshake)…"
     )
+    if stream_is_tty(sys.stderr):
+        print(
+            f"\n  {styled('●', STYLE_ACCENT, stream=sys.stderr)} "
+            f"{styled(status_line, STYLE_HEADING, stream=sys.stderr)}\n",
+            file=sys.stderr,
+            flush=True,
+        )
+    else:
+        print(status_line, file=sys.stderr)
     install_argv = build_ssh_private_venv_install_argv(
         args.destination,
         version=version,
@@ -1784,9 +1865,23 @@ def _confirm_remote_install(
     version: str,
     *,
     before_interaction: Callable[[], None] | None = None,
+    remote_version: str | None = None,
 ) -> bool:
     if before_interaction is not None:
         before_interaction()
+    version_row = (
+        f"{remote_version}  →  {version}"
+        if remote_version else f"install {version}"
+    )
+    _render_setup_card(
+        "Railmux SSH · Remote Update",
+        (
+            ("Host", args.destination),
+            ("Version", version_row),
+            ("Target", "remote user environment (pip --user)"),
+        ),
+        reason,
+    )
     return _confirm(
         f"{reason} Install Railmux {version} with SSH support into "
         f"the remote user environment on {args.destination}?"
@@ -1802,10 +1897,19 @@ def _confirm_remote_private_venv_install(
 ) -> bool:
     if before_interaction is not None:
         before_interaction()
+    _render_setup_card(
+        "Railmux SSH · Isolated Remote Setup",
+        (
+            ("Host", args.destination),
+            ("Version", version),
+            ("Target", f"~/{_REMOTE_VENV} (no sudo, keeps system Python untouched)"),
+        ),
+        failure,
+    )
     return _confirm(
-        f"{failure} Create the isolated "
-        f"~/{_REMOTE_VENV} environment and install Railmux {version} there? "
-        "This does not use sudo or modify the system Python."
+        f"{failure} Create the isolated ~/{_REMOTE_VENV} environment and "
+        f"install Railmux {version} there? This does not use sudo or modify "
+        "the system Python."
     )
 
 
@@ -2191,6 +2295,15 @@ def prepare_remote_process(
             decision = decide_compatibility(facts, consents)
             if decision.action == "prompt" and decision.prompt == "local_upgrade":
                 reveal_terminal()
+                _render_setup_card(
+                    "Railmux SSH · Local Update",
+                    (
+                        ("Host", args.destination),
+                        ("Version", f"{__version__}  →  {hello.version}"),
+                        ("Target", "local Railmux installation"),
+                    ),
+                    decision.reason or "",
+                )
                 consents["local_upgrade"] = _confirm(
                     f"{decision.reason} Upgrade local Railmux to {hello.version}?"
                 )
@@ -2215,6 +2328,7 @@ def prepare_remote_process(
                     decision.reason,
                     decision.install_version,
                     before_interaction=before_interaction,
+                    remote_version=hello.version,
                 )
                 continue
             if decision.action == "tmux_missing":
@@ -3868,15 +3982,27 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    kept_alt = False
     try:
         args = parse_args(argv)
         from railmux.launch_notes import maybe_show_launch_notes
 
         try:
-            maybe_show_launch_notes()
+            try:
+                kept_alt = bool(maybe_show_launch_notes(keep_alternate_screen=True))
+            except TypeError:
+                maybe_show_launch_notes()
         except KeyboardInterrupt:
             return 130
-        return run(args)
+        try:
+            return run(args)
+        finally:
+            if kept_alt:
+                try:
+                    sys.stdout.buffer.write(b"\033[0m\033[?25h\033[?1049l")
+                    sys.stdout.buffer.flush()
+                except OSError:
+                    pass
     except ProbeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

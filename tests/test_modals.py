@@ -110,7 +110,7 @@ def test_delete_confirm_action_keys_use_high_contrast_attribute():
         on_confirm=lambda: None, on_cancel=lambda: None,
     )
 
-    assert "modal_key" in _rendered_attrs(
+    assert "btn_key" in _rendered_attrs(
         modal, size=(40, modal.preferred_height(40)))
 
 
@@ -167,7 +167,7 @@ def test_quit_confirm_wraps_all_choices_in_narrow_sidebar():
 
     assert "hard quit (requires final confirmation)" in text
     assert "soft quit (keep sessions alive)" in text
-    assert "n / Esc = cancel" in text
+    assert "n / Esc cancel" in text
 
 
 def test_quit_confirm_choices_have_filled_button_styling():
@@ -246,15 +246,15 @@ def test_hard_quit_confirm_preserves_enter_and_requires_a_second_action():
     assert "Confirm hard quit" in text
     assert "stop 2 running agent sessions" in text
     assert "Saved conversation history remains" in text
-    assert "y / ↵ = quit and stop all sessions" in text
-    assert "n / Esc = back" in text
+    assert "y / ↵ quit and stop all sessions" in text
+    assert "n / Esc back" in text
     assert called == []
 
     canvas = modal.render((24, height), focus=True)
     hard_row = next(
         index
         for index, line in enumerate(canvas.text)
-        if b"quit and stop" in line
+        if b"y /" in line
     )
     modal.mouse_event((24, height), "mouse press", 1, 12, hard_row, True)
     assert called == []
@@ -480,7 +480,7 @@ def test_rename_legend_documents_clear_shortcut():
 
     text = _rendered_text(modal, size=(40, 12))
 
-    assert "Ctrl+U = clear" in text
+    assert "Ctrl+U  clear" in text
 
 
 def test_rename_height_grows_for_long_wrapped_original_and_keeps_actions():
@@ -610,8 +610,8 @@ def test_delete_confirm_keeps_actions_visible_for_long_name():
 
     text = _rendered_text(modal, size=(30, 12))
 
-    assert "↵ = confirm" in text
-    assert "Esc = cancel" in text
+    assert "↵  confirm" in text
+    assert "Esc" in text and "cancel" in text
 
 
 def test_delete_confirm_keeps_actions_visible_for_long_cjk_name():
@@ -643,7 +643,7 @@ def test_delete_confirm_scrolls_long_body_but_keeps_footer():
     text = _rendered_text(modal, size=(30, 10))
 
     assert "PERMANENT CONSEQUENCE" in text
-    assert "↵ = confirm" in text
+    assert "↵  confirm" in text
 
 
 def test_session_info_renders_attention_and_retry(tmp_path: Path):
@@ -682,7 +682,7 @@ def test_info_modal_keeps_close_legend_visible_when_body_overflows(
 
     text = _rendered_text(modal, size=(24, 8))
 
-    assert "↵ / Esc = close" in text
+    assert "↵ / Esc  close" in text
 
 
 # ── basic rendering ─────────────────────────────────────────────────────

@@ -363,7 +363,7 @@ def test_quit_modal_shows_s_option():
         running_count=3,
     )
     text = _render_text(modal)
-    assert "s = soft quit" in text
+    assert " s  soft quit" in text
 
 
 def test_quit_modal_soft_quit_key_fires_callback():

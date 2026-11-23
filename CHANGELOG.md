@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1.dev4] - 2026-11-23
+
+### Fixed
+
+- Eliminate the brief shell-screen flash between the first-launch What's New
+  dialog and the `railmux ssh` Connecting screen by handing off the terminal's
+  alternate screen seamlessly.
+
+### Changed
+
+- Upgrade the `railmux ssh` remote and local update screens with a structured
+  rounded status card (showing Host, `old → new` version, and Target) and clean
+  progress indicators.
+- Redesign confirmation dialogs (Quit, Final hard quit, Delete, Auto-run, and
+  What's New / Info modals) with rounded borders (`╭─╮╰─╯`), horizontal
+  breathing room, danger accents for destructive actions, and Option C1
+  split-tone keycap actions.
+
 ## [0.5.1.dev3] - 2026-11-23
 
 ### Added
