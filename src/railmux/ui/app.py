@@ -231,8 +231,8 @@ PALETTE = [
     ("btn_pressed", "white,bold", "dark green", "bold", "#ffffff,bold", _DEEP_GRASS_GREEN),
     # Sidebar section scope chips (symmetric pills without ASCII brackets).
     ("scope_chip", "light gray", "dark gray", "", "#cbd4d0", "#242d2a"),
-    ("scope_chip_all", "light cyan,bold", "dark cyan", "bold",
-     "#5ce8ff,bold", "#14363c"),
+    ("scope_chip_all", "white,bold", "dark gray", "bold",
+     "#ffffff,bold", "#37423e"),
     # A live tmux session is structural state, not lifecycle status. Its grass-
     # green title is independent from the idle/busy/blocked status-dot colour.
     ("live", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),

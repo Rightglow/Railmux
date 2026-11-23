@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
 import shlex
@@ -1931,7 +1932,7 @@ def test_real_soft_quit_disconnects_shared_clients_and_agents_survive(
             timeout=8.0,
         ), client_output[first.pid].decode(errors="replace")
         assert _wait_until(
-            lambda: "q Quit" in captured_railmux(), timeout=8.0)
+            lambda: bool(re.search(r"q\s+Quit", captured_railmux())), timeout=8.0)
 
         agent_session = "integration-agent"
         tmux("new-session", "-d", "-s", agent_session, "sleep", "60")
@@ -2075,7 +2076,7 @@ def test_real_remote_display_soft_quit_keeps_tmux_responsive(
     try:
         process = launch_helper()
         assert _wait_until(
-            lambda: "q Quit" in captured_railmux(), timeout=8.0)
+            lambda: bool(re.search(r"q\s+Quit", captured_railmux())), timeout=8.0)
 
         tmux("new-session", "-d", "-s", "integration-agent", "sleep", "60")
         process.terminate()
@@ -2089,7 +2090,7 @@ def test_real_remote_display_soft_quit_keeps_tmux_responsive(
 
         process = launch_helper()
         assert _wait_until(
-            lambda: "q Quit" in captured_railmux(), timeout=8.0)
+            lambda: bool(re.search(r"q\s+Quit", captured_railmux())), timeout=8.0)
         process.stdin.write(encode_input(b"q"))
         process.stdin.flush()
         assert _wait_until(

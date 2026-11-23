@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1.dev3] - 2026-11-23
+
+### Added
+
+- Add optional terminal notification bell (`[interaction] notification_sound`,
+  default `"off"`) in Options, `railmux config`, and `config.toml` that rings
+  when a background agent finishes unread or blocks — forwarded end-to-end in
+  both direct `railmux` and `railmux ssh` (`PROTOCOL_VERSION = 19`).
+
+### Changed
+
+- Polish sidebar headers and bottom controls with Option C terminal styling:
+  borderless `▾` / `▸` fold glyphs, symmetric bracket-free scope pills (with a
+  subtle brighter neutral highlight for `All`), and split-tone keycap pills in
+  the Button Bar.
+- Show the latest three product versions (up from two) in the first-launch
+  What's New dialog.
+- Update built-in Help (including the four-state status-dot legend) and
+  status-bar idle tips to cover pane collapse/zoom, Sessions `[All]` scope,
+  Devin Preview/Delete, and the cyan unread-finished dot.
+
 ## [0.5.1.dev2] - 2026-11-23
 
 ### Added
