@@ -223,12 +223,16 @@ PALETTE = [
     ("session_meta_focus", "light gray", "dark green", "", "#b8b8b8", _DEEP_GRASS_GREEN),
     ("session_meta_sel", "light gray", "dark gray", "", "#b0b0b0", _SLATE),
     ("modal_key", "yellow,bold", "", "bold", f"{_STATUS_YELLOW},bold", "default"),
-    # ButtonBar — neutral filled controls stay distinct from the green tmux
-    # status line while the shortcut itself remains visually prominent.
+    # ButtonBar — split-tone keycap pills (lighter keycap + softer dark label)
+    # stay distinct from the green tmux status line while reading like tactile controls.
     ("btn_key", "white,bold", "dark gray", "bold",
-     "#ffffff,bold", "#303634"),
-    ("btn_label", "light gray", "dark gray", "", _BODY, "#303634"),
+     "#ffffff,bold", "#37423e"),
+    ("btn_label", "light gray", "dark gray", "", "#cfd6d3", "#232a28"),
     ("btn_pressed", "white,bold", "dark green", "bold", "#ffffff,bold", _DEEP_GRASS_GREEN),
+    # Sidebar section scope chips (symmetric pills without ASCII brackets).
+    ("scope_chip", "light gray", "dark gray", "", "#cbd4d0", "#242d2a"),
+    ("scope_chip_all", "light cyan,bold", "dark cyan", "bold",
+     "#5ce8ff,bold", "#14363c"),
     # A live tmux session is structural state, not lifecycle status. Its grass-
     # green title is independent from the idle/busy/blocked status-dot colour.
     ("live", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),
@@ -6199,6 +6203,17 @@ class App:
                 "applies to the next click in native Windows or railmux ssh.")
             return True
 
+        def set_notification_sound(policy: str) -> bool:
+            if not self._settings.set_notification_sound_policy(policy):
+                self._set_status(
+                    "Could not save notification sound option; setting unchanged.",
+                    "error",
+                )
+                return False
+            label = "On" if policy == "on" else "Off"
+            self._set_status(f"Notification sound: {label}.")
+            return True
+
         modal = OptionsModal(
             agent_label=self._active_mode().label,
             mode_choices=self._mode_menu_entries,
@@ -6210,6 +6225,7 @@ class App:
             codex_history_policy=self._settings.codex_history_policy,
             devin_history_policy=self._settings.devin_history_policy,
             devin_bypass_policy=self._settings.devin_bypass_policy,
+            notification_sound_policy=self._settings.notification_sound_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
@@ -6219,6 +6235,7 @@ class App:
             on_codex_history_policy=set_codex_history,
             on_devin_history_policy=set_devin_history,
             on_devin_bypass_policy=set_devin_bypass,
+            on_notification_sound_policy=set_notification_sound,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
 
@@ -9844,6 +9861,19 @@ class App:
             return False
         return workspace.target.agent_tmux_name == tmux_name
 
+    def _maybe_ring_notification_bell(self) -> None:
+        """Emit a debounced terminal bell when enabled in Options."""
+        settings = getattr(self, "_settings", None)
+        if settings is None or settings.notification_sound_policy != "on":
+            return
+        now = time.monotonic()
+        last = getattr(self, "_last_notification_bell_ts", 0.0)
+        if now - last < 2.0:
+            return
+        session_name = getattr(self, "_tmux_status_session", None)
+        if session_name and tmux_ctl.ring_session_bell(session_name):
+            self._last_notification_bell_ts = now
+
     def _record_live_status_transition(
         self, running: _Running, raw_status: str,
     ) -> str:
@@ -9854,12 +9884,20 @@ class App:
             return raw_status
         base = "idle" if raw_status == "done" else raw_status
         previous = last_map.get(running.tmux_name)
+        should_notify = False
         if base in {"busy", "blocked"}:
             unread.discard(running.tmux_name)
+            if (base == "blocked" and previous is not None
+                    and previous != "blocked"
+                    and not self._is_actively_viewing(running.tmux_name)):
+                should_notify = True
         elif base == "idle" and previous in {"busy", "blocked"}:
             if not self._is_actively_viewing(running.tmux_name):
                 unread.add(running.tmux_name)
+                should_notify = True
         last_map[running.tmux_name] = base
+        if should_notify:
+            self._maybe_ring_notification_bell()
         if base == "idle" and running.tmux_name in unread:
             return "done"
         return base

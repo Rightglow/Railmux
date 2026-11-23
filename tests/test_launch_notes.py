@@ -29,10 +29,10 @@ def launch(monkeypatch, tmp_path):
     return marker, view, show
 
 
-def test_current_product_version_has_two_short_english_release_sections():
+def test_current_product_version_has_three_short_english_release_sections():
     current = launch_notes.recent_highlights(__version__)
     assert current[0][0] == Version(__version__).base_version
-    assert len(current) == 2
+    assert len(current) == 3
     sections = launch_notes.recent_highlights("0.5.0rc3")
     assert [version for version, _ in sections] == ["0.5.0", "0.4.2"]
     content = " ".join(note for _, notes in sections for note in notes)

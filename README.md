@@ -565,6 +565,8 @@ hidden = []
 [interaction]
 # Clicked paths in native Windows and railmux ssh: "ask", "internal", or "external"
 path_open = "ask"
+# Terminal bell when a background session finishes or blocks: "off" (default) or "on"
+notification_sound = "off"
 # Railmux-managed history cap (default: 10000; range: 2000-20000)
 history_lines = 10000
 # Claude Code history on managed displays: "ask", "local", or "native"

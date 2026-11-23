@@ -33,7 +33,8 @@ MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "projects": ("show_empty_projects",),
     "live": ("poll_interval_ms", "agent_transport"),
     "interaction": (
-        "history_lines", "claude_history", "codex_history", "devin_history", "path_open",
+        "history_lines", "claude_history", "codex_history", "devin_history",
+        "path_open", "notification_sound",
     ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
@@ -334,6 +335,20 @@ class Settings:
         # operations know about both spellings.
         return self._set_choice_policy(
             "interaction", "path_open", "interaction.path_open", policy)
+
+    # -- Notification sound (default off) -------------------------------
+    @property
+    def notification_sound_policy(self) -> str:
+        return self._choice_policy(
+            "interaction", "notification_sound",
+            "interaction.notification_sound", default="off",
+        )
+
+    def set_notification_sound_policy(self, policy: str) -> bool:
+        return self._set_choice_policy(
+            "interaction", "notification_sound",
+            "interaction.notification_sound", policy,
+        )
 
     # -- Saved outer-workspace geometry ---------------------------------
     @property

@@ -10,7 +10,7 @@ from enum import IntEnum, IntFlag
 
 DISPLAY_MAGIC = b"RMUXD17\x00"
 INPUT_MAGIC = b"RMUXK17\x00"
-PROTOCOL_VERSION = 18
+PROTOCOL_VERSION = 19
 REMOTE_CONFIG_PROTOCOL = 1
 LENGTH_BYTES = 4
 REMOTE_HELLO_PREFIX = b"RAILMUX-REMOTE/1 "
@@ -75,6 +75,7 @@ class OutputKind(IntEnum):
     PATH_RESULT = 6
     PATH_OPEN_RESULT = 7
     IMAGE_PASTE_RESULT = 8
+    BELL = 9
 
 
 class InputKind(IntEnum):
@@ -191,6 +192,11 @@ class ClipboardCopy:
     """One bounded clipboard payload requested by the remote tmux client."""
 
     data: bytes
+
+
+@dataclass(frozen=True)
+class BellNotification:
+    """One explicit terminal bell forwarded from the remote tmux client."""
 
 
 @dataclass(frozen=True)
@@ -500,6 +506,11 @@ def encode_clipboard_copy(data: bytes) -> bytes:
     if not isinstance(data, bytes) or not data or len(data) > MAX_CLIPBOARD_BYTES:
         raise ValueError("invalid clipboard payload")
     payload = bytes((int(OutputKind.CLIPBOARD),)) + data
+    return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
+def encode_bell() -> bytes:
+    payload = bytes((int(OutputKind.BELL),))
     return DISPLAY_MAGIC + struct.pack(">I", len(payload)) + payload
 
 
@@ -914,6 +925,11 @@ class ServerMessageDecoder:
                     if not 1 <= len(body) <= MAX_CLIPBOARD_BYTES:
                         raise ValueError("invalid clipboard payload")
                     messages.append(ClipboardCopy(body))
+                    continue
+                if output_kind is OutputKind.BELL:
+                    if body:
+                        raise ValueError("invalid bell payload")
+                    messages.append(BellNotification())
                     continue
                 if output_kind is OutputKind.PATH_RESULT:
                     if len(body) < _PATH_RESULT.size:

@@ -347,15 +347,15 @@ def test_sidebar_section_click_toggles_collapse_and_scope_independently():
     )
     size = (42, 8)
     header = _row_text(section.render(size, focus=True), 0)
-    assert header.startswith("─ SESSIONS [Devin] workspace")
+    assert header.startswith("─ SESSIONS  Devin  workspace")
     assert "▾ ─" in header
 
-    # Clicking [Devin] toggles scope to [All] without collapsing.
-    scope_col = header.index("[Devin]") + 2
+    # Clicking the scope pill toggles scope to All without collapsing.
+    scope_col = header.index(" Devin ") + 2
     assert section.mouse_event(size, "mouse press", 1, scope_col, 0, True) is True
     assert state == {"collapsed": False, "all": True}
     header_all = _row_text(section.render(size, focus=True), 0)
-    assert header_all.startswith("─ SESSIONS [All] workspace")
+    assert header_all.startswith("─ SESSIONS  All  workspace")
 
     # Clicking the right-edge collapse button collapses to 1 row.
     collapse_col = header_all.index("▾")
@@ -363,7 +363,7 @@ def test_sidebar_section_click_toggles_collapse_and_scope_independently():
     assert state == {"collapsed": True, "all": True}
     assert section.collapsed is True
     collapsed_header = _row_text(section.render((42, 1), focus=True), 0)
-    assert collapsed_header.startswith("─ SESSIONS [All] workspace")
+    assert collapsed_header.startswith("─ SESSIONS  All  workspace")
     assert "▸ ─" in collapsed_header
 
 
@@ -447,12 +447,12 @@ def test_narrow_23col_sidebar_keeps_claude_scope_and_collapse_clickable():
     )
     size = (23, 6)
     header = _row_text(section.render(size, focus=True), 0)
-    assert "[Claude]" in header
+    assert " Claude " in header
     assert "▾" in header
-    assert section.mouse_event(size, "mouse press", 1, header.index("[Claude]"), 0, True)
+    assert section.mouse_event(size, "mouse press", 1, header.index(" Claude ") + 1, 0, True)
     assert section.mouse_event(size, "mouse press", 1, header.index("▾"), 0, True)
     assert toggled == ["scope", "collapse"]
 
-    # At 22 columns [Claude] cannot fit; keep the session count intact.
+    # At 22 columns the Claude pill cannot fit; keep the session count intact.
     header_22 = _row_text(section.render((22, 6), focus=True), 0)
     assert " 1 ▾ ─" in header_22

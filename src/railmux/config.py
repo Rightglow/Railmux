@@ -42,6 +42,7 @@ class Config:
     codex_history: str = "native"
     interaction_path_open: str = "ask"
     devin_history: str = "local"
+    notification_sound: str = "off"
     hidden_modes: tuple[str, ...] = ()
 
     @property
@@ -229,6 +230,10 @@ def load_config(config_path: Path | None = None) -> Config:
         '"ask", "internal", or "external"',
         fallback_table=ssh, fallback_label="ssh.path_open",
     )
+    notification_sound = _enum_choice(
+        "notification_sound", "interaction.notification_sound", "off",
+        '"off" or "on"',
+    )
 
     return Config(
         tmux_binary=_tmux_binary(tmux),
@@ -246,5 +251,6 @@ def load_config(config_path: Path | None = None) -> Config:
         codex_history=codex_history,
         interaction_path_open=path_open,
         devin_history=devin_history,
+        notification_sound=notification_sound,
         hidden_modes=tuple(key for key in mode_keys if key in hidden_modes),
     )

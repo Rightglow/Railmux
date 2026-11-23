@@ -250,8 +250,17 @@ class _ExtendedScreenMixin:
         self._last_graphic_character = ""
         self._active_hyperlink: str | None = None
         self._known_hyperlinks: dict[str, str] = {}
+        self._bell_pending = False
         super().reset()
         self.cursor.attrs = _hyperlink_char(self.cursor.attrs, None)
+
+    def bell(self, *_args: object) -> None:
+        self._bell_pending = True
+
+    def consume_bell(self) -> bool:
+        pending = bool(getattr(self, "_bell_pending", False))
+        self._bell_pending = False
+        return pending
 
     def set_hyperlink(self, hyperlink: str | None) -> None:
         if hyperlink is not None:

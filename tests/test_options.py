@@ -242,3 +242,53 @@ def test_options_modal_saves_devin_bypass_policy(tmp_path, monkeypatch):
     assert modal._policies["devin_bypass"] == "always"
     assert app._settings.devin_bypass_policy == "always"
     assert app._devin_bypass_prompt_handled is True
+
+
+def test_notification_sound_defaults_off_and_rings_only_when_enabled(tmp_path, monkeypatch):
+    from railmux import tmux_ctl
+    from railmux.fast_display_protocol import (
+        BellNotification,
+        ServerMessageDecoder,
+        encode_bell,
+    )
+    from railmux.terminal_screen import extended_pyte
+    from railmux.ui import app as app_mod
+
+    app = _app(tmp_path, monkeypatch)
+    app._devin_bypass_runtime = False
+    app._devin_bypass_prompt_handled = False
+    app._unread_finished = set()
+    app._last_live_status = {}
+    app._railmux_has_focus = True
+    app._tmux_status_session = "railmux-test"
+    app._agent_workspace().target.agent_tmux_name = "dv-other"
+
+    rung = []
+    monkeypatch.setattr(tmux_ctl, "ring_session_bell", lambda name: rung.append(name) or True)
+
+    # Defaults to off in Settings and OptionsModal; transition stays silent.
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+    assert modal._policies["notification_sound"] == "off"
+    running = app_mod._Running("a", "dv-a", "proj/A", session_type="devin", status="busy")
+    assert app._record_live_status_transition(running, "busy") == "busy"
+    assert app._record_live_status_transition(running, "idle") == "done"
+    assert rung == []
+
+    # Enabling via Options rings when a background session finishes or blocks.
+    modal._option_rows["notification_sound"][1].keypress((60,), "enter")
+    assert app._settings.notification_sound_policy == "on"
+    assert app._record_live_status_transition(running, "busy") == "busy"
+    assert app._record_live_status_transition(running, "idle") == "done"
+    assert rung == ["railmux-test"]
+
+    # Bell protocol and extended_pyte Screen round-trip for railmux ssh.
+    pyte_mod = extended_pyte(__import__("pyte"))
+    screen = pyte_mod.Screen(40, 10)
+    stream = pyte_mod.ByteStream(screen)
+    assert screen.consume_bell() is False
+    stream.feed(b"hi\x07")
+    assert screen.consume_bell() is True
+    assert screen.consume_bell() is False
+    decoder = ServerMessageDecoder()
+    assert decoder.feed(encode_bell()) == [BellNotification()]

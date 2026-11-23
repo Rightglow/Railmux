@@ -41,7 +41,7 @@ def recent_highlights(version: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
         key=Version,
         reverse=True,
     )
-    return tuple((release, _HIGHLIGHTS[release]) for release in included[:2])
+    return tuple((release, _HIGHLIGHTS[release]) for release in included[:3])
 
 
 def _recorded_version(path: Path) -> Version | None:

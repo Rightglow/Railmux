@@ -428,13 +428,13 @@ def test_buttonbar_lists_help_quit_detach():
 
 
 def test_buttonbar_button_format():
-    """Each full button uses a filled shortcut plus its action label."""
+    """Each wide button uses a padded split-tone keycap plus its action label."""
     bar = ButtonBar(on_help=lambda: None, on_quit=lambda: None, on_detach=lambda: None)
     canvas = bar.render((60,), False)
     text = "".join(t.decode() for t in canvas.text)
-    assert "? Help" in text
-    assert "q Quit" in text
-    assert "C-b d Detach" in text
+    assert " ?  Help " in text
+    assert " q  Quit " in text
+    assert " C-b d  Detach " in text
     attrs = {
         attr for attr, _charset, _text in next(iter(canvas.content()))
     }
@@ -450,6 +450,7 @@ def test_buttonbar_mouse_click_hits_button():
         on_quit=lambda: calls.append("quit"),
         on_detach=lambda: calls.append("detach"),
     )
+    bar.render((60,), False)
     # The first hit area (lowest start column) is ? help.
     _row, help_start, help_end, _index, _callback = bar._hit_areas[0]
     mid = (help_start + help_end) // 2
@@ -465,6 +466,7 @@ def test_buttonbar_mouse_click_miss_does_nothing():
         on_quit=lambda: calls.append("quit"),
         on_detach=lambda: calls.append("detach"),
     )
+    bar.render((60,), False)
     # Click the one-column gap between the first two visible buttons.
     first = bar._hit_areas[0]
     second = bar._hit_areas[1]
@@ -523,7 +525,7 @@ def test_buttonbar_more_expands_actions_then_less_collapses():
     text = "\n".join(
         line.decode() for line in bar.render((60,), False).text)
     assert "Less" in text
-    assert "m Mode F8 Layout g Search o Options" in text
+    assert " m  Mode   F8  Layout   g  Search   o  Options " in text
     assert bar.rows((60,)) == 2
     assert bar.extra_rows == 1
     assert expansion == [True]
@@ -607,10 +609,10 @@ def test_running_title_scope_and_keyboard_toggle_share_the_running_projection(ap
         return lines, header_row
 
     lines, row = render_sidebar()
-    assert "RUNNING [Codex] [filtered]" in lines[row]
+    assert "RUNNING  Codex  [filtered]" in lines[row]
     assert "1/1" in lines[row]
     assert not any("Devin task" in line for line in lines)
-    scope_col = lines[row].index("[Codex]")
+    scope_col = lines[row].index(" Codex ")
 
     scroll = MagicMock(return_value=None)
     app._running_pane._listbox.keypress = scroll
@@ -623,14 +625,14 @@ def test_running_title_scope_and_keyboard_toggle_share_the_running_projection(ap
     assert app._running_pane.sidebar_scope == "Codex"
     assert app._sidebar_body.mouse_event(size, "mouse press", 1, scope_col, row, True)
     lines, row = render_sidebar()
-    assert "RUNNING [All] [filtered]" in lines[row]
+    assert "RUNNING  All  [filtered]" in lines[row]
     assert "2/2" in lines[row]
     assert any("Devin task" in line for line in lines)
     assert app._current_mode_key() == "codex"
 
     app._on_input("a")
     lines, row = render_sidebar()
-    assert "RUNNING [Codex] [filtered]" in lines[row]
+    assert "RUNNING  Codex  [filtered]" in lines[row]
     assert "1/1" in lines[row]
     assert not any("Devin task" in line for line in lines)
 

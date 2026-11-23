@@ -77,6 +77,7 @@ from railmux.fast_display_protocol import (
     decode_image_identity,
     decode_path_request,
     decode_path_open_request,
+    encode_bell,
     encode_claude_history_policy_result,
     encode_clipboard_copy,
     encode_history_batch,
@@ -3518,6 +3519,8 @@ def _serve_attached(
                             priority=True,
                         )
                     stream.feed(output)
+                    if screen.consume_bell():
+                        queue_control_packet(encode_bell(), priority=True)
                     screen_changed = True
 
             if stdout_fd in writable and pending_packet is not None:

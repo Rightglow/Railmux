@@ -57,6 +57,7 @@ from railmux.fast_display_input import (
     split_page_key_input,
 )
 from railmux.fast_display_protocol import (
+    BellNotification,
     ClipboardCopy,
     ClaudeHistoryPolicyResult,
     HistoryBatch,
@@ -1009,6 +1010,12 @@ class TerminalSurface:
         self.start()
         encoded = base64.b64encode(data)
         self.stream.write(b"\033]52;c;" + encoded + b"\007")
+        self.stream.flush()
+
+    def ring_bell(self) -> None:
+        """Emit one terminal BEL to the local display terminal."""
+        self.start()
+        self.stream.write(b"\x07")
         self.stream.flush()
 
     def _claude_history_prompt_geometry(self) -> tuple[int, int, int]:
@@ -3305,6 +3312,9 @@ def run(args: argparse.Namespace) -> int:
                         wire_bytes += len(chunk)
                         saw_screen_update = False
                         for message in decoder.feed(chunk):
+                            if isinstance(message, BellNotification):
+                                surface.ring_bell()
+                                continue
                             if isinstance(message, ClipboardCopy):
                                 surface.copy_to_clipboard(message.data)
                                 continue

@@ -139,6 +139,13 @@ _BEHAVIOR_SETTINGS = (
          ("never", "Use Devin default permission mode")),
         "set_devin_bypass_policy",
     ),
+    _PolicySetting(
+        "Notification sound", "interaction", "notification_sound",
+        "notification_sound_policy",
+        (("off", "Silent (no terminal bell)"),
+         ("on", "Ring bell when a background session finishes or blocks")),
+        "set_notification_sound_policy",
+    ),
 )
 
 _RELEASED_POLICIES = 5
@@ -150,7 +157,8 @@ _BEHAVIOR_KEYS = {
     "devin": ("auto_run",),
     "updates": ("auto_update",),
     "interaction": (
-        "history_lines", "claude_history", "codex_history", "devin_history", "path_open",
+        "history_lines", "claude_history", "codex_history", "devin_history",
+        "path_open", "notification_sound",
     ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
@@ -447,6 +455,7 @@ def _behavior_menu(
             "codex_history_policy": settings.codex_history_policy,
             "devin_history_policy": settings.devin_history_policy,
             "devin_bypass_policy": settings.devin_bypass_policy,
+            "notification_sound_policy": settings.notification_sound_policy,
         }
         # Released entry numbers stay stable: options added later follow the
         # local-only history capacity entry.

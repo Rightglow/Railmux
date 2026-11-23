@@ -110,15 +110,16 @@ class SidebarSection(urwid.WidgetWrap):
         if self._scope_toggle is not None:
             raw_scope = self._scope_toggle[0]()
             short_scope = raw_scope.split()[0] if raw_scope else raw_scope
+            scope_attr = "scope_chip_all" if raw_scope == "All" else "scope_chip"
             leading = stable + " "
             leading_width = urwid.calc_width(leading, 0, len(leading))
-            # Prefer the full label; fall back to a compact first-word label
-            # (e.g. [Claude]) and drop the count before ever hiding the button
-            # on narrow default 24-column sidebars.
+            # Prefer a symmetric padded pill (` All ` / ` Devin `); fall back to
+            # a compact first-word pill (` Claude `) and drop the count before
+            # hiding the button on narrow 23-column sidebars.
             chosen_label: str | None = None
             remaining = -1
             for candidate in (raw_scope, short_scope):
-                cand_label = f"[{candidate}]"
+                cand_label = f" {candidate} "
                 cand_w = urwid.calc_width(cand_label, 0, len(cand_label))
                 if title_width - leading_width - cand_w >= 0:
                     chosen_label = cand_label
@@ -130,7 +131,7 @@ class SidebarSection(urwid.WidgetWrap):
                 compact_fixed_width = urwid.calc_width(
                     compact_fixed, 0, len(compact_fixed))
                 compact_title_width = maxcol - compact_fixed_width
-                cand_label = f"[{short_scope}]"
+                cand_label = f" {short_scope} "
                 cand_w = urwid.calc_width(cand_label, 0, len(cand_label))
                 if compact_title_width - leading_width - cand_w >= 0:
                     count_segment = ""
@@ -142,7 +143,7 @@ class SidebarSection(urwid.WidgetWrap):
                     remaining = title_width - leading_width - cand_w
             if chosen_label is not None:
                 label_width = urwid.calc_width(chosen_label, 0, len(chosen_label))
-                title = [(title_attr, leading), ("btn_label", chosen_label)]
+                title = [(title_attr, leading), (scope_attr, chosen_label)]
                 if detail and remaining > 1:
                     title.append((title_attr, " " + _truncate_title(detail, remaining - 1)))
                 start = urwid.calc_width(prefix, 0, len(prefix)) + leading_width
@@ -164,7 +165,7 @@ class SidebarSection(urwid.WidgetWrap):
             )
             btn_width = urwid.calc_width(collapse_segment, 0, len(collapse_segment))
             self._collapse_hit = (maxcol, max(0, btn_start - 1), btn_start + btn_width)
-            header_parts.append(("btn_label", collapse_segment))
+            header_parts.append((title_attr, collapse_segment))
         header_parts.append((rule_attr, end))
         self._header.set_text(header_parts)
         return super().render(size, focus)

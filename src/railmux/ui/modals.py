@@ -886,6 +886,10 @@ class OptionsModal(urwid.WidgetWrap):
         ("ask", "Ask every time"),
         ("external", "Outside Railmux"),
     )
+    _SOUND_LABELS = (
+        ("off", "Off"),
+        ("on", "On"),
+    )
 
     @classmethod
     def path_open_label(cls, policy: str) -> str:
@@ -905,6 +909,7 @@ class OptionsModal(urwid.WidgetWrap):
         codex_history_policy: str = "native",
         devin_history_policy: str = "local",
         devin_bypass_policy: str = "never",
+        notification_sound_policy: str = "off",
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
@@ -914,6 +919,7 @@ class OptionsModal(urwid.WidgetWrap):
         on_codex_history_policy: Callable[[str], bool] | None = None,
         on_devin_history_policy: Callable[[str], bool] | None = None,
         on_devin_bypass_policy: Callable[[str], bool] | None = None,
+        on_notification_sound_policy: Callable[[str], bool] | None = None,
     ) -> None:
         self._on_close = on_close
         self._mode_choices = mode_choices
@@ -926,6 +932,7 @@ class OptionsModal(urwid.WidgetWrap):
             "codex_history": codex_history_policy,
             "devin_history": devin_history_policy,
             "path_open": path_open_policy,
+            "notification_sound": notification_sound_policy,
         }
         self._callbacks = {
             "layout": on_layout_policy,
@@ -936,6 +943,7 @@ class OptionsModal(urwid.WidgetWrap):
             "codex_history": on_codex_history_policy or (lambda _policy: False),
             "devin_history": on_devin_history_policy or (lambda _policy: False),
             "path_open": on_path_open_policy,
+            "notification_sound": on_notification_sound_policy or (lambda _policy: False),
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
         self._history_links: dict[str, urwid.Button] = {}
@@ -1030,6 +1038,22 @@ class OptionsModal(urwid.WidgetWrap):
                 "external": "the client operating system opens the path",
             },
             labels=self._PATH_OPEN_LABELS,
+        ))
+        rows.extend([
+            urwid.Divider(),
+            urwid.Text(("title", "Notification sound")),
+            urwid.Text(
+                "Applies immediately in Railmux and railmux ssh. Rings the "
+                "terminal bell when a background agent finishes or blocks."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "notification_sound",
+            {
+                "off": "silent (no terminal bell)",
+                "on": "ring terminal bell on background finish or approval prompt",
+            },
+            labels=self._SOUND_LABELS,
         ))
         rows.extend([
             urwid.Divider(),

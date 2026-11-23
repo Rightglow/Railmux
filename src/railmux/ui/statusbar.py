@@ -212,6 +212,7 @@ class ButtonBar(urwid.WidgetWrap):
         maxcol: int,
     ) -> str:
         variants = (
+            ("padded", [f" {key}  {name} " for key, name, _, _ in specs]),
             ("full", [f"{key} {name}" for key, name, _, _ in specs]),
             ("names", [name for _, name, _, _ in specs]),
         )
@@ -255,6 +256,7 @@ class ButtonBar(urwid.WidgetWrap):
                 key = "-" if self._expanded else "+"
                 tiny = "-" if self._expanded else "+"
             label = {
+                "padded": f" {key}  {description} ",
                 "full": f"{key} {description}",
                 "names": description,
                 "tiny": tiny,
@@ -264,6 +266,11 @@ class ButtonBar(urwid.WidgetWrap):
                 (row, col, col + label_width, index, callback))
             if index == self._pressed_index:
                 markup.append(("btn_pressed", label))
+            elif tier == "padded":
+                markup.extend([
+                    ("btn_key", f" {key} "),
+                    ("btn_label", f" {description} "),
+                ])
             elif tier == "full":
                 markup.extend([
                     ("btn_key", key),

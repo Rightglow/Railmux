@@ -386,6 +386,41 @@ def capture_pane_visible(target: str) -> list[str] | None:
     return result.stdout.splitlines()
 
 
+def ring_session_bell(session_name: str) -> bool:
+    """Write a non-blocking BEL (``\\x07``) to every attached outer client tty.
+
+    Works identically for direct terminal attachments and ``railmux ssh``
+    (whose attached client tty is the fast-display server's PTY slave, which
+    forwards ``OutputKind.BELL`` to the user's local terminal).
+    """
+    if not session_name:
+        return False
+    try:
+        out = subprocess.check_output(
+            ["tmux", "list-clients", "-t", session_name, "-F", "#{client_tty}"],
+            stderr=subprocess.DEVNULL,
+            timeout=1.0,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    rung = False
+    flags = os.O_WRONLY | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_NONBLOCK", 0)
+    for raw_tty in out.decode("utf-8", errors="replace").splitlines():
+        tty = raw_tty.strip()
+        if not tty.startswith("/dev/"):
+            continue
+        try:
+            fd = os.open(tty, flags)
+            try:
+                os.write(fd, b"\x07")
+                rung = True
+            finally:
+                os.close(fd)
+        except OSError:
+            continue
+    return rung
+
+
 def session_has_child(session_name: str) -> bool | None:
     """Whether the Claude process has live child processes.
 
