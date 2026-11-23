@@ -22,7 +22,13 @@ _ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\Z")
 _TIMEOUT = 10
 _MAX_LINE = 1024 * 1024
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\]8;[^\x1b\x07]*(?:\x1b\\|\x07)")
-_RULE_LINE_RE = re.compile(r"^─{10,}(?: .+ ─)?$")
+_RULE_LINE_RE = re.compile(r"^─{10,}(?: .+ ─+)?$")
+_BTW_HEADER_RE = re.compile(r"^─{10,} /btw\b.* ─+$")
+_BTW_STATUS_MARKERS = (
+    "esc back to chat",
+    "↑↓ scroll/history",
+    "↵ ask ·",
+)
 _BRAILLE_SPINNER_RE = re.compile(r"^[\u2800-\u28ff]+\s+(.+)$")
 _BUSY_VERBS = (
     "Thinking",
@@ -127,17 +133,29 @@ def classify_pane_status(lines: Sequence[str]) -> str:
         # Status line sits immediately below the bottom rule.
         for candidate_bottom in (bottom_idx - 1, bottom_idx):
             if candidate_bottom >= 2 and _is_footer_rule(plain[candidate_bottom]):
-                # Search up to 10 rows above for the matching top rule.
-                search_start = max(0, candidate_bottom - 10)
+                next_status = (
+                    plain[candidate_bottom + 1]
+                    if candidate_bottom + 1 < len(plain) else ""
+                )
+                is_btw = any(m in next_status for m in _BTW_STATUS_MARKERS)
+                # Search up to the full viewport for a tall /btw panel, or 10 rows
+                # for the standard inline prompt box.
+                search_start = 0 if is_btw else max(0, candidate_bottom - 10)
                 for candidate_top in range(candidate_bottom - 1, search_start - 1, -1):
                     if _is_footer_rule(plain[candidate_top]):
-                        input_slice = plain[candidate_top + 1 : candidate_bottom]
-                        if input_slice and input_slice[0].startswith("❭"):
-                            top_rule = candidate_top
-                            bottom_rule = candidate_bottom
-                            if candidate_bottom + 1 < len(plain):
-                                status_line = plain[candidate_bottom + 1]
-                            break
+                        if is_btw:
+                            if _BTW_HEADER_RE.match(plain[candidate_top]):
+                                top_rule = candidate_top
+                                bottom_rule = candidate_bottom
+                                status_line = next_status
+                                break
+                        else:
+                            input_slice = plain[candidate_top + 1 : candidate_bottom]
+                            if input_slice and input_slice[0].startswith("❭"):
+                                top_rule = candidate_top
+                                bottom_rule = candidate_bottom
+                                status_line = next_status
+                                break
                 if top_rule is not None:
                     break
 

@@ -3038,3 +3038,40 @@ def test_devin_sanitizer_never_drops_unique_user_prompt():
     # The unique user prompt MUST survive; only the leaked spinner/footer box is stripped.
     assert "❭ unique user prompt that never repeats below" in cleaned
     assert not any("Guide Devin while it works" in r for r in cleaned)
+
+
+def test_devin_sanitizer_strips_repeated_btw_side_panels_while_keeping_main_chat():
+    server = fast_display_server
+    width = 96
+    btw_top = "─" * 82 + " /btw 3/3 ──"
+    bottom_rule = "─" * width
+    rows = [
+        row.encode("utf-8")
+        for row in (
+            "❭ main question before btw",
+            " Main agent paragraph 1.",
+            "[... 5 lines truncated (ctrl+o to expand) ...]",
+            " ● cat tracker.json",
+            "",
+            "⠀⠸ Running tools · 70m 30s",
+            btw_top,
+            "❭ side question inside btw panel",
+            "",
+            *(f" btw answer line {i}" for i in range(1, 22)),
+            "❭ Ask a /btw…",
+            bottom_rule,
+            "↵ ask · ↑↓ scroll/history · esc back to chat",
+            " Main agent paragraph 2 committed after btw.",
+        )
+    ]
+    cleaned = [
+        server._devin_plain_row(r)
+        for r in server._sanitize_devin_scrollback(rows, 38)
+    ]
+    assert "❭ main question before btw" in cleaned
+    assert " Main agent paragraph 1." in cleaned
+    assert " Main agent paragraph 2 committed after btw." in cleaned
+    assert not any("/btw 3/3" in r for r in cleaned)
+    assert not any("Ask a /btw" in r for r in cleaned)
+    assert not any("esc back to chat" in r for r in cleaned)
+    assert not any("truncated (ctrl+o to expand)" in r for r in cleaned)

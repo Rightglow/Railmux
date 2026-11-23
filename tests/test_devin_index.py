@@ -213,6 +213,30 @@ def test_devin_index_invalidate_and_mark_unlocked_prevent_stale_resurrection(mon
             ],
             "blocked",
         ),
+        (
+            [
+                "⠀⠸ Running tools · 70m 30s",
+                "─────────────────────────────────────────────── /btw 3/3 ──",
+                "❭ side question",
+                *(f" btw answer line {i}" for i in range(1, 20)),
+                "❭ Ask a /btw…",
+                "───────────────────────────────────────────────────────────",
+                "↵ ask · ↑↓ scroll/history · esc back to chat",
+            ],
+            "busy",
+        ),
+        (
+            [
+                " ✓ Completed task",
+                "─────────────────────────────────────────────── /btw 3/3 ──",
+                "❭ side question",
+                " btw answer",
+                "❭ Ask a /btw…",
+                "───────────────────────────────────────────────────────────",
+                "↵ ask · ↑↓ scroll/history · esc back to chat",
+            ],
+            "idle",
+        ),
         # Negative preservation: quoted busy/blocked phrases in earlier
         # conversation text above an idle prompt box must still report idle.
         (

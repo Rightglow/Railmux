@@ -2048,7 +2048,8 @@ def _codex_screen_has_pinned_prompt(
     return _transcript_screen_seam(transcript, screen[1:]).transcript_rows == kept
 
 
-_DEVIN_RULE_TOP_RE = re.compile(r"^─{10,}(?: .+ ─)?$")
+_DEVIN_RULE_TOP_RE = re.compile(r"^─{10,}(?: .+ ─+)?$")
+_DEVIN_BTW_HEADER_RE = re.compile(r"^─{10,} /btw\b.* ─+$")
 _DEVIN_RULE_BOTTOM_RE = re.compile(r"^─{10,}$")
 _DEVIN_TRUNCATED_RE = re.compile(
     r"^\[\.\.\. \d+ lines? truncated \(ctrl\+o to expand\) \.\.\.\]$"
@@ -2069,6 +2070,7 @@ _DEVIN_STATUS_MARKERS = (
     "Starting session…",
     "Starting session...",
     "ctrl+o details",
+    "ctrl+o to expand edits",
     "alt+t thinking",
     " · bypass",
     " · normal",
@@ -2079,6 +2081,11 @@ _DEVIN_STATUS_MARKERS = (
     " · autonomous",
     " · dangerous",
     " · auto",
+)
+_DEVIN_BTW_STATUS_MARKERS = (
+    "esc back to chat",
+    "↑↓ scroll/history",
+    "↵ ask ·",
 )
 
 
@@ -2100,6 +2107,10 @@ def _is_devin_spinner_row(text: str) -> bool:
 
 def _is_devin_status_row(text: str) -> bool:
     return any(marker in text for marker in _DEVIN_STATUS_MARKERS)
+
+
+def _is_devin_btw_status_row(text: str) -> bool:
+    return any(marker in text for marker in _DEVIN_BTW_STATUS_MARKERS)
 
 
 def _sanitize_devin_scrollback(
@@ -2127,24 +2138,41 @@ def _sanitize_devin_scrollback(
         if not _DEVIN_RULE_TOP_RE.match(plain[index]):
             index += 1
             continue
-        # Require a prompt line starting with ❭ inside the box and a full-width
-        # bottom rule within a bounded prompt height.
-        if index + 3 >= total or not plain[index + 1].startswith("❭"):
-            index += 1
-            continue
-        bottom = None
-        for candidate in range(index + 2, min(total - 1, index + 12)):
-            if _DEVIN_RULE_BOTTOM_RE.match(plain[candidate]):
-                bottom = candidate
-                break
-        if bottom is None:
-            index += 1
-            continue
-        status_idx = bottom + 1
-        status_text = plain[status_idx]
-        if not _is_devin_status_row(status_text):
-            index += 1
-            continue
+        is_btw_panel = bool(_DEVIN_BTW_HEADER_RE.match(plain[index]))
+        if is_btw_panel:
+            max_box_rows = max(height, 64)
+            bottom = None
+            for candidate in range(index + 2, min(total - 1, index + max_box_rows)):
+                if (
+                    _DEVIN_RULE_BOTTOM_RE.match(plain[candidate])
+                    and _is_devin_btw_status_row(plain[candidate + 1])
+                ):
+                    bottom = candidate
+                    break
+            if bottom is None:
+                index += 1
+                continue
+            status_idx = bottom + 1
+            status_text = plain[status_idx]
+        else:
+            # Require a prompt line starting with ❭ inside the box and a full-width
+            # bottom rule within a bounded prompt height.
+            if index + 3 >= total or not plain[index + 1].startswith("❭"):
+                index += 1
+                continue
+            bottom = None
+            for candidate in range(index + 2, min(total - 1, index + 12)):
+                if _DEVIN_RULE_BOTTOM_RE.match(plain[candidate]):
+                    bottom = candidate
+                    break
+            if bottom is None:
+                index += 1
+                continue
+            status_idx = bottom + 1
+            status_text = plain[status_idx]
+            if not _is_devin_status_row(status_text):
+                index += 1
+                continue
 
         block_start = index
         # Include the optional live spinner row directly above the top rule.
