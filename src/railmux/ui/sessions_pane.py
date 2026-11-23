@@ -97,13 +97,17 @@ def _live_state(session: SessionMeta) -> str:
     if (session.attention is not None
             and session.attention.category is AttentionCategory.ABORTED):
         return "aborted"
-    if session.status in {"idle", "busy", "blocked"}:
+    if session.status in {"idle", "busy", "blocked", "done"}:
         return session.status
     return "running"
 
 
-_STATUS_DOTS = {"idle": ("status_idle", "•"), "busy": ("status_busy", "•"),
-                "blocked": ("status_blocked", "•")}
+_STATUS_DOTS = {
+    "idle": ("status_idle", "•"),
+    "busy": ("status_busy", "•"),
+    "blocked": ("status_blocked", "•"),
+    "done": ("status_done", "•"),
+}
 _ATTENTION_MARK = ("attention", "!")
 # When a row is active in the right pane (or targeted by a context menu), map
 # status-dot attributes to variants with the selected background.
@@ -113,6 +117,7 @@ _SELECTED_MAP = {None: "selected", "dim": "selected",
                  "status_idle": "status_idle_sel",
                  "status_busy": "status_busy_sel",
                  "status_blocked": "status_blocked_sel",
+                 "status_done": "status_done_sel",
                  "attention": "attention_sel",
                  "legacy": "legacy_sel"}
 # Focus highlight (deep-grass bg). Status dots need their own remap so the coloured
@@ -123,21 +128,26 @@ _FOCUS_REMAP = {None: "focus", "live": "focus", "dim": "focus",
                 "status_idle": "status_idle_focus",
                 "status_busy": "status_busy_focus",
                 "status_blocked": "status_blocked_focus",
+                "status_done": "status_done_focus",
                 "attention": "attention_focus",
                 "legacy": "legacy_focus"}
+
+
+_PROVIDER_SHORT_LABELS = {"claude": "Claude", "codex": "Codex", "devin": "Devin"}
 
 
 class _SessionRow(ClickableRow):
     def __init__(self, session: SessionMeta, is_running: bool = False,
                  is_favorite: bool = False,
                  is_selected: bool = False,
+                 show_provider: bool = False,
                  on_click: "Callable[[], None] | None" = None,
                  on_double_click: "Callable[[], None] | None" = None,
                  on_right_click: "Callable[[], None] | None" = None) -> None:
         self.session = session
         # Two-line layout:
         #   [•] [!] [★] Title
-        #   <relative time/live state> · <message count> · <token count>
+        #   [Provider · ]<relative time/live state> · <message count> · <token count>
         # Status dot stays in a fixed leftmost column so the status column
         # aligns across rows; the star sits next to the title it marks.
         title_markup: list = []
@@ -163,11 +173,16 @@ class _SessionRow(ClickableRow):
         title_markup.append(session.display_title)
         title_text = urwid.Text(title_markup, wrap="clip")
 
-        parts = [
+        parts: list[str] = []
+        if show_provider:
+            parts.append(
+                _PROVIDER_SHORT_LABELS.get(session.session_type, session.session_type)
+            )
+        parts.append(
             _live_state(session) if is_running
             else f"running on {session.remote_owner}" if remotely_running
             else _format_when(session.last_mtime)
-        ]
+        )
         parts.append(f"{_format_count(session.message_count)} msg")
         parts.append(f"{_format_count(session.token_total)} tok")
         meta_text = urwid.Text(
@@ -206,6 +221,7 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         self._on_context = on_context
         self._on_double_detected = on_double_detected
         self._provider_label = provider_label
+        self._all_agents = False
         self._boxed = boxed
         self._section_title = "Sessions"
         self._sessions: list[SessionMeta] = []
@@ -252,6 +268,28 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
         return self._section_title + suffix
 
     @property
+    def sidebar_title(self) -> str:
+        """Stable unified-sidebar title with separate scope button and concise project detail."""
+        detail_parts: list[str] = []
+        if self._project is not None:
+            detail_parts.append(self._project.display_name)
+        if self._filter:
+            detail_parts.append("[filtered]")
+        return "Sessions " + " ".join(detail_parts) if detail_parts else "Sessions"
+
+    @property
+    def sidebar_scope(self) -> str:
+        return "All" if self._all_agents else self._provider_label
+
+    def set_all_agents(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if enabled != self._all_agents:
+            self._all_agents = enabled
+            self._rendered_data = None
+            if self._project is not None:
+                self._rerender_preserving_focus()
+
+    @property
     def section_count(self) -> str:
         if self._loading:
             return "…"
@@ -277,6 +315,7 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
             frozenset(next_favorite_ids),
             tuple(_format_when(session.last_mtime) for session in sessions),
             self._provider_label,
+            self._all_agents,
         )
         if self._rendered_data == rendered_data:
             return
@@ -419,6 +458,7 @@ class SessionsPane(ScrollableSidebarPane, urwid.WidgetWrap):
                 s,
                 is_running=is_running, is_favorite=is_fav,
                 is_selected=is_sel,
+                show_provider=self._all_agents,
                 on_click=on_click, on_double_click=on_dbl,
                 on_right_click=(lambda s=s: self._on_context(s))
                                if self._on_context else None,

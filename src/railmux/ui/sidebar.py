@@ -29,12 +29,16 @@ class SidebarSection(urwid.WidgetWrap):
         count: Callable[[], str] | None = None,
         *,
         scope_toggle: tuple[Callable[[], str], Callable[[], None]] | None = None,
+        collapse_toggle: tuple[Callable[[], bool], Callable[[], None]] | None = None,
     ) -> None:
         self.pane = pane
         self._title = title
         self._count = count
         self._scope_toggle = scope_toggle
+        self._collapse_toggle = collapse_toggle
         self._scope_hit: tuple[int, int, int] | None = None
+        self._collapse_hit: tuple[int, int, int] | None = None
+        self._collapsed = False
         self._previous_section_focused = False
         self._header = urwid.Text("")
         self._pile = urwid.Pile([
@@ -43,6 +47,28 @@ class SidebarSection(urwid.WidgetWrap):
         ])
         self._pile.focus_position = 1
         super().__init__(self._pile)
+
+    @property
+    def collapsed(self) -> bool:
+        return self._collapsed
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        collapsed = bool(collapsed)
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+        if collapsed:
+            self._pile.contents[:] = [
+                (self._header, self._pile.options("pack")),
+            ]
+            self._pile.focus_position = 0
+        else:
+            self._pile.contents[:] = [
+                (self._header, self._pile.options("pack")),
+                (self.pane, self._pile.options("weight", 1)),
+            ]
+            self._pile.focus_position = 1
+        self._invalidate()
 
     def set_previous_section_focused(self, focused: bool) -> None:
         """Treat this title rule as the previous section's lower boundary."""
@@ -59,10 +85,21 @@ class SidebarSection(urwid.WidgetWrap):
         count = self._count() if self._count is not None else ""
         count = str(count).strip()
 
+        is_collapsed = (
+            self._collapse_toggle[0]()
+            if self._collapse_toggle is not None else self._collapsed
+        )
+        collapse_button = (
+            ("▸" if is_collapsed else "▾")
+            if self._collapse_toggle is not None else ""
+        )
         prefix = "─ "
         count_segment = f" {count} " if count else ""
+        collapse_segment = (
+            f"{collapse_button} " if count_segment else f" {collapse_button} "
+        ) if collapse_button else ""
         end = "─"
-        fixed = prefix + " " + count_segment + end
+        fixed = prefix + " " + count_segment + collapse_segment + end
         fixed_width = urwid.calc_width(fixed, 0, len(fixed))
         title_width = maxcol - fixed_width
         title_attr = "pane_focus" if focus else "pane"
@@ -75,7 +112,7 @@ class SidebarSection(urwid.WidgetWrap):
             leading = stable + " "
             leading_width = urwid.calc_width(leading, 0, len(leading))
             label_width = urwid.calc_width(label, 0, len(label))
-            # Keep the clickable label whole when trimming the filter marker.
+            # Keep the clickable label whole when trimming trailing detail.
             remaining = title_width - leading_width - label_width
             if remaining >= 0:
                 title = [(title_attr, leading), ("btn_label", label)]
@@ -86,20 +123,41 @@ class SidebarSection(urwid.WidgetWrap):
 
         used = fixed_width + sum(urwid.calc_width(text, 0, len(text)) for _, text in title)
         middle = " " + "─" * max(0, maxcol - used)
-        self._header.set_text([
+        self._collapse_hit = None
+        header_parts: list = [
             (rule_attr, prefix), *title, (rule_attr, middle),
-            (title_attr, count_segment), (rule_attr, end),
-        ])
+            (title_attr, count_segment),
+        ]
+        if collapse_button:
+            btn_start = (
+                urwid.calc_width(prefix, 0, len(prefix))
+                + sum(urwid.calc_width(text, 0, len(text)) for _, text in title)
+                + urwid.calc_width(middle, 0, len(middle))
+                + urwid.calc_width(count_segment, 0, len(count_segment))
+            )
+            btn_width = urwid.calc_width(collapse_segment, 0, len(collapse_segment))
+            self._collapse_hit = (maxcol, max(0, btn_start - 1), btn_start + btn_width)
+            header_parts.append(("btn_label", collapse_segment))
+        header_parts.append((rule_attr, end))
+        self._header.set_text(header_parts)
         return super().render(size, focus)
 
     def mouse_event(self, size, event, button, col, row, focus):
-        if (self._scope_toggle is not None and self._scope_hit is not None
-                and row == 0 and event == "mouse press" and button == 1):
-            width, start, end = self._scope_hit
-            if size[0] == width and start <= col < end:
-                self._scope_toggle[1]()
-                self._invalidate()
-                return True
+        if row == 0 and event == "mouse press" and button == 1:
+            if self._scope_toggle is not None and self._scope_hit is not None:
+                width, start, end = self._scope_hit
+                if size[0] == width and start <= col < end:
+                    self._scope_toggle[1]()
+                    self._invalidate()
+                    return True
+            if self._collapse_toggle is not None and self._collapse_hit is not None:
+                width, start, end = self._collapse_hit
+                if size[0] == width and start <= col < end:
+                    self._collapse_toggle[1]()
+                    self._invalidate()
+                    return True
+        if self._collapsed:
+            return True
         return super().mouse_event(size, event, button, col, row, focus)
 
 
@@ -120,33 +178,42 @@ class StableWeightedPile(urwid.Pile):
 
     def get_rows_sizes(self, size, focus: bool = False):
         if len(size) != 2 or any(
-            option[0] != urwid.WHSettings.WEIGHT
+            option[0] not in (urwid.WHSettings.WEIGHT, urwid.WHSettings.PACK)
             for _widget, option in self.contents
         ):
             return super().get_rows_sizes(size, focus)
 
         maxcol, maxrow = size
-        allocation_rows = maxrow + self._bottom_row_debt
-        weights = [float(option[1]) for _widget, option in self.contents]
-        remaining = max(0, allocation_rows)
-        remaining_weight = sum(weights)
-        heights: list[int] = []
-        for weight in weights:
+        fixed_rows: dict[int, int] = {}
+        weights: list[tuple[int, float]] = []
+        for idx, (widget, option) in enumerate(self.contents):
+            if option[0] == urwid.WHSettings.PACK:
+                fixed_rows[idx] = max(1, widget.rows((maxcol,), focus=False))
+            else:
+                weights.append((idx, float(option[1])))
+        if not weights:
+            return super().get_rows_sizes(size, focus)
+
+        fixed_total = sum(fixed_rows.values())
+        allocation_rows = max(0, maxrow - fixed_total + self._bottom_row_debt)
+        remaining = allocation_rows
+        remaining_weight = sum(weight for _idx, weight in weights)
+        heights = [0] * len(self.contents)
+        for idx, rows in fixed_rows.items():
+            heights[idx] = rows
+        for idx, weight in weights:
             if remaining <= 0 or remaining_weight <= 0:
                 rows = 0
             else:
                 rows = int(remaining * weight / remaining_weight + 0.5)
-            heights.append(rows)
+            heights[idx] = rows
             remaining -= rows
             remaining_weight -= weight
-        # Compute the normal allocation at the pre-expansion height, then pay
-        # the footer's extra rows from Running (the bottom section). Only
-        # pathological terminals where Running is already empty fall back to
-        # the preceding section so the returned heights still fit maxrow.
+        # Pay the footer's extra rows from the lowest expanded section first.
         debt = self._bottom_row_debt
-        for index in range(len(heights) - 1, -1, -1):
-            take = min(debt, heights[index])
-            heights[index] -= take
+        for idx, _weight in reversed(weights):
+            take = min(debt, heights[idx])
+            heights[idx] -= take
             debt -= take
             if debt == 0:
                 break

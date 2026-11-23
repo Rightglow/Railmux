@@ -318,3 +318,104 @@ def test_wheel_routes_by_pointer_section_including_shared_chrome():
 
     assert frame.mouse_event(size, "mouse press", 5, 10, 17, True)
     assert panes[2]._listbox.keypress.call_count == 2
+
+
+def test_sidebar_section_click_toggles_collapse_and_scope_independently():
+    project = Project(Path("/tmp/workspace"), "-tmp-workspace", Path("/tmp/p"), 1, 100.0)
+    sessions = SessionsPane(
+        on_select=lambda *_a, **_kw: None, provider_label="Devin", boxed=False,
+    )
+    sessions.set_sessions(project, [
+        SessionMeta(project, "s-1", Path(), "Chat one", 2, 100, 100.0, session_type="devin"),
+    ])
+    state = {"collapsed": False, "all": False}
+
+    def toggle_collapse():
+        state["collapsed"] = not state["collapsed"]
+        section.set_collapsed(state["collapsed"])
+
+    def toggle_scope():
+        state["all"] = not state["all"]
+        sessions.set_all_agents(state["all"])
+
+    section = SidebarSection(
+        sessions,
+        lambda: sessions.sidebar_title,
+        lambda: sessions.section_count,
+        scope_toggle=(lambda: sessions.sidebar_scope, toggle_scope),
+        collapse_toggle=(lambda: state["collapsed"], toggle_collapse),
+    )
+    size = (42, 8)
+    header = _row_text(section.render(size, focus=True), 0)
+    assert header.startswith("─ SESSIONS [Devin] workspace")
+    assert "▾ ─" in header
+
+    # Clicking [Devin] toggles scope to [All] without collapsing.
+    scope_col = header.index("[Devin]") + 2
+    assert section.mouse_event(size, "mouse press", 1, scope_col, 0, True) is True
+    assert state == {"collapsed": False, "all": True}
+    header_all = _row_text(section.render(size, focus=True), 0)
+    assert header_all.startswith("─ SESSIONS [All] workspace")
+
+    # Clicking the right-edge collapse button collapses to 1 row.
+    collapse_col = header_all.index("▾")
+    assert section.mouse_event(size, "mouse press", 1, collapse_col, 0, True) is True
+    assert state == {"collapsed": True, "all": True}
+    assert section.collapsed is True
+    collapsed_header = _row_text(section.render((42, 1), focus=True), 0)
+    assert collapsed_header.startswith("─ SESSIONS [All] workspace")
+    assert "▸ ─" in collapsed_header
+
+
+def test_stable_weighted_pile_gives_collapsed_sections_one_row_and_expands_others():
+    _frame, pile, panes = _sidebar()
+    sections = [widget for widget, _opt in pile.contents]
+    sections[0].set_collapsed(True)
+    pile.contents[:] = [
+        (sections[0], pile.options("pack")),
+        (sections[1], pile.options("weight", 4)),
+        (sections[2], pile.options("weight", 2)),
+    ]
+    rows = pile.get_item_rows((36, 19), True)
+    assert rows[0] == 1
+    assert sum(rows) == 19
+    assert rows[1] == 12 and rows[2] == 6
+
+
+def test_app_sidebar_collapse_zoom_and_tab_skip_collapsed():
+    from railmux.ui.app import App
+
+    frame, pile, panes = _sidebar()
+    sections = tuple(widget for widget, _opt in pile.contents)
+    app = App.__new__(App)
+    app._sidebar = pile
+    app._sidebar_sections = sections
+    app._sidebar_weights = (2, 4, 2)
+    app._sidebar_collapsed = [False, False, False]
+    app._hint_bar = MagicMock()
+    app._help_context = lambda: "projects"
+    statuses = []
+    app._set_status = lambda text, level="info", **_kw: statuses.append((text, level))
+
+    # Zoom on Sessions (index 1) collapses Projects and Running.
+    pile.focus_position = 1
+    app._toggle_sidebar_pane_zoom()
+    assert app._sidebar_collapsed == [True, False, True]
+    assert pile.focus_position == 1
+    # Refuses to collapse the last remaining expanded section.
+    app._toggle_sidebar_section(1)
+    assert app._sidebar_collapsed == [True, False, True]
+    assert any("at least one" in text for text, _ in statuses)
+
+    # Second zoom restores all three panes.
+    app._toggle_sidebar_pane_zoom()
+    assert app._sidebar_collapsed == [False, False, False]
+
+    # Collapsing Projects skips Projects on Tab.
+    app._toggle_sidebar_section(0)
+    assert app._sidebar_collapsed == [True, False, False]
+    pile.focus_position = 1
+    app._rotate_focus()
+    assert pile.focus_position == 2
+    app._rotate_focus()
+    assert pile.focus_position == 1

@@ -196,6 +196,20 @@ def lease_root() -> Path:
     return Path(override).expanduser().absolute() if override else data / "devin/cli"
 
 
+def preview_source(session_id: str) -> Path | None:
+    """Return a readable local transcript JSON or read-only sessions.db for *session_id*."""
+    if not _ID.fullmatch(session_id):
+        return None
+    root = lease_root()
+    transcript = root / "transcripts" / f"{session_id}.json"
+    if transcript.is_file():
+        return transcript
+    db_path = root / "sessions.db"
+    if db_path.is_file():
+        return db_path
+    return None
+
+
 @dataclass(frozen=True)
 class DevinSession:
     meta: SessionMeta

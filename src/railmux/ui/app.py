@@ -27,6 +27,7 @@ from railmux import (
     devin_index,
     legacy_sessions,
     orphan_marker,
+    provider_adapter,
     session_lease,
     tmux_ctl,
     tmux_health,
@@ -135,6 +136,7 @@ _SLATE = "#3a3a3a"
 _BODY = "#d0d0d0"
 _STATUS_YELLOW = "#ffd700"
 _STATUS_RED = "#ff5f5f"
+_STATUS_CYAN = "#00e5ff"
 _TERMINAL_COLORS = 2**24
 _CODEX_ROLLOUT_PROBE_TTL_S = 2.0
 _DEVIN_STATUS_PROBE_TTL_S = 1.0
@@ -252,6 +254,11 @@ PALETTE = [
      "bold", f"{_STATUS_RED},bold", _DEEP_GRASS_GREEN),
     ("status_blocked_sel", "light red,bold", "dark gray",
      "bold", f"{_STATUS_RED},bold", _SLATE),
+    ("status_done", "light cyan,bold", "", "bold", f"{_STATUS_CYAN},bold", "default"),
+    ("status_done_focus", "light cyan,bold", "dark green",
+     "bold", f"{_STATUS_CYAN},bold", _DEEP_GRASS_GREEN),
+    ("status_done_sel", "light cyan,bold", "dark gray",
+     "bold", f"{_STATUS_CYAN},bold", _SLATE),
     # Attention is a separate conversational outcome, not another activity
     # state. Magenta ``!`` badges therefore never compete with green/yellow/red
     # status dots or with the grass-green liveness/focus signal.
@@ -956,6 +963,10 @@ class App:
         # Every agent session this Railmux instance has opened, keyed by
         # session_id (or a "__new__-N" placeholder until the JSONL appears).
         self._running: dict[str, _Running] = {}
+        self._unread_finished: set[str] = set()
+        self._last_live_status: dict[str, str] = {}
+        self._sessions_all_agents = False
+        self._sidebar_collapsed: list[bool] = [False, False, False]
         # Procfs rollout correlation is useful but relatively expensive
         # (process-tree traversal plus fd reads). Cache it across UI ticks and
         # include the real pane identity so a swap cannot reuse stale data.
@@ -1154,24 +1165,47 @@ class App:
         # two extra columns on decorative side rails. Sessions receives half
         # the available height because each session consumes two display rows;
         # stable weight rounding prevents a one-row jump when focus moves.
-        self._sidebar = StableWeightedPile([
-            ("weight", 2, SidebarSection(
+        self._sidebar_weights = (2, 4, 2)
+        self._sidebar_sections = (
+            SidebarSection(
                 self._projects_pane,
                 lambda: self._projects_pane.section_title,
                 lambda: self._projects_pane.section_count,
-            )),
-            ("weight", 4, SidebarSection(
+                collapse_toggle=(
+                    lambda: self._sidebar_collapsed[0],
+                    lambda: self._toggle_sidebar_section(0),
+                ),
+            ),
+            SidebarSection(
                 self._sessions_pane,
-                lambda: self._sessions_pane.section_title,
+                lambda: self._sessions_pane.sidebar_title,
                 lambda: self._sessions_pane.section_count,
-            )),
-            ("weight", 2, SidebarSection(
+                scope_toggle=(
+                    lambda: self._sessions_pane.sidebar_scope,
+                    self._toggle_sessions_scope,
+                ),
+                collapse_toggle=(
+                    lambda: self._sidebar_collapsed[1],
+                    lambda: self._toggle_sidebar_section(1),
+                ),
+            ),
+            SidebarSection(
                 self._running_pane,
                 lambda: self._running_pane.sidebar_title,
                 lambda: self._running_pane.section_count,
-                scope_toggle=(lambda: self._running_pane.sidebar_scope,
-                              self._toggle_running_scope),
-            )),
+                scope_toggle=(
+                    lambda: self._running_pane.sidebar_scope,
+                    self._toggle_running_scope,
+                ),
+                collapse_toggle=(
+                    lambda: self._sidebar_collapsed[2],
+                    lambda: self._toggle_sidebar_section(2),
+                ),
+            ),
+        )
+        self._sidebar = StableWeightedPile([
+            ("weight", weight, section)
+            for weight, section in zip(self._sidebar_weights, self._sidebar_sections)
         ])
         sidebar_frame = UnifiedSidebarFrame(
             self._sidebar,
@@ -1698,6 +1732,10 @@ class App:
     def _set_railmux_focus(self, active: bool, *, force_border: bool = False) -> None:
         """Synchronize urwid focus maps and the tmux center divider."""
         self._railmux_has_focus = active
+        if not active:
+            workspace = getattr(self, "_workspace", None)
+            if workspace is not None and workspace.target.agent_tmux_name:
+                self._mark_running_seen(workspace.target.agent_tmux_name)
         self._frame.set_window_active(active)
         self._set_divider_active(not active, force=force_border)
         if hasattr(self, "_hint_bar"):
@@ -2339,10 +2377,16 @@ class App:
 
         Stopped-row clicks, Space, and context Preview use this read-only
         projection. A Codex rewind lineage is represented by its newest
-        rollout; Claude branches are projected by ``transcript``.
+        rollout; Claude branches and Devin transcripts are projected by
+        ``transcript``.
         """
-        if session.session_type == "devin":
-            self._set_status("Devin saved-history preview is unavailable. Press Enter to open.", "tip")
+        adapter = provider_adapter.adapter_for(session.session_type)
+        preview_path = adapter.preview_path(self, session)
+        if preview_path is None:
+            self._set_status(
+                f"{adapter.label} saved history is unavailable for this session.",
+                "tip",
+            )
             return
         if session.session_type == "codex":
             representative = self._codex_representative(session.session_id)
@@ -2358,14 +2402,19 @@ class App:
                 self._save_restore_state()
             else:
                 self._save_restore_state(slot)
+        extra_kwargs = (
+            {"session_id": session.session_id}
+            if session.session_type == "devin" else {}
+        )
         shown = (
             self._show_transcript(
-                session.jsonl_path, session_type=session.session_type)
+                preview_path, session_type=session.session_type, **extra_kwargs)
             if slot is self._primary_slot
             else self._show_transcript(
-                session.jsonl_path,
+                preview_path,
                 session_type=session.session_type,
                 slot=slot,
+                **extra_kwargs,
             )
         )
         if shown:
@@ -2466,7 +2515,8 @@ class App:
 
     def _show_transcript(self, jsonl_path: Path,
                          session_type: str = "claude",
-                         slot: AgentSlot | None = None) -> bool:
+                         slot: AgentSlot | None = None,
+                         session_id: str | None = None) -> bool:
         """Create or respawn the right pane with a ``less`` transcript viewer.
 
         Mouse-wheel scrolling works after focusing the right pane (double-click
@@ -2481,12 +2531,16 @@ class App:
         # The pager renderer reads the bounded tail into an anonymous seekable
         # file before starting less.  Its first frame is therefore the final
         # bottom page instead of a pipe visibly scrolling upward.
-        fmt = "codex" if session_type == "codex" else "claude"
+        fmt = provider_adapter.adapter_for(session_type).preview_format
         path = shlex.quote(str(jsonl_path))
         python = shlex.quote(_sys.executable)
+        session_arg = (
+            f" --session-id {shlex.quote(session_id)}"
+            if session_id else ""
+        )
         cmd = (
-            f"{python} -m railmux.preview_pager{mouse} --format {fmt} "
-            f"--preview-limit 2000 {path}"
+            f"{python} -m railmux.preview_pager{mouse} --format {fmt}"
+            f"{session_arg} --preview-limit 2000 {path}"
         )
         restore = slot.restore_state
         controller = getattr(self, "_railmux_pane_id", None)
@@ -2638,6 +2692,7 @@ class App:
     def _attach_agent_slot(self, slot: AgentSlot, agent_tmux_name: str, *,
                            steal_focus: bool = True) -> bool:
         """Make *slot* display an agent through the selected safe transport."""
+        self._mark_running_seen(agent_tmux_name)
         self._last_attach_failure_reason = None
         if not self._agent_workspace().can_display(slot, agent_tmux_name):
             self._last_attach_failure_reason = (
@@ -5626,19 +5681,8 @@ class App:
     def _new_agent_command(
         self, mode: AgentMode, cwd: Path,
     ) -> tuple[list[str], dict[str, str] | None]:
-        if mode.project_source == ProjectSource.DEVIN:
-            return devin_index.command(
-                self._configured_mode_binary(mode),
-                bypass=self._devin_bypass_enabled(),
-            ), None
-        if mode.project_source == ProjectSource.CODEX:
-            return build_codex_new_command(
-                codex_binary=self._configured_mode_binary(mode), cwd=cwd,
-                yolo=self._codex_yolo_enabled(),
-            ), self._codex_env()
-        return build_new_session_command(
-            claude_binary=self._configured_mode_binary(mode), cwd=cwd,
-        ), None
+        adapter = provider_adapter.adapter_for(mode.session_type)
+        return adapter.build_new(self, self._configured_mode_binary(mode), cwd)
 
     def _on_new_project_submit(self, path: Path) -> None:
         self._close_modal()
@@ -8629,35 +8673,14 @@ class App:
         if getattr(self, "_loop", None) is None:
             return
         settings = getattr(self, "_settings", None)
-        if settings is None:
+        spec = provider_adapter.adapter_for(mode.session_type).auto_run
+        if settings is None or spec is None:
             return
-        if mode == DEVIN_MODE:
-            policy_attr = "devin_bypass_policy"
-            setter = settings.set_devin_bypass_policy
-            runtime_attr = "_devin_bypass_runtime"
-            handled_attr = "_devin_bypass_prompt_handled"
-            label = "Devin bypass mode"
-            modal_kwargs = {
-                "title": "Devin bypass mode",
-                "heading": "Start new Devin chats in bypass mode?",
-                "warning": (
-                    "New Devin conversations will auto-approve all tools "
-                    "(writes and shell commands) without prompts. Resumed "
-                    "conversations keep their saved mode. Only enable this "
-                    "if you trust what you run here."
-                ),
-            }
-        else:
-            policy_attr = "codex_yolo_policy"
-            setter = settings.set_codex_yolo_policy
-            runtime_attr = "_codex_yolo_runtime"
-            handled_attr = "_codex_yolo_prompt_handled"
-            label = "Codex auto-run"
-            modal_kwargs = {}
-
-        if (getattr(settings, policy_attr, None) != "ask"
-                or getattr(self, handled_attr, False)):
+        if (getattr(settings, spec.policy_attr, None) != "ask"
+                or getattr(self, spec.handled_attr, False)):
             return
+        setter = getattr(settings, spec.setter_name)
+        label = spec.label
 
         def _always() -> None:
             saved = setter("always")
@@ -8668,25 +8691,25 @@ class App:
                     "error",
                 )
                 return
-            setattr(self, handled_attr, True)
+            setattr(self, spec.handled_attr, True)
             self._set_status(f"{label} always enabled (m to exit mode).")
 
         def _this_time() -> None:
-            setattr(self, runtime_attr, True)
-            setattr(self, handled_attr, True)
+            setattr(self, spec.runtime_attr, True)
+            setattr(self, spec.handled_attr, True)
             self._close_modal()
             self._set_status(f"{label} enabled for this Railmux run.")
 
         def _no() -> None:
-            setattr(self, runtime_attr, False)
-            setattr(self, handled_attr, True)
+            setattr(self, spec.runtime_attr, False)
+            setattr(self, spec.handled_attr, True)
             self._close_modal()
             self._set_status(f"{label} remains off for this Railmux run.")
 
         def _never() -> None:
             saved = setter("never")
-            setattr(self, runtime_attr, False)
-            setattr(self, handled_attr, True)
+            setattr(self, spec.runtime_attr, False)
+            setattr(self, spec.handled_attr, True)
             self._close_modal()
             if not saved:
                 self._set_status(
@@ -8703,7 +8726,9 @@ class App:
             on_this_time=_this_time,
             on_no=_no,
             on_never=_never,
-            **modal_kwargs,
+            title=spec.modal_title,
+            heading=spec.modal_heading,
+            warning=spec.modal_warning,
         )
         self._show_overlay(modal, width=60, height=45)
 
@@ -9180,7 +9205,7 @@ class App:
         )
 
     def _rotate_focus(self, reverse: bool = False) -> None:
-        """Tab / Shift-Tab cycle through the three railmux sidebar panes.
+        """Tab / Shift-Tab cycle through expanded railmux sidebar panes.
 
         Jumping in/out of the agent pane uses tmux's native nav (Ctrl-B ←/→)
         so Tab keeps its native meaning inside each provider (autocomplete).
@@ -9188,9 +9213,71 @@ class App:
         n = len(self._sidebar.contents)
         if n <= 1:
             return
+        collapsed = getattr(self, "_sidebar_collapsed", [False] * n)
         cur = self._sidebar.focus_position
-        self._sidebar.focus_position = (cur - 1) % n if reverse else (cur + 1) % n
+        step = -1 if reverse else 1
+        for offset in range(1, n + 1):
+            candidate = (cur + offset * step) % n
+            if candidate >= len(collapsed) or not collapsed[candidate]:
+                self._sidebar.focus_position = candidate
+                break
         self._hint_bar.set_context(self._help_context())
+
+    def _toggle_sidebar_section(self, index: int) -> None:
+        """Collapse or expand one sidebar section from its title bar."""
+        collapsed = getattr(self, "_sidebar_collapsed", None)
+        sections = getattr(self, "_sidebar_sections", None)
+        if not collapsed or not sections or not 0 <= index < len(sections):
+            return
+        if not collapsed[index] and sum(not flag for flag in collapsed) <= 1:
+            self._set_status("Keep at least one sidebar pane open.", "tip")
+            return
+        collapsed[index] = not collapsed[index]
+        self._apply_sidebar_collapse_state()
+
+    def _toggle_sidebar_pane_zoom(self) -> None:
+        """Toggle focusing the current sidebar pane vs showing all three."""
+        collapsed = getattr(self, "_sidebar_collapsed", None)
+        sections = getattr(self, "_sidebar_sections", None)
+        if not collapsed or not sections:
+            return
+        cur = self._sidebar.focus_position
+        if not 0 <= cur < len(sections):
+            return
+        others_collapsed = all(
+            collapsed[i] for i in range(len(sections)) if i != cur
+        )
+        if others_collapsed and not collapsed[cur]:
+            for i in range(len(sections)):
+                collapsed[i] = False
+        else:
+            for i in range(len(sections)):
+                collapsed[i] = i != cur
+        self._apply_sidebar_collapse_state()
+
+    def _apply_sidebar_collapse_state(self) -> None:
+        """Synchronize section widgets, pile options, and focus after collapse."""
+        collapsed = self._sidebar_collapsed
+        sections = self._sidebar_sections
+        weights = getattr(self, "_sidebar_weights", (2, 4, 2))
+        for section, flag in zip(sections, collapsed):
+            section.set_collapsed(flag)
+        self._sidebar.contents[:] = [
+            (
+                section,
+                self._sidebar.options("pack")
+                if flag else self._sidebar.options("weight", weight),
+            )
+            for section, weight, flag in zip(sections, weights, collapsed)
+        ]
+        cur = self._sidebar.focus_position
+        if 0 <= cur < len(collapsed) and collapsed[cur]:
+            expanded = next(
+                (i for i, flag in enumerate(collapsed) if not flag), 0,
+            )
+            self._sidebar.focus_position = expanded
+        if hasattr(self, "_hint_bar"):
+            self._hint_bar.set_context(self._help_context())
 
     def _teardown_tmux(self, *, defer_outer: bool = False) -> None:
         """Clean up on quit.
@@ -9436,9 +9523,11 @@ class App:
         self._consume_mode_refresh()
         mode_refresh_pending = self._mode_refresh_pending()
         mode = self._active_mode()
+        sessions_all = bool(getattr(self, "_sessions_all_agents", False))
         devin = getattr(self, "_devin_index", None)
         if devin is not None and (
             mode.project_source == ProjectSource.DEVIN
+            or sessions_all
             or any(r.session_type == "devin" for r in self._running.values())
         ):
             devin.refresh()
@@ -9478,6 +9567,7 @@ class App:
         # immediately from the last known-good snapshot.
         refresh_codex = (
             mode.project_source == ProjectSource.CODEX
+            or sessions_all
             or any(r.session_type == "codex" for r in self._running.values())
         )
         initializing = {r.session_type for r in self._running.values() if r.is_placeholder}
@@ -9701,7 +9791,13 @@ class App:
 
         if (meta.session_type == "devin"
                 and r is not None and not r.is_placeholder):
-            return self._devin_live_status(r, server)
+            raw_status = self._devin_live_status(r, server)
+            return (
+                "done"
+                if raw_status == "idle"
+                and r.tmux_name in getattr(self, "_unread_finished", ())
+                else raw_status
+            )
 
         if meta.pending_tool and meta.session_type != "codex":
             if r is not None and not r.is_placeholder:
@@ -9720,7 +9816,47 @@ class App:
                         child_probes[r.tmux_name] = has_child
                 if has_child is not None:
                     return "busy" if has_child else "blocked"
+        if (meta.status == "idle" and r is not None
+                and r.tmux_name in getattr(self, "_unread_finished", ())):
+            return "done"
         return meta.status
+
+    def _mark_running_seen(self, tmux_name: str | None) -> None:
+        """Clear the unread-finished indicator once the user views the pane."""
+        if not tmux_name:
+            return
+        unread = getattr(self, "_unread_finished", None)
+        if unread is not None:
+            unread.discard(tmux_name)
+
+    def _is_actively_viewing(self, tmux_name: str) -> bool:
+        """True when keyboard focus is inside a visible right pane showing *tmux_name*."""
+        if getattr(self, "_railmux_has_focus", True):
+            return False
+        workspace = getattr(self, "_workspace", None)
+        if workspace is None:
+            return False
+        return workspace.target.agent_tmux_name == tmux_name
+
+    def _record_live_status_transition(
+        self, running: _Running, raw_status: str,
+    ) -> str:
+        """Promote ``busy|blocked -> idle`` into ``done`` while unread."""
+        last_map = getattr(self, "_last_live_status", None)
+        unread = getattr(self, "_unread_finished", None)
+        if last_map is None or unread is None:
+            return raw_status
+        base = "idle" if raw_status == "done" else raw_status
+        previous = last_map.get(running.tmux_name)
+        if base in {"busy", "blocked"}:
+            unread.discard(running.tmux_name)
+        elif base == "idle" and previous in {"busy", "blocked"}:
+            if not self._is_actively_viewing(running.tmux_name):
+                unread.add(running.tmux_name)
+        last_map[running.tmux_name] = base
+        if base == "idle" and running.tmux_name in unread:
+            return "done"
+        return base
 
     def _codex_rollout_ids(
         self,
@@ -9840,7 +9976,44 @@ class App:
         modes (Running refines via ``_effective_status``; without this the raw
         ``SessionMeta.status`` could disagree)."""
         source = self._active_mode().project_source
-        if source == ProjectSource.CODEX:
+        if getattr(self, "_sessions_all_agents", False):
+            target_key = self._path_key(project.real_path)
+            usable = self._launchable_mode_keys()
+            combined: list[SessionMeta] = []
+            seen: set[tuple[str, str]] = set()
+
+            def _add(items: list[SessionMeta]) -> None:
+                for item in items:
+                    ident = (item.session_type, item.session_id)
+                    if ident not in seen:
+                        seen.add(ident)
+                        combined.append(item)
+
+            if "claude" in usable:
+                claude_proj = next(
+                    (
+                        p for p in (self._project_snapshot or ())
+                        if p.claude_dir != Path()
+                        and self._path_key(p.real_path) == target_key
+                    ),
+                    project if project.claude_dir != Path() else None,
+                )
+                if claude_proj is not None and claude_proj.claude_dir != Path():
+                    _add(self._session_cache.list_sessions(claude_proj))
+            if "codex" in usable:
+                _add(self._codex_index.sessions_for_cwd(
+                    project.real_path, refresh=refresh))
+            if "devin" in usable:
+                index = getattr(self, "_devin_index", None)
+                if index is not None:
+                    _add([
+                        self._devin_meta(record)
+                        for record in (index.snapshot or {}).values()
+                        if self._path_key(record.meta.project.real_path) == target_key
+                    ])
+            combined.sort(key=lambda meta: (-meta.last_mtime, meta.session_id))
+            raw = combined
+        elif source == ProjectSource.CODEX:
             raw = self._codex_index.sessions_for_cwd(project.real_path, refresh=refresh)
         elif source == ProjectSource.DEVIN:
             index = getattr(self, "_devin_index", None)
@@ -9861,16 +10034,7 @@ class App:
         return self._with_remote_leases(sessions)
 
     def _session_lease_root(self, session_type: str) -> Path:
-        if session_type == "devin":
-            return devin_index.lease_root()
-        if session_type != "codex":
-            return getattr(self, "_claude_home", Path.home() / ".claude")
-        config = getattr(self, "_config", None)
-        return (
-            config.resolved_codex_home()
-            if config is not None
-            else Path.home() / ".codex"
-        )
+        return provider_adapter.adapter_for(session_type).lease_root(self)
 
     def _session_lease_ids(self, session: SessionMeta) -> frozenset[str]:
         if session.session_type != "codex":
@@ -10129,10 +10293,19 @@ class App:
         codex_rollout_probes: dict[str, set[str] | None] | None = None,
     ) -> None:
         """Sync labels/status and repopulate the Running pane."""
+        live_names = {r.tmux_name for r in self._running.values()}
+        unread = getattr(self, "_unread_finished", None)
+        if unread is not None:
+            unread.intersection_update(live_names)
+        last_map = getattr(self, "_last_live_status", None)
+        if last_map is not None:
+            for stale in [k for k in last_map if k not in live_names]:
+                del last_map[stale]
         for r in self._running.values():
             if r.is_placeholder or r.project is None:
                 if r.session_type == "devin" and not r.is_legacy:
-                    r.status = self._devin_live_status(r, server)
+                    r.status = self._record_live_status_transition(
+                        r, self._devin_live_status(r, server))
                 continue
             registered_mode = self._modes().for_tmux_name(r.tmux_name)
             session_type = (
@@ -10148,7 +10321,8 @@ class App:
                     r.project, r.logical_session_id or r.key)
             if meta is None:
                 if session_type == "devin" and not r.is_legacy:
-                    r.status = self._devin_live_status(r, server)
+                    r.status = self._record_live_status_transition(
+                        r, self._devin_live_status(r, server))
                 continue
             if meta is not None:
                 self._record_session_lease_result(
@@ -10158,8 +10332,9 @@ class App:
                         r, meta, server, codex_rollout_probes)
                 if meta.title:
                     r.label = f"{meta.project.display_name}/{meta.display_title}"
-                r.status = self._effective_status(
+                raw_status = self._effective_status(
                     meta, child_probes, server, codex_rollout_probes)
+                r.status = self._record_live_status_transition(r, raw_status)
                 r.last_mtime = meta.last_mtime
                 r.attention = meta.attention
                 if self._agent_workspace().target.agent_tmux_name == r.tmux_name:
@@ -10374,6 +10549,7 @@ class App:
             self._running.items(),
             key=lambda kv: (
                 kv[1].status == "blocked",
+                kv[1].status == "done",
                 kv[1].last_mtime or kv[1].created_at,
             ),
             reverse=True,
@@ -10396,6 +10572,21 @@ class App:
             legacy=r.is_legacy,
             lease_warning=r.lease_warning,
         )
+
+    def _toggle_focused_scope(self) -> None:
+        if self._sidebar.focus_position == 1:
+            self._toggle_sessions_scope()
+        else:
+            self._toggle_running_scope()
+
+    def _toggle_sessions_scope(self) -> None:
+        self._sessions_all_agents = not getattr(self, "_sessions_all_agents", False)
+        self._sessions_pane.set_all_agents(self._sessions_all_agents)
+        if self._selected_project is not None:
+            sessions = self._pane_sessions(self._selected_project, refresh=False)
+            self._show_mode_sessions(self._selected_project, sessions)
+        scope = "all agents" if self._sessions_all_agents else self._active_mode().label
+        self._set_status(f"Sessions · {scope}")
 
     def _toggle_running_scope(self) -> None:
         self._running_all_agents = not self._running_all_agents
@@ -11029,23 +11220,9 @@ class App:
                 return
             title = session.display_title
             lineage_count = len(self._session_identity_ids(session))
-            if session.session_type == "devin":
-                detail = (
-                    "The Devin session will be permanently deleted.\n"
-                    "Its background tmux session will also be killed."
-                )
-            elif session.session_type == "codex" and lineage_count > 1:
-                detail = (
-                    "The logical session and its "
-                    f"{lineage_count} rewind records will be permanently "
-                    "removed from disk.\n"
-                    "Its background tmux session will also be killed."
-                )
-            else:
-                detail = (
-                    "The session file will be permanently removed from disk.\n"
-                    "Its background tmux session will also be killed."
-                )
+            detail = provider_adapter.adapter_for(
+                session.session_type
+            ).delete_session_detail(lineage_count)
             modal = DeleteConfirmModal(
                 action="Delete session",
                 session_name=title,
@@ -11081,22 +11258,9 @@ class App:
                     len(self._codex_lineage_ids(session_id))
                     if r is not None and r.session_type == "codex" else 1
                 )
-                if r is not None and r.session_type == "devin":
-                    detail = (
-                        "The detached tmux session will be killed.\n"
-                        "The Devin session will also be permanently deleted."
-                    )
-                elif lineage_count > 1:
-                    detail = (
-                        "The detached tmux session will be killed.\n"
-                        f"All {lineage_count} rewind records will also be "
-                        "permanently deleted from disk."
-                    )
-                else:
-                    detail = (
-                        "The detached tmux session will be killed.\n"
-                        "The session file will also be permanently deleted from disk."
-                    )
+                detail = provider_adapter.adapter_for(
+                    r.session_type if r is not None else "claude"
+                ).delete_running_detail(lineage_count)
             else:
                 detail = "The detached tmux session will be killed."
             modal = DeleteConfirmModal(
@@ -11946,9 +12110,6 @@ class App:
             (_context_menu_label("Delete", "d"),
              lambda s=session: self._do_context_delete(s)),
         ]
-        if session.session_type == "devin":
-            unavailable = {_context_menu_label("Preview", "␣")}
-            items = [item for item in items if item[0] not in unavailable]
         menu = ContextMenu(items, on_close=self._close_modal)
         self._show_overlay(menu, width=36, height=16,
                            click_outside_to_close=True,
@@ -12175,15 +12336,9 @@ class App:
 
     def _do_context_delete(self, session: SessionMeta) -> None:
         title = session.display_title
-        detail = (
-            "The Devin session will be permanently deleted.\n"
-            "Its background tmux session will also be killed."
-            if session.session_type == "devin"
-            else (
-                "The session file will be permanently removed from disk.\n"
-                "Its background tmux session will also be killed."
-            )
-        )
+        detail = provider_adapter.adapter_for(
+            session.session_type
+        ).delete_session_detail(len(self._session_identity_ids(session)))
         modal = DeleteConfirmModal(
             action="Delete session",
             session_name=title,

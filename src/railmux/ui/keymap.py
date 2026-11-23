@@ -57,8 +57,10 @@ BINDINGS: list[Binding] = [
             contexts=_ALL_CTX),
     Binding(("g", "G"), "g", "Search", "_open_quick_open",
             contexts=_ALL_CTX),
-    Binding(("a", "A"), "a", "agents", "_toggle_running_scope",
-            contexts=(CTX_RUNNING,)),
+    Binding(("a", "A"), "a", "agents", "_toggle_focused_scope",
+            contexts=(CTX_SESSIONS, CTX_RUNNING)),
+    Binding(("z", "Z"), "z", "zoom", "_toggle_sidebar_pane_zoom",
+            contexts=_ALL_CTX),
     # All three — _open_info_modal adapts to the focused pane.
     Binding(("i", "I"), "i", "info", "_open_info_modal",
             contexts=_ALL_CTX),

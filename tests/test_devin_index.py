@@ -267,12 +267,12 @@ def test_devin_delete_context_menu_and_worker(monkeypatch):
     shown = []
     app._show_overlay = lambda widget, **_kw: shown.append(widget)
 
-    # Right-click context menu on a Devin session includes Delete and still omits Preview.
+    # Right-click context menu on a Devin session includes both Preview and Delete.
     app._open_session_context_menu(meta)
     menu = shown[-1]
     rendered = b"\n".join(menu.render((36, 16)).text).decode("utf-8")
     assert "Delete" in rendered
-    assert "Preview" not in rendered
+    assert "Preview" in rendered
 
     # Worker runs exact `devin rm --force --process-model in-process quiet-birch`.
     captured = {}
@@ -445,3 +445,121 @@ def test_devin_bypass_policy_options_and_ask_prompt(tmp_path, monkeypatch):
     # Prompt does not reopen in the same run.
     app._maybe_prompt_auto_run(DEVIN_MODE)
     assert len(shown) == 1
+
+
+def test_devin_saved_history_preview_json_and_sqlite_fallback(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+    from railmux import transcript
+
+    monkeypatch.setenv("DEVIN_SESSIONS_DIR", str(tmp_path))
+    transcripts_dir = tmp_path / "transcripts"
+    transcripts_dir.mkdir()
+    json_path = transcripts_dir / "quiet-birch.json"
+    json_path.write_text(json.dumps({
+        "session_id": "quiet-birch",
+        "steps": [
+            {"source": "system", "message": "<system_info>hidden</system_info>"},
+            {"source": "user", "message": "<available_skills>hidden</available_skills>"},
+            {"source": "user", "message": "Check FP8 parity"},
+            {
+                "source": "agent",
+                "message": "Parity verified.",
+                "tool_calls": [
+                    {"function_name": "read", "arguments": {"file_path": "/tmp/a.py"}},
+                ],
+            },
+        ],
+    }), encoding="utf-8")
+
+    assert devin_index.preview_source("quiet-birch") == json_path
+    rendered = "".join(transcript.format_transcript(json_path, "devin"))
+    assert "Check FP8 parity" in rendered
+    assert "Parity verified." in rendered
+    assert "read: /tmp/a.py" in rendered
+    assert "<system_info>" not in rendered
+    assert "<available_skills>" not in rendered
+
+    # Fallback to read-only sessions.db when no JSON transcript exists yet.
+    db_path = tmp_path / "sessions.db"
+    con = sqlite3.connect(db_path)
+    con.execute("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, chat_message TEXT)")
+    con.execute(
+        "INSERT INTO message_nodes VALUES (1, ?, ?)",
+        ("bright-river", json.dumps({"role": "user", "content": "<available_skills>skip</available_skills>"})),
+    )
+    con.execute(
+        "INSERT INTO message_nodes VALUES (2, ?, ?)",
+        ("bright-river", json.dumps({"role": "user", "content": "Hello from sqlite"})),
+    )
+    con.execute(
+        "INSERT INTO message_nodes VALUES (3, ?, ?)",
+        ("bright-river", json.dumps({"role": "assistant", "content": "Reply from sqlite"})),
+    )
+    con.commit()
+    con.close()
+
+    assert devin_index.preview_source("bright-river") == db_path
+    db_rendered = "".join(
+        transcript.format_transcript(db_path, "devin", session_id="bright-river")
+    )
+    assert "Hello from sqlite" in db_rendered
+    assert "Reply from sqlite" in db_rendered
+    assert "<available_skills>" not in db_rendered
+
+
+def test_unread_done_fourth_status_transitions_and_sorting():
+    from types import SimpleNamespace
+
+    app = App.__new__(App)
+    app._unread_finished = set()
+    app._last_live_status = {}
+    app._railmux_has_focus = True
+    app._workspace = SimpleNamespace(target=SimpleNamespace(agent_tmux_name="dv-other"))
+
+    r_done = _Running("a", "dv-a", "proj/A", session_type="devin", status="busy", last_mtime=10.0)
+    r_idle = _Running("b", "dv-b", "proj/B", session_type="devin", status="idle", last_mtime=20.0)
+    r_blocked = _Running("c", "dv-c", "proj/C", session_type="devin", status="blocked", last_mtime=5.0)
+
+    # busy -> idle while NOT viewing becomes "done" (cyan unread-finished).
+    assert app._record_live_status_transition(r_done, "busy") == "busy"
+    assert app._record_live_status_transition(r_done, "idle") == "done"
+    assert "dv-a" in app._unread_finished
+
+    # Viewing the pane clears "done" back to ordinary "idle".
+    app._mark_running_seen("dv-a")
+    assert app._record_live_status_transition(r_done, "idle") == "idle"
+
+    # Negative preservation: busy -> idle while actively focused in the right pane stays "idle".
+    app._railmux_has_focus = False
+    app._workspace = SimpleNamespace(target=SimpleNamespace(agent_tmux_name="dv-a"))
+    assert app._record_live_status_transition(r_done, "busy") == "busy"
+    assert app._record_live_status_transition(r_done, "idle") == "idle"
+
+    # Running sort ranks blocked > done > idle even when idle is newer.
+    r_done.status = "done"
+    app._running = {"b": r_idle, "a": r_done, "c": r_blocked}
+    app._running_sort_ts = 0.0
+    app._maybe_resort_running()
+    assert list(app._running) == ["c", "a", "b"]
+
+
+def test_sessions_pane_all_agents_shows_provider_on_metadata_line():
+    from railmux.models import Project
+    from railmux.ui.sessions_pane import SessionsPane
+
+    project = Project(Path("/tmp/workspace"), "-tmp-workspace", Path("/tmp/p"), 2, 100.0)
+    s_devin = SessionMeta(project, "d-1", Path(), "Long important Devin title", 4, 500, 200.0,
+                          session_type="devin", status="done")
+    s_codex = SessionMeta(project, "x-1", Path(), "Long important Codex title", 3, 400, 150.0,
+                          session_type="codex", status="idle")
+    pane = SessionsPane(on_select=lambda *_a, **_kw: None, provider_label="Devin", boxed=False)
+    pane.set_all_agents(True)
+    pane.set_sessions(project, [s_devin, s_codex], running_ids={"d-1"})
+
+    rendered = "\n".join(row.decode("utf-8") for row in pane.render((44, 10), focus=True).text)
+    assert "Long important Devin title" in rendered
+    assert "Devin · done · 4 msg · 500 tok" in rendered
+    assert "Codex · " in rendered
+    assert pane.sidebar_scope == "All"
+    assert pane.sidebar_title == "Sessions workspace"

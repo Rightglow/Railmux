@@ -899,21 +899,149 @@ def _render_claude_records(
             yield from _render_claude_native_assistant(record, calls, width)
 
 
+_DEVIN_SYSTEM_PREFIXES = (
+    "<system_info>",
+    "<rules ",
+    "<available_rules>",
+    "<available_skills>",
+    "<context_usage>",
+    "<system_guidance>",
+)
+
+
+def _is_devin_system_blob(text: str) -> bool:
+    stripped = text.lstrip()
+    return any(stripped.startswith(prefix) for prefix in _DEVIN_SYSTEM_PREFIXES)
+
+
+def _render_devin_tool_calls(calls: object) -> list[str]:
+    if not isinstance(calls, list):
+        return []
+    out: list[str] = []
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        name = _sanitize_text(call.get("function_name") or call.get("name") or "")
+        if not name:
+            continue
+        args = call.get("arguments")
+        detail = ""
+        if isinstance(args, dict):
+            for key in ("command", "file_path", "pattern", "path", "query", "skill"):
+                val = args.get(key)
+                if isinstance(val, str) and val.strip():
+                    detail = _sanitize_text(" ".join(val.split()))[:100]
+                    break
+        if detail:
+            out.append(f"{DIM}  • {name}: {detail}{RESET}\n")
+        else:
+            out.append(f"{DIM}  • {name}{RESET}\n")
+    return out
+
+
+def _format_devin_transcript(
+    source: Path | object,
+    *,
+    session_id: str | None = None,
+    preview_limit: int | None = None,
+):
+    """Render a Devin JSON transcript or read-only ``sessions.db`` session."""
+    if isinstance(source, Path) and source.suffix == ".db":
+        if not session_id:
+            return
+        import sqlite3
+
+        uri = f"file:{source}?mode=ro"
+        try:
+            con = sqlite3.connect(uri, uri=True, timeout=2.0)
+        except sqlite3.Error:
+            return
+        try:
+            rows = con.execute(
+                "SELECT chat_message FROM message_nodes WHERE session_id = ? "
+                "ORDER BY row_id ASC",
+                (session_id,),
+            ).fetchall()
+        except sqlite3.Error:
+            return
+        finally:
+            con.close()
+        if preview_limit is not None and len(rows) > preview_limit:
+            rows = rows[-preview_limit:]
+        for (raw_msg,) in rows:
+            try:
+                msg = json.loads(raw_msg)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role")
+            content = msg.get("content", "")
+            text = _sanitize_text(content if isinstance(content, str) else "")
+            if role == "user":
+                if not text.strip() or _is_devin_system_blob(text):
+                    continue
+                yield f"\n{BOLD}{CYAN}━━━ You ━━━{RESET}\n{text.strip()}\n"
+            elif role == "assistant":
+                tools = _render_devin_tool_calls(msg.get("tool_calls"))
+                if text.strip() or tools:
+                    yield f"\n{BOLD}{GREEN}━━━ Devin ━━━{RESET}\n"
+                    if text.strip():
+                        yield f"{text.strip()}\n"
+                    yield from tools
+        return
+
+    try:
+        raw_text = (
+            source.read_text(encoding="utf-8", errors="replace")
+            if isinstance(source, Path)
+            else source.read()
+        )
+        payload = json.loads(raw_text)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict):
+        return
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return
+    if preview_limit is not None and len(steps) > preview_limit:
+        steps = steps[-preview_limit:]
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        src = step.get("source")
+        msg = _sanitize_text(step.get("message", ""))
+        if src == "user":
+            if not msg.strip() or _is_devin_system_blob(msg):
+                continue
+            yield f"\n{BOLD}{CYAN}━━━ You ━━━{RESET}\n{msg.strip()}\n"
+        elif src == "agent":
+            tools = _render_devin_tool_calls(step.get("tool_calls"))
+            if msg.strip() or tools:
+                yield f"\n{BOLD}{GREEN}━━━ Devin ━━━{RESET}\n"
+                if msg.strip():
+                    yield f"{msg.strip()}\n"
+                yield from tools
+
+
 def format_transcript(
     source: Path | object,
     fmt: str | None = None,
     *,
     claude_native: bool = False,
     width: int | None = None,
+    session_id: str | None = None,
+    preview_limit: int | None = None,
 ):
-    """Read a session JSONL and yield ANSI-formatted strings.
+    """Read a session JSONL/JSON and yield ANSI-formatted strings.
 
     *source* may be a ``Path`` or any file-like object (e.g. ``sys.stdin``).
 
-    *fmt* is an optional explicit format hint (``"codex"`` or ``"claude"``).
-    When omitted (the default), the format is auto-detected from the record
-    types actually present in the stream, so a bounded Codex rollout whose
-    leading ``session_meta`` header was omitted still renders as Codex.
+    *fmt* is an optional explicit format hint (``"codex"``, ``"claude"``, or
+    ``"devin"``). When omitted (the default), the format is auto-detected from
+    the record types actually present in the stream, so a bounded Codex rollout
+    whose leading ``session_meta`` header was omitted still renders as Codex.
 
     *width* (Claude native history only) wraps rows and draws tables for a
     pane of that many cells.
@@ -923,6 +1051,11 @@ def format_transcript(
         for chunk in format_transcript(path_or_file):
             sys.stdout.write(chunk)
     """
+    if fmt == "devin":
+        yield from _format_devin_transcript(
+            source, session_id=session_id, preview_limit=preview_limit,
+        )
+        return
     own = False
     fh = None
     # When True we're rendering a Codex rollout JSONL; when False, Claude.
@@ -1160,6 +1293,7 @@ def main(argv: list[str] | None = None) -> None:
     # Optional explicit format hint: ``--format codex|claude`` (or ``--format=…``).
     # Kept back-compatible: when absent the format is auto-detected.
     fmt: str | None = None
+    session_id: str | None = None
     preview_limit: int | None = None
     args: list[str] = []
     it = iter(argv[1:])
@@ -1168,6 +1302,10 @@ def main(argv: list[str] | None = None) -> None:
             fmt = next(it, None)
         elif tok.startswith("--format="):
             fmt = tok.split("=", 1)[1]
+        elif tok == "--session-id":
+            session_id = next(it, None)
+        elif tok.startswith("--session-id="):
+            session_id = tok.split("=", 1)[1]
         elif tok == "--preview-limit":
             raw_limit = next(it, None)
             try:
@@ -1189,8 +1327,8 @@ def main(argv: list[str] | None = None) -> None:
             args.append(tok)
     if not args:
         print(
-            "Usage: python3 -m railmux.transcript [--format codex|claude] "
-            "[--preview-limit N] "
+            "Usage: python3 -m railmux.transcript [--format codex|claude|devin] "
+            "[--session-id ID] [--preview-limit N] "
             "<jsonl_path|- for stdin>",
             file=sys.stderr,
         )
@@ -1206,7 +1344,7 @@ def main(argv: list[str] | None = None) -> None:
         try:
             stream = (
                 _tail_utf8_lines(jsonl_path, preview_limit)
-                if preview_limit is not None
+                if preview_limit is not None and fmt != "devin"
                 else jsonl_path
             )
         except OSError:
@@ -1220,7 +1358,9 @@ def main(argv: list[str] | None = None) -> None:
                 f"{preview_limit:,} records; older activity may be omitted."
                 f"{RESET}\n"
             )
-        for chunk in format_transcript(stream, fmt):
+        for chunk in format_transcript(
+            stream, fmt, session_id=session_id, preview_limit=preview_limit,
+        ):
             sys.stdout.write(chunk)
         if preview_limit is not None:
             sys.stdout.write(
