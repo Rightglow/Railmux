@@ -901,6 +901,7 @@ class OptionsModal(urwid.WidgetWrap):
         path_open_policy: str,
         codex_history_policy: str = "native",
         devin_history_policy: str = "local",
+        devin_bypass_policy: str = "never",
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
@@ -909,12 +910,14 @@ class OptionsModal(urwid.WidgetWrap):
         on_close: Callable[[], None],
         on_codex_history_policy: Callable[[str], bool] | None = None,
         on_devin_history_policy: Callable[[str], bool] | None = None,
+        on_devin_bypass_policy: Callable[[str], bool] | None = None,
     ) -> None:
         self._on_close = on_close
         self._mode_choices = mode_choices
         self._policies = {
             "layout": layout_policy,
             "yolo": yolo_policy,
+            "devin_bypass": devin_bypass_policy,
             "update": update_policy,
             "claude_history": claude_history_policy,
             "codex_history": codex_history_policy,
@@ -924,6 +927,7 @@ class OptionsModal(urwid.WidgetWrap):
         self._callbacks = {
             "layout": on_layout_policy,
             "yolo": on_yolo_policy,
+            "devin_bypass": on_devin_bypass_policy or (lambda _policy: False),
             "update": on_update_policy,
             "claude_history": on_claude_history_policy,
             "codex_history": on_codex_history_policy or (lambda _policy: False),
@@ -973,6 +977,22 @@ class OptionsModal(urwid.WidgetWrap):
                 "always": "enable for every new Codex launch",
                 "ask": "ask once in each Railmux run before first use",
                 "never": "keep approval prompts and sandboxing enabled",
+            },
+        ))
+        rows.extend([
+            urwid.Divider(),
+            urwid.Text(("title", "Devin bypass mode (new chats)")),
+            urwid.Text(
+                "Applies to newly created Devin chats; resumed chats keep "
+                "their saved mode. Always auto-approves all tools without prompts."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "devin_bypass",
+            {
+                "always": "start every new Devin conversation in bypass mode",
+                "ask": "ask once in each Railmux run before first use",
+                "never": "use Devin's configured default permission mode",
             },
         ))
         rows.extend([
@@ -1131,7 +1151,7 @@ class OptionsModal(urwid.WidgetWrap):
 
 
 class YoloConfirmModal(urwid.WidgetWrap):
-    """Codex prompt with persistent and current-run on/off choices."""
+    """Provider auto-run / bypass prompt with persistent and current-run choices."""
 
     def __init__(
         self,
@@ -1139,18 +1159,23 @@ class YoloConfirmModal(urwid.WidgetWrap):
         on_this_time: Callable[[], None],
         on_no: Callable[[], None],
         on_never: Callable[[], None],
+        *,
+        title: str = "Codex auto-run",
+        heading: str = "Enable Codex auto-run (YOLO)?",
+        warning: str = (
+            "Codex will run shell commands WITHOUT approval prompts and "
+            "WITHOUT sandboxing — full access to your files. Only enable "
+            "this if you trust what you run here."
+        ),
     ) -> None:
         self._on_always = on_always
         self._on_this_time = on_this_time
         self._on_no = on_no
         self._on_never = on_never
         rows = [
-            urwid.Text("Enable Codex auto-run (YOLO)?", align="center"),
+            urwid.Text(heading, align="center"),
             urwid.Divider(),
-            urwid.Text(
-                "Codex will run shell commands WITHOUT approval prompts and "
-                "WITHOUT sandboxing — full access to your files. Only enable "
-                "this if you trust what you run here.", align="center"),
+            urwid.Text(warning, align="center"),
             urwid.Divider(),
             urwid.Text(
                 ("dim", "Change later with o Options"),
@@ -1168,7 +1193,7 @@ class YoloConfirmModal(urwid.WidgetWrap):
         self._listbox = urwid.ListBox(urwid.SimpleFocusListWalker(rows))
         self._footer = footer
         frame = urwid.Frame(body=self._listbox, footer=footer, focus_part="body")
-        super().__init__(urwid.LineBox(frame, title="Codex auto-run"))
+        super().__init__(urwid.LineBox(frame, title=title))
 
     def selectable(self) -> bool:
         return True

@@ -96,6 +96,11 @@ SETTING_CONTRACTS = {
         ("next_agent_launch",),
         choices=OPTION_POLICIES,
     ),
+    "devin.auto_run": SettingContract(
+        "devin.auto_run",
+        ("next_agent_launch",),
+        choices=OPTION_POLICIES,
+    ),
     "ui.layout_retention": SettingContract(
         "ui.layout_retention",
         ("next_soft_or_fresh_launch",),

@@ -228,3 +228,17 @@ def test_agent_mode_option_opens_shared_picker_and_switches_with_keyboard(
     modal.keypress(size, "down")
     modal.keypress(size, "enter")
     assert actions == ["closed", "codex"]
+
+
+def test_options_modal_saves_devin_bypass_policy(tmp_path, monkeypatch):
+    app = _app(tmp_path, monkeypatch)
+    app._devin_bypass_runtime = False
+    app._devin_bypass_prompt_handled = False
+    app._open_options_modal()
+    modal = app._open_full_sidebar_modal.call_args.args[0]
+
+    assert modal._policies["devin_bypass"] == "never"
+    modal._option_rows["devin_bypass"][0].keypress((60,), "enter")
+    assert modal._policies["devin_bypass"] == "always"
+    assert app._settings.devin_bypass_policy == "always"
+    assert app._devin_bypass_prompt_handled is True

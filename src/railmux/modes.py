@@ -108,6 +108,7 @@ DEVIN_MODE = AgentMode(
     session_type="devin",
     project_source=ProjectSource.DEVIN,
     binary_config_attr="devin_binary",
+    prompt_for_auto_run=True,
 )
 
 DEFAULT_MODE_REGISTRY = ModeRegistry(

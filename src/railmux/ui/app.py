@@ -951,6 +951,8 @@ class App:
         self._pending_adaptive_layout_profile: LayoutProfile | None = None
         self._codex_yolo_runtime = False
         self._codex_yolo_prompt_handled = False
+        self._devin_bypass_runtime = False
+        self._devin_bypass_prompt_handled = False
         # Every agent session this Railmux instance has opened, keyed by
         # session_id (or a "__new__-N" placeholder until the JSONL appears).
         self._running: dict[str, _Running] = {}
@@ -2620,12 +2622,6 @@ class App:
             return True, None
         return tmux_ctl.new_detached_session(
             name, shell_cmd, env=env, initial_size=initial_size)
-
-    def _ensure_detached_claude(self, name: str, shell_cmd: str,
-                                env: dict[str, str] | None = None
-                                ) -> tuple[bool, str | None]:
-        """Compatibility alias retained for pre-registry integrations."""
-        return self._ensure_detached_agent(name, shell_cmd, env)
 
     def _configure_scroll_acceleration(self, claude_tmux_name: str) -> None:
         """Configure coalescing for the pane currently showing the provider."""
@@ -5631,7 +5627,10 @@ class App:
         self, mode: AgentMode, cwd: Path,
     ) -> tuple[list[str], dict[str, str] | None]:
         if mode.project_source == ProjectSource.DEVIN:
-            return devin_index.command(self._configured_mode_binary(mode)), None
+            return devin_index.command(
+                self._configured_mode_binary(mode),
+                bypass=self._devin_bypass_enabled(),
+            ), None
         if mode.project_source == ProjectSource.CODEX:
             return build_codex_new_command(
                 codex_binary=self._configured_mode_binary(mode), cwd=cwd,
@@ -6079,6 +6078,20 @@ class App:
                 "applies to future launches.")
             return True
 
+        def set_devin_bypass(policy: str) -> bool:
+            if not self._settings.set_devin_bypass_policy(policy):
+                self._set_status(
+                    "Could not save Devin bypass option; setting unchanged.",
+                    "error",
+                )
+                return False
+            self._devin_bypass_runtime = False
+            self._devin_bypass_prompt_handled = policy != "ask"
+            self._set_status(
+                f"Devin bypass mode: {self._policy_label(policy)}; "
+                "applies to future new chats.")
+            return True
+
         def set_update(policy: str) -> bool:
             if not self._settings.set_update_policy(policy):
                 self._set_status(
@@ -6145,6 +6158,7 @@ class App:
             path_open_policy=self._settings.path_open_policy,
             codex_history_policy=self._settings.codex_history_policy,
             devin_history_policy=self._settings.devin_history_policy,
+            devin_bypass_policy=self._settings.devin_bypass_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
@@ -6153,6 +6167,7 @@ class App:
             on_close=self._close_options_modal,
             on_codex_history_policy=set_codex_history,
             on_devin_history_policy=set_devin_history,
+            on_devin_bypass_policy=set_devin_bypass,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
 
@@ -8606,52 +8621,81 @@ class App:
 
     def _maybe_prompt_codex_yolo(self) -> None:
         """Ask once per chosen lifetime whether Codex may bypass safeguards."""
+        self._maybe_prompt_auto_run(CODEX_MODE)
+
+    def _maybe_prompt_auto_run(self, mode: AgentMode) -> None:
+        """Ask once per chosen lifetime whether *mode* may bypass approvals."""
         # getattr: keep bare ``App.__new__`` unit tests (no loop/settings) safe.
         if getattr(self, "_loop", None) is None:
             return
         settings = getattr(self, "_settings", None)
-        if (settings is None or settings.codex_yolo_policy != "ask"
-                or getattr(self, "_codex_yolo_prompt_handled", False)):
+        if settings is None:
+            return
+        if mode == DEVIN_MODE:
+            policy_attr = "devin_bypass_policy"
+            setter = settings.set_devin_bypass_policy
+            runtime_attr = "_devin_bypass_runtime"
+            handled_attr = "_devin_bypass_prompt_handled"
+            label = "Devin bypass mode"
+            modal_kwargs = {
+                "title": "Devin bypass mode",
+                "heading": "Start new Devin chats in bypass mode?",
+                "warning": (
+                    "New Devin conversations will auto-approve all tools "
+                    "(writes and shell commands) without prompts. Resumed "
+                    "conversations keep their saved mode. Only enable this "
+                    "if you trust what you run here."
+                ),
+            }
+        else:
+            policy_attr = "codex_yolo_policy"
+            setter = settings.set_codex_yolo_policy
+            runtime_attr = "_codex_yolo_runtime"
+            handled_attr = "_codex_yolo_prompt_handled"
+            label = "Codex auto-run"
+            modal_kwargs = {}
+
+        if (getattr(settings, policy_attr, None) != "ask"
+                or getattr(self, handled_attr, False)):
             return
 
         def _always() -> None:
-            saved = self._settings.set_codex_yolo_policy("always")
+            saved = setter("always")
             self._close_modal()
             if not saved:
                 self._set_status(
-                    "Could not save Codex auto-run choice; settings unchanged.",
+                    f"Could not save {label} choice; settings unchanged.",
                     "error",
                 )
                 return
-            self._codex_yolo_prompt_handled = True
-            self._set_status("Codex auto-run always enabled (m to exit mode).")
+            setattr(self, handled_attr, True)
+            self._set_status(f"{label} always enabled (m to exit mode).")
 
         def _this_time() -> None:
-            self._codex_yolo_runtime = True
-            self._codex_yolo_prompt_handled = True
+            setattr(self, runtime_attr, True)
+            setattr(self, handled_attr, True)
             self._close_modal()
-            self._set_status("Codex auto-run enabled for this Railmux run.")
+            self._set_status(f"{label} enabled for this Railmux run.")
 
         def _no() -> None:
-            self._codex_yolo_runtime = False
-            self._codex_yolo_prompt_handled = True
+            setattr(self, runtime_attr, False)
+            setattr(self, handled_attr, True)
             self._close_modal()
-            self._set_status(
-                "Codex auto-run remains off for this Railmux run.")
+            self._set_status(f"{label} remains off for this Railmux run.")
 
         def _never() -> None:
-            saved = self._settings.set_codex_yolo_policy("never")
-            self._codex_yolo_runtime = False
-            self._codex_yolo_prompt_handled = True
+            saved = setter("never")
+            setattr(self, runtime_attr, False)
+            setattr(self, handled_attr, True)
             self._close_modal()
             if not saved:
                 self._set_status(
-                    "Could not save the Never Codex auto-run choice; "
+                    f"Could not save the Never {label} choice; "
                     "keeping it off for this Railmux run.",
                     "error",
                 )
                 return
-            self._set_status("Codex auto-run disabled permanently.")
+            self._set_status(f"{label} disabled permanently.")
 
         from railmux.ui.modals import YoloConfirmModal
         modal = YoloConfirmModal(
@@ -8659,6 +8703,7 @@ class App:
             on_this_time=_this_time,
             on_no=_no,
             on_never=_never,
+            **modal_kwargs,
         )
         self._show_overlay(modal, width=60, height=45)
 
@@ -8670,6 +8715,16 @@ class App:
         )
         return bool(
             persisted or getattr(self, "_codex_yolo_runtime", False)
+        )
+
+    def _devin_bypass_enabled(self) -> bool:
+        settings = getattr(self, "_settings", None)
+        persisted = bool(
+            settings is not None
+            and settings.devin_bypass_policy == "always"
+        )
+        return bool(
+            persisted or getattr(self, "_devin_bypass_runtime", False)
         )
 
     def _schedule_mode_data_refresh(self) -> None:
@@ -8963,7 +9018,7 @@ class App:
         if loop is not None and getattr(self, "_mode_bar_alarm", None) is None:
             self._mode_bar_alarm = loop.set_alarm_in(0, self._paint_mode_bar)
         if target.prompt_for_auto_run and target.key in usable:
-            self._maybe_prompt_codex_yolo()
+            self._maybe_prompt_auto_run(target)
 
     def _paint_mode_bar(self, _loop, _data) -> None:
         self._mode_bar_alarm = None
@@ -12881,8 +12936,9 @@ class App:
             ClickableRow._main_loop = self._loop
             self._hint_bar.set_loop(self._loop)
             self._button_bar.set_loop(self._loop)
-            if self._active_mode().prompt_for_auto_run:
-                self._maybe_prompt_codex_yolo()
+            active_mode = self._active_mode()
+            if active_mode.prompt_for_auto_run:
+                self._maybe_prompt_auto_run(active_mode)
             try:
                 # Urwid stores both exact RGB and an automatically downsampled
                 # fallback; tmux/terminal capabilities decide which is emitted.

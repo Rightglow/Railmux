@@ -24,7 +24,7 @@ from railmux.setting_contracts import bounds_for, choices_for
 MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "tmux": ("binary",),
     "claude": ("binary",),
-    "devin": ("binary",),
+    "devin": ("binary", "auto_run"),
     "codex": ("binary", "home", "auto_run"),
     "environment": ("locale",),
     "providers": ("hidden",),
@@ -221,31 +221,57 @@ class Settings:
         """Compatibility wrapper for integrations using the 0.4.0 API."""
         return self.set_history_lines(value)
 
+    def _choice_policy(
+        self,
+        section: str,
+        key: str,
+        contract_key: str,
+        *,
+        default: str,
+        fallback_section: str | None = None,
+        reload: bool = False,
+    ) -> str:
+        if reload:
+            self._load()
+        policy = self._get(section, key)
+        if policy is None and fallback_section is not None:
+            policy = self._get(fallback_section, key)
+        return (
+            policy
+            if isinstance(policy, str) and policy in choices_for(contract_key)
+            else default
+        )
+
+    def _set_choice_policy(
+        self, section: str, key: str, contract_key: str, policy: str,
+    ) -> bool:
+        if policy not in choices_for(contract_key):
+            return False
+        return self._update_section(section, {key: policy})
+
     # -- Codex auto-run --------------------------------------------------
     @property
     def codex_yolo_policy(self) -> str:
-        policy = self._get("codex", "auto_run")
-        return (
-            policy if policy in choices_for("codex.auto_run") else "ask"
-        )
+        return self._choice_policy("codex", "auto_run", "codex.auto_run", default="ask")
 
     def set_codex_yolo_policy(self, policy: str) -> bool:
-        if policy not in choices_for("codex.auto_run"):
-            return False
-        return self._update_section("codex", {"auto_run": policy})
+        return self._set_choice_policy("codex", "auto_run", "codex.auto_run", policy)
+
+    # -- Devin bypass mode (new conversations) ---------------------------
+    @property
+    def devin_bypass_policy(self) -> str:
+        return self._choice_policy("devin", "auto_run", "devin.auto_run", default="never")
+
+    def set_devin_bypass_policy(self, policy: str) -> bool:
+        return self._set_choice_policy("devin", "auto_run", "devin.auto_run", policy)
 
     # -- Package updates -------------------------------------------------
     @property
     def update_policy(self) -> str:
-        policy = self._get("updates", "auto_update")
-        return (
-            policy if policy in choices_for("updates.auto_update") else "ask"
-        )
+        return self._choice_policy("updates", "auto_update", "updates.auto_update", default="ask")
 
     def set_update_policy(self, policy: str) -> bool:
-        if policy not in choices_for("updates.auto_update"):
-            return False
-        return self._update_section("updates", {"auto_update": policy})
+        return self._set_choice_policy("updates", "auto_update", "updates.auto_update", policy)
 
     # -- Transport-managed Claude history -------------------------------
     @property
@@ -253,23 +279,16 @@ class Settings:
         # The fast-display helper is a separate process and may persist the
         # first-scroll choice while the TUI is already running. Reload so a
         # later Options visit reflects that confirmed remote write.
-        self._load()
-        policy = self._get("interaction", "claude_history")
-        if policy is None:
-            policy = self._get("ssh", "claude_history")
-        return (
-            policy
-            if isinstance(policy, str)
-            and policy in choices_for("interaction.claude_history")
-            else "ask"
+        return self._choice_policy(
+            "interaction", "claude_history", "interaction.claude_history",
+            default="ask", fallback_section="ssh", reload=True,
         )
 
     def set_claude_history_policy(self, policy: str) -> bool:
-        if policy not in choices_for("interaction.claude_history"):
-            return False
-        return self._update_section("interaction", {"claude_history": policy})
+        return self._set_choice_policy(
+            "interaction", "claude_history", "interaction.claude_history", policy)
 
-    # -- Transport-managed Codex history --------------------------------
+    # -- Transport-managed Codex / Devin history ------------------------
     @property
     def codex_history_policy(self) -> str:
         return self.terminal_history_policies()[0]
@@ -282,29 +301,17 @@ class Settings:
         """Return Codex and Devin policies from the same settings read."""
         self._load()
         return (
-            self._live_history_policy("codex_history", default="native"),
-            self._live_history_policy("devin_history", default="local"),
-        )
-
-    def _live_history_policy(self, key: str, *, default: str) -> str:
-        policy = self._get("interaction", key)
-        return (
-            policy
-            if isinstance(policy, str)
-            and policy in choices_for(f"interaction.{key}")
-            else default
+            self._choice_policy("interaction", "codex_history", "interaction.codex_history", default="native"),
+            self._choice_policy("interaction", "devin_history", "interaction.devin_history", default="local"),
         )
 
     def set_codex_history_policy(self, policy: str) -> bool:
-        return self._set_live_history_policy("codex_history", policy)
+        return self._set_choice_policy(
+            "interaction", "codex_history", "interaction.codex_history", policy)
 
     def set_devin_history_policy(self, policy: str) -> bool:
-        return self._set_live_history_policy("devin_history", policy)
-
-    def _set_live_history_policy(self, key: str, policy: str) -> bool:
-        if policy not in choices_for(f"interaction.{key}"):
-            return False
-        return self._update_section("interaction", {key: policy})
+        return self._set_choice_policy(
+            "interaction", "devin_history", "interaction.devin_history", policy)
 
     def set_hidden_modes(self, keys: tuple[str, ...]) -> bool:
         modes = tuple(mode.key for mode in DEFAULT_MODE_REGISTRY.modes)
@@ -316,32 +323,22 @@ class Settings:
     # -- Semantic clicked paths -----------------------------------------
     @property
     def path_open_policy(self) -> str:
-        self._load()
-        policy = self._get("interaction", "path_open")
-        if policy is None:
-            policy = self._get("ssh", "path_open")
-        return (
-            policy
-            if isinstance(policy, str)
-            and policy in choices_for("interaction.path_open")
-            else "ask"
+        return self._choice_policy(
+            "interaction", "path_open", "interaction.path_open",
+            default="ask", fallback_section="ssh", reload=True,
         )
 
     def set_path_open_policy(self, policy: str) -> bool:
-        if policy not in choices_for("interaction.path_open"):
-            return False
         # Do not delete the legacy key here: another running 0.3.x process
         # may still rely on it. The canonical key wins immediately and reset
         # operations know about both spellings.
-        return self._update_section("interaction", {"path_open": policy})
+        return self._set_choice_policy(
+            "interaction", "path_open", "interaction.path_open", policy)
 
     # -- Saved outer-workspace geometry ---------------------------------
     @property
     def layout_save_policy(self) -> str:
-        policy = self._get("ui", "layout_retention")
-        return (
-            policy if policy in choices_for("ui.layout_retention") else "ask"
-        )
+        return self._choice_policy("ui", "layout_retention", "ui.layout_retention", default="ask")
 
     @property
     def layout_profile(self) -> LayoutProfile | None:

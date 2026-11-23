@@ -54,7 +54,12 @@ def project_for(cwd: Path, count: int = 0, activity: float = 0) -> Project:
     return Project(cwd, f"-dv-{key}", Path(), count, activity)
 
 
-def command(binary: str, session_id: str | None = None) -> list[str]:
+def command(
+    binary: str,
+    session_id: str | None = None,
+    *,
+    bypass: bool = False,
+) -> list[str]:
     # tmux owns the lifetime of the interactive agent. In-process mode also
     # gives discovery an exact lock owner in the pane's process tree.
     argv = [binary, "--process-model", "in-process"]
@@ -62,6 +67,8 @@ def command(binary: str, session_id: str | None = None) -> list[str]:
         if not _ID.fullmatch(session_id):
             raise ValueError("Invalid Devin session ID")
         argv.extend(("--resume", session_id))
+    elif bypass:
+        argv.extend(("--permission-mode", "dangerous"))
     return argv
 
 

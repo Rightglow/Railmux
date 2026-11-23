@@ -379,3 +379,69 @@ def test_devin_live_status_reflected_in_effective_status(monkeypatch):
     # Second call inside TTL reuses cached status so Sessions and Running agree.
     assert app._effective_status(meta) == "busy"
     assert captured_targets == ["%72"]
+
+
+def test_devin_command_bypass_applies_only_to_new_conversations():
+    assert devin_index.command("devin") == [
+        "devin", "--process-model", "in-process",
+    ]
+    assert devin_index.command("devin", bypass=True) == [
+        "devin", "--process-model", "in-process", "--permission-mode", "dangerous",
+    ]
+    # Resumed sessions keep their saved mode even if bypass=True is passed.
+    assert devin_index.command("devin", "quiet-birch", bypass=True) == [
+        "devin", "--process-model", "in-process", "--resume", "quiet-birch",
+    ]
+
+
+def test_devin_bypass_policy_options_and_ask_prompt(tmp_path, monkeypatch):
+    from railmux.config import Config
+    from railmux.modes import DEVIN_MODE
+    from railmux.settings import Settings
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings = Settings()
+    assert settings.devin_bypass_policy == "never"
+
+    app = App.__new__(App)
+    app._config = Config(devin_binary="devin")
+    app._settings = settings
+    app._loop = object()
+    app._devin_bypass_runtime = False
+    app._devin_bypass_prompt_handled = False
+    app._codex_yolo_runtime = False
+    app._codex_yolo_prompt_handled = False
+    statuses = []
+    app._set_status = lambda text, level="info", **_kw: statuses.append((text, level))
+    shown = []
+    app._show_overlay = lambda widget, **_kw: shown.append(widget)
+    app._close_modal = lambda: None
+
+    # Default ("never") does not prompt and launches without --permission-mode.
+    app._maybe_prompt_auto_run(DEVIN_MODE)
+    assert shown == []
+    assert app._new_agent_command(DEVIN_MODE, Path("/project")) == (
+        ["devin", "--process-model", "in-process"], None,
+    )
+
+    # "always" launches new Devin conversations in bypass (dangerous) mode.
+    assert settings.set_devin_bypass_policy("always")
+    assert app._new_agent_command(DEVIN_MODE, Path("/project")) == (
+        ["devin", "--process-model", "in-process", "--permission-mode", "dangerous"], None,
+    )
+
+    # "ask" prompts once when entering Devin mode; pressing "t" enables for this run only.
+    assert settings.set_devin_bypass_policy("ask")
+    app._maybe_prompt_auto_run(DEVIN_MODE)
+    assert len(shown) == 1
+    modal = shown[-1]
+    assert b"Start new Devin chats in bypass mode?" in b"\n".join(modal.render((60, 12)).text)
+    modal.keypress((60, 12), "t")
+    assert app._devin_bypass_enabled() is True
+    assert settings.devin_bypass_policy == "ask"
+    assert app._new_agent_command(DEVIN_MODE, Path("/project")) == (
+        ["devin", "--process-model", "in-process", "--permission-mode", "dangerous"], None,
+    )
+    # Prompt does not reopen in the same run.
+    app._maybe_prompt_auto_run(DEVIN_MODE)
+    assert len(shown) == 1

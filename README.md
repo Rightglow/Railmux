@@ -530,6 +530,8 @@ auto_run = "ask"
 [devin]
 # Command name or path to the Devin CLI (default: "devin")
 binary = "devin"
+# Start newly created Devin chats in bypass mode: "never" (default), "ask", or "always"
+auto_run = "never"
 
 [environment]
 # "inherit", or an installed UTF-8 locale such as C.UTF-8 / en_US.UTF-8

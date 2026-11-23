@@ -131,6 +131,14 @@ _BEHAVIOR_SETTINGS = (
          ("native", "Always use native terminal scrolling")),
         "set_devin_history_policy",
     ),
+    _PolicySetting(
+        "Devin bypass mode (new chats)", "devin", "auto_run",
+        "devin_bypass_policy",
+        (("always", "Always start new chats in bypass mode"),
+         ("ask", "Ask every Railmux run"),
+         ("never", "Use Devin default permission mode")),
+        "set_devin_bypass_policy",
+    ),
 )
 
 _RELEASED_POLICIES = 5
@@ -139,6 +147,7 @@ _HISTORY_LINES_ENTRY = object()
 _BEHAVIOR_KEYS = {
     "ui": ("layout_retention", "layout_profile"),
     "codex": ("auto_run",),
+    "devin": ("auto_run",),
     "updates": ("auto_update",),
     "interaction": (
         "history_lines", "claude_history", "codex_history", "devin_history", "path_open",
@@ -437,6 +446,7 @@ def _behavior_menu(
             "path_open_policy": settings.path_open_policy,
             "codex_history_policy": settings.codex_history_policy,
             "devin_history_policy": settings.devin_history_policy,
+            "devin_bypass_policy": settings.devin_bypass_policy,
         }
         # Released entry numbers stay stable: options added later follow the
         # local-only history capacity entry.
