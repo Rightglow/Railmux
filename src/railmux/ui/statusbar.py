@@ -58,26 +58,6 @@ def split_at_width(text: str, maxcol: int) -> tuple[str, str]:
     return head, tail.lstrip(" ")
 
 
-def reflow_pages(text: str, maxcol: int, lines: int = 2) -> list[tuple[str, ...]]:
-    """Split *text* into a list of pages, each a tuple of *lines* strings.
-
-    When the text fits in one page the result has a single entry.  Callers use
-    this to detect overflow and drive a page-flipping animation."""
-    maxcol = max(1, maxcol)
-    pages: list[tuple[str, ...]] = []
-    remaining = text
-    while remaining:
-        page: list[str] = []
-        for _ in range(lines):
-            if not remaining:
-                page.append("")
-                continue
-            head, remaining = split_at_width(remaining, maxcol)
-            page.append(head)
-        pages.append(tuple(page))
-    return pages
-
-
 def reflow_hint_pages(
     text: str,
     maxcol: int,

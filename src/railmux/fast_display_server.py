@@ -1065,33 +1065,6 @@ def _pane_current_path(pane: _PaneGeometry) -> str | None:
     )
 
 
-def visible_agent_snapshots(
-    session_id: str,
-    *,
-    use_cache: bool = True,
-) -> tuple[HistorySnapshot, ...]:
-    """Return cached, geometry-only routes for local semantic interaction.
-
-    This is deliberately the same fail-closed pane authority used by the fast
-    SSH display. It does not capture history or transcript data and therefore
-    cannot make local Windows rendering fall behind provider output.
-    """
-    return tuple(
-        HistorySnapshot(
-            0,
-            pane.pane_id,
-            pane.x,
-            pane.y,
-            pane.width,
-            pane.height,
-            mouse_forwardable=pane.mouse_forwardable,
-            generation=pane.history_generation,
-            route_generation=pane.route_generation,
-        )
-        for pane in _list_agent_panes(session_id, use_cache=use_cache)
-    )
-
-
 def _paste_provider_path(pane: _PaneGeometry, path: str) -> bool:
     """Bracket-paste one generated path into an exact provider pane."""
     if not path or "\x00" in path or "\r" in path or "\n" in path:

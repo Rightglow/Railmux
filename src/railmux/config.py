@@ -191,47 +191,44 @@ def load_config(config_path: Path | None = None) -> Config:
             + " must be an integer between "
             f"{HISTORY_MIN_LINES} and {HISTORY_MAX_LINES}"
         )
-    canonical_claude_history = "claude_history" in interaction
-    claude_history = interaction.get(
-        "claude_history",
-        ssh.get("claude_history", "ask"),
-    )
-    if (
-        not isinstance(claude_history, str)
-        or claude_history not in choices_for("interaction.claude_history")
-    ):
-        raise ConfigError(
-            (
-                "interaction.claude_history"
-                if canonical_claude_history
-                else "ssh.claude_history"
-            )
-            + ' must be "ask", "local", or "native"'
+    def _enum_choice(
+        key: str,
+        contract_key: str,
+        default: str,
+        choices_desc: str,
+        *,
+        fallback_table: dict | None = None,
+        fallback_label: str | None = None,
+    ) -> str:
+        in_primary = key in interaction
+        value = (
+            interaction[key]
+            if in_primary
+            else (fallback_table.get(key, default) if fallback_table is not None else default)
         )
-    codex_history = interaction.get("codex_history", "native")
-    if (
-        not isinstance(codex_history, str)
-        or codex_history not in choices_for("interaction.codex_history")
-    ):
-        raise ConfigError(
-            'interaction.codex_history must be "local" or "native"')
-    devin_history = interaction.get("devin_history", "local")
-    if (
-        not isinstance(devin_history, str)
-        or devin_history not in choices_for("interaction.devin_history")
-    ):
-        raise ConfigError(
-            'interaction.devin_history must be "local" or "native"')
+        if not isinstance(value, str) or value not in choices_for(contract_key):
+            label = contract_key if (in_primary or fallback_label is None) else fallback_label
+            raise ConfigError(f"{label} must be {choices_desc}")
+        return value
+
+    claude_history = _enum_choice(
+        "claude_history", "interaction.claude_history", "ask",
+        '"ask", "local", or "native"',
+        fallback_table=ssh, fallback_label="ssh.claude_history",
+    )
+    codex_history = _enum_choice(
+        "codex_history", "interaction.codex_history", "native", '"local" or "native"',
+    )
+    devin_history = _enum_choice(
+        "devin_history", "interaction.devin_history", "local", '"local" or "native"',
+    )
     # The transport-neutral key wins. The released SSH-only spelling remains
     # a read alias so an upgrade never silently forgets the user's choice.
-    canonical_path_open = "path_open" in interaction
-    path_open = interaction.get("path_open", ssh.get("path_open", "ask"))
-    if (
-        not isinstance(path_open, str)
-        or path_open not in choices_for("interaction.path_open")
-    ):
-        label = "interaction.path_open" if canonical_path_open else "ssh.path_open"
-        raise ConfigError(f'{label} must be "ask", "internal", or "external"')
+    path_open = _enum_choice(
+        "path_open", "interaction.path_open", "ask",
+        '"ask", "internal", or "external"',
+        fallback_table=ssh, fallback_label="ssh.path_open",
+    )
 
     return Config(
         tmux_binary=_tmux_binary(tmux),

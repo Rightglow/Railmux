@@ -793,16 +793,6 @@ def _pane_rows(
     return tuple(decoded_cells), tuple(decoded_hyperlinks)
 
 
-def _pane_cells(
-    source: SelectionSource,
-    *,
-    start: int = 0,
-    end: int | None = None,
-) -> tuple[tuple[str | None, ...], ...]:
-    """Decode pane-local cells from either full-screen or history rows."""
-    return _pane_rows(source, start=start, end=end)[0]
-
-
 def _osc8_target(
     rows: tuple[tuple[str | None, ...], ...],
     hyperlinks: tuple[tuple[str | None, ...], ...],
