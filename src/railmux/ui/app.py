@@ -1834,6 +1834,8 @@ class App:
                 self._set_divider_active(True)
             return True
         self._sync_target_slot_from_tmux()
+        if slot.agent_tmux_name:
+            self._mark_running_seen(slot.agent_tmux_name)
         if getattr(self, "_railmux_has_focus", True):
             self._set_railmux_focus(False, force_border=True)
         return True
@@ -2243,6 +2245,10 @@ class App:
             return
         self._on_project_select(project)
         if self._loop is not None:
+            collapsed = getattr(self, "_sidebar_collapsed", None)
+            if collapsed and len(collapsed) > 1 and collapsed[1]:
+                collapsed[1] = False
+                self._apply_sidebar_collapse_state()
             self._sidebar.focus_position = 1
             self._hint_bar.set_context(self._help_context())
 
@@ -8624,16 +8630,15 @@ class App:
         if self._loop is not None and self._loop.widget is not self._frame:
             return
         if key == "esc":
-            # Esc navigates "up" the pane hierarchy:
+            # Esc navigates "up" the pane hierarchy across expanded panes:
             #   Running → Sessions → Projects
-            if self._sidebar.focus_position == 2:
-                self._sidebar.focus_position = 1
-                self._hint_bar.set_context(self._help_context())
-                return
-            if self._sidebar.focus_position == 1:
-                self._sidebar.focus_position = 0
-                self._hint_bar.set_context(self._help_context())
-                return
+            collapsed = getattr(self, "_sidebar_collapsed", [False, False, False])
+            cur = self._sidebar.focus_position
+            for target_pos in range(cur - 1, -1, -1):
+                if target_pos >= len(collapsed) or not collapsed[target_pos]:
+                    self._sidebar.focus_position = target_pos
+                    self._hint_bar.set_context(self._help_context())
+                    return
             return
         if key == "ctrl c":
             self._open_quit_confirm()

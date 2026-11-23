@@ -951,7 +951,7 @@ def _format_devin_transcript(
             return
         import sqlite3
 
-        uri = f"file:{source}?mode=ro"
+        uri = f"{source.resolve().as_uri()}?mode=ro"
         try:
             con = sqlite3.connect(uri, uri=True, timeout=2.0)
         except sqlite3.Error:

@@ -108,14 +108,36 @@ class SidebarSection(urwid.WidgetWrap):
 
         self._scope_hit = None
         if self._scope_toggle is not None:
-            label = f"[{self._scope_toggle[0]()}]"
+            raw_scope = self._scope_toggle[0]()
+            short_scope = raw_scope.split()[0] if raw_scope else raw_scope
             leading = stable + " "
             leading_width = urwid.calc_width(leading, 0, len(leading))
-            label_width = urwid.calc_width(label, 0, len(label))
-            # Keep the clickable label whole when trimming trailing detail.
-            remaining = title_width - leading_width - label_width
-            if remaining >= 0:
-                title = [(title_attr, leading), ("btn_label", label)]
+            # Prefer the full label; fall back to a compact first-word label
+            # (e.g. [Claude]) and drop the count before ever hiding the button
+            # on narrow default 24-column sidebars.
+            chosen_label: str | None = None
+            remaining = -1
+            for candidate in (raw_scope, short_scope):
+                cand_label = f"[{candidate}]"
+                cand_w = urwid.calc_width(cand_label, 0, len(cand_label))
+                if title_width - leading_width - cand_w >= 0:
+                    chosen_label = cand_label
+                    remaining = title_width - leading_width - cand_w
+                    break
+            if chosen_label is None:
+                count_segment = ""
+                collapse_segment = f"{collapse_button} " if collapse_button else ""
+                fixed = prefix + " " + collapse_segment + end
+                fixed_width = urwid.calc_width(fixed, 0, len(fixed))
+                title_width = maxcol - fixed_width
+                cand_label = f"[{short_scope}]"
+                cand_w = urwid.calc_width(cand_label, 0, len(cand_label))
+                if title_width - leading_width - cand_w >= 0:
+                    chosen_label = cand_label
+                    remaining = title_width - leading_width - cand_w
+            if chosen_label is not None:
+                label_width = urwid.calc_width(chosen_label, 0, len(chosen_label))
+                title = [(title_attr, leading), ("btn_label", chosen_label)]
                 if detail and remaining > 1:
                     title.append((title_attr, " " + _truncate_title(detail, remaining - 1)))
                 start = urwid.calc_width(prefix, 0, len(prefix)) + leading_width

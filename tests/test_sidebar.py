@@ -419,3 +419,36 @@ def test_app_sidebar_collapse_zoom_and_tab_skip_collapsed():
     assert pile.focus_position == 2
     app._rotate_focus()
     assert pile.focus_position == 1
+
+    # Esc from Running skips collapsed Sessions and lands on expanded Projects.
+    app._sidebar_collapsed = [False, True, False]
+    app._apply_sidebar_collapse_state()
+    app._loop = None
+    pile.focus_position = 2
+    app._on_input("esc")
+    assert pile.focus_position == 0
+
+
+def test_narrow_23col_sidebar_keeps_claude_scope_and_collapse_clickable():
+    project = Project(Path("/tmp/workspace"), "-tmp-workspace", Path("/tmp/p"), 2, 100.0)
+    sessions = SessionsPane(
+        on_select=lambda *_a, **_kw: None, provider_label="Claude Code", boxed=False,
+    )
+    sessions.set_sessions(project, [
+        SessionMeta(project, "s-1", Path(), "Chat one", 2, 100, 100.0, session_type="claude"),
+    ])
+    toggled = []
+    section = SidebarSection(
+        sessions,
+        lambda: sessions.sidebar_title,
+        lambda: sessions.section_count,
+        scope_toggle=(lambda: sessions.sidebar_scope, lambda: toggled.append("scope")),
+        collapse_toggle=(lambda: False, lambda: toggled.append("collapse")),
+    )
+    size = (23, 6)
+    header = _row_text(section.render(size, focus=True), 0)
+    assert "[Claude]" in header
+    assert "▾" in header
+    assert section.mouse_event(size, "mouse press", 1, header.index("[Claude]"), 0, True)
+    assert section.mouse_event(size, "mouse press", 1, header.index("▾"), 0, True)
+    assert toggled == ["scope", "collapse"]

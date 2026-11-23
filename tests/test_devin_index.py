@@ -507,6 +507,24 @@ def test_devin_saved_history_preview_json_and_sqlite_fallback(tmp_path, monkeypa
     assert "Reply from sqlite" in db_rendered
     assert "<available_skills>" not in db_rendered
 
+    # Directory containing '#' must still open SQLite strictly read-only via URI escaping.
+    hash_dir = tmp_path / "dir#with#hash"
+    hash_dir.mkdir()
+    hash_db = hash_dir / "sessions.db"
+    con = sqlite3.connect(hash_db)
+    con.execute("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, chat_message TEXT)")
+    con.execute(
+        "INSERT INTO message_nodes VALUES (1, ?, ?)",
+        ("hashed-id", json.dumps({"role": "user", "content": "Hash dir prompt"})),
+    )
+    con.commit()
+    con.close()
+    hash_rendered = "".join(
+        transcript.format_transcript(hash_db, "devin", session_id="hashed-id")
+    )
+    assert "Hash dir prompt" in hash_rendered
+    assert not (tmp_path / "dir").exists()
+
 
 def test_unread_done_fourth_status_transitions_and_sorting():
     from types import SimpleNamespace
