@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1.dev5] - 2026-11-23
+
+### Fixed
+
+- Strip leaked Devin `/btw` side-chat panels (including orphaned panel tails at
+  bounded prefetch boundaries) from managed Devin local scrollback while
+  preserving the live viewport and all main conversation content.
+- Detect live Devin `busy` spinners positioned above an open `/btw` side-chat
+  panel so the sidebar status dot stays accurate while Devin works behind `/btw`.
+- Respect `Options → Devin history → Native` by bypassing local Devin scrollback
+  sanitization when native scrolling is selected.
+
 ## [0.5.1.dev4] - 2026-11-23
 
 ### Fixed

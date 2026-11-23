@@ -2222,6 +2222,23 @@ def _sanitize_devin_scrollback(
             drop[k] = True
         index = status_idx + 1
 
+    # Handle an orphaned trailing fragment of a /btw or prompt box whose top
+    # rule was cut off above the start of a bounded capture window (e.g. -300).
+    if not drop[0]:
+        prefix_limit = min(total - 1, max(height, 64))
+        for candidate in range(0, prefix_limit):
+            if drop[candidate]:
+                break
+            if not _DEVIN_RULE_BOTTOM_RE.match(plain[candidate]):
+                continue
+            status_text = plain[candidate + 1]
+            if _is_devin_btw_status_row(status_text) or (
+                candidate < 12 and _is_devin_status_row(status_text)
+            ):
+                for k in range(0, candidate + 2):
+                    drop[k] = True
+                break
+
     if not any(drop):
         return tuple(scrollback)
 
@@ -2408,7 +2425,11 @@ def _capture_pane_history(
         )
     else:
         devin_sanitized = False
-        if pane.devin_pane and len(rendered_raw) > pane.height:
+        if (
+            pane.devin_pane
+            and not pane.native_history
+            and len(rendered_raw) > pane.height
+        ):
             scrollback = rendered_raw[:-pane.height]
             clean_scrollback = _sanitize_devin_scrollback(scrollback, pane.height)
             if len(clean_scrollback) != len(scrollback):

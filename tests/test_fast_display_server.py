@@ -3075,3 +3075,20 @@ def test_devin_sanitizer_strips_repeated_btw_side_panels_while_keeping_main_chat
     assert not any("Ask a /btw" in r for r in cleaned)
     assert not any("esc back to chat" in r for r in cleaned)
     assert not any("truncated (ctrl+o to expand)" in r for r in cleaned)
+
+    # Shallow capture boundary cutting mid-/btw panel drops the orphaned tail too.
+    truncated_prefix = [
+        row.encode("utf-8")
+        for row in (
+            " partial btw answer line cut at capture top",
+            "❭ Ask a /btw…",
+            bottom_rule,
+            "↵ ask · ↑↓ scroll/history · esc back to chat",
+            " Real main conversation resumes cleanly.",
+        )
+    ]
+    cleaned_prefix = [
+        server._devin_plain_row(r)
+        for r in server._sanitize_devin_scrollback(truncated_prefix, 38)
+    ]
+    assert cleaned_prefix == [" Real main conversation resumes cleanly."]
