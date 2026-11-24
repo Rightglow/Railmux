@@ -15,9 +15,9 @@ from railmux.config import default_config_path
 
 _HIGHLIGHTS = {
     "0.5.1": (
-        "Collapse sidebar panes with their title-bar ▾/▸ button or zoom with z; toggle Sessions [All] with a.",
-        "Devin mode supports session delete, saved-history Preview, optional new-chat bypass, and cleaner scrollback.",
-        "Running sessions now show a cyan dot when they finish in the background until you view them.",
+        "Collapse sidebar panes with ▾/▸ or zoom with z; toggle Sessions All with a (saved across soft restart).",
+        "Devin mode adds session delete, saved-history Preview, optional new-chat bypass, live status dots, and clean /btw + /revert scrollback.",
+        "Running sessions show a cyan unread-finished dot with an optional terminal notification bell in Options (direct and over SSH).",
     ),
     "0.5.0": (
         "Press a in Running or click its scope label to see all running agents.",

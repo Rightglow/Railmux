@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-23
+
+### Added
+
+- **Devin CLI parity**: delete Devin sessions from **Sessions** / **Running**
+  (`d` or context menu), preview saved Devin transcripts (`Space` / click /
+  context menu), view live `busy` / `blocked` / `idle` status dots (including
+  while `/btw` is open), and opt into new-chat bypass mode via
+  `[devin] auto_run = "never" | "ask" | "always"` in Options, `railmux config`,
+  and `config.toml`.
+- **Collapsible sidebar & cross-CLI Sessions**: collapse or expand sidebar
+  panes with their title-bar `▾` / `▸` toggle, zoom the focused section with
+  `z`, and toggle **Sessions** between the active CLI and **All** (`a` or
+  click) — with both scope and collapse states preserved across soft restart.
+- **Background completion cue & optional bell**: show a fourth bright-cyan
+  `done` dot when a background agent finishes unread until you view its pane,
+  and opt into terminal notification bells (`[interaction] notification_sound`,
+  default `"off"`) in both direct `railmux` and `railmux ssh`.
+
+### Changed
+
+- Polish sidebar headers, Button Bar, and confirmation / info modals (Quit,
+  Final hard quit, Delete, Auto-run, and What's New) with rounded borders,
+  clean split-tone keycap styling, borderless `▾` / `▸` toggles, and
+  structured rounded SSH update cards.
+- Show the latest three product releases in the first-launch What's New dialog
+  and hand off its alternate screen seamlessly into `railmux ssh` without
+  flashing the underlying shell.
+- Update built-in Help (including the four-state status-dot legend) and
+  status-bar tips for all new controls.
+
+### Fixed
+
+- Remove leaked Devin transient prompt boxes, spinners, truncated previews, and
+  repeated `/btw` side-chat panels (including cut prefetch prefixes) from
+  managed Devin local scrollback while preserving native mode and live views.
+- Prevent reverted Devin turns from reappearing in managed local history after
+  `/revert`, and evaluate `thread_rolled_back` across multi-segment Codex
+  rollouts.
+- Clear cached Devin lock state immediately after killing a local Devin pane so
+  reopening succeeds without delay.
+
+This release uses SSH display protocol v19 to forward optional terminal
+notification bells over `railmux ssh`.
+
 ## [0.5.1.dev5] - 2026-11-23
 
 ### Fixed
