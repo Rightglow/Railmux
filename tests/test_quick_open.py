@@ -95,3 +95,36 @@ def test_running_scope_and_quick_open_keep_foreign_and_unavailable_live_agents()
     del app._running["live"]
     choices[0].on_open()
     assert app._on_running_select.call_count == 1
+
+
+def test_quick_open_highlights_provider_workspace_state_and_matched_terms():
+    from railmux.fuzzy import fuzzy_match_positions
+
+    assert fuzzy_match_positions(["fp8"], "flash fp8 kernel") == {6, 7, 8}
+    assert fuzzy_match_positions(["f8"], "fp8") == {0, 2}
+
+    choices = [
+        SessionChoice(("running", "devin", "dv-1"), "Tune fp8 kernel", "Devin",
+                      "workspace", "Running", Mock(), starred=True),
+        SessionChoice(("saved", "codex", "cx-1"), "Review fp8 patch", "Codex",
+                      "railmux", "Saved", Mock()),
+    ]
+    modal = QuickOpen(choices, Mock(), "Pane 1")
+    size = (64, 14)
+    for ch in "fp8":
+        modal.keypress(size, ch)
+
+    canvas = modal.render(size, focus=True)
+    attrs_by_text: dict[str, set[str]] = {}
+    for row in canvas.content():
+        for attr, _cs, chunk in row:
+            text = chunk.decode("utf-8", errors="replace")
+            if attr is not None:
+                attrs_by_text.setdefault(text, set()).add(str(attr))
+
+    # Active first row uses search_match_focus on "fp8".
+    assert "search_match_focus" in attrs_by_text.get("fp8", set())
+    # Inactive second row uses provider tint, workspace tint, and search_match on "fp8".
+    assert "search_match" in attrs_by_text.get("fp8", set())
+    assert "search_provider_codex" in attrs_by_text.get("Codex", set())
+    assert "search_workspace" in attrs_by_text.get("railmux", set())

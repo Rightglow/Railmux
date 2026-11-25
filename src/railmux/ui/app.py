@@ -233,6 +233,15 @@ PALETTE = [
     ("scope_chip", "light gray", "dark gray", "", "#cbd4d0", "#242d2a"),
     ("scope_chip_all", "white,bold", "dark gray", "bold",
      "#ffffff,bold", "#37423e"),
+    # Search modal semantic accents and matched-keyword highlights.
+    ("search_provider_devin", "light cyan", "", "", "#5fd7af", "default"),
+    ("search_provider_codex", "light blue", "", "", "#7aa2f7", "default"),
+    ("search_provider_claude", "yellow", "", "", "#e0a36b", "default"),
+    ("search_provider_other", "light gray", "", "", "#a8b8b2", "default"),
+    ("search_workspace", "dark cyan", "", "", "#82b8d9", "default"),
+    ("search_match", "yellow,bold", "", "bold", "#ffd700,bold", "default"),
+    ("search_match_focus", "yellow,bold", "dark green", "bold",
+     "#ffff5f,bold", _DEEP_GRASS_GREEN),
     # A live tmux session is structural state, not lifecycle status. Its grass-
     # green title is independent from the idle/busy/blocked status-dot colour.
     ("live", "light green,bold", "", "bold", f"{_GRASS_GREEN},bold", "default"),

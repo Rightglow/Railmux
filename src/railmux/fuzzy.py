@@ -26,3 +26,35 @@ def fuzzy_match(needle: str, haystack: str) -> bool:
                 return False
             pos += 1
     return True
+
+
+def fuzzy_match_positions(terms: list[str] | tuple[str, ...], haystack: str) -> set[int]:
+    """Return character indices in *haystack* matched by *terms*.
+
+    Each term that matches *haystack* highlights its first contiguous
+    case-insensitive occurrence when present, falling back to sequential
+    fuzzy character positions.
+    """
+    if not terms or not haystack:
+        return set()
+    haystack_lower = haystack.lower()
+    hits: set[int] = set()
+    for raw_term in terms:
+        word = raw_term.lower()
+        if not word:
+            continue
+        exact = haystack_lower.find(word)
+        if exact != -1:
+            hits.update(range(exact, exact + len(word)))
+            continue
+        pos = 0
+        matched: list[int] = []
+        for ch in word:
+            pos = haystack_lower.find(ch, pos)
+            if pos == -1:
+                matched = []
+                break
+            matched.append(pos)
+            pos += 1
+        hits.update(matched)
+    return hits

@@ -8,10 +8,81 @@ from pathlib import Path
 
 import urwid
 
-from railmux.fuzzy import fuzzy_match
+from railmux.fuzzy import fuzzy_match, fuzzy_match_positions
 from railmux.models import Project, SessionMeta
 from railmux.session_cache import SessionCache
 from railmux.ui._widgets import ClickableRow
+from railmux.ui.modals import _action_legend, _modal_box
+
+
+def _provider_attr(provider: str) -> str:
+    lower = provider.lower()
+    if "devin" in lower:
+        return "search_provider_devin"
+    if "codex" in lower:
+        return "search_provider_codex"
+    if "claude" in lower:
+        return "search_provider_claude"
+    return "search_provider_other"
+
+
+def _highlight_runs(
+    text: str,
+    terms: tuple[str, ...],
+    base_attr: str,
+    match_attr: str,
+) -> list[tuple[str, str]]:
+    if not text:
+        return []
+    hits = fuzzy_match_positions(terms, text)
+    if not hits:
+        return [(base_attr, text)]
+    runs: list[tuple[str, str]] = []
+    start = 0
+    in_hit = 0 in hits
+    for index in range(1, len(text)):
+        cur = index in hits
+        if cur != in_hit:
+            runs.append((match_attr if in_hit else base_attr, text[start:index]))
+            start = index
+            in_hit = cur
+    runs.append((match_attr if in_hit else base_attr, text[start:]))
+    return runs
+
+
+def _choice_markup(
+    choice: SessionChoice,
+    terms: tuple[str, ...],
+    *,
+    active: bool,
+) -> list[tuple[str, str]]:
+    marker = "›" if active else " "
+    title = " ".join(choice.title.split())
+    project = " ".join(choice.project.split())
+    base = "focus" if active else "body"
+    dim = "focus" if active else "dim"
+    star_attr = "focus" if active else "star"
+    provider_attr = "focus" if active else _provider_attr(choice.provider)
+    state_attr = (
+        "focus" if active
+        else ("live" if choice.state.lower().startswith("running") else "dim")
+    )
+    workspace_attr = "focus" if active else "search_workspace"
+    match_attr = "search_match_focus" if active else "search_match"
+
+    parts: list[tuple[str, str]] = [(base, f"{marker} ")]
+    if choice.starred:
+        parts.append((star_attr, "★ "))
+    parts.append((dim, "["))
+    parts.extend(_highlight_runs(choice.provider, terms, provider_attr, match_attr))
+    parts.append((dim, " · "))
+    parts.extend(_highlight_runs(choice.state, terms, state_attr, match_attr))
+    parts.append((dim, "] "))
+    if project:
+        parts.extend(_highlight_runs(project, terms, workspace_attr, match_attr))
+        parts.append((dim, " / "))
+    parts.extend(_highlight_runs(title, terms, base, match_attr))
+    return parts
 
 
 @dataclass(frozen=True)
@@ -61,15 +132,20 @@ def recent_claude_sessions(
 
 
 class _ResultRow(ClickableRow):
-    def __init__(self, label: str, on_click: Callable[[], None]) -> None:
-        self._label = label
-        self._text = urwid.Text(f"  {label}")
+    def __init__(
+        self,
+        choice: SessionChoice,
+        terms: tuple[str, ...],
+        on_click: Callable[[], None],
+    ) -> None:
+        self._choice = choice
+        self._terms = terms
+        self._text = urwid.Text(_choice_markup(choice, terms, active=False))
         self._style = urwid.AttrMap(self._text, "body")
         super().__init__(self._style, on_click=on_click)
 
     def set_active(self, active: bool) -> None:
-        marker = "›" if active else " "
-        self._text.set_text(f"{marker} {self._label}")
+        self._text.set_text(_choice_markup(self._choice, self._terms, active=active))
         self._style.set_attr_map({None: "focus" if active else "body"})
 
 
@@ -91,20 +167,35 @@ class QuickOpen(urwid.WidgetWrap):
         self._view = 0
         self._choices = tuple(choices)
         self._loading = loading
-        self._edit = urwid.Edit("Search: ")
+        self._edit = urwid.Edit(("title", "Search: "))
         self._scope = urwid.Button("", on_press=lambda _button: self._advance())
         self._rows = urwid.SimpleFocusListWalker([])
         self._list = urwid.ListBox(self._rows)
         self._shown: list[SessionChoice] = []
         self._active_row: _ResultRow | None = None
         header = urwid.Pile([
-            urwid.Text(("title", f"Saved sessions open in {target_label}")),
-            urwid.Columns([self._edit, (12, urwid.AttrMap(self._scope, "body", "focus"))]),
+            urwid.Text(("dim", f"Saved sessions open in {target_label}")),
+            urwid.Columns([
+                self._edit,
+                (12, urwid.AttrMap(self._scope, "scope_chip_all", "focus")),
+            ]),
+            urwid.AttrMap(urwid.Divider("─"), "pane"),
         ])
         header.focus_position = 1
-        footer = urwid.Text("↑↓ Move  Enter Open  Tab View  Esc Close", align="center")
-        self._frame = urwid.Frame(self._list, header=header, footer=footer, focus_part="header")
-        super().__init__(urwid.LineBox(self._frame, title="Search sessions"))
+        footer = urwid.Pile([
+            urwid.AttrMap(urwid.Divider("─"), "pane"),
+            _action_legend(
+                [("↑↓", "Move"), ("↵", "Open"), ("Tab", "View"), ("Esc", "Close")],
+                align="center",
+                separator="  ",
+                wrap="space",
+            ),
+        ])
+        self._frame = urwid.AttrMap(
+            urwid.Frame(self._list, header=header, footer=footer, focus_part="header"),
+            "body",
+        )
+        super().__init__(_modal_box(self._frame, title="Search sessions", pad_x=0))
         urwid.connect_signal(self._edit, "change", lambda _edit, text: self._rebuild(text))
         urwid.connect_signal(self._rows, "modified", self._sync_selection)
         self._rebuild("")
@@ -122,7 +213,7 @@ class QuickOpen(urwid.WidgetWrap):
         previous = self._selected()
         self._scope.set_label(self._VIEWS[self._view])
         choices: list[SessionChoice] = []
-        terms = query.split()
+        terms = tuple(query.split())
         for choice in self._choices:
             if self._view == 1 and choice.identity[0] != "running":
                 continue
@@ -135,7 +226,7 @@ class QuickOpen(urwid.WidgetWrap):
                 break
         self._shown = choices
         self._rows[:] = [
-            _ResultRow(choice.label, partial(self._open, choice))
+            _ResultRow(choice, terms, partial(self._open, choice))
             for choice in choices
         ] or [urwid.Text(("dim", "Loading recent sessions…" if self._loading else "No matching sessions."))]
         if previous is not None:
@@ -176,7 +267,7 @@ class QuickOpen(urwid.WidgetWrap):
             self._advance()
         elif key in self._MOVEMENT:
             width, height = size
-            self._list.keypress((max(1, width - 2), max(1, height - 5)), key)
+            self._list.keypress((max(1, width - 2), max(1, height - 7)), key)
         elif key == "ctrl u":
             self._edit.set_edit_text("")
         else:
