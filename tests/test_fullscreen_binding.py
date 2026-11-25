@@ -1067,5 +1067,5 @@ def test_failed_first_respawn_removes_new_outer_pane(monkeypatch):
 def test_keymap_references_f9():
     """Verify the keymap entry was updated from F3 to F9."""
     from railmux.ui.keymap import BINDINGS
-    fullscreen = next(b for b in BINDINGS if b.desc == "fullscreen")
+    fullscreen = next(b for b in BINDINGS if b.desc == "sidebar")
     assert fullscreen.hint == "F9"

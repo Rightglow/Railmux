@@ -339,7 +339,7 @@ def test_hintbar_wide_shows_all_keys_no_ellipsis():
     rows = _hint_rows(bar, 180)  # wider than the full sessions hint
     joined = "".join(rows)
     assert "…" not in joined
-    assert "F9 fullscreen" in joined  # last key is present
+    assert "F9 sidebar" in joined  # last key is present
     assert "m Mode" not in joined  # dedicated Button Bar action
 
 
@@ -367,7 +367,7 @@ def test_hintbar_keeps_each_shortcut_whole_during_page_flip():
     page_text = [" ".join(page) for page in bar._pages]
     for hint in (
         "F8 layout",
-        "F9 fullscreen",
+        "F9 sidebar",
         "C-b Tab/← Sidebar",
         "C-b → Pane 2",
     ):

@@ -243,7 +243,7 @@ def test_v1_function_lease_upgrades_in_place_with_new_bindings(
 
     def install_after_backup_is_durable(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 11
+        assert persisted["version"] == 12
         assert persisted["phase"] == "installing"
         assert persisted["prefix_tab_backup"] == {"Tab": None}
         assert persisted["right_click_backup"]["MouseDown3Pane"]
@@ -256,7 +256,7 @@ def test_v1_function_lease_upgrades_in_place_with_new_bindings(
 
     assert second.open()
     upgraded = json.loads(state_path.read_text())
-    assert upgraded["version"] == 11
+    assert upgraded["version"] == 12
     assert upgraded["prefix_tab_backup"] == {"Tab": None}
     assert upgraded["prefix_tab_managed"] is True
     assert upgraded["selection_hook_managed"] is True
@@ -297,7 +297,7 @@ def test_v4_lease_upgrades_status_click_after_durable_backup(
 
     def installed_after_backup(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 11
+        assert persisted["version"] == 12
         assert persisted["phase"] == "installing"
         assert persisted["status_click_backup"]["MouseDown1Status"]
         return True
@@ -327,7 +327,7 @@ def test_old_status_lease_reinstalls_internal_status_actions(
     second = SharedTmuxBindingManager("server", "%2")
 
     assert second.open()
-    assert json.loads(state_path.read_text())["version"] == 11
+    assert json.loads(state_path.read_text())["version"] == 12
     assert install.status_click.call_count == prior_calls + 1
 
 
@@ -352,7 +352,47 @@ def test_v8_status_lease_captures_control_bindings_before_reinstall(
 
     assert second.open()
     persisted = json.loads(state_path.read_text())
-    assert persisted["version"] == 11
+    assert persisted["version"] == 12
+    assert set(persisted["status_click_backup"]) == {
+        "MouseDown1Status",
+        "MouseDown1Control0",
+        "MouseDown1Control1",
+        "MouseDown1Control2",
+        "MouseDown1Control3",
+        "MouseDown1Control4",
+    }
+    assert install.status_click.call_count == prior_calls + 1
+
+
+def test_v9_status_lease_migrates_four_key_backup_to_v12(
+        monkeypatch, tmp_path):
+    _backup, install, _restore, _set, _unset = _install_mocks(
+        monkeypatch, tmp_path)
+    first = SharedTmuxBindingManager("server", "%1")
+    assert first.open()
+    state_path = first._state_path
+    assert state_path is not None
+    state = json.loads(state_path.read_text())
+    state["version"] = 9
+    state["status_click_backup"] = {
+        "MouseDown1Status": state["status_click_backup"]["MouseDown1Status"],
+        "MouseDown1Control0": None,
+        "MouseDown1Control1": None,
+        "MouseDown1Control2": None,
+    }
+    state_path.write_text(json.dumps(state))
+    prior_calls = install.status_click.call_count
+
+    # Exercise real upgrade_root_status_click_binding against the 4-key v9 backup.
+    from railmux import tmux_ctl
+    monkeypatch.setattr(
+        tmux_ctl, "upgrade_root_status_click_binding",
+        tmux_ctl.upgrade_root_status_click_binding,
+    )
+    second = SharedTmuxBindingManager("server", "%2")
+    assert second.open()
+    persisted = json.loads(state_path.read_text())
+    assert persisted["version"] == 12
     assert set(persisted["status_click_backup"]) == {
         "MouseDown1Status",
         "MouseDown1Control0",
@@ -381,7 +421,7 @@ def test_v7_lease_upgrades_termux_tap_after_durable_backup(
 
     def installed_after_backup(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 11
+        assert persisted["version"] == 12
         assert persisted["phase"] == "installing"
         assert persisted["termux_tap_backup"]["MouseDown1Pane"]
         return True

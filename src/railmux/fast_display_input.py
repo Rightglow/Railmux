@@ -877,6 +877,23 @@ _DEVIN_PLACEHOLDERS = (
     "Guide Devin while it works",
     "Ask a /btw",
 )
+_DEVIN_FOOTER_MARKERS = (
+    "Context:",
+    "Starting session",
+    "ctrl+o details",
+    "ctrl+o to expand",
+    "alt+t thinking",
+    "esc back to chat",
+    " · bypass",
+    " · normal",
+    " · accept-edits",
+    " · smart",
+    " · plan",
+    " · ask",
+    " · autonomous",
+    " · dangerous",
+    " · auto",
+)
 
 
 def devin_input_cursor_keys(
@@ -886,27 +903,31 @@ def devin_input_cursor_keys(
     click_row: int,
     click_col: int,
 ) -> bytes:
-    """Compute conservative arrow keys to move Devin's prompt cursor to a click.
+    """Compute conservative same-row arrow keys to move Devin's prompt cursor.
 
     Operates strictly inside a live Devin prompt box bounded by full-width
-    horizontal rules (``────``) starting with ``❭``. Returns ``b""`` whenever
-    the click or cursor is outside the prompt box, the box shows a placeholder,
-    or atomic tokens such as ``[Image #1]`` are present so it never sends
-    unintended navigation keys.
+    horizontal rules (``────``) starting with ``❭`` and anchored by a Devin
+    footer status row directly below the bottom rule. Returns ``b""`` for
+    non-Devin panes, cross-row clicks, placeholders, or ``[Image #N]`` tokens.
     """
     total = len(pane_rows)
     if total < 4:
         return b""
     if not (0 <= cursor_row < total and 0 <= click_row < total):
         return b""
+    if click_row != cursor_row:
+        return b""
     plain = [_row_text(row).rstrip() for row in pane_rows]
 
-    # Locate the bottom-most horizontal rule near the footer.
+    # Locate the bottom-most horizontal rule near the footer and verify a Devin
+    # status line sits directly beneath it so non-Devin panes are never targeted.
     bottom_rule: int | None = None
-    for idx in range(total - 1, max(-1, total - 10), -1):
+    for idx in range(total - 2, max(-1, total - 10), -1):
         if _DEVIN_INPUT_BOTTOM_RE.match(plain[idx]):
-            bottom_rule = idx
-            break
+            footer = plain[idx + 1]
+            if any(marker in footer for marker in _DEVIN_FOOTER_MARKERS):
+                bottom_rule = idx
+                break
     if bottom_rule is None or bottom_rule < 2:
         return b""
 
@@ -920,7 +941,7 @@ def devin_input_cursor_keys(
 
     first_prompt = top_rule + 1
     last_prompt = bottom_rule - 1
-    if not (first_prompt <= cursor_row <= last_prompt and first_prompt <= click_row <= last_prompt):
+    if not (first_prompt <= cursor_row <= last_prompt):
         return b""
     if not plain[first_prompt].startswith("❭"):
         return b""
@@ -943,35 +964,14 @@ def devin_input_cursor_keys(
             if row_cells[col_idx] is not None
         )
 
-    # Vertical movement first (when multi-line draft), then horizontal delta.
-    seq = bytearray()
-    row_delta = click_row - cursor_row
-    if row_delta > 0:
-        seq.extend(b"\x1b[B" * row_delta)
-    elif row_delta < 0:
-        seq.extend(b"\x1b[A" * (-row_delta))
-
-    if row_delta == 0:
-        cur_chars = _char_index_at(cursor_row, cursor_col)
-        dst_chars = _char_index_at(click_row, click_col)
-        delta = dst_chars - cur_chars
-        if delta > 0:
-            seq.extend(b"\x1b[C" * delta)
-        elif delta < 0:
-            seq.extend(b"\x1b[D" * (-delta))
-    else:
-        # After Up/Down moves to click_row, estimate column alignment from
-        # min(cursor_col, target line width) to click_col.
-        dst_line_width = sum(_display_width(ch) for ch in plain[click_row])
-        landed_col = min(cursor_col, dst_line_width)
-        cur_chars = _char_index_at(click_row, landed_col)
-        dst_chars = _char_index_at(click_row, click_col)
-        delta = dst_chars - cur_chars
-        if delta > 0:
-            seq.extend(b"\x1b[C" * delta)
-        elif delta < 0:
-            seq.extend(b"\x1b[D" * (-delta))
-    return bytes(seq)
+    cur_chars = _char_index_at(cursor_row, cursor_col)
+    dst_chars = _char_index_at(click_row, click_col)
+    delta = dst_chars - cur_chars
+    if delta > 0:
+        return b"\x1b[C" * delta
+    if delta < 0:
+        return b"\x1b[D" * (-delta)
+    return b""
 
 
 def _hard_wrapped_target(

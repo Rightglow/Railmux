@@ -658,6 +658,9 @@ def test_devin_input_cursor_keys_handles_ascii_cjk_and_bails_on_placeholders():
     assert devin_input_cursor_keys(rows_ph, 1, 2, 1, 8) == b""
     rows_img = (_cells(rule), _cells("❭ check [Image #1] here"), _cells(rule), _cells("Gemini · bypass"))
     assert devin_input_cursor_keys(rows_img, 1, 10, 1, 4) == b""
+    # Non-Devin pane without Devin footer marker must never receive arrow keys.
+    rows_non_devin = (_cells(rule), _cells("❭ hello world"), _cells(rule), _cells("bash prompt"))
+    assert devin_input_cursor_keys(rows_non_devin, 1, 13, 1, 8) == b""
 
 
 def test_dual_pane_f9_toggle_sidebar_detaches_and_rejoins_keeping_split(monkeypatch):
@@ -718,7 +721,21 @@ def test_devin_live_status_preserves_busy_on_transient_swap_capture(monkeypatch)
     assert app._record_live_status_transition(running, "busy") == "busy"
     assert "dv-1" not in app._unread_finished
 
-    # Transient mid-SIGWINCH capture with output but no settled prompt box keeps "busy".
+    # Transient mid-SIGWINCH capture with output but no settled prompt box keeps "busy" (up to 2 probes),
+    # then releases to idle so a dead/exited pane never pins at busy forever.
     app._devin_status_probe_cache.clear()
     monkeypatch.setattr(tmux_ctl, "capture_pane_visible", lambda _t: ["some output line"])
     assert app._devin_live_status(running) == "busy"
+    app._devin_status_probe_cache.clear()
+    assert app._devin_live_status(running) == "idle"
+
+    # Idle Devin prompt box followed by >12 trailing blank lines MUST transition to idle immediately.
+    app._devin_status_probe_cache.clear()
+    app._devin_transient_idle_holds.clear()
+    rule = "─" * 40
+    monkeypatch.setattr(
+        tmux_ctl,
+        "capture_pane_visible",
+        lambda _t: [rule, "❭ Ask Devin anything", rule, "Gemini 4 · bypass", *([""] * 18)],
+    )
+    assert app._devin_live_status(running) == "idle"

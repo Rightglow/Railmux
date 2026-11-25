@@ -304,8 +304,6 @@ PALETTE = [
 # brand (status-left) follows the bar so its fg stays legible in both modes.
 _TMUX_BAR_STYLE_NORMAL = f"bg={_GRASS_GREEN},fg=colour0"  # grass, black default fg
 _TMUX_BAR_STYLE_ERROR = "bg=colour52,fg=colour231"  # dark-red bar, white fg
-_TMUX_BRAND_NORMAL = "#[fg=colour0] Railmux #[default]"
-_TMUX_BRAND_ERROR = "#[fg=colour231] Railmux #[default]"
 
 
 def _format_running_status_pill(
@@ -1080,6 +1078,7 @@ class App:
         self._sidebar_hidden_detached: bool = False
         self._saved_sidebar_width: int = 30
         self._applied_pane_headers_state: tuple | None = None
+        self._devin_transient_idle_holds: dict[str, int] = {}
         # Procfs rollout correlation is useful but relatively expensive
         # (process-tree traversal plus fd reads). Cache it across UI ticks and
         # include the real pane identity so a swap cannot reuse stale data.
@@ -3355,9 +3354,29 @@ class App:
         self._termux_keyboard_projection = None
         self._clear_termux_tap_route()
 
+    def _sidebar_is_detached(self) -> bool:
+        """True when the sidebar pane lives in a different tmux window from right panes."""
+        if getattr(self, "_sidebar_hidden_detached", False):
+            return True
+        owner = getattr(self, "_railmux_pane_id", None)
+        workspace = getattr(self, "_workspace", None)
+        if owner is None or workspace is None:
+            return False
+        owner_ident = tmux_ctl.pane_identity(owner)
+        if owner_ident is None:
+            return False
+        for slot in workspace.slots:
+            if slot.pane_id is None:
+                continue
+            slot_ident = tmux_ctl.pane_identity(slot.pane_id)
+            if slot_ident is not None and slot_ident.window_id != owner_ident.window_id:
+                self._sidebar_hidden_detached = True
+                return True
+        return False
+
     def _sidebar_is_hidden(self) -> bool:
         """True when the left Railmux sidebar is hidden (zoomed or detached)."""
-        if getattr(self, "_sidebar_hidden_detached", False):
+        if self._sidebar_is_detached():
             return True
         owner = getattr(self, "_railmux_pane_id", None)
         if owner is None or self._window_is_zoomed() is not True:
@@ -3370,7 +3389,7 @@ class App:
         owner = getattr(self, "_railmux_pane_id", None)
         if owner is None:
             return False
-        if getattr(self, "_sidebar_hidden_detached", False):
+        if self._sidebar_is_detached():
             workspace = self._agent_workspace()
             anchor = next(
                 (slot.pane_id for slot in workspace.slots
@@ -3379,8 +3398,8 @@ class App:
             )
             if anchor is None:
                 self._sidebar_hidden_detached = False
-                self._sync_pane_headers()
-                self._apply_tmux_bar(self._tmux_error_bar)
+                self._sync_pane_headers(sidebar_hidden=False)
+                self._apply_tmux_bar(self._tmux_error_bar, sidebar_hidden=False)
                 return False
             width = getattr(self, "_saved_sidebar_width", 30) or 30
             if not tmux_ctl.join_pane_left(owner, anchor, width):
@@ -3389,8 +3408,8 @@ class App:
             if focus_sidebar:
                 tmux_ctl.select_pane(owner)
                 self._set_railmux_focus(True, force_border=True)
-            self._sync_pane_headers()
-            self._apply_tmux_bar(self._tmux_error_bar)
+            self._sync_pane_headers(sidebar_hidden=False)
+            self._apply_tmux_bar(self._tmux_error_bar, sidebar_hidden=False)
             return True
         if self._window_is_zoomed() is True:
             active = tmux_ctl.active_pane_id(owner)
@@ -3400,8 +3419,8 @@ class App:
                 if focus_sidebar:
                     tmux_ctl.select_pane(owner)
                     self._set_railmux_focus(True, force_border=True)
-                self._sync_pane_headers()
-                self._apply_tmux_bar(self._tmux_error_bar)
+                self._sync_pane_headers(sidebar_hidden=False)
+                self._apply_tmux_bar(self._tmux_error_bar, sidebar_hidden=False)
                 return True
         return False
 
@@ -3499,13 +3518,13 @@ class App:
         label = running.label or running.tmux_name
         return f"• {provider} · {label}"
 
-    def _sync_pane_headers(self) -> None:
+    def _sync_pane_headers(self, *, sidebar_hidden: bool | None = None) -> None:
         """Update top pane breadcrumb headers according to Options -> Agent pane headers."""
         if not getattr(self, "_tmux_status_enabled", False):
             return
         settings = getattr(self, "_settings", None)
         policy = settings.pane_headers_policy if settings is not None else "auto"
-        hidden = self._sidebar_is_hidden()
+        hidden = self._sidebar_is_hidden() if sidebar_hidden is None else sidebar_hidden
         enabled = policy == "always" or (policy == "auto" and hidden)
         workspace = getattr(self, "_workspace", None)
         if workspace is None:
@@ -4802,6 +4821,8 @@ class App:
 
     def _rotate_split(self) -> None:
         """Cycle layout, committing new geometry authority only on success."""
+        if self._sidebar_is_detached():
+            self._restore_hidden_sidebar(focus_sidebar=False)
         # F8 is explicit user ownership. Keep the currently visible Target in
         # Pane 1 and let normal single-layout semantics remember the hidden
         # agent instead of later replaying an automatic resize snapshot.
@@ -8924,28 +8945,25 @@ class App:
         if key == "f9":
             self._toggle_agent_fullscreen()
             return
-        if key == "f10":
-            self._focus_running_from_status()
-            return
         # F6 is an internal target used by the tmux status-range click binding.
         # It is sent directly to the controller pane and remains useful while
         # an agent (or a modal) owns visible focus.
         if key == "f6":
             self._copy_current_status()
             return
-        # F5/F7 are private targets for clickable Mode/Layout status ranges.
+        # F5/F7/F10 are private targets for clickable Mode/Layout/Running status ranges.
         # Keep an open dialog intact and give an explicit click response.
-        if key in ("f5", "f7"):
+        if key in ("f5", "f7", "f10"):
             if self._loop is not None and self._loop.widget is not self._frame:
                 self._show_tmux_feedback(
-                    "Close the dialog before changing Mode or Layout.")
+                    "Close the dialog before using status-bar controls.")
             elif key == "f5":
                 if self._sidebar_is_hidden():
                     self._restore_hidden_sidebar(focus_sidebar=True)
                 self._open_mode_menu()
+            elif key == "f10":
+                self._focus_running_from_status()
             else:
-                if getattr(self, "_sidebar_hidden_detached", False):
-                    self._restore_hidden_sidebar(focus_sidebar=False)
                 self._rotate_split()
             return
         # When a modal overlay is showing, don't dispatch sidebar action keys.
@@ -9619,6 +9637,15 @@ class App:
         outer tmux session are left alive. Both phases are idempotent.
         """
         if not getattr(self, "_teardown_core_done", False):
+            # Re-dock a detached sidebar before tearing down so outer tmux windows
+            # and saved layout geometry stay consistent across soft restart.
+            if self._sidebar_is_detached():
+                self._restore_hidden_sidebar(focus_sidebar=False)
+            # Unset any pane-border-status / pane-border-format overrides we installed.
+            applied_headers = getattr(self, "_applied_pane_headers_state", None)
+            if applied_headers is not None:
+                tmux_ctl.set_window_pane_border_status(applied_headers[0], False)
+                self._applied_pane_headers_state = None
             index = getattr(self, "_codex_index", None)
             if isinstance(index, BackgroundCodexIndex):
                 index.close(timeout_s=0.2)
@@ -10284,21 +10311,39 @@ class App:
             getattr(self, "_last_live_status", {}).get(running.tmux_name)
             or running.status
         )
-        if lines is None or not any(line.strip() for line in lines):
+        holds = getattr(self, "_devin_transient_idle_holds", None)
+        if holds is None:
+            holds = {}
+            self._devin_transient_idle_holds = holds
+        non_empty = [line for line in lines if line.strip()] if lines is not None else []
+        if not non_empty:
             # A pane swap or SIGWINCH reflow can momentarily return an empty
-            # capture; keep the previous status instead of flashing a false idle/done.
-            status = previous if previous in {"busy", "blocked", "idle"} else "idle"
+            # capture; hold the previous status for at most 2 consecutive probes.
+            held = holds.get(running.tmux_name, 0)
+            if previous in {"busy", "blocked"} and held < 2:
+                holds[running.tmux_name] = held + 1
+                status = previous
+            else:
+                holds.pop(running.tmux_name, None)
+                status = "idle"
         else:
             status = devin_index.classify_pane_status(lines)
             if status == "idle" and previous in {"busy", "blocked"}:
-                # Require a settled prompt box before declaring a busy Devin
-                # session idle so a mid-swap redraw cannot flash a cyan done dot.
+                # Check the last 12 *non-empty* rows (matching classify_pane_status)
+                # and cap transient hold to 2 consecutive probes so a genuinely
+                # finished Devin turn or exited shell never gets stuck as busy.
                 has_prompt_box = any(
                     devin_index._is_footer_rule(devin_index._ANSI_RE.sub("", ln).strip())
-                    for ln in lines[-12:]
+                    for ln in non_empty[-12:]
                 )
-                if not has_prompt_box:
+                held = holds.get(running.tmux_name, 0)
+                if not has_prompt_box and held < 2:
+                    holds[running.tmux_name] = held + 1
                     status = previous
+                else:
+                    holds.pop(running.tmux_name, None)
+            else:
+                holds.pop(running.tmux_name, None)
         cache[key] = (now, status)
         live_names = {item.tmux_name for item in self._running.values()}
         self._devin_status_probe_cache = {
@@ -10715,8 +10760,12 @@ class App:
                             self._show_attention_status(meta.attention)
         self._maybe_resort_running()
         self._render_running_pane()
-        self._apply_tmux_bar(getattr(self, "_tmux_error_bar", False))
-        self._sync_pane_headers()
+        sidebar_hidden = self._sidebar_is_hidden()
+        self._apply_tmux_bar(
+            getattr(self, "_tmux_error_bar", False),
+            sidebar_hidden=sidebar_hidden,
+        )
+        self._sync_pane_headers(sidebar_hidden=sidebar_hidden)
 
     def _sync_codex_rewind_scrollback(
         self,
@@ -11049,6 +11098,20 @@ class App:
             settings is not None
             and settings.notification_sound_policy == "on"
         )
+        def _toggle_sound() -> None:
+            if settings is None:
+                return
+            next_policy = "off" if sound_on else "on"
+            if settings.set_notification_sound_policy(next_policy):
+                self._set_status(
+                    f"Notification sound: {'On' if next_policy == 'on' else 'Off'}."
+                )
+            else:
+                self._set_status(
+                    "Could not save notification sound option; setting unchanged.",
+                    "error",
+                )
+
         commands: list[CommandChoice] = [
             CommandChoice(
                 "Toggle left sidebar",
@@ -11078,9 +11141,7 @@ class App:
                 "Notification sound: " + ("Turn Off" if sound_on else "Turn On"),
                 "",
                 "Terminal bell on background done/blocked",
-                lambda: self._settings.set_notification_sound_policy(
-                    "off" if sound_on else "on"
-                ),
+                _toggle_sound,
             ),
             CommandChoice(
                 "Toggle Sessions All scope",
@@ -11120,7 +11181,7 @@ class App:
                         f"Switch mode: {mode.label}",
                         "m",
                         f"Switch active agent CLI to {mode.label}",
-                        lambda key=mode.key: self._select_mode(key),
+                        lambda key=mode.key: self._switch_mode(key),
                     )
                 )
         return tuple(commands)
@@ -13256,7 +13317,9 @@ class App:
                 idle += 1
         return blocked, done, busy, idle
 
-    def _apply_tmux_bar(self, error: bool) -> None:
+    def _apply_tmux_bar(
+        self, error: bool, *, sidebar_hidden: bool | None = None,
+    ) -> None:
         """Set the whole-bar background (status-style) + brand (status-left) for
         the normal (green) or error (dark red) mode. Called from run() for the
         initial paint, from _render_status_to_tmux on the normal↔error
@@ -13323,12 +13386,16 @@ class App:
                     except (TypeError, ValueError):
                         return content
             running_counts = self._running_status_counts()
+            hidden_flag = (
+                self._sidebar_is_hidden()
+                if sidebar_hidden is None else sidebar_hidden
+            )
             brand, visible = _tmux_status_left_with_width(
                 error,
                 self._active_mode().label,
                 self._status_layout_indicator(),
                 wrap_action,
-                sidebar_hidden=self._sidebar_is_hidden(),
+                sidebar_hidden=hidden_flag,
                 running_counts=running_counts,
                 width=width,
             )

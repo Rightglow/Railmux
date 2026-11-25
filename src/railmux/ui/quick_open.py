@@ -293,18 +293,44 @@ class QuickOpen(urwid.WidgetWrap):
         self._shown_commands = []
         previous = self._selected()
         self._scope.set_label(self._VIEWS[self._view])
-        choices: list[SessionChoice] = []
+        matched_pairs: list[tuple[tuple[int, int, int, int], SessionChoice]] = []
         terms = tuple(query.split())
-        for choice in self._choices:
+        lower_terms = tuple(t.lower() for t in terms)
+        for recency_idx, choice in enumerate(self._choices):
             if self._view == 1 and choice.identity[0] != "running":
                 continue
             if self._view == 2 and not choice.starred:
                 continue
             fields = (choice.provider, choice.state, choice.project, choice.title)
-            if all(any(fuzzy_match(term, field) for field in fields) for term in terms):
-                choices.append(choice)
-            if len(choices) == 80:
-                break
+            if not all(any(fuzzy_match(term, field) for field in fields) for term in terms):
+                continue
+            if lower_terms:
+                title_l = choice.title.lower()
+                proj_l = choice.project.lower()
+                prov_l = choice.provider.lower()
+                if all(title_l.startswith(t) for t in lower_terms):
+                    match_rank = 0
+                elif all(f" {t}" in title_l for t in lower_terms):
+                    match_rank = 1
+                elif all(t in title_l for t in lower_terms):
+                    match_rank = 2
+                elif all(t in title_l or t in proj_l or t in prov_l for t in lower_terms):
+                    match_rank = 3
+                else:
+                    match_rank = 4
+            else:
+                match_rank = 0
+            rank_key = (
+                0 if choice.identity[0] == "running" else 1,
+                0 if choice.starred else 1,
+                match_rank,
+                recency_idx,
+            )
+            matched_pairs.append((rank_key, choice))
+        if lower_terms:
+            matched_pairs.sort(key=lambda item: item[0])
+        total_matches = len(matched_pairs)
+        choices = [choice for _rank, choice in matched_pairs[:80]]
         self._shown = choices
         self._active_row = None
         hint_rows: list[urwid.Widget] = []
@@ -317,6 +343,10 @@ class QuickOpen(urwid.WidgetWrap):
             _ResultRow(choice, terms, partial(self._open, choice))
             for choice in choices
         ] or [urwid.Text(("dim", "Loading recent sessions…" if self._loading else "No matching sessions."))]
+        if total_matches > len(choices):
+            result_rows.append(
+                urwid.Text(("dim", f"  Showing {len(choices)} of {total_matches} — refine query to narrow results"))
+            )
         self._rows[:] = hint_rows + result_rows
         if previous is not None:
             for index, choice in enumerate(choices):

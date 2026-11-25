@@ -160,3 +160,60 @@ def test_quick_open_command_palette_triggers_on_gt_and_executes_selected():
     modal.keypress(size, "enter")
     close.assert_called_once_with()
     assert ran == ["layout"]
+
+
+def test_quick_open_ranks_results_and_shows_truncation_footer():
+    choices = [
+        SessionChoice(("saved", "devin", "s-fuzzy"), "f_o_o_p_8 misc", "Devin", "ws", "Saved", Mock()),
+        SessionChoice(("saved", "devin", "s-sub"), "tune fp8 kernel", "Devin", "ws", "Saved", Mock()),
+        SessionChoice(("saved", "devin", "s-prefix"), "fp8 bench", "Devin", "ws", "Saved", Mock()),
+        SessionChoice(("saved", "devin", "s-star"), "other fp8 note", "Devin", "ws", "Saved", Mock(), starred=True),
+        SessionChoice(("running", "devin", "r-live"), "live fp8 run", "Devin", "ws", "Running", Mock()),
+    ]
+    modal = QuickOpen(choices, Mock(), "Pane 1")
+    size = (70, 14)
+    for ch in "fp8":
+        modal.keypress(size, ch)
+    assert [c.identity[2] for c in modal._shown] == [
+        "r-live", "s-star", "s-prefix", "s-sub", "s-fuzzy",
+    ]
+
+    # >80 matches appends a transparent truncation footer row.
+    many = [
+        SessionChoice(("saved", "devin", f"s-{i}"), f"fp8 session {i}", "Devin", "ws", "Saved", Mock())
+        for i in range(95)
+    ]
+    modal_many = QuickOpen(many, Mock(), "Pane 1")
+    for ch in "fp8":
+        modal_many.keypress(size, ch)
+    assert len(modal_many._shown) == 80
+    last_row_text = b"".join(modal_many._rows[-1].render((70,)).text).decode()
+    assert "Showing 80 of 95" in last_row_text
+
+
+def test_app_quick_open_commands_all_bind_existing_methods():
+    from unittest.mock import MagicMock
+
+    app = App.__new__(App)
+    app._active_mode_key = "devin"
+    app._settings = MagicMock(notification_sound_policy="off")
+    app._settings.set_notification_sound_policy.return_value = True
+    app._set_status = MagicMock()
+    app._switch_mode = MagicMock()
+    app._toggle_agent_fullscreen = MagicMock()
+    app._rotate_split = MagicMock()
+    app._launch_new_session = MagicMock()
+    app._open_options_modal = MagicMock()
+    app._toggle_sessions_scope = MagicMock()
+    app._toggle_running_scope = MagicMock()
+    app._toggle_sidebar_pane_zoom = MagicMock()
+    app._open_help_modal = MagicMock()
+    app._open_quit_confirm = MagicMock()
+
+    commands = app._quick_open_commands()
+    assert any(c.name == "Switch mode: Claude" for c in commands)
+    assert any(c.name == "Switch mode: Codex" for c in commands)
+    for cmd in commands:
+        cmd.on_run()
+    app._switch_mode.assert_any_call("claude")
+    app._switch_mode.assert_any_call("codex")

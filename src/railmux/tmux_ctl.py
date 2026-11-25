@@ -421,13 +421,18 @@ def join_pane_left(
 
 
 def set_window_pane_border_status(target: str, enabled: bool) -> bool:
-    """Toggle top pane breadcrumb headers on *target*'s tmux window."""
+    """Toggle top pane breadcrumb headers on *target*'s tmux window.
+
+    Uses the pane-local ``@railmux_header`` user option so Railmux never
+    clobbers provider OSC ``pane_title`` metadata, and unsets both window
+    options cleanly with ``-u`` when disabled or tearing down.
+    """
     try:
         if enabled:
             fmt = (
                 "#{?pane_active,"
-                "#[fg=colour82,bold] #{pane_title} #[default],"
-                "#[fg=colour245] #{pane_title} #[default]}"
+                "#[fg=colour82,bold] #{?#{!=:#{@railmux_header},},#{@railmux_header},#{pane_title}} #[default],"
+                "#[fg=colour245] #{?#{!=:#{@railmux_header},},#{@railmux_header},#{pane_title}} #[default]}"
             )
             subprocess.check_call(
                 ["tmux", "set-window-option", "-t", target,
@@ -438,8 +443,10 @@ def set_window_pane_border_status(target: str, enabled: bool) -> bool:
             )
         else:
             subprocess.check_call(
-                ["tmux", "set-window-option", "-t", target,
-                 "pane-border-status", "off"],
+                ["tmux", "set-window-option", "-u", "-t", target,
+                 "pane-border-status", ";",
+                 "set-window-option", "-u", "-t", target,
+                 "pane-border-format"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         return True
@@ -448,10 +455,10 @@ def set_window_pane_border_status(target: str, enabled: bool) -> bool:
 
 
 def set_pane_title(pane_id: str, title: str) -> bool:
-    """Set tmux's ``pane_title`` metadata shown in top pane border headers."""
+    """Set Railmux's ``@railmux_header`` pane option shown in top border headers."""
     try:
         subprocess.check_call(
-            ["tmux", "select-pane", "-t", pane_id, "-T", title],
+            ["tmux", "set-option", "-p", "-t", pane_id, "@railmux_header", title],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         return True
@@ -3300,23 +3307,30 @@ def upgrade_root_status_click_binding(
     previous: RootStatusClickBindingBackup,
     token: str,
 ) -> RootStatusClickBindingBackup | None:
-    """Expand a pre-control-range lease without losing user bindings.
+    """Expand a prior-version status-click lease without losing user bindings.
 
-    Versions 5-8 saved only MouseDown1Status.  Before version 9 installs the
-    tmux 3.7 control keys it captures their exact current commands, while also
-    verifying that the old status wrapper is still either original or ours.
+    Versions 5-8 saved only MouseDown1Status; versions 9-10 saved
+    MouseDown1Status plus MouseDown1Control0..2. Before installing additional
+    control keys, verify every previously saved key is still either original
+    or Railmux-owned, keep all prior backups, and capture only newly added keys.
     """
-    if set(previous) != {_ROOT_STATUS_CLICK_KEY}:
-        return None
-    current = read_root_status_click_binding()
-    if not root_status_click_binding_is_original_or_owned(
-        current.get(_ROOT_STATUS_CLICK_KEY),
-        previous.get(_ROOT_STATUS_CLICK_KEY),
-        token,
+    prev_keys = set(previous)
+    if (
+        _ROOT_STATUS_CLICK_KEY not in prev_keys
+        or not prev_keys.issubset(_ROOT_STATUS_CLICK_KEYS)
     ):
         return None
+    current = read_root_status_click_binding()
+    for key in prev_keys:
+        if not root_status_click_binding_is_original_or_owned(
+            current.get(key),
+            previous.get(key),
+            token,
+        ):
+            return None
     upgraded = dict(current)
-    upgraded[_ROOT_STATUS_CLICK_KEY] = previous[_ROOT_STATUS_CLICK_KEY]
+    for key, saved in previous.items():
+        upgraded[key] = saved
     return upgraded if _status_click_backup_replayable(upgraded) else None
 
 
@@ -3588,7 +3602,8 @@ def set_prefix_target_binding(
             "if [ '#{pane_id}' = '#{@railmux_controller_pane}' ]; then "
             "if [ -n '#{@railmux_target_pane}' ]; then "
             f"{target_select}; fi; "
-            f"else {controller_select}; fi; "
+            f"else {controller_select} || "
+            f"{_tmux_shell_executable()} send-keys -t '#{{@railmux_controller_pane}}' F9; fi; "
             f": {marker}"
         )
         toggle = f'run-shell {shlex.quote(toggle_script)}'

@@ -97,7 +97,7 @@ BINDINGS: list[Binding] = [
     # pane owns keyboard focus.
     Binding((), "F8", "layout"),
     # Display-only: handled by a tmux root binding, not railmux.
-    Binding((), "F9", "fullscreen"),
+    Binding((), "F9", "sidebar"),
     # Agent panes — tmux owns these navigation keys, so they are hints only.
     Binding((), "C-b Tab/←", "Sidebar",
             contexts=(CTX_AGENT, CTX_AGENT_P1_SIDE_BY_SIDE,

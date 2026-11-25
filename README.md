@@ -190,8 +190,9 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 |-----|--------|
 | `Enter` | Resume or start the selected session |
 | `n` | Start a fresh session in the current project |
-| `g` | Search sessions across agents |
-| `a` | Toggle all agents while Running has focus |
+| `g` | Search sessions across agents (type `>` for command palette) |
+| `a` | Toggle `[All]` scope in Sessions or Running |
+| `z` | Zoom / restore the focused sidebar pane (or click `▾`/`▸` on a pane title) |
 | `i` | Popup with session details |
 | `r` | Rename the focused session |
 | `s` | Toggle star — starred sessions pinned to top with ⭐ |
@@ -203,7 +204,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `o` | Open persistent Railmux options |
 | `␣` | Preview canonical history for the selected stopped or running session |
 | `F8` | Cycle agent layout: single → side-by-side → stacked |
-| `F9` | Fullscreen the focused agent, managed terminal, or Vim (toggle) |
+| `F9` | Toggle left sidebar (hide/show; keeps dual-pane splits intact) |
 | `?` | Full help popup with all keybindings |
 | `q` or `Ctrl-C` | Quit with confirmation |
 
@@ -679,7 +680,7 @@ drag-select in the agent pane copies to the local clipboard automatically,
 over ordinary SSH, no Shift needed. (iTerm2: enable *Settings → General →
 Selection → "Applications in terminal may access clipboard"*.)
 
-**Without OSC 52** (Terminal.app, etc.): press **F9** to fullscreen the agent →
+**Without OSC 52** (Terminal.app, etc.): press **F9** to hide the sidebar →
 **Shift‑drag** to select → `Cmd+C` / `Ctrl+C` to copy → **F9** to return.
 
 > `Ctrl-B z` also toggles fullscreen (built into tmux) but zooms whichever
@@ -738,7 +739,7 @@ sources, it can conflict with terminal suggestions; use the OS input-source
 menu/Globe key to confirm, rebind the terminal suggestion action, or disable it
 with `"terminal.integrated.suggest.enabled": false`.
 
-**F8 (layout) and F9 (fullscreen)**: the operating system or terminal may
+**F8 (layout) and F9 (toggle sidebar)**: the operating system or terminal may
 consume function keys before tmux sees them. On macOS, either hold `Fn` when
 pressing the key or enable *System Settings → Keyboard → “Use F1, F2, etc. keys
 as standard function keys”*; also remove any Mission Control shortcut using the

@@ -112,7 +112,7 @@ def test_hint_text_legacy_returns_all_keys():
     assert "star" in text
     assert "kill" in text
     assert "del" in text
-    assert "fullscreen" in text
+    assert "sidebar" in text
 
 
 def test_hint_text_for_always_has_two_lines():
@@ -153,7 +153,7 @@ def test_trailing_line_identical_across_sidebar_contexts():
 def test_hint_text_for_single_agent_shows_sidebar_routes_and_fullscreen():
     text = hint_text_for(CTX_AGENT)
     assert "C-b Tab/← Sidebar" in text
-    assert "F9 fullscreen" in text
+    assert "F9 sidebar" in text
     # Sidebar keys must not appear.
     assert "move" not in text
     assert "pane" not in text
@@ -176,7 +176,7 @@ def test_side_by_side_primary_agent_hint_includes_pane_2_route():
 
     assert "C-b Tab/← Sidebar" in text
     assert "C-b → Pane 2" in text
-    assert "F9 fullscreen" in text
+    assert "F9 sidebar" in text
 
 
 def test_side_by_side_secondary_agent_hint_names_pane_1():
@@ -185,7 +185,7 @@ def test_side_by_side_secondary_agent_hint_names_pane_1():
     assert "C-b ← Pane 1" in text
     assert "C-b Tab Sidebar" in text
     assert "C-b ← Sidebar" not in text
-    assert "F9 fullscreen" in text
+    assert "F9 sidebar" in text
 
 
 def test_stacked_agent_hints_follow_top_bottom_geometry():

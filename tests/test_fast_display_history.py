@@ -2444,7 +2444,7 @@ def test_devin_click_cursor_input_end_to_end_with_selection_source():
         b" " * 10 + rule,
         b" " * 10 + "❭ hello world".encode("utf-8").ljust(width, b" "),
         b" " * 10 + rule,
-        b" " * 10 + b"Gemini 4 Neon High".ljust(width, b" "),
+        b" " * 10 + "Gemini 4 Neon High · bypass".encode("utf-8").ljust(width, b" "),
     )
     route = HistorySnapshot(1, "%9", 10, 0, width, 4, (b"",) * 4, mouse_forwardable=False)
     history = LocalHistoryView()
