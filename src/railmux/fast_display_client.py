@@ -54,11 +54,14 @@ from railmux.fast_display_input import (
     BracketedPasteInput,
     ClickTarget,
     LocalTextSelection,
+    SelectionAction,
     SelectionSegment,
+    SelectionSource,
     SgrMouseEvent,
     TermuxTouchKeyboard,
     TouchKeyboardAction,
     TerminalInputDecoder,
+    _pane_rows,
     bracketed_paste_for_pane,
     devin_input_cursor_keys,
     is_termux_environment,
@@ -2567,6 +2570,39 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return args
 
 
+def _devin_click_cursor_input(
+    event: SgrMouseEvent,
+    selection_action: SelectionAction,
+    selection_source: SelectionSource | None,
+    latest_screen: AppliedScreen | None,
+    history: LocalHistoryView,
+    focused_pane_id: str | None,
+) -> bytes:
+    """Return arrow keys to reposition Devin's prompt cursor on a pure click."""
+    if (
+        event.pressed
+        or (event.button & 3) != 0
+        or selection_action.open_target is not None
+        or selection_action.copy_data is not None
+        or len(selection_action.replay_events) != 2
+        or latest_screen is None
+        or history.active
+        or selection_source is None
+    ):
+        return b""
+    route = selection_source.route
+    if route.pane_id != focused_pane_id or route.mouse_forwardable:
+        return b""
+    pane_cells, _links = _pane_rows(selection_source)
+    return devin_input_cursor_keys(
+        pane_cells,
+        latest_screen.cursor_y - route.y,
+        latest_screen.cursor_x - route.x,
+        (event.y - 1) - route.y,
+        (event.x - 1) - route.x,
+    )
+
+
 def run(args: argparse.Namespace) -> int:
     diagnostic_started = time.monotonic()
     recorder = SshDisplayRecorder(__version__, PROTOCOL_VERSION)
@@ -3113,17 +3149,18 @@ def run(args: argparse.Namespace) -> int:
                     )
             if touch_action.handled:
                 return
+            pointer_source = (
+                None
+                if latest_screen is None
+                else history.selection_source(
+                    part,
+                    latest_screen.rows,
+                    focused_pane_id=focused_pane_id,
+                )
+            )
             selection_action = selection.pointer_event(
                 part,
-                (
-                    None
-                    if latest_screen is None
-                    else history.selection_source(
-                        part,
-                        latest_screen.rows,
-                        focused_pane_id=focused_pane_id,
-                    )
-                ),
+                pointer_source,
             )
             if selection.capturing or not selection.active:
                 selection_clear_at = None
@@ -3182,32 +3219,16 @@ def run(args: argparse.Namespace) -> int:
                 else:
                     begin_path_open(target)
             if selection_action.handled:
-                if (
-                    not part.pressed
-                    and (part.button & 3) == 0
-                    and selection_action.open_target is None
-                    and selection_action.copy_data is None
-                    and len(selection_action.replay_events) == 2
-                    and latest_screen is not None
-                    and not history.active
-                ):
-                    click_route = history.route_at(part)
-                    if (
-                        click_route is not None
-                        and click_route.pane_id == focused_pane_id
-                        and not click_route.mouse_forwardable
-                    ):
-                        from railmux.fast_display_input import _pane_rows
-
-                        cursor_keys = devin_input_cursor_keys(
-                            _pane_rows(latest_screen.rows, click_route),
-                            latest_screen.cursor_y - click_route.y,
-                            latest_screen.cursor_x - click_route.x,
-                            (part.y - 1) - click_route.y,
-                            (part.x - 1) - click_route.x,
-                        )
-                        if cursor_keys:
-                            send_protocol_frame(encode_input(cursor_keys))
+                cursor_keys = _devin_click_cursor_input(
+                    part,
+                    selection_action,
+                    pointer_source,
+                    latest_screen,
+                    history,
+                    focused_pane_id,
+                )
+                if cursor_keys:
+                    send_protocol_frame(encode_input(cursor_keys))
                 return
             received_at = time.monotonic()
             action = history.pointer_event(

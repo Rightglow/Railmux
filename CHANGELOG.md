@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2.dev3] - 2026-11-23
+
+### Fixed
+
+- Fix `TypeError: _pane_rows() takes 1 positional argument` crash on mouse click
+  in `railmux ssh` by passing the frozen `SelectionSource` cleanly through a
+  dedicated end-to-end tested `_devin_click_cursor_input()` helper.
+
+### Changed
+
+- Render the bottom-left running status counts directly on the tmux status bar
+  background (pill-free, `◧ · ◫ · Mode · •1 •2 •3`) using crisp small `•`
+  bullets matching the Running pane.
+
 ## [0.5.2.dev2] - 2026-11-23
 
 ### Fixed

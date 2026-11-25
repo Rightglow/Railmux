@@ -313,37 +313,41 @@ def _format_running_status_pill(
     *,
     error: bool,
 ) -> tuple[str, int]:
-    """Render compact non-zero running counts inside a recessed pill for status-left.
+    """Render compact pill-free running counts directly on the tmux status bar.
 
     *counts* is ``(blocked, done, busy, idle)``. Uses the same crisp ``•`` dot
-    glyph as the Running pane, colored dots with soft-white counts on a deep
-    forest-green pill (or deep burgundy on error) that harmonizes with the bar.
-    Returns ``(tmux_markup, visible_cells)``.
+    glyph as the Running pane with no separate background pill, matching the
+    rest of the bar. Returns ``(tmux_markup, visible_cells)``.
     """
     if not counts or not any(counts):
         return "", 0
-    specs = (
-        (counts[0], "#ff6b6b"),  # blocked (red)
-        (counts[1], "#00e5ff"),  # done unread (cyan)
-        (counts[2], "#ffd700"),  # busy (yellow)
-        (counts[3], "#7ce63b"),  # idle (bright grass green)
-    )
+    if error:
+        specs = (
+            (counts[0], "#ff6b6b"),  # blocked (bright red on dark red)
+            (counts[1], "#00e5ff"),  # done unread (cyan)
+            (counts[2], "#ffd700"),  # busy (yellow)
+            (counts[3], "#7ce63b"),  # idle (green)
+        )
+        digit_fg = "colour231"
+    else:
+        specs = (
+            (counts[0], "#b80000"),  # blocked (deep red on grass green)
+            (counts[1], "#d7ffff"),  # done unread (bright cyan on grass green)
+            (counts[2], "#ffff5f"),  # busy (bright yellow on grass green)
+            (counts[3], "colour0"),  # idle (bar-native black on grass green)
+        )
+        digit_fg = "colour0"
     parts: list[str] = []
-    visible = 1  # leading space inside pill
+    visible = 0
     for count, color in specs:
         if count <= 0:
             continue
         digits = str(count)
-        parts.append(f"#[fg={color},bold]•#[fg=#edf5ee,nobold]{digits}")
-        visible += 1 + len(digits) + 1  # dot + digits + trailing space
+        parts.append(f"#[fg={color},bold]•#[fg={digit_fg},nobold]{digits}")
+        visible += 1 + len(digits) + 1
     if not parts:
         return "", 0
-    bar_bg = "colour52" if error else _GRASS_GREEN
-    bar_fg = "colour231" if error else "colour0"
-    pill_bg = "#3a0e0e" if error else "#1b4214"
-    inner = " ".join(parts)
-    markup = f"#[bg={pill_bg}] {inner} #[bg={bar_bg},fg={bar_fg}]"
-    return markup, visible
+    return " ".join(parts), max(0, visible - 1)
 
 
 def _tmux_status_left_with_width(
@@ -397,8 +401,8 @@ def _tmux_status_left_with_width(
             if range_wrapper is not None:
                 pill_markup = range_wrapper(
                     tmux_ctl.STATUS_ACTION_RUNNING, pill_markup)
-            pill = f"  {pill_markup}"
-            visible += 2 + pill_vis
+            pill = f" · {pill_markup}"
+            visible += 3 + pill_vis
     visible += 1  # trailing space
     return f"#[bg={bg},fg={fg}] {sidebar_seg}{layout} · {mode}{pill} #[default]", visible
 

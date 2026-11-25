@@ -2433,6 +2433,48 @@ def test_local_history_route_at_maps_1_based_sgr_event():
     assert view.route_at(SgrMouseEvent(b"", 0, 10, 1, False)) is None
 
 
+def test_devin_click_cursor_input_end_to_end_with_selection_source():
+    from railmux.fast_display_client import AppliedScreen, _devin_click_cursor_input
+    from railmux.fast_display_input import LocalTextSelection
+    from railmux.fast_display_protocol import TerminalMode
+
+    width = 40
+    rule = ("─" * width).encode("utf-8")
+    live_rows = (
+        b" " * 10 + rule,
+        b" " * 10 + "❭ hello world".encode("utf-8").ljust(width, b" "),
+        b" " * 10 + rule,
+        b" " * 10 + b"Gemini 4 Neon High".ljust(width, b" "),
+    )
+    route = HistorySnapshot(1, "%9", 10, 0, width, 4, (b"",) * 4, mouse_forwardable=False)
+    history = LocalHistoryView()
+    history.visible_routes = (route,)
+    screen = AppliedScreen(
+        width=50,
+        height=4,
+        cursor_x=10 + 13,  # end of "❭ hello world"
+        cursor_y=1,
+        cursor_visible=True,
+        terminal_modes=TerminalMode.NONE,
+        rows=live_rows,
+        changed_rows=(),
+        clear=False,
+    )
+    selection = LocalTextSelection()
+    # 1-based SGR click at pane col 8 ('w' in "❭ hello world") -> x = 10 + 8 + 1 = 19, y = 2.
+    press = SgrMouseEvent(b"\x1b[<0;19;2M", 0, 19, 2, True)
+    release = SgrMouseEvent(b"\x1b[<0;19;2m", 0, 19, 2, False)
+    press_source = history.selection_source(press, screen.rows, focused_pane_id="%9")
+    assert selection.pointer_event(press, press_source).handled is True
+    release_source = history.selection_source(release, screen.rows, focused_pane_id="%9")
+    release_action = selection.pointer_event(release, release_source)
+    assert release_action.handled is True
+    keys = _devin_click_cursor_input(
+        release, release_action, release_source, screen, history, "%9",
+    )
+    assert keys == b"\x1b[D" * 5
+
+
 def test_codex_history_pins_the_prompt_for_the_visible_turn_without_shifting_links():
     from railmux.fast_display_input import _pane_rows, _target_in_rows
     from railmux.fast_display_protocol import ServerMessageDecoder, encode_history_batch
