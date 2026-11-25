@@ -19,7 +19,7 @@ from railmux.ui import keymap
 TIPS: tuple[str, ...] = (
     "Soft Quit (q, then s) closes shared views; agents keep running",
     "Press g to search sessions, or type > inside Search for commands",
-    "Press F9 or click ◧ at bottom-left to hide or show the sidebar",
+    "Press F9 or click «/» at bottom-left to hide or show the sidebar",
     "Single-click a stopped session to preview its saved history",
     "Click ▾/▸ on a pane title to collapse it, or press z to zoom",
     "A cyan dot marks a background session that finished unread",

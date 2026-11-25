@@ -2591,7 +2591,7 @@ def test_real_side_by_side_focus_draws_inward_arrows_and_restores(
         ],
         text=True,
     )
-    assert "◧ · ◧ · Codex" in status_left
+    assert "« · ◧ · Codex" in status_left
     # A direct mouse-style focus move from P1/sidebar to P2 is observed through
     # tmux while the sidebar remains unfocused; Target and status-left must
     # update without waiting for focus to return through the sidebar.
@@ -2608,7 +2608,7 @@ def test_real_side_by_side_focus_draws_inward_arrows_and_restores(
         ],
         text=True,
     )
-    assert "◧ · ◨ · Codex" in status_left
+    assert "« · ◨ · Codex" in status_left
 
     assert app._restore_border_indicators()
     assert tmux_ctl.local_window_option("pane-border-indicators") == (

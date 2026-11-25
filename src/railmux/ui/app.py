@@ -373,7 +373,7 @@ def _tmux_status_left_with_width(
         mode_label = "Codex" if mode_label else "Claude"
     elif mode_label == "Claude Code":
         mode_label = "Claude"
-    sidebar_glyph = "▢" if sidebar_hidden else "◧"
+    sidebar_glyph = "»" if sidebar_hidden else "«"
     sidebar_seg = (
         range_wrapper(tmux_ctl.STATUS_ACTION_SIDEBAR, sidebar_glyph)
         if range_wrapper is not None else sidebar_glyph

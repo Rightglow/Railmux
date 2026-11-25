@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2.dev4] - 2026-11-23
+
+### Fixed
+
+- Allow `railmux-sidebar` and `railmux-running` clicks through the tmux 3.4–3.6
+  `MouseDown1Status` regex guard (upgrading shared tmux bindings to v11 so live
+  sessions pick up the fix automatically).
+- Replace washed-out `#d7ffff` cyan with saturated `#00e5ff` for the `done`
+  dot on the grass-green status bar, and use deep forest green (`#004d00`) for
+  the `idle` dot.
+
+### Changed
+
+- Use directional `«` / `»` chevrons for the bottom-left sidebar toggle so it
+  never collides visually with the layout target glyph (`◧` / `◨` / `▣`).
+
 ## [0.5.2.dev3] - 2026-11-23
 
 ### Fixed

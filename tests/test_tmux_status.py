@@ -276,21 +276,21 @@ def test_status_left_shows_current_mode(monkeypatch):
 
 def test_status_left_pure_function():
     normal = _tmux_status_left(False, False)
-    assert "◧ · Claude #[default]" in normal
+    assert "« · Claude #[default]" in normal
     assert "Railmux" not in normal
     error = _tmux_status_left(True, True)
-    assert "◧ · Codex #[default]" in error
+    assert "« · Codex #[default]" in error
 
     third = _tmux_status_left(False, "Review Agent")
-    assert "◧ · Review Agent #[default]" in third
+    assert "« · Review Agent #[default]" in third
 
     with_layout = _tmux_status_left(False, "Codex", "◨")
-    assert "◧ · ◨ · Codex #[default]" in with_layout
+    assert "« · ◨ · Codex #[default]" in with_layout
 
     hidden_with_counts = _tmux_status_left(
         False, "Devin", "◨", sidebar_hidden=True, running_counts=(1, 2, 0, 3),
     )
-    assert "▢ · ◨ · Devin · " in hidden_with_counts
+    assert "» · ◨ · Devin · " in hidden_with_counts
     assert "#[bg=#" not in hidden_with_counts.split("Devin", 1)[1]
     assert "•#[fg=colour0,nobold]1" in hidden_with_counts
     assert "•#[fg=colour0,nobold]2" in hidden_with_counts
@@ -315,7 +315,7 @@ def test_wide_status_left_wraps_mode_and_layout_as_separate_actions():
         "railmux-mode",
         "railmux-running",
     ]
-    assert "<railmux-sidebar>◧</railmux-sidebar>" in value
+    assert "<railmux-sidebar>«</railmux-sidebar>" in value
     assert "<railmux-layout>◧</railmux-layout>" in value
     assert "<railmux-mode>Claude</railmux-mode>" in value
     assert "<railmux-running>" in value
@@ -474,7 +474,7 @@ def test_apply_wide_bar_makes_mode_and_layout_clickable(monkeypatch):
     app._apply_tmux_bar(error=False)
 
     left = _style_calls(run, "status-left")[-1]
-    assert "#[range=user|railmux-sidebar]◧#[norange]" in left
+    assert "#[range=user|railmux-sidebar]«#[norange]" in left
     assert "#[range=user|railmux-layout]▣#[norange]" in left
     assert "#[range=user|railmux-mode]Claude#[norange]" in left
 
@@ -583,7 +583,7 @@ def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
     app._workspace.set_target(AgentWorkspace.PRIMARY)
     app._apply_tmux_bar(error=False)
     single_status = _style_calls(run, "status-left")[-1]
-    assert "◧ · ▣ · Claude" in single_status
+    assert "« · ▣ · Claude" in single_status
     assert "Target" not in single_status
 
 
