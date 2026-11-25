@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-25
+
+### Added
+
+- **True `F9` Toggle Left Sidebar**: press `F9` or click the bottom-left
+  `«` / `»` toggle to hide and restore only the left sidebar — keeping
+  dual-pane splits intact via detached break/join — with hidden state
+  preserved across soft quit restarts and `Ctrl-B Tab` automatically restoring
+  a detached sidebar.
+- **Compact bottom-left control cluster (`« · ◧ · Mode · •1 •2 •1 •6`)**:
+  reclaimed the bottom-left brand space for fixed-position sidebar and layout
+  toggles, the active CLI mode, and clickable pill-free global running-session
+  status counts (`blocked` / `done` / `busy` / `idle`) that restore the sidebar
+  and jump to **Running**.
+- **Auto Agent Pane Headers**: show a compact 1-row breadcrumb title
+  (`@railmux_header`, leaving provider `pane_title` untouched) above visible
+  agent panes automatically while the sidebar is hidden (configurable as
+  `Auto / Always / Off` in Options and `config.toml`, cleanly unset on exit).
+- **Search (`g`) highlights, ranking & `>` Command Palette**: colorize CLI,
+  state, workspace, and matched keywords in Search results; rank by Running >
+  Starred > title prefix/word/substring > fuzzy > recency with a
+  `Showing 80 of N` footer; and type `>` to open an interactive command palette.
+- **Devin session metrics & Info details**: populate real Devin `msg` and `tok`
+  counts in **Sessions** from read-only `sessions.db` and transcript metrics,
+  surface Devin `model` and `ACU cost` in `Info (i)`, and add **New session
+  (`n`)** to the Projects right-click menu.
+- **Devin prompt click-to-move-cursor**: single-clicking inside a focused
+  Devin prompt box over `railmux ssh` positions the cursor conservatively
+  (CJK-width aware, guarded by Devin footer markers) without interfering with
+  drag selection or link clicks.
+
+### Changed
+
+- Shorten the Claude UI mode label from `"Claude Code"` to `"Claude"` across
+  the status bar, sidebar, Search, Options, Help, and tips.
+- Bind `v` (with `V`/`T` compatibility aliases) to return to the managed Vim
+  viewer, align `keymap.py` and `README.md` with `F9 sidebar`, `z`, `v`, and
+  `>`, and show immediate `Resuming Devin session…` feedback on resume.
+
+### Fixed
+
+- Stop double-clicking a stopped session from synchronously launching and
+  tearing down a Preview pane on click 1 (keeping zero-delay attach for running
+  sessions), and push a bounded `ORDER BY row_id DESC LIMIT 400` tail query
+  (with `immutable=1` fallback) into SQLite for fast Devin fallback previews.
+- Migrate shared tmux status-click leases cleanly from v5–v10 (including
+  0.5.1's 4-key v9 backup) to v12 without dropping bindings.
+- Prevent busy Devin sessions from briefly flashing a false cyan `done` dot
+  during pane swaps while still transitioning cleanly to `idle`/`done` when
+  trailing blank rows follow the prompt box.
+
+This release uses SSH display protocol v19, compatible with Railmux 0.5.1.
+
 ## [0.5.2.dev6] - 2026-11-25
 
 ### Fixed
