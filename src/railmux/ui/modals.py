@@ -448,6 +448,7 @@ class HelpModal(urwid.WidgetWrap):
             ("m / More → Mode", "Open the agent Mode picker"),
             ("o", "Open persistent Railmux options"),
             ("t", "Open a terminal in the active project"),
+            ("v", "Return to the agent's managed Vim viewer, when open"),
             ("␣", "Preview saved session history"),
             ("F8", "Cycle layout: single / side-by-side / stacked"),
             ("F9", "Toggle left sidebar (hide/show; keeps splits intact)"),

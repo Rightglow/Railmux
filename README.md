@@ -199,7 +199,7 @@ see [FAQ 1](#1-how-do-i-copy-text-from-the-agent-pane).
 | `k` | Kill the running agent process (keeps session file) |
 | `d` | Delete the focused session (confirms, then finishes in background) |
 | `t` | Open or return to the managed terminal below the Target agent |
-| `T` | Return to that agent's managed Vim viewer, when open |
+| `v` | Return to that agent's managed Vim viewer, when open (`T` alias preserved) |
 | `m` | Open the agent Mode picker |
 | `o` | Open persistent Railmux options |
 | `␣` | Preview canonical history for the selected stopped or running session |
