@@ -4,6 +4,8 @@ is exercised here (tmux itself is stubbed) — the option round-trip, the forced
 redraw, and the actual colour rendering are verified manually against a
 throwaway tmux session.
 """
+from __future__ import annotations
+
 from unittest.mock import MagicMock
 
 from railmux.ui.app import (
