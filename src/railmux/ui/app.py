@@ -334,7 +334,7 @@ def _format_running_status_pill(
             (counts[0], "#b80000"),  # blocked (deep red on grass green)
             (counts[1], "#00e5ff"),  # done unread (saturated cyan on grass green)
             (counts[2], "#ffff5f"),  # busy (bright yellow on grass green)
-            (counts[3], "#004d00"),  # idle (deep forest green on grass green)
+            (counts[3], "#98ff98"),  # idle (cool mint light green on grass green)
         )
         digit_fg = "colour0"
     parts: list[str] = []
