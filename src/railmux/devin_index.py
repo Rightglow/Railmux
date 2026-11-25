@@ -7,12 +7,13 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -267,6 +268,115 @@ def _parse_session(row: object) -> DevinSession | None:
     )
 
 
+_FINAL_PROMPT_TOK_RE = re.compile(r'"total_prompt_tokens"\s*:\s*(\d+)')
+_FINAL_COMPLETION_TOK_RE = re.compile(r'"total_completion_tokens"\s*:\s*(\d+)')
+_PRECEDING_TOK_RE = re.compile(r'"num_tokens_preceding"\s*:\s*(\d+)')
+
+
+def _transcript_tail_tokens(session_id: str) -> int:
+    """Read cumulative tokens from the last 4 KiB of a Devin transcript JSON."""
+    if not _ID.fullmatch(session_id):
+        return 0
+    path = lease_root() / "transcripts" / f"{session_id}.json"
+    if not path.is_file():
+        return 0
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 4096))
+            tail = fh.read().decode("utf-8", errors="ignore")
+    except OSError:
+        return 0
+    if '"final_metrics"' not in tail:
+        return 0
+    section = tail.rsplit('"final_metrics"', 1)[1]
+    prompt_m = _FINAL_PROMPT_TOK_RE.search(section)
+    comp_m = _FINAL_COMPLETION_TOK_RE.search(section)
+    total = (int(prompt_m.group(1)) if prompt_m else 0) + (
+        int(comp_m.group(1)) if comp_m else 0
+    )
+    return total
+
+
+def _read_session_stats(session_ids: set[str]) -> dict[str, tuple[int, int]]:
+    """Best-effort read-only lookup of ``(message_count, token_total)`` for Devin."""
+    if not session_ids:
+        return {}
+    msgs: dict[str, int] = {}
+    tokens: dict[str, int] = {}
+    for sid in session_ids:
+        tok = _transcript_tail_tokens(sid)
+        if tok > 0:
+            tokens[sid] = tok
+
+    db_path = lease_root() / "sessions.db"
+    if db_path.is_file():
+        try:
+            uri = db_path.resolve().as_uri() + "?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=0.3)
+            try:
+                for sid, count in conn.execute(
+                    "SELECT session_id, COUNT(*) FROM prompt_history GROUP BY session_id"
+                ):
+                    if sid in session_ids and isinstance(count, int) and count > 0:
+                        msgs[sid] = count
+                missing_tok = [sid for sid in session_ids if sid not in tokens]
+                if missing_tok:
+                    heads = {
+                        sid: head
+                        for sid, head in conn.execute(
+                            "SELECT id, main_chain_id FROM sessions"
+                        )
+                        if sid in session_ids
+                    }
+                    for sid in missing_tok:
+                        head = heads.get(sid)
+                        row = conn.execute(
+                            "SELECT metadata FROM message_nodes "
+                            "WHERE session_id = ? AND row_id <= ? "
+                            "AND metadata LIKE '%num_tokens_preceding%' "
+                            "ORDER BY row_id DESC LIMIT 1",
+                            (sid, head if isinstance(head, int) else 10**12),
+                        ).fetchone()
+                        if row and isinstance(row[0], str):
+                            m = _PRECEDING_TOK_RE.search(row[0])
+                            if m:
+                                tokens[sid] = int(m.group(1))
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError):
+            pass
+
+    return {
+        sid: (msgs.get(sid, 0), tokens.get(sid, 0))
+        for sid in session_ids
+        if sid in msgs or sid in tokens
+    }
+
+
+def _enrich_session_stats(
+    records: dict[str, DevinSession],
+) -> dict[str, DevinSession]:
+    """Attach real message and token counts to scanned Devin sessions."""
+    stats = _read_session_stats(set(records))
+    if not stats:
+        return records
+    enriched: dict[str, DevinSession] = {}
+    for sid, rec in records.items():
+        pair = stats.get(sid)
+        if pair is None:
+            enriched[sid] = rec
+        else:
+            msg_count, tok_total = pair
+            enriched[sid] = DevinSession(
+                replace(rec.meta, message_count=msg_count, token_total=tok_total),
+                rec.locked,
+                rec.holder_pid,
+            )
+    return enriched
+
+
 def scan(binary: str) -> dict[str, DevinSession]:
     """Collect a complete paginated generation, bounded even for a stalled CLI."""
     with subprocess.Popen(
@@ -310,7 +420,7 @@ def scan(binary: str) -> dict[str, DevinSession]:
                         records.setdefault(record.meta.session_id, record)
                 cursor = page.get("nextCursor")
                 if cursor is None:
-                    return records
+                    return _enrich_session_stats(records)
                 if not isinstance(cursor, str) or not cursor or cursor in seen:
                     raise ValueError("Invalid ACP pagination cursor")
                 seen.add(cursor)

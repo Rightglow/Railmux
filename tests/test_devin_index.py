@@ -257,6 +257,65 @@ def test_devin_classify_pane_status_positive_and_negative(lines, expected):
     assert devin_index.classify_pane_status(lines) == expected
 
 
+def test_devin_enrich_session_stats_reads_prompts_and_tokens(tmp_path, monkeypatch):
+    import json
+    import sqlite3
+
+    data_root = tmp_path / "share"
+    cli_dir = data_root / "devin" / "cli"
+    tdir = cli_dir / "transcripts"
+    tdir.mkdir(parents=True)
+    monkeypatch.setenv("XDG_DATA_HOME", str(data_root))
+
+    # Session A has final_metrics in transcript JSON + prompt_history in SQLite.
+    (tdir / "sess-a.json").write_text(
+        json.dumps({
+            "session_id": "sess-a",
+            "final_metrics": {
+                "total_prompt_tokens": 120000,
+                "total_completion_tokens": 4500,
+            },
+        }),
+        encoding="utf-8",
+    )
+    # Session B has no transcript file yet -> falls back to num_tokens_preceding in sessions.db.
+    db_path = cli_dir / "sessions.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, main_chain_id INTEGER)")
+    conn.execute("CREATE TABLE prompt_history (session_id TEXT, prompt TEXT)")
+    conn.execute(
+        "CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, metadata TEXT)"
+    )
+    conn.execute("INSERT INTO sessions VALUES ('sess-a', 10), ('sess-b', 20)")
+    conn.executemany(
+        "INSERT INTO prompt_history VALUES (?, ?)",
+        [("sess-a", "p1"), ("sess-a", "p2"), ("sess-a", "p3"), ("sess-b", "q1")],
+    )
+    conn.execute(
+        "INSERT INTO message_nodes VALUES (15, 'sess-b', '{\"num_tokens_preceding\": 42000}')"
+    )
+    conn.commit()
+    conn.close()
+
+    proj = devin_index.project_for(tmp_path)
+    records = {
+        "sess-a": devin_index.DevinSession(
+            devin_index.SessionMeta(proj, "sess-a", tmp_path, "A", 0, 0, 1.0, session_type="devin"),
+            False, None,
+        ),
+        "sess-b": devin_index.DevinSession(
+            devin_index.SessionMeta(proj, "sess-b", tmp_path, "B", 0, 0, 1.0, session_type="devin"),
+            False, None,
+        ),
+    }
+    enriched = devin_index._enrich_session_stats(records)
+    assert enriched["sess-a"].meta.message_count == 3
+    assert enriched["sess-a"].meta.token_total == 124500
+    assert enriched["sess-b"].meta.message_count == 1
+    assert enriched["sess-b"].meta.token_total == 42000
+
+
+
 def test_devin_delete_context_menu_and_worker(monkeypatch):
     import threading
     from types import SimpleNamespace
