@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2.dev6] - 2026-11-25
+
+### Fixed
+
+- Stop double-clicking a stopped session from synchronously launching and
+  tearing down a Preview pane on click 1 (keeping zero-delay single-click
+  attach for already-running sessions), preventing missed double-clicks and
+  redundant preview overhead over SSH.
+- Push a bounded `ORDER BY row_id DESC LIMIT 400` tail query (with
+  `immutable=1` fallback when `sessions.db` is busy) into SQLite for Devin
+  fallback transcript previews, cutting multi-thousand-node preview latency
+  from ~13s to well under 1s.
+
+### Changed
+
+- Show immediate `Resuming Devin session…` status feedback when launching a
+  Devin resume so cold-start progress is clear immediately.
+
 ## [0.5.2.dev5] - 2026-11-25
 
 ### Added

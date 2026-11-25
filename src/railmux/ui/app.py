@@ -5901,6 +5901,7 @@ class App:
             except ValueError as exc:
                 self._set_status(str(exc), "error")
                 return False
+            self._set_status(f"Resuming {mode.label} session…")
         elif mode == CODEX_MODE:
             cmd = build_codex_resume_command(
                 codex_binary=binary,

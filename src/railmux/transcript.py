@@ -939,6 +939,9 @@ def _render_devin_tool_calls(calls: object) -> list[str]:
     return out
 
 
+_DEVIN_SQLITE_DEFAULT_LIMIT = 400
+
+
 def _format_devin_transcript(
     source: Path | object,
     *,
@@ -951,23 +954,38 @@ def _format_devin_transcript(
             return
         import sqlite3
 
-        uri = f"{source.resolve().as_uri()}?mode=ro"
-        try:
-            con = sqlite3.connect(uri, uri=True, timeout=2.0)
-        except sqlite3.Error:
+        limit = (
+            preview_limit
+            if preview_limit is not None else _DEVIN_SQLITE_DEFAULT_LIMIT
+        )
+        rows: list[tuple[str]] = []
+        truncated = False
+        base_uri = source.resolve().as_uri()
+        for suffix in ("?mode=ro", "?mode=ro&immutable=1"):
+            try:
+                con = sqlite3.connect(f"{base_uri}{suffix}", uri=True, timeout=0.5)
+            except sqlite3.Error:
+                continue
+            try:
+                fetched = con.execute(
+                    "SELECT chat_message FROM message_nodes WHERE session_id = ? "
+                    "ORDER BY row_id DESC LIMIT ?",
+                    (session_id, limit + 1),
+                ).fetchall()
+                truncated = len(fetched) > limit
+                rows = list(reversed(fetched[:limit]))
+                break
+            except sqlite3.Error:
+                continue
+            finally:
+                con.close()
+        if not rows:
             return
-        try:
-            rows = con.execute(
-                "SELECT chat_message FROM message_nodes WHERE session_id = ? "
-                "ORDER BY row_id ASC",
-                (session_id,),
-            ).fetchall()
-        except sqlite3.Error:
-            return
-        finally:
-            con.close()
-        if preview_limit is not None and len(rows) > preview_limit:
-            rows = rows[-preview_limit:]
+        if truncated:
+            yield (
+                f"{DIM}(showing latest {limit} Devin messages — "
+                f"earlier history omitted for fast preview){RESET}\n"
+            )
         for (raw_msg,) in rows:
             try:
                 msg = json.loads(raw_msg)

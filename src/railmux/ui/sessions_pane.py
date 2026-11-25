@@ -195,12 +195,14 @@ class _SessionRow(ClickableRow):
             row_attr = "live"
         else:
             row_attr = None
-        # Immediate preview keeps single-click latency low; a following double
-        # click reuses the preview pane when it opens the session.
+        # Running rows attach immediately on first press; stopped rows defer
+        # single-click Preview until the double-click window elapses so
+        # double-clicking to resume never wastes a synchronous preview launch
+        # or misses the double-click interval over SSH.
         super().__init__(urwid.AttrMap(body, row_attr, focus_map=_FOCUS_REMAP),
                          on_click, on_double_click, on_right_click,
                          click_key=session.session_id,
-                         immediate_click=True)
+                         immediate_click=is_running)
 
 
 class _NewSessionRow(ClickableRow):

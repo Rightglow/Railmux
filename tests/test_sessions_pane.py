@@ -805,3 +805,17 @@ def test_session_title_no_longer_renders_live_badge():
     row = next(w for w in pane._walker if isinstance(w, _SessionRow))
     title = row._wrapped_widget.base_widget.contents[0][0].text
     assert "[LIVE]" not in title
+
+
+def test_stopped_session_defers_preview_while_running_session_attaches_immediately():
+    proj = _project()
+    stopped = _session(proj, session_id="a" * 36, title="Stopped")
+    live = _session(proj, session_id="b" * 36, title="Live")
+    pane = SessionsPane(on_select=lambda s: None, on_preview=lambda s: None)
+    pane.set_sessions(proj, [stopped, live], running_ids={live.session_id})
+    rows = {
+        w.session.session_id: w
+        for w in pane._walker if isinstance(w, _SessionRow)
+    }
+    assert rows[stopped.session_id]._immediate_click is False
+    assert rows[live.session_id]._immediate_click is True
