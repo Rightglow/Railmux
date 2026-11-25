@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2.dev5] - 2026-11-25
+
+### Added
+
+- Populate real Devin `msg` and `tok` counts in **Sessions** from read-only
+  `sessions.db` (`prompt_history` / `num_tokens_preceding`) and transcript
+  `final_metrics` tails, and display Devin `model` and `ACU cost` in the
+  `Info (i)` modal.
+- Rank `Search (g)` results by Running > Starred > title prefix / word /
+  substring > fuzzy > recency, and append a `Showing 80 of N` footer when
+  truncated.
+- Add **New session (`n`)** to the Projects right-click menu.
+
+### Changed
+
+- Use cool mint light green (`#98ff98`) for the bottom-left `idle` status dot
+  on the grass-green bar.
+- Bind `v` (with `V`/`T` aliases preserved) to return to the managed Vim viewer
+  and align `keymap.py` and `README.md` with `F9 sidebar`, `z`, `v`, and `>`.
+
+### Fixed
+
+- Resolve all Fable 5.2 peer-review findings (`F1`–`F8`): fix `> Switch mode`
+  command crash (`_switch_mode`), migrate v9/v10 4-key status-click leases
+  cleanly to v12 (including `Ctrl-B Tab` restoring a detached sidebar), derive
+  detached sidebar state from tmux and rejoin on `F8`/teardown, store pane
+  headers in `@railmux_header` with `-u` cleanup, strip trailing blanks and
+  bound transient holds in Devin live status, gate `F10` behind open modals,
+  and validate Devin footer markers before click-to-cursor arrows.
+
 ## [0.5.2.dev4] - 2026-11-23
 
 ### Fixed

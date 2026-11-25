@@ -1834,7 +1834,7 @@ def test_project_context_menu_has_only_requested_actions(tmp_path):
     menu = app._show_overlay.call_args.args[0]
     labels = [row._wrapped_widget.base_widget.text for row in menu._walker]
     assert [label.split()[0] for label in labels] == [
-        "Copy", "Star", "Info", "Term",
+        "New", "Copy", "Star", "Info", "Term",
     ]
     assert all(
         forbidden not in " ".join(labels)
