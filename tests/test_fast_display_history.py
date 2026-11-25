@@ -2425,6 +2425,14 @@ def test_uncoordinated_devin_revert_drops_reverted_turns_instead_of_resurrecting
     assert b"turn-80" not in merged_partial.lines
 
 
+def test_local_history_route_at_maps_1_based_sgr_event():
+    view = LocalHistoryView()
+    route = HistorySnapshot(1, "%9", 30, 0, 80, 24, (b"row",))
+    view.visible_routes = (route,)
+    assert view.route_at(SgrMouseEvent(b"", 0, 31, 1, False)) is route
+    assert view.route_at(SgrMouseEvent(b"", 0, 10, 1, False)) is None
+
+
 def test_codex_history_pins_the_prompt_for_the_visible_turn_without_shifting_links():
     from railmux.fast_display_input import _pane_rows, _target_in_rows
     from railmux.fast_display_protocol import ServerMessageDecoder, encode_history_batch

@@ -313,32 +313,36 @@ def _format_running_status_pill(
     *,
     error: bool,
 ) -> tuple[str, int]:
-    """Render compact non-zero running counts inside a dark pill for status-left.
+    """Render compact non-zero running counts inside a recessed pill for status-left.
 
-    *counts* is ``(blocked, done, busy, idle)``. Returns ``(tmux_markup, visible_cells)``.
+    *counts* is ``(blocked, done, busy, idle)``. Uses the same crisp ``•`` dot
+    glyph as the Running pane, colored dots with soft-white counts on a deep
+    forest-green pill (or deep burgundy on error) that harmonizes with the bar.
+    Returns ``(tmux_markup, visible_cells)``.
     """
     if not counts or not any(counts):
         return "", 0
     specs = (
-        (counts[0], "#ff5f5f"),  # blocked (red)
+        (counts[0], "#ff6b6b"),  # blocked (red)
         (counts[1], "#00e5ff"),  # done unread (cyan)
         (counts[2], "#ffd700"),  # busy (yellow)
-        (counts[3], "#5faf00"),  # idle (green)
+        (counts[3], "#7ce63b"),  # idle (bright grass green)
     )
     parts: list[str] = []
     visible = 1  # leading space inside pill
     for count, color in specs:
         if count <= 0:
             continue
-        token = f"●{count}"
-        parts.append(f"#[fg={color},bold]{token}#[nobold]")
-        visible += len(token) + 1  # token + trailing space
+        digits = str(count)
+        parts.append(f"#[fg={color},bold]•#[fg=#edf5ee,nobold]{digits}")
+        visible += 1 + len(digits) + 1  # dot + digits + trailing space
     if not parts:
         return "", 0
     bar_bg = "colour52" if error else _GRASS_GREEN
     bar_fg = "colour231" if error else "colour0"
+    pill_bg = "#3a0e0e" if error else "#1b4214"
     inner = " ".join(parts)
-    markup = f"#[bg=#1c2220] {inner} #[bg={bar_bg},fg={bar_fg}]"
+    markup = f"#[bg={pill_bg}] {inner} #[bg={bar_bg},fg={bar_fg}]"
     return markup, visible
 
 
@@ -3487,15 +3491,9 @@ class App:
         running = self._by_tmux(tmux_name) if tmux_name else None
         if running is None:
             return "Agent"
-        dot = {
-            "blocked": "●",
-            "done": "●",
-            "busy": "●",
-            "idle": "●",
-        }.get(running.status, "●")
         provider = self._modes().resolve(running.session_type).label
         label = running.label or running.tmux_name
-        return f"{dot} {provider} · {label}"
+        return f"• {provider} · {label}"
 
     def _sync_pane_headers(self) -> None:
         """Update top pane breadcrumb headers according to Options -> Agent pane headers."""

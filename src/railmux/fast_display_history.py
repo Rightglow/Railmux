@@ -720,8 +720,11 @@ class LocalHistoryView:
         self.content_cache.clear()
         self._unverified_after_reconnect.clear()
 
-    def _route_at(self, event: SgrMouseEvent) -> HistorySnapshot | None:
+    def route_at(self, event: SgrMouseEvent) -> HistorySnapshot | None:
         return self._route_at_position(event.x - 1, event.y - 1)
+
+    def _route_at(self, event: SgrMouseEvent) -> HistorySnapshot | None:
+        return self.route_at(event)
 
     @staticmethod
     def _contains_position(

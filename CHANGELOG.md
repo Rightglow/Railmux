@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2.dev2] - 2026-11-23
+
+### Fixed
+
+- Fix `AttributeError: 'LocalHistoryView' object has no attribute
+  'route_at_position'` crash when clicking inside a non-mouse-reporting pane
+  over `railmux ssh`, and align 1-based SGR click coordinates to 0-based pane
+  cells for Devin prompt cursor positioning.
+
+### Changed
+
+- Refine the bottom-left running status pill to use a harmonious deep
+  forest-green fill (`#1b4214` on green bar / `#3a0e0e` on error bar), crisp
+  small `•` bullets matching the Running pane, and soft-white count digits.
+
 ## [0.5.2.dev1] - 2026-11-23
 
 ### Added

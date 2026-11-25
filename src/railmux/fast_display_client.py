@@ -3191,7 +3191,7 @@ def run(args: argparse.Namespace) -> int:
                     and latest_screen is not None
                     and not history.active
                 ):
-                    click_route = history.route_at_position(part.x, part.y)
+                    click_route = history.route_at(part)
                     if (
                         click_route is not None
                         and click_route.pane_id == focused_pane_id
@@ -3203,8 +3203,8 @@ def run(args: argparse.Namespace) -> int:
                             _pane_rows(latest_screen.rows, click_route),
                             latest_screen.cursor_y - click_route.y,
                             latest_screen.cursor_x - click_route.x,
-                            part.y - click_route.y,
-                            part.x - click_route.x,
+                            (part.y - 1) - click_route.y,
+                            (part.x - 1) - click_route.x,
                         )
                         if cursor_keys:
                             send_protocol_frame(encode_input(cursor_keys))

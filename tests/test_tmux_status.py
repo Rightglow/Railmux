@@ -291,8 +291,11 @@ def test_status_left_pure_function():
         False, "Devin", "◨", sidebar_hidden=True, running_counts=(1, 2, 0, 3),
     )
     assert "▢ · ◨ · Devin" in hidden_with_counts
-    assert "●1" in hidden_with_counts and "●2" in hidden_with_counts and "●3" in hidden_with_counts
-    assert "●0" not in hidden_with_counts
+    assert "#[bg=#1b4214]" in hidden_with_counts
+    assert "•#[fg=#edf5ee,nobold]1" in hidden_with_counts
+    assert "•#[fg=#edf5ee,nobold]2" in hidden_with_counts
+    assert "•#[fg=#edf5ee,nobold]3" in hidden_with_counts
+    assert "•#[fg=#edf5ee,nobold]0" not in hidden_with_counts
 
 
 def test_wide_status_left_wraps_mode_and_layout_as_separate_actions():
