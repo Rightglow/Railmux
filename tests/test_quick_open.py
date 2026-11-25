@@ -86,7 +86,7 @@ def test_running_scope_and_quick_open_keep_foreign_and_unavailable_live_agents()
     assert app._running_pane.section_count == "2"
 
     choices = app._quick_open_choices((star,))
-    assert [choice.provider for choice in choices] == ["Devin", "Codex", "Claude Code"]
+    assert [choice.provider for choice in choices] == ["Devin", "Codex", "Claude"]
     assert choices[-1].starred
     choices[-1].on_open()
     app._on_session_select.assert_called_once_with(star)
@@ -128,3 +128,35 @@ def test_quick_open_highlights_provider_workspace_state_and_matched_terms():
     assert "search_match" in attrs_by_text.get("fp8", set())
     assert "search_provider_codex" in attrs_by_text.get("Codex", set())
     assert "search_workspace" in attrs_by_text.get("railmux", set())
+
+
+def test_quick_open_command_palette_triggers_on_gt_and_executes_selected():
+    from railmux.ui.quick_open import CommandChoice
+
+    ran: list[str] = []
+    close = Mock()
+    commands = [
+        CommandChoice("Toggle left sidebar", "F9", "Hide or show sidebar", lambda: ran.append("sidebar")),
+        CommandChoice("Cycle layout", "F8", "Single or split", lambda: ran.append("layout")),
+    ]
+    choices = [
+        SessionChoice(("saved", "devin", "dv-1"), "Tune fp8", "Devin", "workspace", "Saved", Mock()),
+    ]
+    modal = QuickOpen(choices, close, "Pane 1", commands=commands)
+    size = (70, 14)
+
+    # Empty query shows hint row while keeping the first real session selectable.
+    initial = b"\n".join(modal.render(size, focus=True).text).decode()
+    assert "Tip: type >" in initial
+    assert "› [Devin · Saved]" in initial
+
+    # Typing ">" immediately switches into command palette (no space required).
+    for ch in ">lay":
+        modal.keypress(size, ch)
+    palette = b"\n".join(modal.render(size, focus=True).text).decode()
+    assert "Cycle layout" in palette
+    assert "Toggle left sidebar" not in palette
+
+    modal.keypress(size, "enter")
+    close.assert_called_once_with()
+    assert ran == ["layout"]

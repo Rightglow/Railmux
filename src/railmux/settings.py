@@ -34,7 +34,7 @@ MANAGED_CONFIG_KEYS: dict[str, tuple[str, ...]] = {
     "live": ("poll_interval_ms", "agent_transport"),
     "interaction": (
         "history_lines", "claude_history", "codex_history", "devin_history",
-        "path_open", "notification_sound",
+        "path_open", "notification_sound", "pane_headers",
     ),
     "ssh": ("history_lines", "claude_history", "path_open"),
 }
@@ -348,6 +348,20 @@ class Settings:
         return self._set_choice_policy(
             "interaction", "notification_sound",
             "interaction.notification_sound", policy,
+        )
+
+    # -- Top pane breadcrumb headers (auto when sidebar hidden) ---------
+    @property
+    def pane_headers_policy(self) -> str:
+        return self._choice_policy(
+            "interaction", "pane_headers",
+            "interaction.pane_headers", default="auto",
+        )
+
+    def set_pane_headers_policy(self, policy: str) -> bool:
+        return self._set_choice_policy(
+            "interaction", "pane_headers",
+            "interaction.pane_headers", policy,
         )
 
     # -- Saved outer-workspace geometry ---------------------------------

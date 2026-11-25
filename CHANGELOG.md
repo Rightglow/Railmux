@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2.dev1] - 2026-11-23
+
+### Added
+
+- **True F9 Toggle Sidebar**: pressing `F9` or clicking the bottom-left `◧` /
+  `▢` toggle hides and restores only the left sidebar — keeping dual-pane
+  splits intact via detached break/join — and persists hidden state across
+  soft quit restarts.
+- **Compact bottom control cluster (`◧ · ◫ · Mode  [●1 ●2 ●3]`)**: removed the
+  redundant `"railmux"` brand from `status-left`, anchored the sidebar and
+  layout toggles to fixed bottom-left coordinates, and added a clickable dark
+  running-status pill (`blocked` / `done` / `busy` / `idle`) that restores the
+  sidebar and jumps to **Running**.
+- **Auto Agent Pane Headers**: show a compact 1-row breadcrumb title above
+  each visible agent pane automatically while the left sidebar is hidden
+  (configurable as `Auto / Always / Off` in Options and `config.toml`).
+- **Search (`g`) highlights & `>` Command Palette**: colorize CLI, state,
+  workspace, and matched keywords in Search results, add a subtle empty-query
+  tip, and trigger an interactive command palette immediately on typing `>`.
+- **Devin prompt click-to-move-cursor**: single-clicking inside a focused
+  Devin prompt box over `railmux ssh` positions the cursor conservatively
+  (CJK-width aware) without interfering with drag selection or link clicks.
+
+### Changed
+
+- Shorten the Claude UI mode label from `"Claude Code"` to `"Claude"` across
+  the status bar, sidebar, Search, Options, Help, and tips.
+
+### Fixed
+
+- Prevent busy Devin sessions from briefly flashing a false cyan `done` dot
+  during pane swaps or transient `SIGWINCH` redraws.
+
 ## [0.5.1] - 2026-11-23
 
 ### Added

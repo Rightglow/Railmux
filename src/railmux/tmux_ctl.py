@@ -386,6 +386,79 @@ def capture_pane_visible(target: str) -> list[str] | None:
     return result.stdout.splitlines()
 
 
+def break_pane_detached(pane_id: str) -> str | None:
+    """Move *pane_id* into a detached background window and return its window id."""
+    try:
+        out = subprocess.check_output(
+            ["tmux", "break-pane", "-d", "-P", "-F", "#{window_id}",
+             "-s", pane_id],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+        return out or None
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def join_pane_left(
+    source_pane_id: str,
+    target_pane_id: str,
+    width: int,
+) -> bool:
+    """Dock *source_pane_id* back onto the full-height left edge of *target_pane_id*."""
+    args = [
+        "tmux", "join-pane", "-h", "-b", "-f",
+        "-l", str(max(12, int(width))),
+        "-s", source_pane_id,
+        "-t", target_pane_id,
+    ]
+    try:
+        subprocess.check_call(
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def set_window_pane_border_status(target: str, enabled: bool) -> bool:
+    """Toggle top pane breadcrumb headers on *target*'s tmux window."""
+    try:
+        if enabled:
+            fmt = (
+                "#{?pane_active,"
+                "#[fg=colour82,bold] #{pane_title} #[default],"
+                "#[fg=colour245] #{pane_title} #[default]}"
+            )
+            subprocess.check_call(
+                ["tmux", "set-window-option", "-t", target,
+                 "pane-border-status", "top", ";",
+                 "set-window-option", "-t", target,
+                 "pane-border-format", fmt],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.check_call(
+                ["tmux", "set-window-option", "-t", target,
+                 "pane-border-status", "off"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def set_pane_title(pane_id: str, title: str) -> bool:
+    """Set tmux's ``pane_title`` metadata shown in top pane border headers."""
+    try:
+        subprocess.check_call(
+            ["tmux", "select-pane", "-t", pane_id, "-T", title],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def ring_session_bell(session_name: str) -> bool:
     """Write a non-blocking BEL (``\\x07``) to every attached outer client tty.
 
@@ -2239,6 +2312,8 @@ _ROOT_TERMUX_TAP_MARKER = "railmux-termux-tap-v1"
 STATUS_ACTION_MODE = "railmux-mode"
 STATUS_ACTION_LAYOUT = "railmux-layout"
 STATUS_ACTION_COPY = "railmux-copy"
+STATUS_ACTION_SIDEBAR = "railmux-sidebar"
+STATUS_ACTION_RUNNING = "railmux-running"
 STATUS_ACTION_PAGE_SIDEBAR = "railmux-page-r"
 STATUS_ACTION_PAGE_PRIMARY = "railmux-page-1"
 STATUS_ACTION_PAGE_SECONDARY = "railmux-page-2"
@@ -2246,6 +2321,8 @@ _ROOT_STATUS_ACTION_KEYS = {
     STATUS_ACTION_MODE: "MouseDown1Control0",
     STATUS_ACTION_LAYOUT: "MouseDown1Control1",
     STATUS_ACTION_COPY: "MouseDown1Control2",
+    STATUS_ACTION_SIDEBAR: "MouseDown1Control3",
+    STATUS_ACTION_RUNNING: "MouseDown1Control4",
 }
 _ROOT_STATUS_CLICK_KEYS = (
     _ROOT_STATUS_CLICK_KEY,
@@ -2255,6 +2332,8 @@ _STATUS_ACTIONS = frozenset({
     STATUS_ACTION_MODE,
     STATUS_ACTION_LAYOUT,
     STATUS_ACTION_COPY,
+    STATUS_ACTION_SIDEBAR,
+    STATUS_ACTION_RUNNING,
     STATUS_ACTION_PAGE_SIDEBAR,
     STATUS_ACTION_PAGE_PRIMARY,
     STATUS_ACTION_PAGE_SECONDARY,
@@ -3256,6 +3335,8 @@ def _set_root_status_control_forwarding(
         STATUS_ACTION_MODE: "F5",
         STATUS_ACTION_LAYOUT: "F7",
         STATUS_ACTION_COPY: "F6",
+        STATUS_ACTION_SIDEBAR: "F9",
+        STATUS_ACTION_RUNNING: "F10",
     }
     condition = (
         "#{&&:"
@@ -3307,6 +3388,10 @@ def set_root_status_click_forwarding(
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F7 ;; '
             f'{STATUS_ACTION_COPY}) {_tmux_shell_executable()} send-keys -t '
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F6 ;; '
+            f'{STATUS_ACTION_SIDEBAR}) {_tmux_shell_executable()} send-keys -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F9 ;; '
+            f'{STATUS_ACTION_RUNNING}) {_tmux_shell_executable()} send-keys -t '
+            f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' F10 ;; '
             f'{STATUS_ACTION_PAGE_SIDEBAR}) '
             f'{_tmux_shell_executable()} send-keys -l -t '
             f'\'#{{{RAILMUX_CONTROLLER_OPTION}}}\' -- '

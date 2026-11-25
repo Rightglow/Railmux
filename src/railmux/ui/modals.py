@@ -450,7 +450,7 @@ class HelpModal(urwid.WidgetWrap):
             ("t", "Open a terminal in the active project"),
             ("␣", "Preview saved session history"),
             ("F8", "Cycle layout: single / side-by-side / stacked"),
-            ("F9", "Fullscreen the focused agent / terminal / Vim (toggle)"),
+            ("F9", "Toggle left sidebar (hide/show; keeps splits intact)"),
             ("q or Ctrl-C", "Quit railmux (prompts for confirmation)"),
         ]),
         ("Across agents", [
@@ -473,7 +473,7 @@ class HelpModal(urwid.WidgetWrap):
             ("Drag-select",
              "OSC 52 terminals copy to local clipboard automatically"),
             ("F9",
-             "Fullscreen agent → Shift-drag select → Cmd/Ctrl+C → F9"),
+             "Hide sidebar → Shift-drag select → Cmd/Ctrl+C → F9"),
         ]),
         ("tmux", [
             ("Ctrl-B Tab", "Toggle between sidebar and the Target pane"),
@@ -906,7 +906,7 @@ class OptionsModal(urwid.WidgetWrap):
         "claude_history": {
             "local": "use Railmux scrollback",
             "ask": "choose on first upward scroll",
-            "native": "use Claude Code's clickable history",
+            "native": "use Claude's clickable history",
         },
         "codex_history": {
             "local": "styled scrollback with transcript fallback",
@@ -925,6 +925,11 @@ class OptionsModal(urwid.WidgetWrap):
     _SOUND_LABELS = (
         ("off", "Off"),
         ("on", "On"),
+    )
+    _PANE_HEADER_LABELS = (
+        ("auto", "Auto (when sidebar hidden)"),
+        ("always", "Always"),
+        ("off", "Off"),
     )
 
     @classmethod
@@ -946,6 +951,7 @@ class OptionsModal(urwid.WidgetWrap):
         devin_history_policy: str = "local",
         devin_bypass_policy: str = "never",
         notification_sound_policy: str = "off",
+        pane_headers_policy: str = "auto",
         on_layout_policy: Callable[[str], bool],
         on_yolo_policy: Callable[[str], bool],
         on_update_policy: Callable[[str], bool],
@@ -956,6 +962,7 @@ class OptionsModal(urwid.WidgetWrap):
         on_devin_history_policy: Callable[[str], bool] | None = None,
         on_devin_bypass_policy: Callable[[str], bool] | None = None,
         on_notification_sound_policy: Callable[[str], bool] | None = None,
+        on_pane_headers_policy: Callable[[str], bool] | None = None,
     ) -> None:
         self._on_close = on_close
         self._mode_choices = mode_choices
@@ -969,6 +976,7 @@ class OptionsModal(urwid.WidgetWrap):
             "devin_history": devin_history_policy,
             "path_open": path_open_policy,
             "notification_sound": notification_sound_policy,
+            "pane_headers": pane_headers_policy,
         }
         self._callbacks = {
             "layout": on_layout_policy,
@@ -980,6 +988,7 @@ class OptionsModal(urwid.WidgetWrap):
             "devin_history": on_devin_history_policy or (lambda _policy: False),
             "path_open": on_path_open_policy,
             "notification_sound": on_notification_sound_policy or (lambda _policy: False),
+            "pane_headers": on_pane_headers_policy or (lambda _policy: False),
         }
         self._option_rows: dict[str, list[_OptionRow]] = {}
         self._history_links: dict[str, urwid.Button] = {}
@@ -1090,6 +1099,22 @@ class OptionsModal(urwid.WidgetWrap):
                 "on": "ring terminal bell on background finish or approval prompt",
             },
             labels=self._SOUND_LABELS,
+        ))
+        rows.extend([
+            urwid.Divider(),
+            urwid.Text(("title", "Agent pane headers")),
+            urwid.Text(
+                "Show a compact title strip above each visible agent pane."
+            ),
+        ])
+        rows.extend(self._build_group(
+            "pane_headers",
+            {
+                "auto": "show automatically while the left sidebar is hidden",
+                "always": "always show above agent panes",
+                "off": "never show agent pane headers",
+            },
+            labels=self._PANE_HEADER_LABELS,
         ))
         rows.extend([
             urwid.Divider(),

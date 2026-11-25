@@ -16,6 +16,7 @@ LIVE_HISTORY_POLICIES = frozenset({"local", "native"})
 CODEX_HISTORY_POLICIES = LIVE_HISTORY_POLICIES
 PATH_OPEN_POLICIES = frozenset({"ask", "internal", "external"})
 NOTIFICATION_SOUND_POLICIES = frozenset({"off", "on"})
+PANE_HEADER_POLICIES = frozenset({"auto", "always", "off"})
 HISTORY_MIN_LINES = 2000
 HISTORY_MAX_LINES = 20000
 HISTORY_DEFAULT_LINES = 10000
@@ -71,6 +72,11 @@ SETTING_CONTRACTS = {
         "interaction.notification_sound",
         ("immediate",),
         choices=NOTIFICATION_SOUND_POLICIES,
+    ),
+    "interaction.pane_headers": SettingContract(
+        "interaction.pane_headers",
+        ("immediate",),
+        choices=PANE_HEADER_POLICIES,
     ),
     # Released 0.3.x/0.4.0 prereleases wrote this key. Keep it as a validated
     # read alias while new writes converge on the transport-neutral setting.

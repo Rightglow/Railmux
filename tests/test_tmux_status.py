@@ -10,8 +10,6 @@ from railmux.ui.app import (
     App,
     _TMUX_BAR_STYLE_NORMAL,
     _TMUX_BAR_STYLE_ERROR,
-    _TMUX_BRAND_NORMAL,
-    _TMUX_BRAND_ERROR,
     _TMUX_LEVEL_STYLE,
     _compact_tmux_status_left,
     _tmux_status_left,
@@ -265,7 +263,7 @@ def test_status_left_shows_current_mode(monkeypatch):
 
     _status_app(codex_mode=False)._apply_tmux_bar(error=False)
     claude_left = _style_calls(run, "status-left")[-1]
-    assert "Claude Code" in claude_left and "Codex" not in claude_left
+    assert "Claude" in claude_left and "Codex" not in claude_left
 
     run.reset_mock()
     _status_app(codex_mode=True)._apply_tmux_bar(error=False)
@@ -275,21 +273,24 @@ def test_status_left_shows_current_mode(monkeypatch):
 
 
 def test_status_left_pure_function():
-    # Brand prefix stays; the mode segment is in the same weight as tips (no bold).
     normal = _tmux_status_left(False, False)
-    assert normal.startswith(_TMUX_BRAND_NORMAL)
-    assert normal.endswith("· Claude Code #[default]")
-    assert "bold" not in normal
+    assert "◧ · Claude #[default]" in normal
+    assert "Railmux" not in normal
     error = _tmux_status_left(True, True)
-    assert error.startswith(_TMUX_BRAND_ERROR)
-    assert error.endswith("· Codex #[default]")
+    assert "◧ · Codex #[default]" in error
 
     third = _tmux_status_left(False, "Review Agent")
-    assert third.endswith("· Review Agent #[default]")
-    assert "bold" not in error
+    assert "◧ · Review Agent #[default]" in third
 
     with_layout = _tmux_status_left(False, "Codex", "◨")
-    assert with_layout.endswith("· Codex · ◨ #[default]")
+    assert "◧ · ◨ · Codex #[default]" in with_layout
+
+    hidden_with_counts = _tmux_status_left(
+        False, "Devin", "◨", sidebar_hidden=True, running_counts=(1, 2, 0, 3),
+    )
+    assert "▢ · ◨ · Devin" in hidden_with_counts
+    assert "●1" in hidden_with_counts and "●2" in hidden_with_counts and "●3" in hidden_with_counts
+    assert "●0" not in hidden_with_counts
 
 
 def test_wide_status_left_wraps_mode_and_layout_as_separate_actions():
@@ -299,30 +300,36 @@ def test_wide_status_left_wraps_mode_and_layout_as_separate_actions():
         wrapped.append((action, content))
         return f"<{action}>{content}</{action}>"
 
-    value = _tmux_status_left(False, "Claude Code", "◧", wrap)
+    value = _tmux_status_left(
+        False, "Claude", "◧", wrap, running_counts=(0, 1, 2, 0),
+    )
 
-    assert wrapped == [
-        ("railmux-mode", "Claude Code"),
-        ("railmux-layout", "◧"),
+    assert [a for a, _c in wrapped] == [
+        "railmux-sidebar",
+        "railmux-layout",
+        "railmux-mode",
+        "railmux-running",
     ]
-    assert "<railmux-mode>Claude Code</railmux-mode>" in value
+    assert "<railmux-sidebar>◧</railmux-sidebar>" in value
     assert "<railmux-layout>◧</railmux-layout>" in value
+    assert "<railmux-mode>Claude</railmux-mode>" in value
+    assert "<railmux-running>" in value
 
 
 def test_compact_status_left_has_stable_phone_navigation_and_mode_abbreviation():
     value, visible = _compact_tmux_status_left(
         False,
-        "Claude Code",
+        "Claude",
         WorkspacePage.PRIMARY,
         ("%1", "%2", "%3"),
         40,
     )
 
     assert "[R]" in value and "[1]" in value and "[2]" in value
-    assert " CC " in value
+    assert " Cl " in value
     assert "#[fg=colour231][1]" in value
     assert "#[fg=colour0][R]" in value
-    assert visible == len("[R][1][2] CC ")
+    assert visible == len("[R][1][2] Cl ")
 
 
 def test_compact_status_left_expands_without_shortening_tip_pool():
@@ -359,12 +366,12 @@ def test_compact_status_left_wraps_mode_and_layout_as_actions():
     )
 
     assert actions == [
-        ("railmux-mode", "CC"),
+        ("railmux-mode", "Cl"),
         ("railmux-layout", "◨"),
     ]
-    assert "<railmux-mode>CC</railmux-mode>" in value
+    assert "<railmux-mode>Cl</railmux-mode>" in value
     assert "<railmux-layout>◨</railmux-layout>" in value
-    assert visible == len("[R][1][2] CC · ◨ ")
+    assert visible == len("[R][1][2] Cl · ◨ ")
 
 
 def test_compact_status_left_routes_available_pages_through_controller_actions():
@@ -407,9 +414,9 @@ def test_apply_bar_uses_dynamic_compact_left_length(monkeypatch):
     app._apply_tmux_bar(error=False)
 
     lengths = _style_calls(run, "status-left-length")
-    assert lengths[-1] == str(len("[R][1][2] CC · ▣ "))
+    assert lengths[-1] == str(len("[R][1][2] Cl · ▣ "))
     right_lengths = _style_calls(run, "status-right-length")
-    assert right_lengths[-1] == str(40 - len("[R][1][2] CC · ▣ "))
+    assert right_lengths[-1] == str(40 - len("[R][1][2] Cl · ▣ "))
 
     run.reset_mock()
     app._workspace.presentation = WorkspacePresentation.WIDE
@@ -441,9 +448,9 @@ def test_apply_compact_bar_makes_pages_mode_and_layout_clickable(monkeypatch):
     assert "#[range=user|railmux-page-r]" in left
     assert "#[range=user|railmux-page-1]" in left
     assert "#[range=user|railmux-page-2]" in left
-    assert "#[range=user|railmux-mode]CC#[norange]" in left
+    assert "#[range=user|railmux-mode]Cl#[norange]" in left
     assert "#[range=user|railmux-layout]◨#[norange]" in left
-    visible = len("[R][1][2] CC · ◨ ")
+    visible = len("[R][1][2] Cl · ◨ ")
     assert _style_calls(run, "status-left-length")[-1] == str(visible)
     assert _style_calls(run, "status-right-length")[-1] == str(40 - visible)
 
@@ -462,8 +469,9 @@ def test_apply_wide_bar_makes_mode_and_layout_clickable(monkeypatch):
     app._apply_tmux_bar(error=False)
 
     left = _style_calls(run, "status-left")[-1]
-    assert "#[range=user|railmux-mode]Claude Code#[norange]" in left
+    assert "#[range=user|railmux-sidebar]◧#[norange]" in left
     assert "#[range=user|railmux-layout]▣#[norange]" in left
+    assert "#[range=user|railmux-mode]Claude#[norange]" in left
 
 
 def test_rendered_status_text_is_clickable_and_copy_uses_full_source(
@@ -570,7 +578,7 @@ def test_status_left_keeps_layout_and_target_visible_across_focus(monkeypatch):
     app._workspace.set_target(AgentWorkspace.PRIMARY)
     app._apply_tmux_bar(error=False)
     single_status = _style_calls(run, "status-left")[-1]
-    assert "· Claude Code · ▣" in single_status
+    assert "◧ · ▣ · Claude" in single_status
     assert "Target" not in single_status
 
 
@@ -618,3 +626,94 @@ def test_level_styles_are_pill_free():
 
 def test_normal_bar_uses_grass_green_accent():
     assert _TMUX_BAR_STYLE_NORMAL.startswith("bg=#5faf00,")
+
+
+def test_devin_input_cursor_keys_handles_ascii_cjk_and_bails_on_placeholders():
+    from railmux.fast_display_input import devin_input_cursor_keys
+
+    def _cells(text: str, width: int = 40) -> tuple[str | None, ...]:
+        out: list[str | None] = []
+        for ch in text:
+            out.append(ch)
+            if ord(ch) > 127 and ch not in "─❭…":
+                out.append(None)
+        while len(out) < width:
+            out.append(" ")
+        return tuple(out[:width])
+
+    rule = "─" * 40
+    # ASCII: cursor at end of "hello world" (col 13), click on 'w' (col 8) -> 5 Lefts.
+    rows = (_cells(rule), _cells("❭ hello world"), _cells(rule), _cells("Gemini · bypass"))
+    assert devin_input_cursor_keys(rows, 1, 13, 1, 8) == b"\x1b[D" * 5
+    # CJK double-width: "❭ 你好世界" -> '你'(2,3) '好'(4,5) '世'(6,7) '界'(8,9), end=10
+    rows_cjk = (_cells(rule), _cells("❭ 你好世界"), _cells(rule), _cells("Gemini · bypass"))
+    assert devin_input_cursor_keys(rows_cjk, 1, 10, 1, 4) == b"\x1b[D" * 3
+    # Placeholder / Image token bails out safely.
+    rows_ph = (_cells(rule), _cells("❭ Ask Devin anything"), _cells(rule), _cells("Gemini · bypass"))
+    assert devin_input_cursor_keys(rows_ph, 1, 2, 1, 8) == b""
+    rows_img = (_cells(rule), _cells("❭ check [Image #1] here"), _cells(rule), _cells("Gemini · bypass"))
+    assert devin_input_cursor_keys(rows_img, 1, 10, 1, 4) == b""
+
+
+def test_dual_pane_f9_toggle_sidebar_detaches_and_rejoins_keeping_split(monkeypatch):
+    from railmux import tmux_ctl
+
+    app = _status_app()
+    app._railmux_pane_id = "%1"
+    app._workspace = AgentWorkspace()
+    app._workspace.layout = WorkspaceLayout.SIDE_BY_SIDE
+    app._workspace.primary.pane_id = "%2"
+    app._workspace.secondary.pane_id = "%3"
+    app._sidebar_hidden_detached = False
+    app._saved_sidebar_width = 30
+    app._set_railmux_focus = MagicMock()
+    app._set_status = MagicMock()
+    app._apply_tmux_bar = MagicMock()
+    app._sync_pane_headers = MagicMock()
+    monkeypatch.setattr(tmux_ctl, "pane_alive", lambda _pid: True)
+    monkeypatch.setattr(tmux_ctl, "pane_size", lambda _pid: (28, 38))
+    selected = []
+    monkeypatch.setattr(tmux_ctl, "select_pane", lambda pid: selected.append(pid) or True)
+    broken = []
+    monkeypatch.setattr(tmux_ctl, "break_pane_detached", lambda pid: broken.append(pid) or "@9")
+    joined = []
+    monkeypatch.setattr(
+        tmux_ctl, "join_pane_left",
+        lambda src, dst, width: joined.append((src, dst, width)) or True,
+    )
+
+    # First F9 detaches ONLY the sidebar pane, keeping %2 and %3 split.
+    app._toggle_agent_fullscreen()
+    assert app._sidebar_hidden_detached is True
+    assert broken == ["%1"]
+    assert app._saved_sidebar_width == 28
+
+    # Second F9 re-joins the sidebar on the left edge at its exact saved width.
+    app._toggle_agent_fullscreen()
+    assert app._sidebar_hidden_detached is False
+    assert joined == [("%1", "%2", 28)]
+    assert selected[-1] == "%1"
+
+
+def test_devin_live_status_preserves_busy_on_transient_swap_capture(monkeypatch):
+    from railmux import tmux_ctl
+    from railmux.ui.app import _Running
+
+    app = _status_app()
+    running = _Running("s1", "dv-1", "ws/task", session_type="devin", status="busy")
+    app._running = {"s1": running}
+    app._last_live_status = {"dv-1": "busy"}
+    app._unread_finished = set()
+    app._devin_status_probe_cache = {}
+    app._transport = None
+
+    # Transient empty capture during pane swap must keep "busy" (no false cyan done dot).
+    monkeypatch.setattr(tmux_ctl, "capture_pane_visible", lambda _t: ["", "   "])
+    assert app._devin_live_status(running) == "busy"
+    assert app._record_live_status_transition(running, "busy") == "busy"
+    assert "dv-1" not in app._unread_finished
+
+    # Transient mid-SIGWINCH capture with output but no settled prompt box keeps "busy".
+    app._devin_status_probe_cache.clear()
+    monkeypatch.setattr(tmux_ctl, "capture_pane_visible", lambda _t: ["some output line"])
+    assert app._devin_live_status(running) == "busy"

@@ -28,6 +28,8 @@ def _install_mocks(monkeypatch, tmp_path):
         "MouseDown1Control0": None,
         "MouseDown1Control1": None,
         "MouseDown1Control2": None,
+        "MouseDown1Control3": None,
+        "MouseDown1Control4": None,
     }
     termux_tap_backup = {
         "MouseDown1Pane": (
@@ -241,7 +243,7 @@ def test_v1_function_lease_upgrades_in_place_with_new_bindings(
 
     def install_after_backup_is_durable(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 9
+        assert persisted["version"] == 10
         assert persisted["phase"] == "installing"
         assert persisted["prefix_tab_backup"] == {"Tab": None}
         assert persisted["right_click_backup"]["MouseDown3Pane"]
@@ -254,7 +256,7 @@ def test_v1_function_lease_upgrades_in_place_with_new_bindings(
 
     assert second.open()
     upgraded = json.loads(state_path.read_text())
-    assert upgraded["version"] == 9
+    assert upgraded["version"] == 10
     assert upgraded["prefix_tab_backup"] == {"Tab": None}
     assert upgraded["prefix_tab_managed"] is True
     assert upgraded["selection_hook_managed"] is True
@@ -295,7 +297,7 @@ def test_v4_lease_upgrades_status_click_after_durable_backup(
 
     def installed_after_backup(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 9
+        assert persisted["version"] == 10
         assert persisted["phase"] == "installing"
         assert persisted["status_click_backup"]["MouseDown1Status"]
         return True
@@ -325,7 +327,7 @@ def test_old_status_lease_reinstalls_internal_status_actions(
     second = SharedTmuxBindingManager("server", "%2")
 
     assert second.open()
-    assert json.loads(state_path.read_text())["version"] == 9
+    assert json.loads(state_path.read_text())["version"] == 10
     assert install.status_click.call_count == prior_calls + 1
 
 
@@ -350,12 +352,14 @@ def test_v8_status_lease_captures_control_bindings_before_reinstall(
 
     assert second.open()
     persisted = json.loads(state_path.read_text())
-    assert persisted["version"] == 9
+    assert persisted["version"] == 10
     assert set(persisted["status_click_backup"]) == {
         "MouseDown1Status",
         "MouseDown1Control0",
         "MouseDown1Control1",
         "MouseDown1Control2",
+        "MouseDown1Control3",
+        "MouseDown1Control4",
     }
     assert install.status_click.call_count == prior_calls + 1
 
@@ -377,7 +381,7 @@ def test_v7_lease_upgrades_termux_tap_after_durable_backup(
 
     def installed_after_backup(_backup, _token):
         persisted = json.loads(state_path.read_text())
-        assert persisted["version"] == 9
+        assert persisted["version"] == 10
         assert persisted["phase"] == "installing"
         assert persisted["termux_tap_backup"]["MouseDown1Pane"]
         return True

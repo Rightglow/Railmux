@@ -43,6 +43,7 @@ class Config:
     interaction_path_open: str = "ask"
     devin_history: str = "local"
     notification_sound: str = "off"
+    pane_headers: str = "auto"
     hidden_modes: tuple[str, ...] = ()
 
     @property
@@ -234,6 +235,10 @@ def load_config(config_path: Path | None = None) -> Config:
         "notification_sound", "interaction.notification_sound", "off",
         '"off" or "on"',
     )
+    pane_headers = _enum_choice(
+        "pane_headers", "interaction.pane_headers", "auto",
+        '"auto", "always", or "off"',
+    )
 
     return Config(
         tmux_binary=_tmux_binary(tmux),
@@ -252,5 +257,6 @@ def load_config(config_path: Path | None = None) -> Config:
         interaction_path_open=path_open,
         devin_history=devin_history,
         notification_sound=notification_sound,
+        pane_headers=pane_headers,
         hidden_modes=tuple(key for key in mode_keys if key in hidden_modes),
     )

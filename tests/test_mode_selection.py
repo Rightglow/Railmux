@@ -88,7 +88,7 @@ def test_missing_provider_binary_warning_never_echoes_configured_path(
 
     message, level = app._set_status.call_args.args
     assert level == "warn"
-    assert "Claude Code executable not found" in message
+    assert "Claude executable not found" in message
     assert secret_path not in message
 
 
@@ -279,7 +279,7 @@ def test_mode_menu_can_reopen_a_hidden_provider_with_running_sessions(monkeypatc
     app._open_mode_menu()
     menu = app._show_overlay.call_args.args[0]
     rendered = b"\n".join(menu.render((40, 5)).text)
-    assert b"Claude Code" in rendered and b"Unavailable" in rendered
+    assert b"Claude" in rendered and b"Unavailable" in rendered
     assert b"Devin" in rendered and b"Running" in rendered and b"Hidden" in rendered
     menu.keypress((40, 5), "down")
     menu.keypress((40, 5), "enter")

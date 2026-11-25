@@ -870,6 +870,110 @@ def _display_column(text: str, character_index: int) -> int:
     return sum(_display_width(character) for character in text[:character_index])
 
 
+_DEVIN_INPUT_TOP_RE = re.compile(r"^─{10,}(?: .+ ─+)?$")
+_DEVIN_INPUT_BOTTOM_RE = re.compile(r"^─{10,}$")
+_DEVIN_PLACEHOLDERS = (
+    "Ask Devin anything",
+    "Guide Devin while it works",
+    "Ask a /btw",
+)
+
+
+def devin_input_cursor_keys(
+    pane_rows: tuple[tuple[str | None, ...], ...],
+    cursor_row: int,
+    cursor_col: int,
+    click_row: int,
+    click_col: int,
+) -> bytes:
+    """Compute conservative arrow keys to move Devin's prompt cursor to a click.
+
+    Operates strictly inside a live Devin prompt box bounded by full-width
+    horizontal rules (``────``) starting with ``❭``. Returns ``b""`` whenever
+    the click or cursor is outside the prompt box, the box shows a placeholder,
+    or atomic tokens such as ``[Image #1]`` are present so it never sends
+    unintended navigation keys.
+    """
+    total = len(pane_rows)
+    if total < 4:
+        return b""
+    if not (0 <= cursor_row < total and 0 <= click_row < total):
+        return b""
+    plain = [_row_text(row).rstrip() for row in pane_rows]
+
+    # Locate the bottom-most horizontal rule near the footer.
+    bottom_rule: int | None = None
+    for idx in range(total - 1, max(-1, total - 10), -1):
+        if _DEVIN_INPUT_BOTTOM_RE.match(plain[idx]):
+            bottom_rule = idx
+            break
+    if bottom_rule is None or bottom_rule < 2:
+        return b""
+
+    top_rule: int | None = None
+    for idx in range(bottom_rule - 1, max(-1, bottom_rule - 12), -1):
+        if _DEVIN_INPUT_TOP_RE.match(plain[idx]):
+            top_rule = idx
+            break
+    if top_rule is None:
+        return b""
+
+    first_prompt = top_rule + 1
+    last_prompt = bottom_rule - 1
+    if not (first_prompt <= cursor_row <= last_prompt and first_prompt <= click_row <= last_prompt):
+        return b""
+    if not plain[first_prompt].startswith("❭"):
+        return b""
+    box_lines = plain[first_prompt : last_prompt + 1]
+    if any(
+        any(ph in ln for ph in _DEVIN_PLACEHOLDERS) or "[Image #" in ln
+        for ln in box_lines
+    ):
+        return b""
+
+    def _char_index_at(row_idx: int, col: int) -> int:
+        row_cells = pane_rows[row_idx]
+        text_start = 2
+        line_text = plain[row_idx]
+        max_col = sum(_display_width(ch) for ch in line_text)
+        clamped_col = max(text_start, min(col, max_col))
+        return sum(
+            1
+            for col_idx in range(text_start, min(clamped_col, len(row_cells)))
+            if row_cells[col_idx] is not None
+        )
+
+    # Vertical movement first (when multi-line draft), then horizontal delta.
+    seq = bytearray()
+    row_delta = click_row - cursor_row
+    if row_delta > 0:
+        seq.extend(b"\x1b[B" * row_delta)
+    elif row_delta < 0:
+        seq.extend(b"\x1b[A" * (-row_delta))
+
+    if row_delta == 0:
+        cur_chars = _char_index_at(cursor_row, cursor_col)
+        dst_chars = _char_index_at(click_row, click_col)
+        delta = dst_chars - cur_chars
+        if delta > 0:
+            seq.extend(b"\x1b[C" * delta)
+        elif delta < 0:
+            seq.extend(b"\x1b[D" * (-delta))
+    else:
+        # After Up/Down moves to click_row, estimate column alignment from
+        # min(cursor_col, target line width) to click_col.
+        dst_line_width = sum(_display_width(ch) for ch in plain[click_row])
+        landed_col = min(cursor_col, dst_line_width)
+        cur_chars = _char_index_at(click_row, landed_col)
+        dst_chars = _char_index_at(click_row, click_col)
+        delta = dst_chars - cur_chars
+        if delta > 0:
+            seq.extend(b"\x1b[C" * delta)
+        elif delta < 0:
+            seq.extend(b"\x1b[D" * (-delta))
+    return bytes(seq)
+
+
 def _hard_wrapped_target(
     rows: tuple[tuple[str | None, ...], ...],
     row: int,

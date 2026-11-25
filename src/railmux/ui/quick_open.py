@@ -86,6 +86,16 @@ def _choice_markup(
 
 
 @dataclass(frozen=True)
+class CommandChoice:
+    """One executable Railmux action surfaced via ``>`` in QuickOpen."""
+
+    name: str
+    shortcut: str
+    description: str
+    on_run: Callable[[], None]
+
+
+@dataclass(frozen=True)
 class SessionChoice:
     identity: tuple[str, str, str]
     title: str
@@ -131,6 +141,46 @@ def recent_claude_sessions(
     return tuple(rows.values())
 
 
+def _command_markup(
+    command: CommandChoice,
+    terms: tuple[str, ...],
+    *,
+    active: bool,
+) -> list[tuple[str, str]]:
+    marker = "›" if active else " "
+    base = "focus" if active else "body"
+    dim = "focus" if active else "dim"
+    key_attr = "focus" if active else "btn_key"
+    match_attr = "search_match_focus" if active else "search_match"
+    parts: list[tuple[str, str]] = [(base, f"{marker} ")]
+    parts.extend(_highlight_runs(command.name, terms, base, match_attr))
+    if command.shortcut:
+        parts.append((dim, "  "))
+        parts.append((key_attr, f" {command.shortcut} "))
+    if command.description:
+        parts.append((dim, "  "))
+        parts.extend(_highlight_runs(command.description, terms, dim, match_attr))
+    return parts
+
+
+class _CommandRow(ClickableRow):
+    def __init__(
+        self,
+        command: CommandChoice,
+        terms: tuple[str, ...],
+        on_click: Callable[[], None],
+    ) -> None:
+        self._command = command
+        self._terms = terms
+        self._text = urwid.Text(_command_markup(command, terms, active=False))
+        self._style = urwid.AttrMap(self._text, "body")
+        super().__init__(self._style, on_click=on_click)
+
+    def set_active(self, active: bool) -> None:
+        self._text.set_text(_command_markup(self._command, self._terms, active=active))
+        self._style.set_attr_map({None: "focus" if active else "body"})
+
+
 class _ResultRow(ClickableRow):
     def __init__(
         self,
@@ -162,17 +212,22 @@ class QuickOpen(urwid.WidgetWrap):
         target_label: str,
         *,
         loading: bool = False,
+        commands: Iterable[CommandChoice] = (),
     ) -> None:
         self._on_close = on_close
         self._view = 0
         self._choices = tuple(choices)
+        self._commands = tuple(commands)
         self._loading = loading
         self._edit = urwid.Edit(("title", "Search: "))
         self._scope = urwid.Button("", on_press=lambda _button: self._advance())
         self._rows = urwid.SimpleFocusListWalker([])
         self._list = urwid.ListBox(self._rows)
         self._shown: list[SessionChoice] = []
-        self._active_row: _ResultRow | None = None
+        self._shown_commands: list[CommandChoice] = []
+        self._command_mode = False
+        self._hint_offset = 0
+        self._active_row: _ResultRow | _CommandRow | None = None
         header = urwid.Pile([
             urwid.Text(("dim", f"Saved sessions open in {target_label}")),
             urwid.Columns([
@@ -185,7 +240,7 @@ class QuickOpen(urwid.WidgetWrap):
         footer = urwid.Pile([
             urwid.AttrMap(urwid.Divider("─"), "pane"),
             _action_legend(
-                [("↑↓", "Move"), ("↵", "Open"), ("Tab", "View"), ("Esc", "Close")],
+                [("↑↓", "Move"), ("↵", "Open"), ("Tab", "View"), (">", "Commands"), ("Esc", "Close")],
                 align="center",
                 separator="  ",
                 wrap="space",
@@ -206,10 +261,36 @@ class QuickOpen(urwid.WidgetWrap):
         self._rebuild(self._edit.get_edit_text())
 
     def _advance(self) -> None:
+        if self._command_mode:
+            return
         self._view = (self._view + 1) % len(self._VIEWS)
         self._rebuild(self._edit.get_edit_text())
 
     def _rebuild(self, query: str) -> None:
+        if query.startswith(">") and self._commands:
+            self._command_mode = True
+            self._hint_offset = 0
+            self._scope.set_label("Commands")
+            cmd_terms = tuple(query[1:].strip().split())
+            matched: list[CommandChoice] = []
+            for command in self._commands:
+                fields = (command.name, command.shortcut, command.description)
+                if all(any(fuzzy_match(term, field) for field in fields) for term in cmd_terms):
+                    matched.append(command)
+            self._shown = []
+            self._shown_commands = matched
+            self._active_row = None
+            self._rows[:] = [
+                _CommandRow(command, cmd_terms, partial(self._run_command, command))
+                for command in matched
+            ] or [urwid.Text(("dim", "No matching commands."))]
+            self._rows.set_focus(0)
+            self._list.set_focus_valign("top")
+            self._sync_selection()
+            return
+
+        self._command_mode = False
+        self._shown_commands = []
         previous = self._selected()
         self._scope.set_label(self._VIEWS[self._view])
         choices: list[SessionChoice] = []
@@ -225,22 +306,32 @@ class QuickOpen(urwid.WidgetWrap):
             if len(choices) == 80:
                 break
         self._shown = choices
-        self._rows[:] = [
+        self._active_row = None
+        hint_rows: list[urwid.Widget] = []
+        if not query and self._commands:
+            hint_rows.append(
+                urwid.Text(("dim", "  Tip: type > to search & run commands (sidebar, layout, mode, options…)"))
+            )
+        self._hint_offset = len(hint_rows)
+        result_rows: list[urwid.Widget] = [
             _ResultRow(choice, terms, partial(self._open, choice))
             for choice in choices
         ] or [urwid.Text(("dim", "Loading recent sessions…" if self._loading else "No matching sessions."))]
+        self._rows[:] = hint_rows + result_rows
         if previous is not None:
             for index, choice in enumerate(choices):
                 if previous.identity == choice.identity:
-                    self._rows.set_focus(index)
+                    self._rows.set_focus(self._hint_offset + index)
+                    self._sync_selection()
                     return
-        self._rows.set_focus(0)
+        self._rows.set_focus(self._hint_offset)
         self._list.set_focus_valign("top")
+        self._sync_selection()
 
     def _sync_selection(self) -> None:
         # The search field keeps keyboard focus while the walker selects results.
         row, _ = self._rows.get_focus()
-        active_row = row if isinstance(row, _ResultRow) else None
+        active_row = row if isinstance(row, (_ResultRow, _CommandRow)) else None
         if active_row is self._active_row:
             return
         if self._active_row is not None:
@@ -250,19 +341,37 @@ class QuickOpen(urwid.WidgetWrap):
         self._active_row = active_row
 
     def _selected(self) -> SessionChoice | None:
-        return self._shown[self._rows.focus] if self._shown else None
+        if self._command_mode or not self._shown:
+            return None
+        index = self._rows.focus - self._hint_offset
+        return self._shown[index] if 0 <= index < len(self._shown) else None
+
+    def _selected_command(self) -> CommandChoice | None:
+        if not self._command_mode or not self._shown_commands:
+            return None
+        index = self._rows.focus
+        return self._shown_commands[index] if 0 <= index < len(self._shown_commands) else None
 
     def _open(self, choice: SessionChoice) -> None:
         self._on_close()
         choice.on_open()
 
+    def _run_command(self, command: CommandChoice) -> None:
+        self._on_close()
+        command.on_run()
+
     def keypress(self, size, key):
         if key == "esc":
             self._on_close()
         elif key == "enter":
-            choice = self._selected()
-            if choice is not None:
-                self._open(choice)
+            if self._command_mode:
+                command = self._selected_command()
+                if command is not None:
+                    self._run_command(command)
+            else:
+                choice = self._selected()
+                if choice is not None:
+                    self._open(choice)
         elif key == "tab":
             self._advance()
         elif key in self._MOVEMENT:

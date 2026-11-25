@@ -162,7 +162,7 @@ def _devin_running_delete_detail(_lineage_count: int) -> str:
 
 CLAUDE_ADAPTER = ProviderAdapter(
     key="claude",
-    label="Claude Code",
+    label="Claude",
     short_label="Claude",
     preview_format="claude",
     auto_run=None,

@@ -603,7 +603,7 @@ def _program_menu(
     *,
     remote_context: bool,
 ) -> object | None:
-    programs = (("tmux", "tmux"), ("claude", "Claude Code"), ("codex", "Codex"),
+    programs = (("tmux", "tmux"), ("claude", "Claude"), ("codex", "Codex"),
                 ("devin", "Devin"))
     while True:
         config = load_config()

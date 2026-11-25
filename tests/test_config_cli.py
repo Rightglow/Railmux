@@ -337,5 +337,5 @@ def test_editor_toggles_devin_history_and_agent_visibility(tmp_path, monkeypatch
     config = load_config()
     assert config.devin_history == config.codex_history == "native"
     assert config.hidden_modes == ("claude",)
-    assert "Claude Code [" in output.getvalue()
+    assert "Claude [" in output.getvalue()
     assert "hidden from mode switching" in output.getvalue()

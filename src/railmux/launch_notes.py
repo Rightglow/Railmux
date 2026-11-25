@@ -14,6 +14,11 @@ from railmux.config import default_config_path
 
 
 _HIGHLIGHTS = {
+    "0.5.2": (
+        "Press F9 or click ◧ at bottom-left to toggle only the sidebar (keeps splits) with auto agent pane headers.",
+        "Bottom-left bar shows ◧ · ◫ · Mode and live running status counts; click the counts pill to jump to Running.",
+        "Search (g) colorizes results and adds a > command palette; Devin input supports click-to-position cursor over SSH.",
+    ),
     "0.5.1": (
         "Collapse sidebar panes with ▾/▸ or zoom with z; toggle Sessions All with a (saved across soft restart).",
         "Devin mode adds session delete, saved-history Preview, optional new-chat bypass, live status dots, and clean /btw + /revert scrollback.",

@@ -14,13 +14,15 @@ from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
 
 
-_VERSION = 9
+_VERSION = 10
 _KEYS = ("F8", "F9")
 _STATUS_CLICK_KEYS = (
     "MouseDown1Status",
     "MouseDown1Control0",
     "MouseDown1Control1",
     "MouseDown1Control2",
+    "MouseDown1Control3",
+    "MouseDown1Control4",
 )
 _MAX_STATE_BYTES = 64 * 1024
 
@@ -311,7 +313,7 @@ class SharedTmuxBindingManager:
                             or {"MouseDown1Pane": None}
                         )
                         upgraded = True
-                    if state["version"] < 9:
+                    if state["version"] < 10:
                         if state["status_click_managed"]:
                             if set(state["status_click_backup"]) != set(
                                 _STATUS_CLICK_KEYS
@@ -330,9 +332,8 @@ class SharedTmuxBindingManager:
                             state["status_click_backup"] = {
                                 key: None for key in _STATUS_CLICK_KEYS
                             }
-                        # tmux 3.7 routes control ranges through dedicated
-                        # MouseDown1ControlN keys. Capture all originals before
-                        # reinstalling the shared status-click lease.
+                        # v9/v10 route control ranges through MouseDown1ControlN
+                        # (including Sidebar toggle and Running status pill).
                         upgraded = True
                     if upgraded:
                         state["version"] = _VERSION

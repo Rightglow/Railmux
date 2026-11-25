@@ -1051,7 +1051,7 @@ def test_claude_history_prompt_is_local_bounded_and_mouse_selectable():
     surface.show_claude_history_prompt()
 
     painted = output.getvalue()
-    assert b"Claude Code history" in painted
+    assert b"Claude history" in painted
     assert b"Always use smooth local history" in painted
     assert b"Claude native" in painted
     assert b"\033[1;38;5;220m[1]\033[0m" in painted

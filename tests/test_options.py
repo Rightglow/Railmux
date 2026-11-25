@@ -223,7 +223,7 @@ def test_agent_mode_option_opens_shared_picker_and_switches_with_keyboard(
 
     modal.keypress(size, "enter")
     text = _option_text(modal, size)
-    assert "Claude Code · Unavailable" in text
+    assert "Claude · Unavailable" in text
     assert "● Devin" in text
     modal.keypress(size, "down")
     modal.keypress(size, "enter")

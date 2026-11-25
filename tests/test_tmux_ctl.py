@@ -1077,6 +1077,8 @@ def test_root_status_click_scopes_ranges_and_dispatches_actions():
         "MouseDown1Control0": None,
         "MouseDown1Control1": None,
         "MouseDown1Control2": None,
+        "MouseDown1Control3": None,
+        "MouseDown1Control4": None,
     }
     with patch.object(tmux_ctl, "tmux_version", return_value=(3, 4)), \
             _mock_check_call() as call:
@@ -1114,6 +1116,8 @@ def test_tmux_37_status_controls_receive_dedicated_mouse_bindings():
         "MouseDown1Control0": None,
         "MouseDown1Control1": None,
         "MouseDown1Control2": None,
+        "MouseDown1Control3": None,
+        "MouseDown1Control4": None,
     }
     with patch.object(tmux_ctl, "tmux_version", return_value=(3, 7)), \
             _mock_check_call() as call:
@@ -1126,10 +1130,14 @@ def test_tmux_37_status_controls_receive_dedicated_mouse_bindings():
         "MouseDown1Control0",
         "MouseDown1Control1",
         "MouseDown1Control2",
+        "MouseDown1Control3",
+        "MouseDown1Control4",
     ]
     assert "send-keys" in calls[1][8] and " F5" in calls[1][8]
     assert "send-keys" in calls[2][8] and " F7" in calls[2][8]
     assert "send-keys" in calls[3][8] and " F6" in calls[3][8]
+    assert "send-keys" in calls[4][8] and " F9" in calls[4][8]
+    assert "send-keys" in calls[5][8] and " F10" in calls[5][8]
     assert all(
         "railmux-status-pane-v1-owner123" in argv[7]
         for argv in calls[1:]

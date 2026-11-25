@@ -60,6 +60,7 @@ from railmux.fast_display_input import (
     TouchKeyboardAction,
     TerminalInputDecoder,
     bracketed_paste_for_pane,
+    devin_input_cursor_keys,
     is_termux_environment,
     page_key_direction,
     split_page_key_input,
@@ -1052,7 +1053,7 @@ class TerminalSurface:
                 f"{normal}"
             )
 
-        title = " Claude Code history "
+        title = " Claude history "
         rows = (
             f"{border}┌\033[1m{title}\033[22m{'─' * (inner - len(title))}┐{normal}",
             middle("[1]", "Always use smooth local history"),
@@ -3181,6 +3182,32 @@ def run(args: argparse.Namespace) -> int:
                 else:
                     begin_path_open(target)
             if selection_action.handled:
+                if (
+                    not part.pressed
+                    and (part.button & 3) == 0
+                    and selection_action.open_target is None
+                    and selection_action.copy_data is None
+                    and len(selection_action.replay_events) == 2
+                    and latest_screen is not None
+                    and not history.active
+                ):
+                    click_route = history.route_at_position(part.x, part.y)
+                    if (
+                        click_route is not None
+                        and click_route.pane_id == focused_pane_id
+                        and not click_route.mouse_forwardable
+                    ):
+                        from railmux.fast_display_input import _pane_rows
+
+                        cursor_keys = devin_input_cursor_keys(
+                            _pane_rows(latest_screen.rows, click_route),
+                            latest_screen.cursor_y - click_route.y,
+                            latest_screen.cursor_x - click_route.x,
+                            part.y - click_route.y,
+                            part.x - click_route.x,
+                        )
+                        if cursor_keys:
+                            send_protocol_frame(encode_input(cursor_keys))
                 return
             received_at = time.monotonic()
             action = history.pointer_event(

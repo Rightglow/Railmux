@@ -18,9 +18,9 @@ from railmux.ui import keymap
 # reminders, marketing copy, or transient state that the UI already shows.
 TIPS: tuple[str, ...] = (
     "Soft Quit (q, then s) closes shared views; agents keep running",
-    "Press / then Ctrl-U to clear a list filter restored at startup",
+    "Press g to search sessions, or type > inside Search for commands",
+    "Press F9 or click ◧ at bottom-left to hide or show the sidebar",
     "Single-click a stopped session to preview its saved history",
-    "Search finds running, recent, and starred sessions across CLIs",
     "Click ▾/▸ on a pane title to collapse it, or press z to zoom",
     "A cyan dot marks a background session that finished unread",
     "Right-click a Project, Session, or Running row for more actions",

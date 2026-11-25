@@ -380,7 +380,7 @@ def _validate_workspace_slot(raw: object) -> dict | None:
 
 def _validate_workspace(raw: object) -> dict | None:
     """Decode the optional full workspace owned by this exact outer pane."""
-    if not isinstance(raw, dict) or len(raw) > 7 or raw.get("version") != 1:
+    if not isinstance(raw, dict) or len(raw) > 8 or raw.get("version") != 1:
         return None
     layout = _bounded_string(raw.get("layout"), 32)
     target = _bounded_string(raw.get("target"), 16)
@@ -426,6 +426,12 @@ def _validate_workspace(raw: object) -> dict | None:
         if not all(collapsed.values()):
             return None
         workspace["collapsed_secondary"] = collapsed
+    raw_sidebar_hidden = raw.get("sidebar_hidden")
+    if raw_sidebar_hidden is not None:
+        if not isinstance(raw_sidebar_hidden, bool):
+            return None
+        if raw_sidebar_hidden:
+            workspace["sidebar_hidden"] = True
     return workspace
 
 

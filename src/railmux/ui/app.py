@@ -96,7 +96,12 @@ from railmux.ui.modals import (
     SessionInfoModal,
 )
 from railmux.ui.projects_pane import ProjectsPane
-from railmux.ui.quick_open import QuickOpen, SessionChoice, recent_claude_sessions
+from railmux.ui.quick_open import (
+    CommandChoice,
+    QuickOpen,
+    SessionChoice,
+    recent_claude_sessions,
+)
 from railmux.ui.running_pane import RunningEntry, RunningSessionsPane
 from railmux.ui.sessions_pane import SessionsPane
 from railmux.ui.sidebar import (
@@ -303,33 +308,118 @@ _TMUX_BRAND_NORMAL = "#[fg=colour0] Railmux #[default]"
 _TMUX_BRAND_ERROR = "#[fg=colour231] Railmux #[default]"
 
 
-def _tmux_status_left(
+def _format_running_status_pill(
+    counts: tuple[int, int, int, int] | None,
+    *,
     error: bool,
-    mode_label: str | bool,
+) -> tuple[str, int]:
+    """Render compact non-zero running counts inside a dark pill for status-left.
+
+    *counts* is ``(blocked, done, busy, idle)``. Returns ``(tmux_markup, visible_cells)``.
+    """
+    if not counts or not any(counts):
+        return "", 0
+    specs = (
+        (counts[0], "#ff5f5f"),  # blocked (red)
+        (counts[1], "#00e5ff"),  # done unread (cyan)
+        (counts[2], "#ffd700"),  # busy (yellow)
+        (counts[3], "#5faf00"),  # idle (green)
+    )
+    parts: list[str] = []
+    visible = 1  # leading space inside pill
+    for count, color in specs:
+        if count <= 0:
+            continue
+        token = f"●{count}"
+        parts.append(f"#[fg={color},bold]{token}#[nobold]")
+        visible += len(token) + 1  # token + trailing space
+    if not parts:
+        return "", 0
+    bar_bg = "colour52" if error else _GRASS_GREEN
+    bar_fg = "colour231" if error else "colour0"
+    inner = " ".join(parts)
+    markup = f"#[bg=#1c2220] {inner} #[bg={bar_bg},fg={bar_fg}]"
+    return markup, visible
+
+
+def _tmux_status_left_with_width(
+    error: bool,
+    mode_label: str | bool = "Claude",
     layout_indicator: str | None = None,
     range_wrapper: Callable[[str, str], str] | None = None,
-) -> str:
-    """The tmux status-left segment: the ``railmux`` brand plus a current-mode
-    indicator (``· Claude Code`` / ``· Codex``) and a compact workspace-layout
-    glyph. All are rendered in the tips colour (colour0 = black on green, or
-    white on red)."""
-    brand = _TMUX_BRAND_ERROR if error else _TMUX_BRAND_NORMAL
+    *,
+    sidebar_hidden: bool = False,
+    running_counts: tuple[int, int, int, int] | None = None,
+    width: int | None = None,
+) -> tuple[str, int]:
+    """The tmux status-left control cluster: ``◧ · ◫ · Mode  [●1 ●2 ●3]``.
+
+    Sidebar toggle stays anchored at column 1 (Fitts's Law), followed by the
+    layout cycle icon, current CLI mode, and a compact dark pill with non-zero
+    running session counts. Returns ``(tmux_markup, visible_cells)``.
+    """
     fg = "colour231" if error else "colour0"
-    # Bool support is a compatibility bridge for callers from <=0.1.1. New
-    # code passes the registered label so a third mode renders correctly.
+    bg = "colour52" if error else _GRASS_GREEN
+    # Bool support is a compatibility bridge for callers from <=0.1.1.
     if isinstance(mode_label, bool):
-        mode_label = "Codex" if mode_label else "Claude Code"
-    mode = f"{mode_label}"
-    if range_wrapper is not None:
-        mode = range_wrapper(tmux_ctl.STATUS_ACTION_MODE, mode)
+        mode_label = "Codex" if mode_label else "Claude"
+    elif mode_label == "Claude Code":
+        mode_label = "Claude"
+    sidebar_glyph = "▢" if sidebar_hidden else "◧"
+    sidebar_seg = (
+        range_wrapper(tmux_ctl.STATUS_ACTION_SIDEBAR, sidebar_glyph)
+        if range_wrapper is not None else sidebar_glyph
+    )
+    visible = 1 + len(sidebar_glyph)  # leading space + glyph
     layout = ""
     if layout_indicator:
-        indicator = layout_indicator
-        if range_wrapper is not None:
-            indicator = range_wrapper(
-                tmux_ctl.STATUS_ACTION_LAYOUT, indicator)
+        indicator = (
+            range_wrapper(tmux_ctl.STATUS_ACTION_LAYOUT, layout_indicator)
+            if range_wrapper is not None else layout_indicator
+        )
         layout = f" · {indicator}"
-    return f"{brand}#[fg={fg}]· {mode}{layout} #[default]"
+        visible += 3 + len(layout_indicator)
+    mode = (
+        range_wrapper(tmux_ctl.STATUS_ACTION_MODE, mode_label)
+        if range_wrapper is not None else mode_label
+    )
+    visible += 3 + len(mode_label)
+    pill = ""
+    if width is None or width >= 65:
+        pill_markup, pill_vis = _format_running_status_pill(
+            running_counts, error=error,
+        )
+        if pill_markup:
+            if range_wrapper is not None:
+                pill_markup = range_wrapper(
+                    tmux_ctl.STATUS_ACTION_RUNNING, pill_markup)
+            pill = f"  {pill_markup}"
+            visible += 2 + pill_vis
+    visible += 1  # trailing space
+    return f"#[bg={bg},fg={fg}] {sidebar_seg}{layout} · {mode}{pill} #[default]", visible
+
+
+def _tmux_status_left(
+    error: bool,
+    mode_label: str | bool = "Claude",
+    layout_indicator: str | None = None,
+    range_wrapper: Callable[[str, str], str] | None = None,
+    *,
+    sidebar_hidden: bool = False,
+    running_counts: tuple[int, int, int, int] | None = None,
+    width: int | None = None,
+) -> str:
+    """Return the rendered wide tmux ``status-left`` string."""
+    markup, _visible = _tmux_status_left_with_width(
+        error,
+        mode_label,
+        layout_indicator,
+        range_wrapper,
+        sidebar_hidden=sidebar_hidden,
+        running_counts=running_counts,
+        width=width,
+    )
+    return markup
 
 
 def _compact_tmux_status_left(
@@ -351,14 +441,13 @@ def _compact_tmux_status_left(
     if width < 52:
         labels = ("R", "1", "2")
         mode = "Cx" if mode_label == "Codex" else (
-            "CC" if mode_label == "Claude Code" else mode_label[:2])
+            "Cl" if mode_label in ("Claude", "Claude Code") else mode_label[:2])
     elif width < 80:
         labels = ("Railmux", "A1", "A2")
-        mode = "Codex" if mode_label == "Codex" else (
-            "CC" if mode_label == "Claude Code" else mode_label[:8])
+        mode = "Claude" if mode_label in ("Claude", "Claude Code") else mode_label[:8]
     else:
         labels = ("Railmux", "Agent 1", "Agent 2")
-        mode = mode_label
+        mode = "Claude" if mode_label == "Claude Code" else mode_label
 
     pages = (
         WorkspacePage.SIDEBAR,
@@ -980,6 +1069,9 @@ class App:
         self._last_live_status: dict[str, str] = {}
         self._sessions_all_agents = False
         self._sidebar_collapsed: list[bool] = [False, False, False]
+        self._sidebar_hidden_detached: bool = False
+        self._saved_sidebar_width: int = 30
+        self._applied_pane_headers_state: tuple | None = None
         # Procfs rollout correlation is useful but relatively expensive
         # (process-tree traversal plus fd reads). Cache it across UI ticks and
         # include the real pane identity so a swap cannot reuse stale data.
@@ -3255,14 +3347,97 @@ class App:
         self._termux_keyboard_projection = None
         self._clear_termux_tap_route()
 
+    def _sidebar_is_hidden(self) -> bool:
+        """True when the left Railmux sidebar is hidden (zoomed or detached)."""
+        if getattr(self, "_sidebar_hidden_detached", False):
+            return True
+        owner = getattr(self, "_railmux_pane_id", None)
+        if owner is None or self._window_is_zoomed() is not True:
+            return False
+        active = tmux_ctl.active_pane_id(owner)
+        return active is not None and active != owner
+
+    def _restore_hidden_sidebar(self, *, focus_sidebar: bool = False) -> bool:
+        """Restore the left sidebar if hidden via zoom or dual-pane detach."""
+        owner = getattr(self, "_railmux_pane_id", None)
+        if owner is None:
+            return False
+        if getattr(self, "_sidebar_hidden_detached", False):
+            workspace = self._agent_workspace()
+            anchor = next(
+                (slot.pane_id for slot in workspace.slots
+                 if slot.pane_id is not None and tmux_ctl.pane_alive(slot.pane_id)),
+                None,
+            )
+            if anchor is None:
+                self._sidebar_hidden_detached = False
+                self._sync_pane_headers()
+                self._apply_tmux_bar(self._tmux_error_bar)
+                return False
+            width = getattr(self, "_saved_sidebar_width", 30) or 30
+            if not tmux_ctl.join_pane_left(owner, anchor, width):
+                return False
+            self._sidebar_hidden_detached = False
+            if focus_sidebar:
+                tmux_ctl.select_pane(owner)
+                self._set_railmux_focus(True, force_border=True)
+            self._sync_pane_headers()
+            self._apply_tmux_bar(self._tmux_error_bar)
+            return True
+        if self._window_is_zoomed() is True:
+            active = tmux_ctl.active_pane_id(owner)
+            if active is not None and active != owner:
+                if not tmux_ctl.toggle_pane_zoom(active):
+                    return False
+                if focus_sidebar:
+                    tmux_ctl.select_pane(owner)
+                    self._set_railmux_focus(True, force_border=True)
+                self._sync_pane_headers()
+                self._apply_tmux_bar(self._tmux_error_bar)
+                return True
+        return False
+
     def _toggle_agent_fullscreen(self) -> None:
-        """Zoom the focused agent/tool, or the Target agent from the sidebar."""
+        """Toggle left sidebar visibility (hides only the sidebar, keeping splits)."""
         if (self._agent_workspace().presentation
                 is WorkspacePresentation.COMPACT):
             self._set_status(
                 "Compact view already shows one full-window page.", "tip")
             return
+        if self._sidebar_is_hidden():
+            if not self._restore_hidden_sidebar(focus_sidebar=True):
+                self._set_status("Could not restore sidebar.", "error")
+            return
         owner = getattr(self, "_railmux_pane_id", None)
+        workspace = self._agent_workspace()
+        primary_alive = (
+            workspace.primary.pane_id is not None
+            and tmux_ctl.pane_alive(workspace.primary.pane_id)
+        )
+        secondary_alive = (
+            workspace.secondary.pane_id is not None
+            and tmux_ctl.pane_alive(workspace.secondary.pane_id)
+        )
+        # Dual-pane split: detach ONLY the sidebar pane so both right panes stay
+        # visible side-by-side or stacked across the full terminal width.
+        if owner is not None and primary_alive and secondary_alive:
+            cur_size = tmux_ctl.pane_size(owner)
+            if cur_size is not None and cur_size[0] >= 12:
+                self._saved_sidebar_width = cur_size[0]
+            target_pane = (
+                workspace.target.pane_id
+                if workspace.target.pane_id is not None
+                and tmux_ctl.pane_alive(workspace.target.pane_id)
+                else workspace.primary.pane_id
+            )
+            if target_pane is not None:
+                tmux_ctl.select_pane(target_pane)
+            if tmux_ctl.break_pane_detached(owner) is not None:
+                self._sidebar_hidden_detached = True
+                self._set_railmux_focus(False, force_border=True)
+                self._sync_pane_headers()
+                self._apply_tmux_bar(self._tmux_error_bar)
+                return
         active = tmux_ctl.active_pane_id(owner) if owner is not None else None
         manager = self._get_tool_pane_manager()
         if (
@@ -3271,15 +3446,87 @@ class App:
             and active in manager.visible_tool_panes()
         ):
             if not self._zoom_pane(active, toggle_if_current=True):
-                self._set_status("Could not toggle tool fullscreen.", "error")
+                self._set_status("Could not hide sidebar.", "error")
+            else:
+                self._sync_pane_headers()
+                self._apply_tmux_bar(self._tmux_error_bar)
             return
         slot = self._sync_target_slot_from_tmux()
         pane_id = slot.pane_id
         if pane_id is None or not tmux_ctl.pane_alive(pane_id):
-            self._set_status("No agent pane to fullscreen.", "tip")
+            self._set_status("Open a session before hiding the sidebar.", "tip")
             return
         if not self._zoom_pane(pane_id, toggle_if_current=True):
-            self._set_status("Could not toggle agent fullscreen.", "error")
+            self._set_status("Could not hide sidebar.", "error")
+        else:
+            self._sync_pane_headers()
+            self._apply_tmux_bar(self._tmux_error_bar)
+
+    def _focus_running_from_status(self) -> None:
+        """Restore sidebar if hidden and move focus straight to the Running pane."""
+        if self._sidebar_is_hidden():
+            self._restore_hidden_sidebar(focus_sidebar=True)
+        else:
+            owner = getattr(self, "_railmux_pane_id", None)
+            if owner is not None:
+                tmux_ctl.select_pane(owner)
+                self._set_railmux_focus(True, force_border=True)
+        collapsed = getattr(self, "_sidebar_collapsed", None)
+        if collapsed and len(collapsed) > 2 and collapsed[2]:
+            collapsed[2] = False
+            self._apply_sidebar_collapse_state()
+        if getattr(self, "_sidebar", None) is not None and len(self._sidebar.contents) > 2:
+            self._sidebar.focus_position = 2
+            self._hint_bar.set_context(self._help_context())
+
+    def _pane_header_label(self, slot: AgentSlot) -> str:
+        """Format a compact breadcrumb title for one visible right pane."""
+        if slot.in_history_mode:
+            return f"Preview · {slot.active_session_id or 'history'}"
+        tmux_name = slot.agent_tmux_name
+        running = self._by_tmux(tmux_name) if tmux_name else None
+        if running is None:
+            return "Agent"
+        dot = {
+            "blocked": "●",
+            "done": "●",
+            "busy": "●",
+            "idle": "●",
+        }.get(running.status, "●")
+        provider = self._modes().resolve(running.session_type).label
+        label = running.label or running.tmux_name
+        return f"{dot} {provider} · {label}"
+
+    def _sync_pane_headers(self) -> None:
+        """Update top pane breadcrumb headers according to Options -> Agent pane headers."""
+        if not getattr(self, "_tmux_status_enabled", False):
+            return
+        settings = getattr(self, "_settings", None)
+        policy = settings.pane_headers_policy if settings is not None else "auto"
+        hidden = self._sidebar_is_hidden()
+        enabled = policy == "always" or (policy == "auto" and hidden)
+        workspace = getattr(self, "_workspace", None)
+        if workspace is None:
+            return
+        titles: list[tuple[str, str]] = []
+        window_target: str | None = None
+        for slot in workspace.slots:
+            if slot.pane_id is not None and tmux_ctl.pane_alive(slot.pane_id):
+                if window_target is None:
+                    window_target = slot.pane_id
+                if enabled:
+                    titles.append((slot.pane_id, self._pane_header_label(slot)))
+        if window_target is None:
+            window_target = getattr(self, "_railmux_pane_id", None)
+        if window_target is None:
+            return
+        state = (window_target, enabled, tuple(titles))
+        if getattr(self, "_applied_pane_headers_state", None) == state:
+            return
+        for pane_id, title in titles:
+            tmux_ctl.set_pane_title(pane_id, title)
+        tmux_ctl.set_window_pane_border_status(window_target, enabled)
+        self._applied_pane_headers_state = state
 
     def _pane_for_workspace_page(
         self, page: WorkspacePage,
@@ -6239,6 +6486,17 @@ class App:
             self._set_status(f"Notification sound: {label}.")
             return True
 
+        def set_pane_headers(policy: str) -> bool:
+            if not self._settings.set_pane_headers_policy(policy):
+                self._set_status(
+                    "Could not save agent pane header option; setting unchanged.",
+                    "error",
+                )
+                return False
+            self._sync_pane_headers()
+            self._set_status(f"Agent pane headers: {policy}.")
+            return True
+
         modal = OptionsModal(
             agent_label=self._active_mode().label,
             mode_choices=self._mode_menu_entries,
@@ -6251,6 +6509,7 @@ class App:
             devin_history_policy=self._settings.devin_history_policy,
             devin_bypass_policy=self._settings.devin_bypass_policy,
             notification_sound_policy=self._settings.notification_sound_policy,
+            pane_headers_policy=self._settings.pane_headers_policy,
             on_layout_policy=set_layout,
             on_yolo_policy=set_yolo,
             on_update_policy=set_update,
@@ -6261,6 +6520,7 @@ class App:
             on_devin_history_policy=set_devin_history,
             on_devin_bypass_policy=set_devin_bypass,
             on_notification_sound_policy=set_notification_sound,
+            on_pane_headers_policy=set_pane_headers,
         )
         self._open_full_sidebar_modal(modal, self._close_options_modal)
 
@@ -6802,6 +7062,8 @@ class App:
                     "session": running.logical_session_id,
                     "mode": mode.key,
                 }
+        if self._sidebar_is_hidden():
+            data["sidebar_hidden"] = True
         return data
 
     def _recovery_state_data(self) -> dict:
@@ -7292,6 +7554,8 @@ class App:
             self._set_railmux_focus(True, force_border=True)
         self._apply_layout_profile(allow_create=True)
         self._install_tmux_bindings()
+        if saved.get("sidebar_hidden") is True and not self._sidebar_is_hidden():
+            self._toggle_agent_fullscreen()
         return content_ok and secondary_ok
 
     def _restore_right_pane(self, state: dict) -> bool:
@@ -8658,6 +8922,9 @@ class App:
         if key == "f9":
             self._toggle_agent_fullscreen()
             return
+        if key == "f10":
+            self._focus_running_from_status()
+            return
         # F6 is an internal target used by the tmux status-range click binding.
         # It is sent directly to the controller pane and remains useful while
         # an agent (or a modal) owns visible focus.
@@ -8671,8 +8938,12 @@ class App:
                 self._show_tmux_feedback(
                     "Close the dialog before changing Mode or Layout.")
             elif key == "f5":
+                if self._sidebar_is_hidden():
+                    self._restore_hidden_sidebar(focus_sidebar=True)
                 self._open_mode_menu()
             else:
+                if getattr(self, "_sidebar_hidden_detached", False):
+                    self._restore_hidden_sidebar(focus_sidebar=False)
                 self._rotate_split()
             return
         # When a modal overlay is showing, don't dispatch sidebar action keys.
@@ -10007,10 +10278,25 @@ class App:
         if cached is not None and now - cached[0] < _DEVIN_STATUS_PROBE_TTL_S:
             return cached[1]
         lines = tmux_ctl.capture_pane_visible(target)
-        status = (
-            devin_index.classify_pane_status(lines)
-            if lines is not None else "idle"
+        previous = (
+            getattr(self, "_last_live_status", {}).get(running.tmux_name)
+            or running.status
         )
+        if lines is None or not any(line.strip() for line in lines):
+            # A pane swap or SIGWINCH reflow can momentarily return an empty
+            # capture; keep the previous status instead of flashing a false idle/done.
+            status = previous if previous in {"busy", "blocked", "idle"} else "idle"
+        else:
+            status = devin_index.classify_pane_status(lines)
+            if status == "idle" and previous in {"busy", "blocked"}:
+                # Require a settled prompt box before declaring a busy Devin
+                # session idle so a mid-swap redraw cannot flash a cyan done dot.
+                has_prompt_box = any(
+                    devin_index._is_footer_rule(devin_index._ANSI_RE.sub("", ln).strip())
+                    for ln in lines[-12:]
+                )
+                if not has_prompt_box:
+                    status = previous
         cache[key] = (now, status)
         live_names = {item.tmux_name for item in self._running.values()}
         self._devin_status_probe_cache = {
@@ -10427,6 +10713,8 @@ class App:
                             self._show_attention_status(meta.attention)
         self._maybe_resort_running()
         self._render_running_pane()
+        self._apply_tmux_bar(getattr(self, "_tmux_error_bar", False))
+        self._sync_pane_headers()
 
     def _sync_codex_rewind_scrollback(
         self,
@@ -10752,6 +11040,89 @@ class App:
             meta = current
         self._on_session_select(meta)
 
+    def _quick_open_commands(self) -> tuple[CommandChoice, ...]:
+        """Executable actions surfaced via ``>`` in Search / Command Palette."""
+        settings = getattr(self, "_settings", None)
+        sound_on = (
+            settings is not None
+            and settings.notification_sound_policy == "on"
+        )
+        commands: list[CommandChoice] = [
+            CommandChoice(
+                "Toggle left sidebar",
+                "F9",
+                "Hide or show sidebar (keeps splits)",
+                self._toggle_agent_fullscreen,
+            ),
+            CommandChoice(
+                "Cycle layout",
+                "F8",
+                "Single / side-by-side / stacked",
+                self._rotate_split,
+            ),
+            CommandChoice(
+                "New session",
+                "n",
+                f"Start new {self._active_mode().label} session",
+                self._launch_new_session,
+            ),
+            CommandChoice(
+                "Options",
+                "o",
+                "Configure Railmux settings",
+                self._open_options_modal,
+            ),
+            CommandChoice(
+                "Notification sound: " + ("Turn Off" if sound_on else "Turn On"),
+                "",
+                "Terminal bell on background done/blocked",
+                lambda: self._settings.set_notification_sound_policy(
+                    "off" if sound_on else "on"
+                ),
+            ),
+            CommandChoice(
+                "Toggle Sessions All scope",
+                "a",
+                "Show all CLIs or active CLI in Sessions",
+                self._toggle_sessions_scope,
+            ),
+            CommandChoice(
+                "Toggle Running All scope",
+                "a",
+                "Show all CLIs or active CLI in Running",
+                self._toggle_running_scope,
+            ),
+            CommandChoice(
+                "Zoom / restore sidebar pane",
+                "z",
+                "Focus current sidebar section",
+                self._toggle_sidebar_pane_zoom,
+            ),
+            CommandChoice(
+                "Help",
+                "?",
+                "Show keyboard shortcuts and legend",
+                self._open_help_modal,
+            ),
+            CommandChoice(
+                "Quit Railmux",
+                "q",
+                "Soft quit or hard quit",
+                self._open_quit_confirm,
+            ),
+        ]
+        for mode in self._modes().modes:
+            if mode.key != self._current_mode_key():
+                commands.append(
+                    CommandChoice(
+                        f"Switch mode: {mode.label}",
+                        "m",
+                        f"Switch active agent CLI to {mode.label}",
+                        lambda key=mode.key: self._select_mode(key),
+                    )
+                )
+        return tuple(commands)
+
     def _open_quick_open(self) -> None:
         """Open instantly from indexes. Load Claude history outside Urwid."""
         if self._loop is None:
@@ -10793,7 +11164,9 @@ class App:
         modal = QuickOpen(
             self._quick_open_choices(previous), self._close_modal,
             "Pane 2" if self._agent_workspace().target_slot_key == AgentWorkspace.SECONDARY
-            else "Pane 1", loading=loading,
+            else "Pane 1",
+            loading=loading,
+            commands=self._quick_open_commands(),
         )
         self._show_overlay(modal, width=88, height=80, click_outside_to_close=True)
         if loading:
@@ -12867,6 +13240,20 @@ class App:
         except Exception:
             pass
 
+    def _running_status_counts(self) -> tuple[int, int, int, int]:
+        """Count live running sessions as ``(blocked, done, busy, idle)``."""
+        blocked = done = busy = idle = 0
+        for item in getattr(self, "_running", {}).values():
+            if item.status == "blocked":
+                blocked += 1
+            elif item.status == "done":
+                done += 1
+            elif item.status == "busy":
+                busy += 1
+            else:
+                idle += 1
+        return blocked, done, busy, idle
+
     def _apply_tmux_bar(self, error: bool) -> None:
         """Set the whole-bar background (status-style) + brand (status-left) for
         the normal (green) or error (dark red) mode. Called from run() for the
@@ -12922,6 +13309,7 @@ class App:
             # unchanged; widening the terminal reveals more of the same text.
             right_length = max(1, width - left_length)
         else:
+            width = (getattr(self, "_last_workspace_size", None) or (120, 40))[0]
             manager = getattr(self, "_tmux_binding_manager", None)
             range_helper = getattr(tmux_ctl, "status_action_range", None)
             wrap_action = None
@@ -12932,12 +13320,17 @@ class App:
                         return range_helper(action, content)
                     except (TypeError, ValueError):
                         return content
-            brand = _tmux_status_left(
+            running_counts = self._running_status_counts()
+            brand, visible = _tmux_status_left_with_width(
                 error,
                 self._active_mode().label,
                 self._status_layout_indicator(),
                 wrap_action,
+                sidebar_hidden=self._sidebar_is_hidden(),
+                running_counts=running_counts,
+                width=width,
             )
+            left_length = max(24, visible + 2)
         state = (
             self._tmux_status_session,
             bar,

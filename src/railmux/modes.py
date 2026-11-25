@@ -84,7 +84,7 @@ class ModeRegistry:
 
 CLAUDE_MODE = AgentMode(
     key="claude",
-    label="Claude Code",
+    label="Claude",
     tmux_prefix="cc-",
     session_type="claude",
     project_source=ProjectSource.CLAUDE,
