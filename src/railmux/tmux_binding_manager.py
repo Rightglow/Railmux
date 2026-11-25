@@ -14,7 +14,7 @@ from railmux import restart_state, tmux_ctl
 from railmux.atomic_file import atomic_write_text
 
 
-_VERSION = 10
+_VERSION = 11
 _KEYS = ("F8", "F9")
 _STATUS_CLICK_KEYS = (
     "MouseDown1Status",
@@ -313,7 +313,7 @@ class SharedTmuxBindingManager:
                             or {"MouseDown1Pane": None}
                         )
                         upgraded = True
-                    if state["version"] < 10:
+                    if state["version"] < 11:
                         if state["status_click_managed"]:
                             if set(state["status_click_backup"]) != set(
                                 _STATUS_CLICK_KEYS
@@ -332,8 +332,8 @@ class SharedTmuxBindingManager:
                             state["status_click_backup"] = {
                                 key: None for key in _STATUS_CLICK_KEYS
                             }
-                        # v9/v10 route control ranges through MouseDown1ControlN
-                        # (including Sidebar toggle and Running status pill).
+                        # v9-v11 route Sidebar/Running status clicks cleanly on
+                        # both tmux 3.4-3.6 (MouseDown1Status regex) and 3.7+.
                         upgraded = True
                     if upgraded:
                         state["version"] = _VERSION

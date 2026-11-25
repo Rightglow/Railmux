@@ -3370,7 +3370,7 @@ def set_root_status_click_forwarding(
     marker = f"{_ROOT_STATUS_CLICK_MARKER}-{token}"
     condition = (
         "#{&&:"
-        "#{m/r:^(%[0-9]+|railmux-(mode|layout|copy|page-[r12]))$,"
+        "#{m/r:^(%[0-9]+|railmux-(mode|layout|copy|sidebar|running|page-[r12]))$,"
         "#{mouse_status_range}},"
         "#{!=:#{@railmux_controller_pane},},"
         f"#{{==:{marker},{marker}}}}}"
