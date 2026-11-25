@@ -90,6 +90,9 @@ class SessionMeta:
     # Claude Code background-job (``sessionKind: bg``) session. Listings hide
     # these unless one is the ``continued-in`` successor of a visible session.
     background: bool = False
+    # Optional provider metadata shown in the Session / Running Info modal (`i`).
+    model: str | None = None
+    acu_cost: float | None = None
 
     @property
     def display_title(self) -> str:

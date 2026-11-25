@@ -12469,6 +12469,8 @@ class App:
         self._projects_pane.set_context_selected(project.encoded_name)
         is_starred = self._project_favorites.is_favorite(project.real_path)
         items: list[tuple[str, Callable[[], None]]] = [
+            (_context_menu_label("New session", "n"),
+             lambda p=project: (self._on_project_select(p), self._launch_new_session())),
             (_context_menu_label("Copy path", "c"),
              lambda p=project: self._copy_project_path(p)),
             (_context_menu_label("Unstar" if is_starred else "Star", "s"),
@@ -12482,7 +12484,7 @@ class App:
         self._show_overlay(
             menu,
             width=36,
-            height=10,
+            height=len(items) + 4,
             click_outside_to_close=True,
             fixed_width=True,
             fixed_height=True,

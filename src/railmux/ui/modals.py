@@ -633,6 +633,10 @@ class SessionInfoModal(_ReadOnlyInfoModal):
                 urwid.Text(f"messages:  {session.message_count}"),
                 urwid.Text(f"tokens:    {session.token_total}"),
             ]
+            if session.model:
+                body_lines.append(urwid.Text(f"model:     {session.model}"))
+            if session.acu_cost is not None:
+                body_lines.append(urwid.Text(f"ACU cost:  {session.acu_cost:.2f}"))
             body_lines.extend(_attention_lines(session.attention))
             if session.last_user_message:
                 body_lines.append(urwid.Divider())
@@ -669,6 +673,10 @@ class RunningInfoModal(_ReadOnlyInfoModal):
             body_lines.append(urwid.Text(f"session id:    {session.session_id}"))
             body_lines.append(urwid.Text(f"messages:      {session.message_count}"))
             body_lines.append(urwid.Text(f"tokens:        {session.token_total}"))
+            if session.model:
+                body_lines.append(urwid.Text(f"model:         {session.model}"))
+            if session.acu_cost is not None:
+                body_lines.append(urwid.Text(f"ACU cost:      {session.acu_cost:.2f}"))
             body_lines.extend(_attention_lines(session.attention))
         else:
             body_lines.append(urwid.Divider())

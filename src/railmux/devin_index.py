@@ -308,9 +308,11 @@ def _query_sessions_db_stats(
     existing_tokens: dict[str, int],
     *,
     immutable: bool = False,
-) -> tuple[dict[str, int], dict[str, int]]:
+) -> tuple[dict[str, int], dict[str, int], dict[str, str], dict[str, float]]:
     msgs: dict[str, int] = {}
     tokens: dict[str, int] = {}
+    models: dict[str, str] = {}
+    acus: dict[str, float] = {}
     suffix = "?mode=ro&immutable=1" if immutable else "?mode=ro"
     uri = db_path.resolve().as_uri() + suffix
     conn = sqlite3.connect(uri, uri=True, timeout=0.05)
@@ -320,39 +322,65 @@ def _query_sessions_db_stats(
         ):
             if sid in session_ids and isinstance(count, int) and count > 0:
                 msgs[sid] = count
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(sessions)")}
+        has_model = "model" in cols
+        has_meta = "metadata" in cols
+        select_cols = ["id", "main_chain_id"]
+        if has_model:
+            select_cols.append("model")
+        if has_meta:
+            select_cols.append("metadata")
+        heads: dict[str, int | None] = {}
+        for row in conn.execute(f"SELECT {', '.join(select_cols)} FROM sessions"):
+            sid = row[0]
+            if sid not in session_ids:
+                continue
+            heads[sid] = row[1]
+            col_idx = 2
+            if has_model:
+                raw_model = row[col_idx]
+                col_idx += 1
+                if isinstance(raw_model, str) and raw_model.strip():
+                    models[sid] = raw_model.strip()
+            if has_meta:
+                raw_meta = row[col_idx]
+                if isinstance(raw_meta, str) and "total_acu_cost" in raw_meta:
+                    try:
+                        parsed = json.loads(raw_meta)
+                        acu = parsed.get("total_acu_cost") if isinstance(parsed, dict) else None
+                        if isinstance(acu, (int, float)) and not isinstance(acu, bool) and acu >= 0:
+                            acus[sid] = float(acu)
+                    except ValueError:
+                        pass
         missing_tok = [sid for sid in session_ids if sid not in existing_tokens]
-        if missing_tok:
-            heads = {
-                sid: head
-                for sid, head in conn.execute(
-                    "SELECT id, main_chain_id FROM sessions"
-                )
-                if sid in session_ids
-            }
-            for sid in missing_tok:
-                head = heads.get(sid)
-                row = conn.execute(
-                    "SELECT metadata FROM message_nodes "
-                    "WHERE session_id = ? AND row_id <= ? "
-                    "AND metadata LIKE '%num_tokens_preceding%' "
-                    "ORDER BY row_id DESC LIMIT 1",
-                    (sid, head if isinstance(head, int) else 10**12),
-                ).fetchone()
-                if row and isinstance(row[0], str):
-                    m = _PRECEDING_TOK_RE.search(row[0])
-                    if m:
-                        tokens[sid] = int(m.group(1))
+        for sid in missing_tok:
+            head = heads.get(sid)
+            row = conn.execute(
+                "SELECT metadata FROM message_nodes "
+                "WHERE session_id = ? AND row_id <= ? "
+                "AND metadata LIKE '%num_tokens_preceding%' "
+                "ORDER BY row_id DESC LIMIT 1",
+                (sid, head if isinstance(head, int) else 10**12),
+            ).fetchone()
+            if row and isinstance(row[0], str):
+                m = _PRECEDING_TOK_RE.search(row[0])
+                if m:
+                    tokens[sid] = int(m.group(1))
     finally:
         conn.close()
-    return msgs, tokens
+    return msgs, tokens, models, acus
 
 
-def _read_session_stats(session_ids: set[str]) -> dict[str, tuple[int, int]]:
-    """Best-effort read-only lookup of ``(message_count, token_total)`` for Devin."""
+def _read_session_stats(
+    session_ids: set[str],
+) -> dict[str, tuple[int, int, str | None, float | None]]:
+    """Best-effort read-only lookup of ``(msg, tok, model, acu)`` for Devin."""
     if not session_ids:
         return {}
     msgs: dict[str, int] = {}
     tokens: dict[str, int] = {}
+    models: dict[str, str] = {}
+    acus: dict[str, float] = {}
     fallback_steps: dict[str, int] = {}
     for sid in session_ids:
         steps, tok = _transcript_tail_stats(sid)
@@ -365,11 +393,13 @@ def _read_session_stats(session_ids: set[str]) -> dict[str, tuple[int, int]]:
     if db_path.is_file():
         for immutable in (False, True):
             try:
-                db_msgs, db_toks = _query_sessions_db_stats(
+                db_msgs, db_toks, db_models, db_acus = _query_sessions_db_stats(
                     db_path, session_ids, tokens, immutable=immutable,
                 )
                 msgs.update(db_msgs)
                 tokens.update(db_toks)
+                models.update(db_models)
+                acus.update(db_acus)
                 break
             except (sqlite3.Error, OSError):
                 continue
@@ -379,28 +409,34 @@ def _read_session_stats(session_ids: set[str]) -> dict[str, tuple[int, int]]:
             msgs[sid] = steps
 
     return {
-        sid: (msgs.get(sid, 0), tokens.get(sid, 0))
+        sid: (msgs.get(sid, 0), tokens.get(sid, 0), models.get(sid), acus.get(sid))
         for sid in session_ids
-        if sid in msgs or sid in tokens
+        if sid in msgs or sid in tokens or sid in models or sid in acus
     }
 
 
 def _enrich_session_stats(
     records: dict[str, DevinSession],
 ) -> dict[str, DevinSession]:
-    """Attach real message and token counts to scanned Devin sessions."""
+    """Attach real message, token, model, and ACU metadata to scanned Devin sessions."""
     stats = _read_session_stats(set(records))
     if not stats:
         return records
     enriched: dict[str, DevinSession] = {}
     for sid, rec in records.items():
-        pair = stats.get(sid)
-        if pair is None:
+        entry = stats.get(sid)
+        if entry is None:
             enriched[sid] = rec
         else:
-            msg_count, tok_total = pair
+            msg_count, tok_total, model, acu_cost = entry
             enriched[sid] = DevinSession(
-                replace(rec.meta, message_count=msg_count, token_total=tok_total),
+                replace(
+                    rec.meta,
+                    message_count=msg_count,
+                    token_total=tok_total,
+                    model=model,
+                    acu_cost=acu_cost,
+                ),
                 rec.locked,
                 rec.holder_pid,
             )

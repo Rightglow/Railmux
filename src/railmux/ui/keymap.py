@@ -88,7 +88,7 @@ BINDINGS: list[Binding] = [
     Binding(("t",), "t", "term", "_open_terminal_for_active_project",
             contexts=_ALL_CTX),
     Binding(("T",), "T", "Vim", "_focus_managed_viewer",
-            contexts=_ALL_CTX),
+            contexts=_ALL_CTX, show_in_hint=False),
     # Space is reliably distinct across traditional and extended terminals.
     Binding((" ",), "␣", "preview",
             "_preview_focused_target",
