@@ -270,16 +270,17 @@ def _parse_session(row: object) -> DevinSession | None:
 
 _FINAL_PROMPT_TOK_RE = re.compile(r'"total_prompt_tokens"\s*:\s*(\d+)')
 _FINAL_COMPLETION_TOK_RE = re.compile(r'"total_completion_tokens"\s*:\s*(\d+)')
+_FINAL_STEPS_RE = re.compile(r'"total_steps"\s*:\s*(\d+)')
 _PRECEDING_TOK_RE = re.compile(r'"num_tokens_preceding"\s*:\s*(\d+)')
 
 
-def _transcript_tail_tokens(session_id: str) -> int:
-    """Read cumulative tokens from the last 4 KiB of a Devin transcript JSON."""
+def _transcript_tail_stats(session_id: str) -> tuple[int, int]:
+    """Read ``(steps, cumulative_tokens)`` from the last 4 KiB of a Devin transcript."""
     if not _ID.fullmatch(session_id):
-        return 0
+        return 0, 0
     path = lease_root() / "transcripts" / f"{session_id}.json"
     if not path.is_file():
-        return 0
+        return 0, 0
     try:
         with path.open("rb") as fh:
             fh.seek(0, os.SEEK_END)
@@ -287,16 +288,63 @@ def _transcript_tail_tokens(session_id: str) -> int:
             fh.seek(max(0, size - 4096))
             tail = fh.read().decode("utf-8", errors="ignore")
     except OSError:
-        return 0
+        return 0, 0
     if '"final_metrics"' not in tail:
-        return 0
+        return 0, 0
     section = tail.rsplit('"final_metrics"', 1)[1]
     prompt_m = _FINAL_PROMPT_TOK_RE.search(section)
     comp_m = _FINAL_COMPLETION_TOK_RE.search(section)
+    steps_m = _FINAL_STEPS_RE.search(section)
     total = (int(prompt_m.group(1)) if prompt_m else 0) + (
         int(comp_m.group(1)) if comp_m else 0
     )
-    return total
+    steps = int(steps_m.group(1)) if steps_m else 0
+    return steps, total
+
+
+def _query_sessions_db_stats(
+    db_path: Path,
+    session_ids: set[str],
+    existing_tokens: dict[str, int],
+    *,
+    immutable: bool = False,
+) -> tuple[dict[str, int], dict[str, int]]:
+    msgs: dict[str, int] = {}
+    tokens: dict[str, int] = {}
+    suffix = "?mode=ro&immutable=1" if immutable else "?mode=ro"
+    uri = db_path.resolve().as_uri() + suffix
+    conn = sqlite3.connect(uri, uri=True, timeout=0.05)
+    try:
+        for sid, count in conn.execute(
+            "SELECT session_id, COUNT(*) FROM prompt_history GROUP BY session_id"
+        ):
+            if sid in session_ids and isinstance(count, int) and count > 0:
+                msgs[sid] = count
+        missing_tok = [sid for sid in session_ids if sid not in existing_tokens]
+        if missing_tok:
+            heads = {
+                sid: head
+                for sid, head in conn.execute(
+                    "SELECT id, main_chain_id FROM sessions"
+                )
+                if sid in session_ids
+            }
+            for sid in missing_tok:
+                head = heads.get(sid)
+                row = conn.execute(
+                    "SELECT metadata FROM message_nodes "
+                    "WHERE session_id = ? AND row_id <= ? "
+                    "AND metadata LIKE '%num_tokens_preceding%' "
+                    "ORDER BY row_id DESC LIMIT 1",
+                    (sid, head if isinstance(head, int) else 10**12),
+                ).fetchone()
+                if row and isinstance(row[0], str):
+                    m = _PRECEDING_TOK_RE.search(row[0])
+                    if m:
+                        tokens[sid] = int(m.group(1))
+    finally:
+        conn.close()
+    return msgs, tokens
 
 
 def _read_session_stats(session_ids: set[str]) -> dict[str, tuple[int, int]]:
@@ -305,48 +353,30 @@ def _read_session_stats(session_ids: set[str]) -> dict[str, tuple[int, int]]:
         return {}
     msgs: dict[str, int] = {}
     tokens: dict[str, int] = {}
+    fallback_steps: dict[str, int] = {}
     for sid in session_ids:
-        tok = _transcript_tail_tokens(sid)
+        steps, tok = _transcript_tail_stats(sid)
         if tok > 0:
             tokens[sid] = tok
+        if steps > 0:
+            fallback_steps[sid] = steps
 
     db_path = lease_root() / "sessions.db"
     if db_path.is_file():
-        try:
-            uri = db_path.resolve().as_uri() + "?mode=ro"
-            conn = sqlite3.connect(uri, uri=True, timeout=0.3)
+        for immutable in (False, True):
             try:
-                for sid, count in conn.execute(
-                    "SELECT session_id, COUNT(*) FROM prompt_history GROUP BY session_id"
-                ):
-                    if sid in session_ids and isinstance(count, int) and count > 0:
-                        msgs[sid] = count
-                missing_tok = [sid for sid in session_ids if sid not in tokens]
-                if missing_tok:
-                    heads = {
-                        sid: head
-                        for sid, head in conn.execute(
-                            "SELECT id, main_chain_id FROM sessions"
-                        )
-                        if sid in session_ids
-                    }
-                    for sid in missing_tok:
-                        head = heads.get(sid)
-                        row = conn.execute(
-                            "SELECT metadata FROM message_nodes "
-                            "WHERE session_id = ? AND row_id <= ? "
-                            "AND metadata LIKE '%num_tokens_preceding%' "
-                            "ORDER BY row_id DESC LIMIT 1",
-                            (sid, head if isinstance(head, int) else 10**12),
-                        ).fetchone()
-                        if row and isinstance(row[0], str):
-                            m = _PRECEDING_TOK_RE.search(row[0])
-                            if m:
-                                tokens[sid] = int(m.group(1))
-            finally:
-                conn.close()
-        except (sqlite3.Error, OSError):
-            pass
+                db_msgs, db_toks = _query_sessions_db_stats(
+                    db_path, session_ids, tokens, immutable=immutable,
+                )
+                msgs.update(db_msgs)
+                tokens.update(db_toks)
+                break
+            except (sqlite3.Error, OSError):
+                continue
+
+    for sid, steps in fallback_steps.items():
+        if sid not in msgs:
+            msgs[sid] = steps
 
     return {
         sid: (msgs.get(sid, 0), tokens.get(sid, 0))
